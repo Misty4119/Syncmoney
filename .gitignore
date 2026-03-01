@@ -1,0 +1,112 @@
+# ==============================
+# Syncmoney - Sync Money
+# ==============================
+
+# =============================================
+# Gradle & Build
+# =============================================
+.gradle/
+build/
+target/
+.gradle/**/checksums/
+.gradle/**/fileChanges/
+.gradle/**/fileHashes/
+.gradle/**/buildOutputCleanup/
+
+# =============================================
+# IDE
+# =============================================
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.cursor/
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.settings/
+.classpath
+.project
+.cursorignore
+
+# =============================================
+# Java
+# =============================================
+*.class
+*.jar
+*.war
+*.ear
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# =============================================
+# Runtime & Configuration (Sensitive)
+# =============================================
+# Runtime generated plugin directories (if any)
+plugins/
+world/
+world_nether/
+world_the_end/
+
+# Local configuration files (may contain sensitive information)
+local_*.yml
+local_*.properties
+secrets.yml
+credentials.yml
+*.auth
+*.key
+*.pem
+
+# Database files
+*.sqlite
+*.db
+*.sqlite3
+*.mv.db
+*.trace.db
+
+# Log files
+*.log
+logs/
+
+# Backup
+*.bak
+*.backup
+*.old
+
+# =============================================
+# Files not needed during development
+# =============================================
+Proposal/
+reference/
+tmp/
+temp/
+cache/
+
+# =============================================
+# Minecraft plugin specific
+# =============================================
+# Compilation output (each person compiles themselves)
+out/
+syncmoney-*.jar
+syncmoney-papi-expansion-*.jar
+
+# Running configuration
+run/
+server.properties
+spigot.yml
+bukkit.yml
+paper.yml
+purpur.yml
+
+# Private notes
+*.md
+
+# =============================================
+# Files to keep
+# =============================================
+!README.md

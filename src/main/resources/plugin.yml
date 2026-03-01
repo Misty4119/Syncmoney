@@ -1,0 +1,62 @@
+name: Syncmoney
+version: '${version}'
+main: noietime.syncmoney.Syncmoney
+description: Cross-server game currency sync via Vault (Redis + DB).
+api-version: '1.20'
+folia-supported: true
+
+depend:
+  - Vault
+
+softdepend:
+  - CMI
+  - PlaceholderAPI
+
+commands:
+  money:
+    description: View balance
+    usage: /<command> [player]
+  pay:
+    description: Transfer money to other players
+    usage: /<command> <player> <amount>
+  baltop:
+    description: Ranking
+    usage: /<command> [page]
+  syncmoney:
+    description: Plugin main command
+    usage: /<command> <subcommand>
+
+permissions:
+  syncmoney.money:
+    description: View own balance
+    default: true
+  syncmoney.money.others:
+    description: View other players' balance
+    default: op
+  syncmoney.pay:
+    description: Transfer money to other players
+    default: true
+  syncmoney.admin:
+    description: Admin permissions
+    default: op
+  syncmoney.admin.set:
+    description: Set player balance
+    default: op
+  syncmoney.admin.give:
+    description: Give money to players
+    default: op
+  syncmoney.admin.take:
+    description: Take money from players
+    default: op
+  syncmoney.admin.audit:
+    description: Allow viewing audit logs
+    default: op
+  syncmoney.admin.monitor:
+    description: Allow viewing system monitoring
+    default: op
+  syncmoney.admin.econstats:
+    description: Allow viewing economic statistics
+    default: op
+  syncmoney.admin.reload:
+    description: Allow reloading configuration
+    default: op

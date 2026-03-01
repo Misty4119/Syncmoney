@@ -1,0 +1,10 @@
+name: SyncmoneyExpansion
+version: 1.0.0
+main: noietime.syncmoney.expansion.SyncmoneyExpansion
+author: Syncmoney
+description: Syncmoney PlaceholderAPI Expansion - Provides economic placeholders for Syncmoney
+api-version: 1.20
+depend:
+  - PlaceholderAPI
+softdepend:
+  - Syncmoney

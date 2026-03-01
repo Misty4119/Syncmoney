@@ -1,0 +1,107 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.3.1'
+    id("xyz.jpenilla.run-paper") version "2.3.1"
+}
+
+group = 'noietime'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    maven {
+        name = "papermc"
+        url = "https://repo.papermc.io/repository/maven-public/"
+    }
+    maven {
+        name = "jitpack"
+        url = "https://jitpack.io"
+    }
+    maven {
+        name = "spigotmc-repo"
+        url = "https://hub.spigotmc.org/nexus/content/repositories/snapshots/"
+    }
+    maven {
+        name = "extendedclip"
+        url = "https://repo.extendedclip.com/content/repositories/placeholderapi/"
+    }
+}
+
+dependencies {
+    compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+
+    implementation("com.github.MilkBowl:VaultAPI:1.7")
+
+    compileOnly("me.clip:placeholderapi:2.12.2")
+
+    implementation("redis.clients:jedis:5.1.0")
+    implementation("org.apache.commons:commons-pool2:2.11.1")
+    implementation("com.zaxxer:HikariCP:5.1.0")
+    implementation("com.mysql:mysql-connector-j:8.2.0")
+    implementation("org.postgresql:postgresql:42.7.1")
+    implementation("org.xerial:sqlite-jdbc:3.44.1.0")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.16.1")
+    implementation("net.kyori:adventure-text-minimessage:4.14.0")
+    implementation("net.kyori:adventure-text-serializer-ansi:4.14.0")    
+    implementation("org.bstats:bstats-bukkit:3.1.0")
+}
+
+shadowJar {
+    archiveFileName = "Syncmoney-${version}.jar"
+    
+    dependencies {
+    }
+    
+    relocate('org.apache.commons', 'noietime.libs.apache.commons')
+    relocate('com.zaxxer.hikari', 'noietime.libs.hikari')
+    relocate('com.mysql', 'noietime.libs.mysql')
+    relocate('org.postgresql', 'noietime.libs.postgresql')
+    relocate('org.sqlite', 'noietime.libs.sqlite')
+    relocate('com.fasterxml.jackson', 'noietime.libs.jackson')
+    relocate('redis.clients.jedis', 'noietime.libs.jedis')
+    relocate('org.bstats', 'noietime.libs.bstats')
+    relocate('net.kyori.adventure.text.minimessage', 'noietime.libs.adventure.text.minimessage')
+    relocate('net.kyori.adventure.text.serializer.ansi', 'noietime.libs.adventure.text.serializer.ansi')
+
+    mergeServiceFiles()
+}
+
+tasks {
+  runServer {
+    minecraftVersion("1.20")
+  }
+  
+  build {
+    dependsOn shadowJar
+  }
+}
+
+def targetJavaVersion = 21
+java {
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+
+    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
+        options.release.set(targetJavaVersion)
+    }
+}
+
+processResources {
+    def props = [version: version]
+    inputs.properties props
+    filteringCharset 'UTF-8'
+    filesMatching('paper-plugin.yml') {
+        expand props
+    }
+    filesMatching('plugin.yml') {
+        expand props
+    }
+    filesMatching('lua/*.lua') {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+}

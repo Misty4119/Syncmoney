@@ -1,0 +1,35 @@
+# Syncmoney Alias Configuration
+# Server administrators can customize aliases as needed
+# Aliases will be automatically registered to the corresponding commands
+
+# Economy command aliases
+money:
+  # Balance query command
+  aliases:
+    - balance
+    - bal
+    - balancetop
+    - money:balance
+    - money:bal
+    - money:balancetop
+
+# Transfer command aliases
+pay:
+  aliases:
+    - transfer
+    - send
+    - paymoney
+    - pay:transfer
+    - pay:send
+    - pay:paymoney
+
+# Ranking command aliases
+baltop:
+  aliases:
+    - richest
+    - topmoney
+    - wealth
+    - baltop:richest
+    - baltop:topmoney
+    - baltop:wealth
+    - baltop:baltop

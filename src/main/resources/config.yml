@@ -1,0 +1,301 @@
+# ==========================================
+# Syncmoney Main Configuration File
+# ==========================================
+
+# ==========================================
+# 1. Core and Basic Settings
+# ==========================================
+# Multi-server identification (Pub/Sub filtering and debugging)
+server-name: ""
+
+# Event queue (BlockingQueue capacity)
+queue-capacity: 50000
+
+# Feature switches
+pubsub-enabled: true
+db-enabled: true
+
+# Debug mode (output detailed logs)
+debug: false
+
+
+# ==========================================
+# 2. Database and Redis
+# ==========================================
+# Redis (Connection pool)
+redis:
+  enabled: true          # Whether to enable Redis
+  host: "localhost"
+  port: 6379
+  password: ""
+  database: 0
+  pool-size: 30
+
+# MySQL (PostgreSQL can be used as a future expansion)
+database:
+  enabled: true          # Whether to enable the database
+  type: "mysql"
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: ""
+  database: "syncmoney"
+  pool-size: 10
+  connection-timeout: 10000
+  max-lifetime: 600000
+  idle-timeout: 300000
+
+
+# ==========================================
+# 3. Economy and Transaction Settings
+# ==========================================
+# ===== Economy mode configuration =====
+economy:
+  # Economy mode: auto (auto detection) / local / local_redis / sync / cmi
+  mode: "auto"  
+  sync:
+    # Whether to enable Vault intercept
+    vault-intercept: true
+    vault-intercept-deposit: true
+    vault-intercept-withdraw: true
+    # Source whitelist
+    vault-whitelist: []
+    # Ignored commands
+    ignore-commands: []
+  cmi:
+    # Redis prefix
+    redis-prefix: "syncmoney:cmi"
+    # Detection interval (milliseconds)
+    detect-interval-ms: 500
+    # Cross-server sync
+    cross-server-sync: true
+    # Balance operation mode
+    # api - Use CMI API (slower but more compatible)
+    # internal - Direct database access (faster, default)
+    balance-mode: "internal"
+    # Debounce delay in ticks (1 tick = 0.05 seconds)
+    # Reduces redundant sync operations during rapid balance changes
+    debounce-ticks: 5
+  local:
+    # SQLite path
+    sqlite-path: "plugins/Syncmoney/syncmoney.db"
+    # Automatic save interval (seconds)
+    auto-save-interval: 60
+
+# Command and display settings
+display:
+  currency-name: "$"
+  decimal-places: 2
+
+# /pay transfer settings
+pay:
+  # Cooling time (seconds), 0 means no cooling
+  cooldown-seconds: 30
+  # Minimum single transfer amount
+  min-amount: 1
+  # Maximum single transfer amount
+  max-amount: 1000000
+  # Whether to allow transfers in degraded mode
+  allow-in-degraded: false
+  # Large transfer confirmation threshold (if the amount exceeds this value, the command needs to be confirmed)
+  confirm-threshold: 100000
+
+# ===== Cross-server ranking and PAPI =====
+baltop:
+  # Whether to enable the ranking
+  enabled: true
+  # Cache seconds
+  cache-seconds: 30
+  # Number of entries per page
+  entries-per-page: 10
+  # Balance format (full/smart/abbreviated)
+  format: "smart"
+  # Number format configuration (using one configuration, automatically identifying Chinese/English)
+  # Format: [threshold, "display text"]
+  # Example: [1000000000000, "T"] or [1000000000000, "兆"]
+  # The system will automatically sort by threshold from largest to smallest, using the first one that matches
+  number-format:
+    - [1000000000000, "T"]
+    - [100000000, "億"]
+    - [10000, "萬"]
+    - [1000, "K"]
+
+
+# ==========================================
+# 4. Security and Protection Mechanisms
+# ==========================================
+# ===== Economic circuit breaker mechanism =====
+circuit-breaker:
+  # Whether to enable the circuit breaker mechanism
+  enabled: true
+  # Single transaction limit (blocks transactions exceeding this amount)
+  max-single-transaction: 100000000
+  # Transaction frequency limit (maximum transactions per second)
+  max-transactions-per-second: 10
+  # Rapid inflation threshold (total increase percentage within 5 minutes, if exceeded, the circuit breaker will be triggered)
+  rapid-inflation-threshold: 0.2
+  # Rapid inflation check interval (minutes)
+  inflation-check-interval-minutes: 5
+  # Abnormal large change detection (balance change multiplier, if exceeded, the balance will be locked immediately)
+  sudden-change-threshold: 100
+  # Redis disconnect after how many seconds enter LOCKED mode (seconds)
+  redis-disconnect-lock-seconds: 5
+  # Memory usage warning threshold (percentage)
+  memory-warning-threshold: 80
+  # Connection pool exhausted warning threshold (remaining connections, default is 20% of the pool size)
+  pool-exhausted-warning: 2
+
+# Cross-server portal protection
+transfer-guard:
+  # Whether to enable portal protection
+  enabled: true
+  # Maximum wait time (milliseconds)
+  max-wait-ms: 500
+
+# ===== Audit log system =====
+audit:
+  # Whether to enable audit log
+  enabled: true
+  # Batch write size (set to 1 to ensure immediate write for each operation)
+  batch-size: 1
+  # Retention days (0 = permanent)
+  retention-days: 90
+  # Automatic cleanup settings
+  cleanup:
+    # Whether to enable automatic cleanup
+    enabled: true
+    # Cleanup interval (hours)
+    interval-hours: 24
+  # Automatic export settings
+  export:
+    # Whether to enable automatic export
+    enabled: true
+    # Export folder
+    export-folder: "./plugins/Syncmoney/logs/"
+    # Whether to delete database records after export
+    delete-after-export: true
+
+
+# ==========================================
+# 5. Permissions and Administration
+# ==========================================
+# Permission nodes (optional custom)
+permissions:
+  money: syncmoney.money
+  money-others: syncmoney.money.others
+  pay: syncmoney.pay
+  admin: syncmoney.admin
+  admin-set: syncmoney.admin.set
+  admin-give: syncmoney.admin.give
+  admin-take: syncmoney.admin.take
+
+# ===== Admin permissions levels =====
+admin-permissions:
+  # Whether to enable daily limit
+  enforce-daily-limit: true
+  # Large operation confirmation threshold (if the amount exceeds this value, the command needs to be confirmed)
+  confirm-threshold: 500000
+  # Permission level settings
+  levels:
+    observe:
+      permission: "syncmoney.admin.observe"
+      daily-give-limit: 0
+      daily-take-limit: 0
+    reward:
+      permission: "syncmoney.admin.reward"
+      daily-give-limit: 100000
+      daily-take-limit: 0
+    general:
+      permission: "syncmoney.admin.general"
+      daily-give-limit: 1000000
+      daily-take-limit: 1000000
+    full:
+      permission: "syncmoney.admin.full"
+      daily-give-limit: 0
+      daily-take-limit: 0
+
+# Admin notification list (used for large transaction notifications)
+notify-admins: []
+
+
+# ==========================================
+# 6. Messages and Notifications
+# ==========================================
+# ===== Messages settings =====
+messages:
+  # Whether to enable Legacy color support
+  legacy-color-support: true
+  # Legacy color prefix character
+  legacy-character: "&"
+  # Whether to enable MiniMessage
+  minimessage-support: true
+  # Whether to enable HEX colors
+  hex-colors: true
+
+# Cross-server notifications
+cross-server-notifications:
+  enabled: true
+  notify-type: "all"
+  show-actionbar: true
+  actionbar-duration: 80
+
+
+# ==========================================
+# 7. Migration and Syncing
+# ==========================================
+# Migration settings
+migration:
+  cmi:
+    # Automatic detection: read configuration from DataBaseInfo.yml
+    auto-detect: true
+    # Manual configuration (when auto-detect: false)
+    # If MySQL, the table name will be automatically prefixed (e.g. CMI_users)
+    host: "localhost"
+    port: 3306
+    username: "root"
+    password: ""
+    database: "minecraft"
+    # Table prefix (MySQL mode)
+    table-prefix: "CMI_"
+    # SQLite database path (SQLite mode, single path)
+    sqlite-path: "plugins/CMI/cmi.sqlite.db"
+    # Multi-server mode: scan multiple databases and merge (only CMI SQLite mode)
+    multi-server:
+      enabled: true
+      # Multiple SQLite path configuration (supports Windows and Linux full paths)
+      # Windows: "G:/Servers/Main/plugins/CMI/cmi.sqlite.db"
+      # Linux: "/home/minecraft/server1/plugins/CMI/cmi.sqlite.db"
+      sqlite-paths:
+        - "plugins/CMI/cmi.sqlite.db"
+      # Merge strategy: latest (based on the last login), sum (total), max (maximum)
+      merge-strategy: "latest"
+    # After migration, automatically disable CMI economy commands (balance, pay, baltop, money)
+    auto-disable-commands: true
+    # After migration, automatically disable CMI economy module
+    auto-disable-economy: true
+  # Batch size
+  batch-size: 100
+  # Automatic backup
+  auto-backup: true
+
+# Shadow sync settings (synchronize Syncmoney balance to database backup)
+shadow-sync:
+  # Whether to enable shadow sync
+  enabled: true
+  # Sync target: local (write to Syncmoney database), cmi (write to CMI database), all (write to both local and cmi)
+  target: "local"
+  # Batch size (trigger write when reaching this number)
+  batch-size: 10
+  # Maximum delay (milliseconds, trigger write when exceeding this time)
+  max-delay-ms: 1000
+  # CMI SQLite database path (default uses local SQLite to avoid MySQL connection failure)
+  # Windows: "plugins/CMI/cmi.sqlite.db"
+  # Linux: "/home/container/plugins/CMI/cmi.sqlite.db"
+  cmi-sqlite-path: "plugins/CMI/cmi.sqlite.db"
+  # CMI MySQL configuration (when SQLite connection fails)
+  cmi-mysql:
+    host: "localhost"
+    port: 3306
+    username: "root"
+    password: ""
+    database: "minecraft"
