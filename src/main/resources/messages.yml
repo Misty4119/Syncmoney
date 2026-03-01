@@ -187,14 +187,14 @@ breaker:
     warning-count: ' <#38BDF8>▪ <#94A3B8>Warning count: <white>{count}'
     unlock-in: ' <#38BDF8>▪ <#94A3B8>Unlock in: <white>{minutes} minutes'
     not-enabled: ' <#38BDF8>▪ <#94A3B8>Player protection system is not enabled'
-    not-found: '<#F43F5E>Player not found: {player}'
+    not-found: '{prefix}<#F43F5E>Query Failed ⦊ <#94A3B8>Player {player} not found'
   # Player unlock messages
   unlock:
-    success: '<#4ADE80>Player {player} has been unlocked.'
-    failed: '<#F43F5E>Failed to unlock player {player}'
-    usage: '<#F43F5E>Usage: /syncmoney breaker unlock <player>'
-    player-not-found: '<#F43F5E>Player not found: {player}'
-    system-not-enabled: '<#94A3B8>Player protection system is not enabled'
+    success: '{prefix}<#4ADE80>Player {player} has been unlocked.'
+    failed: '{prefix}<#F43F5E>Operation Failed ⦊ <#94A3B8>Failed to unlock player {player}'
+    usage: '{prefix}<#F43F5E>Usage Error ⦊ <#94A3B8>Usage: /syncmoney breaker unlock <player>'
+    player-not-found: '{prefix}<#F43F5E>Query Failed ⦊ <#94A3B8>Player {player} not found'
+    system-not-enabled: '{prefix}<#94A3B8>Player protection system is not enabled'
 
 # Admin commands
 admin:
@@ -538,34 +538,34 @@ high-value-notification:
 player-protection:
   # L1: Rate Limit messages
   rate-limited:
-    per-second: '<#F43F5E>Transaction too fast, please wait a moment'
-    per-minute: '<#F43F5E>You have reached the maximum number of transactions per minute'
-    amount-limit: '<#F43F5E>You have exceeded the maximum transaction amount per minute'
-    broadcast: '<#F43F5E>[Rate Limit] Transaction rejected for {player}'
-  
+    per-second: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>Transaction too fast, please wait a moment'
+    per-minute: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>You have reached the maximum number of transactions per minute'
+    amount-limit: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>You have exceeded the maximum transaction amount per minute'
+    broadcast: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>Transaction rejected for player {player}'
+
   # L2: Warning messages
   warning:
     title: '<#FBBF24>[WARNING] Player {player} has abnormal economic behavior'
-    content: '    Transactions: {count} / {limit}\n    Total Amount: {total}\n    Please monitor this player'
-    broadcast: '<#FBBF24>System detected abnormal economic behavior, recording in progress'
-    player-notify: '<#FBBF24>Your transactions are being monitored due to unusual activity'
-  
+    content: ' <#38BDF8>▪ <#94A3B8>Transactions: {count} / {limit}\n <#38BDF8>▪ <#94A3B8>Total Amount: {total}'
+    broadcast: '{prefix}<#FBBF24>Security Alert ⦊ <#94A3B8>System detected abnormal economic behavior, recording in progress'
+    player-notify: '{prefix}<#FBBF24>Security Alert ⦊ <#94A3B8>Your transactions are being monitored due to unusual activity'
+
   # L3: Lock messages
   locked:
     title: '<#F43F5E>[LOCKED] Player {player} has been locked by economic protection system'
-    content: '    Reason: {reason}\n    Unlock Time: {unlock_time}'
-    player-message: '<#F43F5E>Your account cannot process transactions temporarily, please wait {minutes} minutes and try again'
-    auto-unlock-success: '<#4ADE80>Player {player} has been automatically unlocked'
-    auto-unlock-fail: '<#F43F5E>Player {player} automatic unlock failed, remaining locked'
-    admin-locked: '<#F43F5E>Player {player} has been locked by admin. Reason: {reason}'
-  
+    content: ' <#38BDF8>▪ <#94A3B8>Reason: {reason}\n <#38BDF8>▪ <#94A3B8>Unlock Time: {unlock_time}'
+    player-message: '{prefix}<#F43F5E>Access Denied ⦊ <#94A3B8>Your account cannot process transactions temporarily, please wait {minutes} minutes and try again'
+    auto-unlock-success: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player} has been automatically unlocked'
+    auto-unlock-fail: '{prefix}<#F43F5E>System Alert ⦊ <#94A3B8>Player {player} automatic unlock failed, remaining locked'
+    admin-locked: '{prefix}<#F43F5E>System Alert ⦊ <#94A3B8>Player {player} has been locked by admin. Reason: {reason}'
+
   # Unlock messages
   unlocked:
-    by-admin: '<#4ADE80>Player {player}\''s economic protection has been lifted by admin'
-    by-timeout: '<#4ADE80>Player {player}\''s account has been automatically unlocked'
-    test-failed: '<#F43F5E>Unlock test failed, remaining locked for {minutes} minutes'
-    test-success: '<#4ADE80>Player {player} passed unlock test, protection lifted'
-  
+    by-admin: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player}\''s economic protection has been lifted by admin'
+    by-timeout: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player}\''s account has been automatically unlocked'
+    test-failed: '{prefix}<#F43F5E>Security Alert ⦊ <#94A3B8>Unlock test failed, remaining locked for {minutes} minutes'
+    test-success: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player} passed unlock test, protection lifted'
+
   # Status messages
   status:
     normal: '<green>Normal'
