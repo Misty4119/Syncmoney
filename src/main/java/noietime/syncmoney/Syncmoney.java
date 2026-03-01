@@ -355,6 +355,7 @@ public final class Syncmoney extends JavaPlugin {
                 syncmoneyConfig,
                 economyFacade,
                 databaseManager,
+                redisManager,
                 nameResolver);
 
         getLogger().log(Level.FINE, "Commands registered: /money, /pay, /syncmoney migrate");
@@ -596,57 +597,15 @@ public final class Syncmoney extends JavaPlugin {
             shadowSyncTask.stop();
         }
 
+        if (circuitBreaker != null && circuitBreaker.getConnectionStateManager() != null) {
+            circuitBreaker.getConnectionStateManager().shutdown();
+        }
+
         if (redisManager != null) {
             redisManager.close();
         }
 
         getLogger().info("Syncmoney disabled.");
-    }
-
-    /**
-     * Registers PlaceholderAPI expansion (if PAPI is installed).
-     * Uses reflection to obtain the correct class loader from PlaceholderAPI plugin.
-     */
-    private void registerPlaceholderExpansion() {
-        getServer().getAsyncScheduler().runDelayed(this, (task) -> {
-            var papiPlugin = getServer().getPluginManager().getPlugin("PlaceholderAPI");
-            if (papiPlugin != null) {
-                getLogger().info("PlaceholderAPI detected, registering syncmoney expansion...");
-
-                try {
-                    ClassLoader papiClassLoader = papiPlugin.getClass().getClassLoader();
-
-                    Class<?> papiClass = Class.forName("me.clip.placeholderapi.PlaceholderAPI", true, papiClassLoader);
-                    Class<?> expansionClass = Class.forName(
-                            "noietime.syncmoney.integration.placeholder.SyncmoneyPlaceholderExpansion", true,
-                            papiClassLoader);
-
-                    Object expansion = expansionClass.getConstructor(
-                            Syncmoney.class,
-                            EconomyFacade.class,
-                            BaltopManager.class,
-                            NameResolver.class,
-                            String.class).newInstance(this, economyFacade, baltopManager, nameResolver,
-                                    getDescription().getVersion());
-
-                    java.lang.reflect.Method registerMethod = papiClass.getMethod("registerPlaceholderHook",
-                            String.class, expansionClass);
-                    boolean registered = (boolean) registerMethod.invoke(null, "syncmoney", expansion);
-
-                    if (registered) {
-                        getLogger().info("PlaceholderAPI expansion registered successfully: syncmoney v"
-                                + getDescription().getVersion());
-                    } else {
-                        getLogger().warning("PlaceholderAPI expansion registration failed: syncmoney");
-                    }
-                } catch (Exception e) {
-                    getLogger().warning("Failed to register PlaceholderAPI expansion: " + e.getClass().getSimpleName()
-                            + " - " + e.getMessage());
-                }
-            } else {
-                getLogger().fine("PlaceholderAPI not found, skipping expansion registration.");
-            }
-        }, 1, TimeUnit.SECONDS);
     }
 
     /**

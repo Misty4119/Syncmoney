@@ -3,6 +3,7 @@ package noietime.syncmoney.migration;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import org.bukkit.plugin.Plugin;
 
@@ -26,6 +27,7 @@ public final class LocalToSyncMigrationTask {
     private final SyncmoneyConfig config;
     private final EconomyFacade economyFacade;
     private final DatabaseManager databaseManager;
+    private final RedisManager redisManager;
     private final MigrationCheckpoint checkpoint;
     private final MigrationBackup backup;
 
@@ -33,16 +35,20 @@ public final class LocalToSyncMigrationTask {
     private LocalToSyncProgressCallback progressCallback;
 
     private static final String LOCAL_DB_PREFIX = "jdbc:sqlite:";
+    private static final String KEY_PREFIX_BALANCE = "syncmoney:balance:";
+    private static final String KEY_PREFIX_VERSION = "syncmoney:version:";
 
     public LocalToSyncMigrationTask(Plugin plugin, SyncmoneyConfig config,
                                     EconomyFacade economyFacade,
                                     DatabaseManager databaseManager,
+                                    RedisManager redisManager,
                                     MigrationCheckpoint checkpoint,
                                     MigrationBackup backup) {
         this.plugin = plugin;
         this.config = config;
         this.economyFacade = economyFacade;
         this.databaseManager = databaseManager;
+        this.redisManager = redisManager;
         this.checkpoint = checkpoint;
         this.backup = backup;
     }
@@ -61,6 +67,17 @@ public final class LocalToSyncMigrationTask {
         if (running) {
             plugin.getLogger().warning("Local-to-Sync migration is already running!");
             return;
+        }
+
+        if (!validatePrerequisites()) {
+            reportError("Prerequisites validation failed: Redis or Database is not available");
+            return;
+        }
+
+        if (config.isMigrationLockEconomy()) {
+            MigrationLock.enable();
+            MigrationLock.lock();
+            plugin.getLogger().info("Economy operations locked for migration");
         }
 
         running = true;
@@ -104,6 +121,8 @@ public final class LocalToSyncMigrationTask {
                                 config.getServerName()
                         );
 
+                        populateRedis(player.uuid(), player.balance(), player.version());
+
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         failedCount.incrementAndGet();
@@ -117,6 +136,9 @@ public final class LocalToSyncMigrationTask {
                 }
 
                 checkpoint.complete();
+
+                validateMigration(players.size(), successCount.get(), failedCount.get());
+
                 reportComplete(successCount.get(), failedCount.get());
 
             } catch (Exception e) {
@@ -125,6 +147,11 @@ public final class LocalToSyncMigrationTask {
                 reportError(e.getMessage());
             } finally {
                 running = false;
+                if (config.isMigrationLockEconomy()) {
+                    MigrationLock.unlock();
+                    MigrationLock.disable();
+                    plugin.getLogger().info("Economy operations unlocked after migration");
+                }
             }
         });
     }
@@ -173,6 +200,138 @@ public final class LocalToSyncMigrationTask {
      */
     private String getTableName(String dbPath) {
         return "player_balances";
+    }
+
+    /**
+     * Populates Redis with player balance and version data.
+     * This is critical for SYNC mode to function properly after migration.
+     */
+    private void populateRedis(UUID uuid, BigDecimal balance, long version) {
+        if (redisManager == null || !redisManager.isConnected()) {
+            plugin.getLogger().warning("Redis not available, skipping Redis population for: " + uuid);
+            return;
+        }
+
+        try (var jedis = redisManager.getResource()) {
+            String keyBalance = KEY_PREFIX_BALANCE + uuid.toString();
+            String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
+
+            jedis.set(keyBalance, balance.toPlainString());
+            jedis.set(keyVersion, String.valueOf(version));
+
+            plugin.getLogger().fine("Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to populate Redis for " + uuid + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Validates prerequisites before starting migration.
+     * @return true if all prerequisites are met
+     */
+    private boolean validatePrerequisites() {
+        if (databaseManager == null) {
+            plugin.getLogger().severe("Database manager is not available. Cannot start migration.");
+            return false;
+        }
+
+        if (redisManager == null || !redisManager.isConnected()) {
+            plugin.getLogger().severe("Redis is not available. Cannot start migration to SYNC mode.");
+            return false;
+        }
+
+        plugin.getLogger().info("Migration prerequisites validated successfully.");
+        return true;
+    }
+
+    /**
+     * Validates data consistency after migration.
+     * Compares total balance in SQLite vs Redis to ensure migration was successful.
+     */
+    private void validateMigration(int totalPlayers, int successCount, int failedCount) {
+        if (redisManager == null || !redisManager.isConnected()) {
+            plugin.getLogger().warning("Skipping migration validation - Redis not available");
+            return;
+        }
+
+        try {
+            BigDecimal sqliteTotal = calculateSQLiteTotalBalance();
+            plugin.getLogger().info("Migration validation - SQLite total balance: " + sqliteTotal);
+
+            BigDecimal redisTotal = calculateRedisTotalBalance(totalPlayers);
+            plugin.getLogger().info("Migration validation - Redis total balance: " + redisTotal);
+
+            if (sqliteTotal.compareTo(redisTotal) == 0) {
+                plugin.getLogger().info("Migration validation PASSED: SQLite and Redis balances match!");
+            } else {
+                double diffPercent = Math.abs(sqliteTotal.subtract(redisTotal).doubleValue()) /
+                                   Math.max(sqliteTotal.doubleValue(), 1.0) * 100;
+                plugin.getLogger().warning("Migration validation WARNING: Balance difference is " +
+                    String.format("%.2f", diffPercent) + "%");
+            }
+
+            plugin.getLogger().info("Migration validation summary - Total: " + totalPlayers +
+                ", Success: " + successCount + ", Failed: " + failedCount);
+
+        } catch (Exception e) {
+            plugin.getLogger().warning("Migration validation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Calculates total balance from local SQLite database.
+     */
+    private BigDecimal calculateSQLiteTotalBalance() throws SQLException {
+        String localDbPath = config.getLocalSQLitePath();
+        if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
+            localDbPath = LOCAL_DB_PREFIX + localDbPath;
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        try (Connection conn = DriverManager.getConnection(localDbPath);
+             Statement stmt = conn.createStatement()) {
+
+            String query = "SELECT SUM(balance) as total FROM " + getTableName(localDbPath);
+            try (ResultSet rs = stmt.executeQuery(query)) {
+                if (rs.next()) {
+                    double sum = rs.getDouble("total");
+                    if (!rs.wasNull()) {
+                        total = BigDecimal.valueOf(sum);
+                    }
+                }
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Calculates total balance from Redis.
+     * Scans all balance keys and sums up.
+     */
+    private BigDecimal calculateRedisTotalBalance(int expectedCount) {
+        BigDecimal total = BigDecimal.ZERO;
+        try (var jedis = redisManager.getResource()) {
+            String pattern = KEY_PREFIX_BALANCE + "*";
+            var keys = jedis.keys(pattern);
+
+            int count = 0;
+            for (String key : keys) {
+                String value = jedis.get(key);
+                if (value != null) {
+                    try {
+                        total = total.add(new BigDecimal(value));
+                        count++;
+                    } catch (NumberFormatException e) {
+                        plugin.getLogger().warning("Invalid balance value in Redis: " + value);
+                    }
+                }
+            }
+
+            plugin.getLogger().info("Redis balance scan found " + count + " player records");
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to calculate Redis total balance: " + e.getMessage());
+        }
+        return total;
     }
 
     /**

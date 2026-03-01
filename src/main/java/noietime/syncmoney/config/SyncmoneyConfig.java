@@ -72,6 +72,10 @@ public final class SyncmoneyConfig {
         return config.getInt("database.pool-size", 10);
     }
 
+    public int getDatabaseMinimumIdle() {
+        return config.getInt("database.minimum-idle", 2);
+    }
+
     public int getDatabaseConnectionTimeout() {
         return config.getInt("database.connection-timeout", 10000);
     }
@@ -165,6 +169,21 @@ public final class SyncmoneyConfig {
 
     public boolean isMigrationAutoBackup() {
         return config.getBoolean("migration.auto-backup", true);
+    }
+
+    /**
+     * Whether to populate Redis during migration (strongly recommended for SYNC mode).
+     */
+    public boolean isMigrationPopulateRedis() {
+        return config.getBoolean("migration.populate-redis", true);
+    }
+
+    /**
+     * Whether to lock economy operations during migration.
+     * When enabled, prevents data inconsistency during migration.
+     */
+    public boolean isMigrationLockEconomy() {
+        return config.getBoolean("migration.lock-economy", false);
     }
 
     /**
@@ -294,6 +313,190 @@ public final class SyncmoneyConfig {
      */
     public String getShadowSyncCMIMySQLDatabase() {
         return config.getString("shadow-sync.cmi-mysql.database", "minecraft");
+    }
+
+    // ========== New Shadow Sync Config (v2) ==========
+
+    /**
+     * Gets shadow sync storage type (jsonl/sqlite/mysql/postgresql)
+     */
+    public String getShadowSyncStorageType() {
+        return config.getString("shadow-sync.storage.type", "sqlite").toLowerCase();
+    }
+
+    /**
+     * Gets shadow sync SQLite path
+     */
+    public String getShadowSyncStorageSqlitePath() {
+        return config.getString("shadow-sync.storage.sqlite.path", "plugins/Syncmoney/data/shadow-sync.db");
+    }
+
+    /**
+     * Gets shadow sync JSONL path
+     */
+    public String getShadowSyncStorageJsonlPath() {
+        return config.getString("shadow-sync.storage.jsonl.path", "plugins/Syncmoney/logs/shadow-sync/");
+    }
+
+    /**
+     * Gets shadow sync MySQL host
+     */
+    public String getShadowSyncStorageMysqlHost() {
+        return config.getString("shadow-sync.storage.mysql.host", "localhost");
+    }
+
+    /**
+     * Gets shadow sync MySQL port
+     */
+    public int getShadowSyncStorageMysqlPort() {
+        return config.getInt("shadow-sync.storage.mysql.port", 3306);
+    }
+
+    /**
+     * Gets shadow sync MySQL username
+     */
+    public String getShadowSyncStorageMysqlUsername() {
+        return config.getString("shadow-sync.storage.mysql.username", "root");
+    }
+
+    /**
+     * Gets shadow sync MySQL password
+     */
+    public String getShadowSyncStorageMysqlPassword() {
+        return config.getString("shadow-sync.storage.mysql.password", "");
+    }
+
+    /**
+     * Gets shadow sync MySQL database name
+     */
+    public String getShadowSyncStorageMysqlDatabase() {
+        return config.getString("shadow-sync.storage.mysql.database", "syncmoney_shadow");
+    }
+
+    /**
+     * Gets shadow sync MySQL pool size
+     */
+    public int getShadowSyncStorageMysqlPoolSize() {
+        return config.getInt("shadow-sync.storage.mysql.pool-size", 5);
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL host
+     */
+    public String getShadowSyncStoragePostgresHost() {
+        return config.getString("shadow-sync.storage.postgresql.host", "localhost");
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL port
+     */
+    public int getShadowSyncStoragePostgresPort() {
+        return config.getInt("shadow-sync.storage.postgresql.port", 5432);
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL username
+     */
+    public String getShadowSyncStoragePostgresUsername() {
+        return config.getString("shadow-sync.storage.postgresql.username", "root");
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL password
+     */
+    public String getShadowSyncStoragePostgresPassword() {
+        return config.getString("shadow-sync.storage.postgresql.password", "");
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL database name
+     */
+    public String getShadowSyncStoragePostgresDatabase() {
+        return config.getString("shadow-sync.storage.postgresql.database", "syncmoney_shadow");
+    }
+
+    /**
+     * Gets shadow sync PostgreSQL pool size
+     */
+    public int getShadowSyncStoragePostgresPoolSize() {
+        return config.getInt("shadow-sync.storage.postgresql.pool-size", 5);
+    }
+
+    /**
+     * Gets shadow sync CMI connection mode (sqlite/mysql)
+     */
+    public String getShadowSyncCMIConnection() {
+        return config.getString("shadow-sync.cmi.connection", "sqlite").toLowerCase();
+    }
+
+    /**
+     * Gets shadow sync CMI SQLite path
+     */
+    public String getShadowSyncCMIConnectionSqlitePath() {
+        return config.getString("shadow-sync.cmi.sqlite-path", "plugins/CMI/cmi.sqlite.db");
+    }
+
+    /**
+     * Gets shadow sync CMI MySQL host
+     */
+    public String getShadowSyncCMIConnectionMySQLHost() {
+        return config.getString("shadow-sync.cmi.mysql.host", "localhost");
+    }
+
+    /**
+     * Gets shadow sync CMI MySQL port
+     */
+    public int getShadowSyncCMIConnectionMySQLPort() {
+        return config.getInt("shadow-sync.cmi.mysql.port", 3306);
+    }
+
+    /**
+     * Gets shadow sync CMI MySQL username
+     */
+    public String getShadowSyncCMIConnectionMySQLUsername() {
+        return config.getString("shadow-sync.cmi.mysql.username", "root");
+    }
+
+    /**
+     * Gets shadow sync CMI MySQL password
+     */
+    public String getShadowSyncCMIConnectionMySQLPassword() {
+        return config.getString("shadow-sync.cmi.mysql.password", "");
+    }
+
+    /**
+     * Gets shadow sync CMI MySQL database name
+     */
+    public String getShadowSyncCMIConnectionMySQLDatabase() {
+        return config.getString("shadow-sync.cmi.mysql.database", "minecraft");
+    }
+
+    /**
+     * Gets shadow sync trigger batch size
+     */
+    public int getShadowSyncTriggerBatchSize() {
+        return config.getInt("shadow-sync.trigger.batch-size", 10);
+    }
+
+    /**
+     * Gets shadow sync trigger max delay milliseconds
+     */
+    public long getShadowSyncTriggerMaxDelayMs() {
+        return config.getLong("shadow-sync.trigger.max-delay-ms", 1000);
+    }
+
+    /**
+     * Whether shadow sync history feature is enabled
+     */
+    public boolean isShadowSyncHistoryEnabled() {
+        return config.getBoolean("shadow-sync.features.history-enabled", true);
+    }
+
+    /**
+     * Gets shadow sync history retention days
+     */
+    public int getShadowSyncHistoryRetentionDays() {
+        return config.getInt("shadow-sync.features.history-retention-days", 90);
     }
 
 

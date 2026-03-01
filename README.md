@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <b>Enterprise-grade cross-server economy synchronization plugin for Minecraft</b>
+  <b>Enterprise-grade cross-server economy synchronization for Minecraft</b>
   <br>
   <a href="https://official.noie.fun">
     <img src="https://img.shields.io/discord/1453099158884978850?label=Discord&logo=discord" alt="Discord">
@@ -22,72 +22,68 @@
 
 ---
 
-## Why Syncmoney?
+## Overview
 
-| Problem | Syncmoney Solution |
-|---------|-------------------|
-| Players lose money when switching servers | Cross-server sync via Redis Pub/Sub |
-| Economy desync between servers | Atomic transactions with Lua scripts |
-| CMI migration pain | Migration tool with multi-server merge |
-| Economic exploits | 4-layer circuit breaker protection |
-| Performance bottlenecks | Async write queues + memory caching |
+Syncmoney is a high-performance Minecraft economy plugin designed for multi-server networks. It synchronizes player balances across all servers in real-time using Redis Pub/Sub, with comprehensive protection against economic exploits and data loss.
 
-**Perfect for**: Survival networks, factions servers, SMPs, and any multi-server economy ecosystem.
+**Perfect for**: Survival servers, factions, SMPs, minigame networks, and any multi-server economy ecosystem.
 
 ---
 
 ## Features
 
-### Core
-- **Real-time Sync** — Balance updates propagate across all servers via Redis Pub/Sub
-- **Vault Integration** — Compatible with any Vault-enabled economy plugin
-- **Atomic Transactions** — Lua scripts prevent money duplication
-- **Graceful Degradation** — Memory → Redis → Database fallback chain
+### Core Synchronization
+- **Real-time Cross-Server Sync** — Balance changes instantly propagate to all servers via Redis Pub/Sub
+- **Vault Integration** — Full compatibility with any Vault-enabled economy plugin
+- **Atomic Transactions** — Lua scripts prevent money duplication during race conditions
+- **Graceful Degradation** — Automatic fallback: Memory → Redis → Database
 
-### Security
-- **Circuit Breaker** — Single transaction limits, rate limiting, anomaly detection, periodic inflation monitoring
-- **Transfer Guard** — Prevents money loss during server teleportation
-- **Audit Trail** — Full transaction history with search & export (stored in MySQL)
+### Security Protection
+- **4-Layer Circuit Breaker**
+  - Single transaction limits
+  - Rate limiting (transactions per second)
+  - Sudden balance change detection
+  - Periodic inflation monitoring
+- **Transfer Guard** — Prevents money loss when players teleport during transactions
+- **Rollback Protection** — Guards against failed database writes
 
-### Advanced
-- **CMI Migration** — Import from CMI with multi-server merge support
-- **Shadow Sync** — Automated backup to external databases
-- **Baltop** — Global leaderboard via Redis sorted sets
-- **PlaceholderAPI** — Dynamic placeholders for scoreboards & plugins
+### Migration & Backup
+- **CMI Migration Tool** — One-command import from CMI economy
+- **Multi-Server Merge** — Combines economy data from multiple CMI servers
+- **Shadow Sync** — Automatic backup to external databases
+- **Checkpoint Resume** — Large migrations can resume if interrupted
+
+### Leaderboards & Integration
+- **Global Baltop** — Redis-powered sorted set leaderboard
+- **PlaceholderAPI Expansion** — Dynamic placeholders for scoreboards
 - **Folia Support** — Region-based scheduling compatibility
+- **Audit Trail** — Full transaction history with search and export
 
 ---
 
-## Supported Platforms
+## Requirements
 
-| Platform | Support |
-|----------|---------|
-| Paper 1.20+ | Full |
-| Spigot 1.20+ | Full |
-| Folia 1.20+ | Full |
-
-**Requirements**: Java 21+, Vault, Redis, MySQL/PostgreSQL/MariaDB
+| Component | Version |
+|-----------|---------|
+| Server | Paper 1.20+ / Spigot 1.20+ / Folia 1.20+ |
+| Java | 21+ |
+| Redis | 5.0+ |
+| Database | MySQL 8.0+ / MariaDB 10.5+ / PostgreSQL 13+ |
+| Plugin | Vault |
 
 ---
 
 ## Quick Start
 
-### 1. Installation
-```
-plugins/Syncmoney.jar
-```
+### 1. Install
 
-### 2. PlaceholderAPI Expansion (Optional)
-If you want to use placeholders in scoreboards or other plugins:
+Place `Syncmoney.jar` in your server's `plugins/` folder.
 
-1. Download `SyncmoneyExpansion.jar` from [Releases](https://github.com/Misty4119/Syncmoney/releases)
-2. Place it in `plugins/PlaceholderAPI/expansions/`
-3. Restart the server
-4. The expansion will register automatically if PlaceholderAPI and Syncmoney are installed
+### 2. Configure Redis
 
-### 3. Configuration
+Edit `plugins/Syncmoney/config.yml`:
+
 ```yaml
-# config.yml
 server-name: "survival-01"
 
 redis:
@@ -100,74 +96,42 @@ database:
   type: "mysql"
   host: "localhost"
   port: 3306
+  username: "root"
+  password: ""
   database: "syncmoney"
 ```
 
-### 4. Multi-Server Setup
-1. Install on all servers
-2. Connect to same Redis instance
-3. Set unique `server-name` per server
-4. Restart — economy syncs automatically
+### 3. Multi-Server Setup
+
+1. Install Syncmoney on **all** servers
+2. Connect all servers to the **same Redis instance**
+3. Set a unique `server-name` for each server
+4. Restart all servers — economy syncs automatically
+
+### 4. PlaceholderAPI (Optional)
+
+For scoreboard placeholders:
+
+1. Download `SyncmoneyExpansion.jar` from [Releases](https://github.com/Misty4119/Syncmoney/releases)
+2. Place in `plugins/PlaceholderAPI/expansions/`
+3. Restart the server
 
 ---
 
-## Commands
+## Configuration
 
-### Players
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/money` | View balance | `syncmoney.money` |
-| `/pay <player> <amount>` | Transfer money | `syncmoney.pay` |
-| `/baltop` | Leaderboard | `syncmoney.money` |
+### Economy Modes
 
-### Admins
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/syncmoney admin give <player> <amount>` | Give money | `syncmoney.admin.give` |
-| `/syncmoney admin take <player> <amount>` | Take money | `syncmoney.admin.take` |
-| `/syncmoney admin set <player> <amount>` | Set balance | `syncmoney.admin.set` |
-| `/syncmoney migrate cmi` | Migrate from CMI | `syncmoney.admin` |
-| `/syncmoney breaker status` | View protection status | `syncmoney.admin` |
-| `/syncmoney reload` | Reload config | `syncmoney.admin` |
-
-### Permission Hierarchy
-```
-syncmoney.admin.full
-    │
-    ├── syncmoney.admin.general (give/take ≤1M/day)
-    │       │
-    │       ├── syncmoney.admin.reward (give ≤100K/day)
-    │       │       │
-    │       │       └── syncmoney.admin.observe
-```
-
----
-
-## Economy Modes
-
-| Mode | Use Case |
-|------|----------|
+| Mode | Description |
+|------|-------------|
 | `auto` | Auto-detect based on Redis/DB availability (recommended) |
-| `local` | Single server only, in-memory with SQLite backup |
-| `local_redis` | Multi-server sync via Redis (no MySQL), data stored in Redis |
-| `sync` | Full cross-server sync with Redis + MySQL persistence |
+| `local` | Single server only, SQLite backup |
+| `local_redis` | Multi-server sync via Redis (no MySQL) |
+| `sync` | Full cross-server sync with Redis + MySQL |
 | `cmi` | Direct CMI database integration |
 
-### Auto Detection Logic
-
-When set to `auto`, the mode is automatically determined:
-
-| Redis | Database | Result Mode |
-|-------|----------|-------------|
-| Enabled | Enabled | `sync` |
-| Enabled | Disabled | `local_redis` |
-| Disabled | Disabled | `local` |
-
----
-
-## Configuration Reference
-
 ### Pay Settings
+
 ```yaml
 pay:
   cooldown-seconds: 30
@@ -177,6 +141,7 @@ pay:
 ```
 
 ### Circuit Breaker
+
 ```yaml
 circuit-breaker:
   enabled: true
@@ -186,17 +151,29 @@ circuit-breaker:
   sudden-change-threshold: 100
 ```
 
-### CMI Migration
-```yaml
-migration:
-  cmi:
-    auto-detect: true
-    multi-server:
-      enabled: true
-      sqlite-paths:
-        - "plugins/CMI/cmi.sqlite.db"
-      merge-strategy: "latest"  # latest | sum | max
-```
+---
+
+## Commands
+
+### Players
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/money` | View your balance | `syncmoney.money` |
+| `/pay <player> <amount>` | Transfer money to player | `syncmoney.pay` |
+| `/baltop` | View global leaderboard | `syncmoney.money` |
+
+### Administrators
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/syncmoney admin give <player> <amount>` | Give money to player | `syncmoney.admin.give` |
+| `/syncmoney admin take <player> <amount>` | Take money from player | `syncmoney.admin.take` |
+| `/syncmoney admin set <player> <amount>` | Set player balance | `syncmoney.admin.set` |
+| `/syncmoney migrate cmi` | Migrate from CMI | `syncmoney.admin` |
+| `/syncmoney breaker status` | View protection status | `syncmoney.admin` |
+| `/syncmoney audit` | View transaction history | `syncmoney.admin` |
+| `/syncmoney reload` | Reload configuration | `syncmoney.admin` |
 
 ---
 
@@ -206,14 +183,10 @@ migration:
 |-------------|-------------|
 | `%syncmoney_balance%` | Player's current balance |
 | `%syncmoney_balance_formatted%` | Balance with smart formatting |
-| `%syncmoney_balance_abbreviated%` | Balance with abbreviated format (e.g., 1.5K, 2.3億) |
-| `%syncmoney_rank%` | Player's rank on the leaderboard |
-| `%syncmoney_my_rank%` | Player's rank (alias) |
+| `%syncmoney_balance_abbreviated%` | Balance abbreviated (1.5K, 2.3億) |
+| `%syncmoney_rank%` | Player's leaderboard rank |
 | `%syncmoney_total_supply%` | Total money in circulation |
-| `%syncmoney_total_players%` | Number of players in leaderboard |
-| `%syncmoney_online_players%` | Current online player count |
-| `%syncmoney_version%` | Plugin version |
-| `%syncmoney_top_<n>%` | Balance of player at rank n (e.g., `%syncmoney_top_1%`) |
+| `%syncmoney_top_<n>%` | Balance of player at rank n |
 | `%syncmoney_balance_<player>%` | Specific player's balance by name |
 
 ---
@@ -221,7 +194,7 @@ migration:
 ## Migration from CMI
 
 ```bash
-# Preview migration data first
+# Preview migration data
 /syncmoney migrate cmi -preview
 
 # Start migration
@@ -230,44 +203,39 @@ migration:
 # Force migration (skip validation)
 /syncmoney migrate cmi -force
 
-# Migrate without backup
+# Force migration without backup
 /syncmoney migrate cmi -force -no-backup
 ```
 
 **Features**:
-- PostgreSQL & MySQL & SQLite support
-- Multi-server merge (configured in config.yml)
-- Auto-backup before migration
-- Checkpoint resume support
-- Progress tracking
+- PostgreSQL, MySQL, and SQLite support
+- Multi-server data merge
+- Automatic backup before migration
+- Checkpoint resume for large datasets
 
 ---
 
 ## Performance
 
-Syncmoney uses asynchronous processing and connection pooling to handle high-throughput scenarios:
+Syncmoney is optimized for high-throughput scenarios:
 
-- Redis connection pooling (`pool-size: 30` recommended)
-- Async write queues to prevent main thread blocking
-- In-memory caching for frequently accessed data
-- Batch database writes for audit logs
+- **Redis connection pooling** (default: 30 connections)
+- **Async write queues** — prevents main thread blocking
+- **In-memory caching** — O(1) balance reads
+- **Batch database writes** — efficient audit log persistence
 
 ---
 
-## API (Developers)
+## API for Developers
 
 ```java
 // Get economy via Vault
 Economy economy = Bukkit.getServicesManager()
     .getRegistration(Economy.class).getProvider();
 
-// Access internal event data
-// EconomyEvent contains: playerUuid, delta, balanceAfter, type, source, timestamp
+// Economy events contain:
+// playerUuid, delta, balanceAfter, type, source, timestamp
 ```
-
-**Internal Event Data**:
-- `EconomyEvent` — Transaction data (deposit, withdraw, transfer, set balance)
-- Event sources include: `COMMAND_PAY`, `COMMAND_ADMIN`, `ADMIN_GIVE`, `ADMIN_TAKE`, `MIGRATION`, etc.
 
 ---
 
@@ -276,11 +244,11 @@ Economy economy = Bukkit.getServicesManager()
 | Issue | Solution |
 |-------|----------|
 | "Server name not configured" | Set `server-name` in config.yml |
-| Redis connection failed | Verify host/port/password |
-| Balances not syncing | Check same Redis/DB across servers |
-| Performance issues | Increase `queue-capacity` + `pool-size` |
+| Redis connection failed | Verify host/port/password in config |
+| Balances not syncing | Ensure all servers use same Redis instance |
+| Performance issues | Increase `pool-size` and `queue-capacity` |
 
-Enable `debug: true` in config for detailed logs.
+Enable `debug: true` in config.yml for detailed logs.
 
 ---
 

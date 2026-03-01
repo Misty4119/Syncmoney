@@ -58,7 +58,6 @@ general:
   no-permission: '{prefix}<#F43F5E>You do not have permission to execute this command.'
   sync-error: '{prefix}<#F43F5E>Data synchronization failed. For data safety, please log back into the server.'
   player-only: '<#F43F5E>System Prompt ⦊ <#94A3B8>This command is restricted to in-game players.'
-  # Time format
   time-format:
     seconds-ago: '{seconds} seconds ago'
     minutes-ago: '{minutes} minutes ago'
@@ -131,11 +130,9 @@ migration:
 
 # Breaker (Protection mechanism)
 breaker:
-  # Boolean value translation (for breaker)
-  boolean:
-    yes: '<green>Yes'
-    no: '<red>No'
-  # Health status
+  enabled:
+    active: '<green>Active</green>'
+    inactive: '<red>Inactive</red>'
   health:
     healthy: '<green>Healthy'
     abnormal: '<red>Abnormal'
@@ -168,13 +165,11 @@ breaker:
     redis-connection: '<#475569>┣━ <#A78BFA>[ Database Connection ]'
     resources: '<#475569>┣━ <#A78BFA>[ Server Resources ]'
     health-header: '<#475569>┣━ <#A78BFA>[ System Health ]'
-  # Breaker status options
   state-options:
     normal: '<green>Normal (NORMAL)'
     warning: '<yellow>Warning (WARNING)'
     locked: '<red>Locked (LOCKED)'
     not-enabled: '<gray>Not Enabled'
-  # Usage instructions
   usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Breaker Guide</bold></gradient> <#475569>▰▰▰▰'
   usage-status: ' <#F8FAFC>/syncmoney breaker status <#475569>⦊ <white>View breaker status'
   usage-reset: ' <#F8FAFC>/syncmoney breaker reset <#475569>⦊ <white>Force reset breaker'
@@ -261,7 +256,6 @@ monitor:
     cached-players: ' <#38BDF8>▪ <#94A3B8>Player Data Cache: <#A78BFA>{count} entries'
     queue: ' <#38BDF8>▪ <#94A3B8>Pending DB Writes: <#A78BFA>{count} entries'
     hint: '<#475569>Type <#38BDF8>/syncmoney monitor [redis|cache|db] <#475569>to view detailed metrics'
-  # Boolean value translation
   status:
     online: '<green>Online'
     offline: '<red>Offline'
@@ -358,7 +352,6 @@ baltop:
   self-gap: ' <#38BDF8>▪ <#94A3B8>Gap to next tier: <#F43F5E>{amount} <#94A3B8>({player})'
   not-ranked: '{prefix}<#94A3B8>You are not currently ranked on the leaderboard.'
   me-console: '{prefix}<#94A3B8>Please execute this command in-game to view your personal rank.'
-  # Pagination buttons
   pagination:
     prev: '<#38BDF8>◀ Prev'
     prev-disabled: '<#475569>◀ '
@@ -367,7 +360,6 @@ baltop:
     page-info: '<#94A3B8>Page <#38BDF8>{page} <#94A3B8>/ <#38BDF8>{total}'
     hover-prev: '<#94A3B8>Click to go to previous page'
     hover-next: '<#94A3B8>Click to go to next page'
-  # Hover message
   hover:
     player: '<#94A3B8>Player: <#38BDF8>{player}'
     balance: '<#94A3B8>Balance: <#4ADE80>{balance}'
@@ -376,10 +368,9 @@ baltop:
 
 # Shadow sync (background sync mechanism)
 shadow:
-  # Boolean value translation
-  boolean:
-    yes: '<green>Yes'
-    no: '<red>No'
+  enabled:
+    running: '<green>Running</green>'
+    stopped: '<red>Stopped</red>'
   status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Background Shadow Sync</bold></gradient> <#475569>▰▰▰▰'
   status-running: ' <#38BDF8>▪ <#94A3B8>Execution State: <white>{running}'
   status-queue: ' <#38BDF8>▪ <#94A3B8>Queued for processing: <#38BDF8>{count} entries'
@@ -401,11 +392,31 @@ shadow:
   sync-target: ' <#38BDF8>▪ <#94A3B8>Sync Target Object: <#A78BFA>{target}'
   log-entry: '<gray>{timestamp} <yellow>{player} <gray>-> <yellow>{balance} <white>({status})'
   log-entry-failed: '<gray>{timestamp} <yellow>{player} <gray>-> <yellow>{balance} <white>({status}) <red>Reason: {reason}'
-  # Log status translation
   log-status:
     success: '<green>Success'
     failed: '<red>Failed'
     unknown: '<gray>Unknown'
+  history:
+    usage: '<#F43F5E>Usage: <#38BDF8>/syncmoney shadow history <player> [page]'
+    invalid-page: '<#F43F5E>Pagination Error ⦊ <#94A3B8>Please enter a valid page number.'
+    not-found: '{prefix}<#94A3B8>No history found for <white>{player}'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>History - {player}</bold></gradient> <#475569>▰▰▰▰'
+    header-page: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>History - {player}</bold> <#475569>(Page {page}) <#475569>▰▰▰▰'
+    entry: ' <#38BDF8>{timestamp} <#475569>┇ <#F8FAFC>{balance} <#475569>┇ <#A78BFA>{target} <#475569>⦊ <#94A3B8>{status}'
+    status-success: '<#4ADE80>Success'
+    status-failed: '<#F43F5E>Failed'
+    pagination-hint: '<#475569>┗━ <#94A3B8>Page <#38BDF8>{page} <#94A3B8>. Use <#38BDF8>/syncmoney shadow history {player} {nextPage} <#94A3B8>for more.'
+  export:
+    usage: '<#F43F5E>Usage: <#38BDF8>/syncmoney shadow export <player> [startDate] [endDate]'
+    example: '<#475569>┣━ <#94A3B8>Example: <#38BDF8>/syncmoney shadow export Notch 2026-01-01 2026-03-01'
+    invalid-start-date: '<#F43F5E>Date Format Error ⦊ <#94A3B8>Invalid start date format. Use yyyy-MM-dd'
+    invalid-end-date: '<#F43F5E>Date Format Error ⦊ <#94A3B8>Invalid end date format. Use yyyy-MM-dd'
+    start-after-end: '<#F43F5E>Date Range Error ⦊ <#94A3B8>Start date must be before end date.'
+    exporting: '{prefix}<#94A3B8>Exporting shadow sync history...'
+    success: '{prefix}<#4ADE80>Exported <white>{count} <#4ADE80>records to <#38BDF8>{path}'
+    no-records: '{prefix}<#94A3B8>No records found to export.'
+  usage-history: ' <#F8FAFC>/syncmoney shadow history <player> [page] <#475569>⦊ <white>View sync history'
+  usage-export: ' <#F8FAFC>/syncmoney shadow export <player> [startDate] [endDate] <#475569>⦊ <white>Export to JSONL'
 
 # Permission related (level tags)
 permission:

@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.migration.CMIDatabaseReader.CMIPlayerData;
+import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.plugin.Plugin;
@@ -28,6 +29,7 @@ public final class MigrationTask {
     private CMIDatabaseReader cmiReader;
     private final EconomyFacade economyFacade;
     private final DatabaseManager databaseManager;
+    private final RedisManager redisManager;
     private final NameResolver nameResolver;
     private final MigrationCheckpoint checkpoint;
     private final MigrationBackup backup;
@@ -47,7 +49,9 @@ public final class MigrationTask {
 
     public MigrationTask(Plugin plugin, SyncmoneyConfig config,
                          CMIDatabaseReader cmiReader, EconomyFacade economyFacade,
-                         DatabaseManager databaseManager, NameResolver nameResolver,
+                         DatabaseManager databaseManager,
+                         RedisManager redisManager,
+                         NameResolver nameResolver,
                          MigrationCheckpoint checkpoint, MigrationBackup backup,
                          CMIEconomyDisabler economyDisabler) {
         this.plugin = plugin;
@@ -55,6 +59,7 @@ public final class MigrationTask {
         this.cmiReader = cmiReader;
         this.economyFacade = economyFacade;
         this.databaseManager = databaseManager;
+        this.redisManager = redisManager;
         this.nameResolver = nameResolver;
         this.checkpoint = checkpoint;
         this.backup = backup;
@@ -117,6 +122,19 @@ public final class MigrationTask {
                 }
                 return;
             }
+        }
+
+        if (!validatePrerequisites()) {
+            if (progressCallback != null) {
+                progressCallback.onError("Redis is not available. Cannot start migration to SYNC mode.");
+            }
+            return;
+        }
+
+        if (config.isMigrationLockEconomy()) {
+            MigrationLock.enable();
+            MigrationLock.lock();
+            plugin.getLogger().info("Economy operations locked for CMI migration");
         }
 
         int totalPlayers;
@@ -326,7 +344,47 @@ public final class MigrationTask {
             );
         }
 
+        populateRedis(uuid, balance, 1L);
+
         plugin.getLogger().info("Migrated player: " + playerName + " with balance " + balance);
+    }
+
+    /**
+     * Populates Redis with player balance and version data.
+     * Uses SYNC mode key space (syncmoney:balance:) instead of CMI key space.
+     */
+    private void populateRedis(UUID uuid, BigDecimal balance, long version) {
+        if (redisManager == null || !redisManager.isConnected()) {
+            plugin.getLogger().warning("Redis not available, skipping Redis population for: " + uuid);
+            return;
+        }
+
+        try (var jedis = redisManager.getResource()) {
+            String keyBalance = "syncmoney:balance:" + uuid.toString();
+            String keyVersion = "syncmoney:version:" + uuid.toString();
+
+            jedis.set(keyBalance, balance.toPlainString());
+            jedis.set(keyVersion, String.valueOf(version));
+
+            plugin.getLogger().fine("CMI Migration: Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to populate Redis for " + uuid + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Validates prerequisites before starting CMI migration.
+     * Redis must be available for SYNC mode.
+     * @return true if all prerequisites are met
+     */
+    private boolean validatePrerequisites() {
+        if (redisManager == null || !redisManager.isConnected()) {
+            plugin.getLogger().severe("Redis is not available. Cannot start CMI migration to SYNC mode.");
+            return false;
+        }
+
+        plugin.getLogger().info("CMI Migration prerequisites validated successfully.");
+        return true;
     }
 
     /**
@@ -376,6 +434,12 @@ public final class MigrationTask {
 
         if (economyDisabler != null) {
             scheduleCMIEconomyDisable();
+        }
+
+        if (MigrationLock.isEnabled()) {
+            MigrationLock.unlock();
+            MigrationLock.disable();
+            plugin.getLogger().info("Economy operations unlocked after CMI migration");
         }
 
         cancel();

@@ -2,17 +2,20 @@ package noietime.syncmoney.command;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.shadow.ShadowSyncTask;
+import noietime.syncmoney.shadow.storage.ShadowSyncRecord;
 import noietime.syncmoney.util.MessageHelper;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -23,11 +26,15 @@ import java.util.stream.Collectors;
  * /syncmoney shadow status
  * /syncmoney shadow now
  * /syncmoney shadow logs
+ * /syncmoney shadow history [player] [page]
+ * /syncmoney shadow export [player] [startDate] [endDate]
  */
 public final class ShadowCommand implements CommandExecutor, TabCompleter {
 
     private final Syncmoney plugin;
     private final ShadowSyncTask shadowSyncTask;
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final int RECORDS_PER_PAGE = 10;
 
     public ShadowCommand(Syncmoney plugin, ShadowSyncTask shadowSyncTask) {
         this.plugin = plugin;
@@ -52,6 +59,8 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
             case "status" -> handleStatus(sender);
             case "now" -> handleSyncNow(sender);
             case "logs" -> handleLogs(sender);
+            case "history" -> handleHistory(sender, args);
+            case "export" -> handleExport(sender, args);
             default -> sendUsage(sender);
         }
 
@@ -68,7 +77,7 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
 
         Map<String, String> runningVars = new HashMap<>();
         runningVars.put("running", status.running() ?
-                plugin.getMessage("shadow.boolean.yes") : plugin.getMessage("shadow.boolean.no"));
+                plugin.getMessage("shadow.enabled.running") : plugin.getMessage("shadow.enabled.stopped"));
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.status-running"), runningVars);
 
         String target = plugin.getSyncmoneyConfig().getShadowSyncTarget();
@@ -159,6 +168,127 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
+     * Handles history query.
+     * Usage: /syncmoney shadow history [player] [page]
+     */
+    private void handleHistory(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.usage"));
+            return;
+        }
+
+        String playerName = args[1];
+        int page = 1;
+        if (args.length >= 3) {
+            try {
+                page = Math.max(1, Integer.parseInt(args[2]));
+            } catch (NumberFormatException e) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.invalid-page"));
+                return;
+            }
+        }
+
+        List<ShadowSyncRecord> records = shadowSyncTask.getHistoryByPlayerName(playerName, RECORDS_PER_PAGE * page);
+
+        if (records.isEmpty()) {
+            Map<String, String> vars = new HashMap<>();
+            vars.put("player", playerName);
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.not-found"), vars);
+            return;
+        }
+
+        int startIndex = (page - 1) * RECORDS_PER_PAGE;
+        int endIndex = Math.min(startIndex + RECORDS_PER_PAGE, records.size());
+        List<ShadowSyncRecord> pageRecords = records.subList(startIndex, endIndex);
+
+        Map<String, String> headerVars = new HashMap<>();
+        headerVars.put("player", playerName);
+        headerVars.put("page", String.valueOf(page));
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.header-page"), headerVars);
+
+        for (ShadowSyncRecord record : pageRecords) {
+            String status = record.isSuccess() ?
+                    plugin.getMessage("shadow.history.status-success") : plugin.getMessage("shadow.history.status-failed");
+            String timestamp = record.getTimestamp().atZone(java.time.ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+            Map<String, String> entryVars = new HashMap<>();
+            entryVars.put("timestamp", timestamp);
+            entryVars.put("balance", record.getBalance().toPlainString());
+            entryVars.put("target", record.getSyncTarget());
+            entryVars.put("status", status);
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.entry"), entryVars);
+        }
+
+        Map<String, String> paginationVars = new HashMap<>();
+        paginationVars.put("player", playerName);
+        paginationVars.put("page", String.valueOf(page));
+        paginationVars.put("nextPage", String.valueOf(page + 1));
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.history.pagination-hint"), paginationVars);
+    }
+
+    /**
+     * Handles export to JSONL.
+     * Usage: /syncmoney shadow export [player] [startDate] [endDate]
+     */
+    private void handleExport(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.usage"));
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.example"));
+            return;
+        }
+
+        String playerName = args[1];
+        String playerUuid = null;
+
+        OfflinePlayer offlinePlayer = plugin.getServer().getOfflinePlayerIfCached(playerName);
+        if (offlinePlayer != null) {
+            playerUuid = offlinePlayer.getUniqueId().toString();
+        }
+
+        LocalDate startDate = null;
+        LocalDate endDate = null;
+
+        if (args.length >= 3) {
+            try {
+                startDate = LocalDate.parse(args[2], DATE_FORMAT);
+            } catch (DateTimeParseException e) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.invalid-start-date"));
+                return;
+            }
+        }
+
+        if (args.length >= 4) {
+            try {
+                endDate = LocalDate.parse(args[3], DATE_FORMAT);
+            } catch (DateTimeParseException e) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.invalid-end-date"));
+                return;
+            }
+        }
+
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.start-after-end"));
+            return;
+        }
+
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.exporting"));
+
+        int exported = shadowSyncTask.exportHistory(playerUuid, startDate, endDate);
+
+        if (exported > 0) {
+            String jsonlPath = plugin.getSyncmoneyConfig().getShadowSyncStorageJsonlPath();
+            Map<String, String> vars = new HashMap<>();
+            vars.put("count", String.valueOf(exported));
+            vars.put("path", jsonlPath);
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.success"), vars);
+        } else {
+            MessageHelper.sendMessage(sender, plugin.getMessage("shadow.export.no-records"));
+        }
+    }
+
+    /**
      * Sends usage instructions.
      */
     private void sendUsage(CommandSender sender) {
@@ -166,6 +296,8 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.usage-status"));
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.usage-now"));
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.usage-logs"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.usage-history"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.usage-export"));
     }
 
     @Override
@@ -175,10 +307,19 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 1) {
-            return Arrays.asList("status", "now", "logs")
+            return Arrays.asList("status", "now", "logs", "history", "export")
                     .stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
+        }
+
+        if (args.length == 2) {
+            if (args[0].equalsIgnoreCase("history") || args[0].equalsIgnoreCase("export")) {
+                return plugin.getServer().getOnlinePlayers().stream()
+                        .map(Player::getName)
+                        .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
         }
 
         return Collections.emptyList();

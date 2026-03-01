@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.migration.*;
 import noietime.syncmoney.migration.CMIDatabaseReader.CMIPlayerData;
+import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.MessageHelper;
@@ -44,7 +45,9 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
 
     public MigrationCommand(Syncmoney plugin, SyncmoneyConfig config,
                             EconomyFacade economyFacade,
-                            DatabaseManager databaseManager, NameResolver nameResolver) {
+                            DatabaseManager databaseManager,
+                            RedisManager redisManager,
+                            NameResolver nameResolver) {
         this.plugin = plugin;
         this.config = config;
         this.checkpoint = new MigrationCheckpoint(plugin);
@@ -53,11 +56,11 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
 
         this.migrationTask = new MigrationTask(
                 plugin, config, null, economyFacade,
-                databaseManager, nameResolver, checkpoint, backup, economyDisabler
+                databaseManager, redisManager, nameResolver, checkpoint, backup, economyDisabler
         );
 
         this.localToSyncMigrationTask = new LocalToSyncMigrationTask(
-                plugin, config, economyFacade, databaseManager, checkpoint, backup
+                plugin, config, economyFacade, databaseManager, redisManager, checkpoint, backup
         );
 
         migrationTask.setProgressCallback(new MigrationTask.MigrationProgressCallback() {
@@ -152,6 +155,15 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         }
 
         boolean useMultiServer = config.isCMIMultiServerEnabled();
+        if (config.isCMIAutoDetect()) {
+            CMIDatabaseReader.StorageType detectedType = cmiReader.getDetectedStorageType();
+            if (detectedType == CMIDatabaseReader.StorageType.MySQL) {
+                if (useMultiServer) {
+                    plugin.getLogger().info("CMI auto-detect: MySQL detected, ignoring multi-server setting");
+                }
+                useMultiServer = false;
+            }
+        }
 
         if (useMultiServer) {
             MessageHelper.sendMessage(sender, plugin.getMessage("migration.multi-server-start"));

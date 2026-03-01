@@ -3,10 +3,14 @@ package noietime.syncmoney.shadow;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.shadow.storage.*;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 
+import java.io.File;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -38,26 +42,34 @@ public final class ShadowSyncTask {
             plugin.getLogger().info("[DEBUG] " + message);
         }
     }
+
+    /**
+     * Resolves a relative path to an absolute path based on server working directory.
+     * If the path is already absolute, returns it as-is.
+     */
+    private String resolvePath(String relativePath) {
+        File path = new File(relativePath);
+        if (path.isAbsolute()) {
+            return relativePath;
+        }
+        return path.getAbsolutePath();
+    }
+
     private final DatabaseManager databaseManager;
     private CMIDatabaseWriter cmiWriter;
     private final RollbackProtection rollbackProtection;
-    private final ShadowSyncLog syncLog;
-
+    private ShadowSyncLog syncLog;
+    private ShadowSyncStorage storage;
 
     private CMISyncQueue syncQueue;
 
-
     private ScheduledExecutorService flushScheduler;
-
 
     private volatile boolean running = false;
 
-
     private final AtomicBoolean syncNow = new AtomicBoolean(false);
 
-
     private final Object syncLock = new Object();
-
 
     private volatile long lastSyncTime = 0;
 
@@ -88,6 +100,8 @@ public final class ShadowSyncTask {
             plugin.getLogger().info("Shadow sync is disabled in config.");
             return;
         }
+
+        initializeStorage();
 
         String target = config.getShadowSyncTarget();
         boolean writeToCMI = target.equals("cmi") || target.equals("all");
@@ -121,8 +135,8 @@ public final class ShadowSyncTask {
         }
 
         this.syncQueue = new CMISyncQueue(
-                config.getShadowSyncBatchSize(),
-                config.getShadowSyncMaxDelayMs()
+                config.getShadowSyncTriggerBatchSize(),
+                config.getShadowSyncTriggerMaxDelayMs()
         );
 
         this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -131,14 +145,84 @@ public final class ShadowSyncTask {
             return t;
         });
         flushScheduler.scheduleAtFixedRate(this::flush,
-                config.getShadowSyncMaxDelayMs(),
-                config.getShadowSyncMaxDelayMs(),
+                config.getShadowSyncTriggerMaxDelayMs(),
+                config.getShadowSyncTriggerMaxDelayMs(),
                 TimeUnit.MILLISECONDS);
 
         running = true;
         debug("Shadow sync task started (target: " + target +
-                ", batch: " + config.getShadowSyncBatchSize() +
-                ", max-delay: " + config.getShadowSyncMaxDelayMs() + "ms)");
+                ", batch: " + config.getShadowSyncTriggerBatchSize() +
+                ", max-delay: " + config.getShadowSyncTriggerMaxDelayMs() + "ms)");
+    }
+
+    /**
+     * Initializes the storage based on configuration.
+     */
+    private void initializeStorage() {
+        String storageType = config.getShadowSyncStorageType();
+        String jsonlPath = resolvePath(config.getShadowSyncStorageJsonlPath());
+
+        switch (storageType) {
+            case "sqlite" -> {
+                String sqlitePath = resolvePath(config.getShadowSyncStorageSqlitePath());
+                this.storage = new SqliteShadowStorage(plugin, sqlitePath, jsonlPath);
+                plugin.getLogger().info("Using SQLite for shadow sync history.");
+            }
+            case "mysql" -> {
+                this.storage = new MysqlShadowStorage(
+                        plugin,
+                        config.getShadowSyncStorageMysqlHost(),
+                        config.getShadowSyncStorageMysqlPort(),
+                        config.getShadowSyncStorageMysqlUsername(),
+                        config.getShadowSyncStorageMysqlPassword(),
+                        config.getShadowSyncStorageMysqlDatabase(),
+                        config.getShadowSyncStorageMysqlPoolSize(),
+                        jsonlPath
+                );
+                plugin.getLogger().info("Using MySQL for shadow sync history.");
+            }
+            case "postgresql" -> {
+                this.storage = new PostgresShadowStorage(
+                        plugin,
+                        config.getShadowSyncStoragePostgresHost(),
+                        config.getShadowSyncStoragePostgresPort(),
+                        config.getShadowSyncStoragePostgresUsername(),
+                        config.getShadowSyncStoragePostgresPassword(),
+                        config.getShadowSyncStoragePostgresDatabase(),
+                        config.getShadowSyncStoragePostgresPoolSize(),
+                        jsonlPath
+                );
+                plugin.getLogger().info("Using PostgreSQL for shadow sync history.");
+            }
+            case "jsonl" -> {
+                this.storage = null;
+                plugin.getLogger().info("Using JSONL for shadow sync history (legacy mode).");
+            }
+            default -> {
+                plugin.getLogger().warning("Unknown storage type: " + storageType + ", defaulting to SQLite.");
+                String sqlitePath = resolvePath(config.getShadowSyncStorageSqlitePath());
+                this.storage = new SqliteShadowStorage(plugin, sqlitePath, jsonlPath);
+            }
+        }
+
+        if (storage != null) {
+            try {
+                storage.initialize();
+            } catch (Exception e) {
+                plugin.getLogger().severe("Failed to initialize shadow sync storage: " + e.getMessage());
+                this.storage = null;
+            }
+        }
+
+        if (config.isShadowSyncHistoryEnabled() && storage != null) {
+            int retentionDays = config.getShadowSyncHistoryRetentionDays();
+            if (retentionDays > 0) {
+                int deleted = storage.cleanupOldRecords(retentionDays);
+                if (deleted > 0) {
+                    plugin.getLogger().info("Cleaned up " + deleted + " old shadow sync records.");
+                }
+            }
+        }
     }
 
     /**
@@ -169,6 +253,11 @@ public final class ShadowSyncTask {
             cmiWriter = null;
         }
 
+        if (storage != null) {
+            storage.close();
+            storage = null;
+        }
+
         plugin.getLogger().fine("Shadow sync task stopped.");
     }
 
@@ -188,7 +277,7 @@ public final class ShadowSyncTask {
 
         syncQueue.offer(new CMISyncQueue.SyncEvent(uuid, playerName, balance, System.currentTimeMillis()));
 
-        if (syncQueue.size() >= config.getShadowSyncBatchSize()) {
+        if (syncQueue.size() >= config.getShadowSyncTriggerBatchSize()) {
             flush();
         }
     }
@@ -265,6 +354,20 @@ public final class ShadowSyncTask {
 
             for (CMISyncQueue.SyncEvent e : events) {
                 syncLog.logSuccess(e.playerName(), e.balance().toPlainString(), "N/A");
+
+                if (storage != null && config.isShadowSyncHistoryEnabled()) {
+                    ShadowSyncRecord record = new ShadowSyncRecord(
+                            e.uuid().toString(),
+                            e.playerName(),
+                            e.balance(),
+                            target,
+                            "sync",
+                            Instant.now(),
+                            true,
+                            null
+                    );
+                    storage.saveRecord(record);
+                }
             }
 
             lastSyncTime = System.currentTimeMillis();
@@ -291,17 +394,29 @@ public final class ShadowSyncTask {
      * Gets the sync status.
      */
     public SyncStatus getStatus() {
-        if (syncLog == null) {
-            return new SyncStatus(running, lastSyncTime, 0, 0, 0);
+        int total = 0;
+        int success = 0;
+        int failed = 0;
+
+        if (storage != null && config.isShadowSyncHistoryEnabled()) {
+            try {
+                var stats = storage.getTodayStats();
+                total = stats.getTotalSyncs();
+                success = stats.getSuccessfulSyncs();
+                failed = stats.getFailedSyncs();
+            } catch (Exception e) {
+                debug("Failed to get stats from storage: " + e.getMessage());
+            }
         }
-        ShadowSyncLog.SyncStats todayStats = syncLog.getTodayStats();
-        return new SyncStatus(
-                running,
-                lastSyncTime,
-                todayStats.total(),
-                todayStats.success(),
-                todayStats.failed()
-        );
+
+        if (total == 0 && syncLog != null) {
+            var todayStats = syncLog.getTodayStats();
+            total = todayStats.total();
+            success = todayStats.success();
+            failed = todayStats.failed();
+        }
+
+        return new SyncStatus(running, lastSyncTime, total, success, failed);
     }
 
     /**
@@ -309,6 +424,57 @@ public final class ShadowSyncTask {
      */
     public ShadowSyncLog getSyncLog() {
         return syncLog;
+    }
+
+    /**
+     * Gets the storage instance.
+     */
+    public ShadowSyncStorage getStorage() {
+        return storage;
+    }
+
+    /**
+     * Queries sync history by player UUID.
+     */
+    public List<ShadowSyncRecord> getHistoryByPlayer(String playerUuid, int limit) {
+        if (storage == null) {
+            plugin.getLogger().warning("Storage not initialized.");
+            return List.of();
+        }
+        return storage.queryByPlayer(playerUuid, limit);
+    }
+
+    /**
+     * Queries sync history by player name.
+     */
+    public List<ShadowSyncRecord> getHistoryByPlayerName(String playerName, int limit) {
+        if (storage == null) {
+            plugin.getLogger().warning("Storage not initialized.");
+            return List.of();
+        }
+        return storage.queryByPlayerName(playerName, limit);
+    }
+
+    /**
+     * Queries sync history by player and date range.
+     */
+    public List<ShadowSyncRecord> getHistoryByPlayerAndDateRange(String playerUuid, LocalDate startDate, LocalDate endDate, int limit) {
+        if (storage == null) {
+            plugin.getLogger().warning("Storage not initialized.");
+            return List.of();
+        }
+        return storage.queryByPlayerAndDateRange(playerUuid, startDate, endDate, limit);
+    }
+
+    /**
+     * Exports sync history to JSONL file.
+     */
+    public int exportHistory(String playerUuid, LocalDate startDate, LocalDate endDate) {
+        if (storage == null) {
+            plugin.getLogger().warning("Storage not initialized.");
+            return 0;
+        }
+        return storage.exportToJsonl(playerUuid, startDate, endDate);
     }
 
     /**

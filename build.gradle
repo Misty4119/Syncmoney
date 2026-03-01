@@ -56,7 +56,6 @@ shadowJar {
     relocate('com.zaxxer.hikari', 'noietime.libs.hikari')
     relocate('com.mysql', 'noietime.libs.mysql')
     relocate('org.postgresql', 'noietime.libs.postgresql')
-    relocate('org.sqlite', 'noietime.libs.sqlite')
     relocate('com.fasterxml.jackson', 'noietime.libs.jackson')
     relocate('redis.clients.jedis', 'noietime.libs.jedis')
     relocate('org.bstats', 'noietime.libs.bstats')

@@ -157,6 +157,11 @@ public final class EconomyFacade {
      * [AsyncScheduler] Event is processed by async consumer
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
+            plugin.getLogger().warning("Deposit rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.valueOf(-1);
         }
@@ -217,6 +222,11 @@ public final class EconomyFacade {
      * [AsyncScheduler] Event is processed by async consumer
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
+            plugin.getLogger().warning("Withdraw rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.valueOf(-1);
         }
@@ -285,6 +295,13 @@ public final class EconomyFacade {
      * [AsyncScheduler] Event is processed by async consumer
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
+        if (noietime.syncmoney.migration.MigrationLock.isLocked() &&
+            source != EconomyEvent.EventSource.ADMIN_SET &&
+            source != EconomyEvent.EventSource.COMMAND_ADMIN) {
+            plugin.getLogger().warning("SetBalance rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
             return BigDecimal.valueOf(-1);
         }

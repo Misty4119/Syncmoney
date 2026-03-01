@@ -66,6 +66,18 @@ public final class CMIDatabaseReader {
     }
 
     /**
+     * Gets the detected storage type without initializing the database connection.
+     * Uses auto-detect from DataBaseInfo.yml if enabled.
+     */
+    public StorageType getDetectedStorageType() {
+        if (config.isCMIAutoDetect()) {
+            CMIDatabaseConfig cmiConfig = CMIDatabaseConfig.fromDataBaseInfo(plugin);
+            return cmiConfig.getType();
+        }
+        return StorageType.SQLite;
+    }
+
+    /**
      * Lazily initializes database connection.
      * This method is only invoked when migration command is executed.
      */

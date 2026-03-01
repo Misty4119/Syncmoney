@@ -41,6 +41,7 @@ database:
   password: ""
   database: "syncmoney"
   pool-size: 10
+  minimum-idle: 2
   connection-timeout: 10000
   max-lifetime: 600000
   idle-timeout: 300000
@@ -110,7 +111,7 @@ baltop:
   entries-per-page: 10
   # Balance format (full/smart/abbreviated)
   format: "smart"
-  # Number format configuration (using one configuration, automatically identifying Chinese/English)
+  # Number format configuration
   # Format: [threshold, "display text"]
   # Example: [1000000000000, "T"] or [1000000000000, "兆"]
   # The system will automatically sort by threshold from largest to smallest, using the first one that matches
@@ -275,27 +276,74 @@ migration:
     auto-disable-economy: true
   # Batch size
   batch-size: 100
-  # Automatic backup
+  # Automatic backup before migration
   auto-backup: true
+  # Populate Redis during migration (strongly recommended for SYNC mode)
+  populate-redis: true
+  # Lock economy operations during migration (prevents data inconsistency)
+  lock-economy: false
 
-# Shadow sync settings (synchronize Syncmoney balance to database backup)
+# Shadow sync settings (backup Syncmoney balance to secondary database)
+# Use case: When main database corrupts, can restore from backup
 shadow-sync:
-  # Whether to enable shadow sync
+  # [Basic Settings]
+  # Enable/disable shadow sync
   enabled: true
-  # Sync target: local (write to Syncmoney database), cmi (write to CMI database), all (write to both local and cmi)
+  # Sync target: local (write to Syncmoney DB), cmi (write to CMI DB), all (write to both)
   target: "local"
-  # Batch size (trigger write when reaching this number)
-  batch-size: 10
-  # Maximum delay (milliseconds, trigger write when exceeding this time)
-  max-delay-ms: 1000
-  # CMI SQLite database path (default uses local SQLite to avoid MySQL connection failure)
-  # Windows: "plugins/CMI/cmi.sqlite.db"
-  # Linux: "/home/container/plugins/CMI/cmi.sqlite.db"
-  cmi-sqlite-path: "plugins/CMI/cmi.sqlite.db"
-  # CMI MySQL configuration (when SQLite connection fails)
-  cmi-mysql:
-    host: "localhost"
-    port: 3306
-    username: "root"
-    password: ""
-    database: "minecraft"
+
+  # [Trigger Strategy] - Sync triggers when ANY condition is met
+  trigger:
+    # Batch threshold: Number of accumulated changes before triggering sync
+    batch-size: 10
+    # Time threshold: Milliseconds since last sync before triggering
+    max-delay-ms: 1000
+
+  # [Storage Settings]
+  storage:
+    # Storage type: jsonl (file), sqlite, mysql, postgresql
+    type: "sqlite"
+    # JSONL settings (used when type is jsonl)
+    jsonl:
+      path: "plugins/Syncmoney/logs/shadow-sync/"
+    # SQLite settings (used when type is sqlite)
+    sqlite:
+      path: "plugins/Syncmoney/data/shadow-sync.db"
+    # MySQL settings (used when type is mysql)
+    mysql:
+      host: "localhost"
+      port: 3306
+      username: "root"
+      password: ""
+      database: "syncmoney_shadow"
+      # Connection pool size
+      pool-size: 5
+    # PostgreSQL settings (used when type is postgresql)
+    postgresql:
+      host: "localhost"
+      port: 5432
+      username: "root"
+      password: ""
+      database: "syncmoney_shadow"
+      pool-size: 5
+
+  # [CMI Database Connection] - For writing to CMI database
+  cmi:
+    # Connection mode: sqlite / mysql
+    connection: "sqlite"
+    # SQLite mode path
+    sqlite-path: "plugins/CMI/cmi.sqlite.db"
+    # MySQL mode (when SQLite fails or connection is sqlite)
+    mysql:
+      host: "localhost"
+      port: 3306
+      username: "root"
+      password: ""
+      database: "minecraft"
+
+  # [Feature Settings]
+  features:
+    # Record balance change history (for player query)
+    history-enabled: true
+    # History retention days (0 = permanent)
+    history-retention-days: 90

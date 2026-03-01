@@ -96,23 +96,33 @@ public final class PlayerTransferGuard implements Listener {
         UUID uuid = event.getPlayer().getUniqueId();
 
         if (writeQueue.hasPending(uuid)) {
-            logger.warning("Player " + event.getPlayer().getName() + " is quitting with pending transactions. Waiting for completion...");
+            logger.info("Player " + event.getPlayer().getName() + " is quitting with pending transactions. Attempting to drain...");
 
-            long startWait = System.currentTimeMillis();
-            while (writeQueue.hasPending(uuid) && (System.currentTimeMillis() - startWait) < Constants.MAX_WAIT_MS) {
-                try {
-                    Thread.sleep(Constants.CHECK_INTERVAL_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+            int drained = writeQueue.drainPendingForPlayer(uuid, 10);
+
+            if (drained > 0) {
+                logger.info("Drained " + drained + " pending events for " + event.getPlayer().getName());
             }
 
             if (writeQueue.hasPending(uuid)) {
-                logger.severe("Player " + event.getPlayer().getName() + " quit with " +
-                    writeQueue.getPendingCount(uuid) + " pending transactions! Data inconsistency may occur.");
+                long startWait = System.currentTimeMillis();
+                while (writeQueue.hasPending(uuid) && (System.currentTimeMillis() - startWait) < 200) {
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+
+                if (writeQueue.hasPending(uuid)) {
+                    logger.warning("Player " + event.getPlayer().getName() + " quit with " +
+                        writeQueue.getPendingCount(uuid) + " pending transactions (data already saved to Redis).");
+                } else {
+                    logger.info("Player " + event.getPlayer().getName() + " pending transactions cleared.");
+                }
             } else {
-                logger.info("Player " + event.getPlayer().getName() + " transactions completed before quit.");
+                logger.info("Player " + event.getPlayer().getName() + " pending transactions drained successfully.");
             }
         }
 

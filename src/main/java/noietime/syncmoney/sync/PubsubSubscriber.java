@@ -290,9 +290,9 @@ public final class PubsubSubscriber {
                 noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
                 String messageKey = null;
 
-                if ("DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
+                if ("DEPOSIT".equals(eventType) || "VAULT_DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
                     messageKey = "admin.money-received";
-                } else if ("WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
+                } else if ("WITHDRAW".equals(eventType) || "VAULT_WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
                     messageKey = "admin.money-taken";
                 } else if ("SET_BALANCE".equals(eventType)) {
                     messageKey = "admin.balance-set-by-admin";

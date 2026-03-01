@@ -77,7 +77,7 @@ public final class EconomyWriteQueue {
      * Poll economy event (blocking until task available or timeout).
      */
     public EconomyEvent poll() throws InterruptedException {
-        return poll(1, java.util.concurrent.TimeUnit.SECONDS);
+        return poll(50, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -95,6 +95,30 @@ public final class EconomyWriteQueue {
             }
         }
         return event;
+    }
+
+    /**
+     * Try to drain all pending events for a specific player.
+     * Returns the number of events drained.
+     * @param uuid Player UUID
+     * @param maxDrain Maximum events to drain
+     * @return Number of events drained
+     */
+    public int drainPendingForPlayer(UUID uuid, int maxDrain) {
+        int drained = 0;
+        var iterator = queue.iterator();
+        while (iterator.hasNext() && drained < maxDrain) {
+            EconomyEvent event = iterator.next();
+            if (event.uuid().equals(uuid)) {
+                iterator.remove();
+                AtomicInteger count = pendingCounts.get(uuid);
+                if (count != null && count.decrementAndGet() <= 0) {
+                    pendingCounts.remove(uuid);
+                }
+                drained++;
+            }
+        }
+        return drained;
     }
 
     /**

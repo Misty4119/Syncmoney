@@ -307,9 +307,11 @@ public final class EconomyEventConsumer implements Runnable {
         long version = cacheManager.getVersion(event.playerUuid());
         String serverName = config.getServerName();
 
+        String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
+
         var task = new DbWriteQueue.DbWriteTask(
                 event.playerUuid(),
-                null,
+                playerName,
                 newBalance.doubleValue(),
                 version,
                 serverName != null ? serverName : "unknown",

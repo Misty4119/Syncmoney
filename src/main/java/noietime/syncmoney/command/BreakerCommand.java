@@ -115,7 +115,7 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
 
         Map<String, String> redisVars = new HashMap<>();
         redisVars.put("available", connectionState.isRedisAvailable() ?
-                plugin.getMessage("breaker.boolean.yes") : plugin.getMessage("breaker.boolean.no"));
+                plugin.getMessage("breaker.enabled.active") : plugin.getMessage("breaker.enabled.inactive"));
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.info.redis-available"), redisVars);
 
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.info.redis-last-success")

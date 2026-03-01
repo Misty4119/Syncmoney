@@ -1,7 +1,7 @@
 name: Syncmoney
 version: '${version}'
 main: noietime.syncmoney.Syncmoney
-description: Cross-server game currency sync via Vault (Redis + DB).
+description: Cross-server economy synchronization plugin for Minecraft
 api-version: '1.20'
 folia-supported: true
 

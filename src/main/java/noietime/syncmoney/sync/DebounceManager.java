@@ -46,6 +46,7 @@ public final class DebounceManager {
                 if (plugin.getConfig().getBoolean("debug", false)) {
                     plugin.getLogger().fine("Debounce: rejected duplicate " + uuid + " v" + version);
                 }
+                return false;
             }
             processedMessages.remove(key);
         }

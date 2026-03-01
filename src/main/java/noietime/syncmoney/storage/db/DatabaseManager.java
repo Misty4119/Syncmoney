@@ -124,6 +124,7 @@ public final class DatabaseManager implements AutoCloseable {
         hikariConfig.setUsername(config.getDatabaseUsername());
         hikariConfig.setPassword(config.getDatabasePassword());
         hikariConfig.setMaximumPoolSize(config.getDatabasePoolSize());
+        hikariConfig.setMinimumIdle(config.getDatabaseMinimumIdle());
         hikariConfig.setConnectionTimeout(config.getDatabaseConnectionTimeout());
         hikariConfig.setMaxLifetime(config.getDatabaseMaxLifetime());
         hikariConfig.setIdleTimeout(config.getDatabaseIdleTimeout());
