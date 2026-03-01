@@ -18,6 +18,9 @@
   <a href="https://official.noie.fun">
     <img src="https://img.shields.io/discord/1453099158884978850?label=Discord&logo=discord" alt="Discord">
   </a>
+  <a href="https://paypal.me/NoieSrv">
+    <img src="https://img.shields.io/badge/Donate-PayPal-blue" alt="Donate">
+  </a>
 </p>
 
 ---
