@@ -54,6 +54,8 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
             case "reset" -> handleReset(sender);
             case "info" -> handleInfo(sender);
             case "resources" -> handleResources(sender);
+            case "player" -> handlePlayer(sender, args);
+            case "unlock" -> handleUnlock(sender, args);
             default -> sendUsage(sender);
         }
 
@@ -148,6 +150,98 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
+     * Handles player protection status query.
+     */
+    private void handlePlayer(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.not-found")
+                    .replace("{player}", ""));
+            return;
+        }
+
+        String playerName = args[1];
+        var player = plugin.getServer().getPlayer(playerName);
+
+        if (player == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.not-found")
+                    .replace("{player}", playerName));
+            return;
+        }
+
+        var guard = plugin.getPlayerTransactionGuard();
+        if (guard == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.not-enabled"));
+            return;
+        }
+
+        var state = guard.getPlayerState(player.getUniqueId());
+        var protectionState = guard.getProtectionState(player.getUniqueId());
+
+        MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.header"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.player")
+                .replace("{player}", player.getName()));
+
+        String stateColor = switch (state) {
+            case NORMAL -> "<green>";
+            case WARNING -> "<yellow>";
+            case LOCKED -> "<red>";
+        };
+        MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.status")
+                .replace("{state}", stateColor + state.name()));
+
+        if (protectionState != null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.transactions-per-second")
+                    .replace("{count}", String.valueOf(protectionState.getTransactionsPerSecond())));
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.transactions-per-minute")
+                    .replace("{count}", String.valueOf(protectionState.getTransactionsPerMinute())));
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.warning-count")
+                    .replace("{count}", String.valueOf(protectionState.getWarningCount())));
+
+            if (protectionState.getUnlockTime() > 0) {
+                long remainingTime = (protectionState.getUnlockTime() - System.currentTimeMillis()) / 60000;
+                if (remainingTime > 0) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("breaker.player-status.unlock-in")
+                            .replace("{minutes}", String.valueOf(remainingTime)));
+                }
+            }
+        }
+    }
+
+    /**
+     * Handles manual player unlock.
+     */
+    private void handleUnlock(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.unlock.usage"));
+            return;
+        }
+
+        String playerName = args[1];
+        var player = plugin.getServer().getPlayer(playerName);
+
+        if (player == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.unlock.player-not-found")
+                    .replace("{player}", playerName));
+            return;
+        }
+
+        var guard = plugin.getPlayerTransactionGuard();
+        if (guard == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.unlock.system-not-enabled"));
+            return;
+        }
+
+        boolean success = guard.unlockPlayer(player.getUniqueId());
+        if (success) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.unlock.success")
+                    .replace("{player}", player.getName()));
+        } else {
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.unlock.failed")
+                    .replace("{player}", player.getName()));
+        }
+    }
+
+    /**
      * Gets state color.
      */
     private String getStateColor(EconomicCircuitBreaker.CircuitState state) {
@@ -188,6 +282,8 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.usage-reset"));
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.usage-info"));
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.usage-resources"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("breaker.usage-player"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("breaker.usage-unlock"));
     }
 
     @Override
@@ -197,7 +293,7 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 1) {
-            return Arrays.asList("status", "reset", "info", "resources")
+            return Arrays.asList("status", "reset", "info", "resources", "player", "unlock")
                     .stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());

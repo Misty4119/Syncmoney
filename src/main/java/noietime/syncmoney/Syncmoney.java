@@ -140,6 +140,8 @@ public final class Syncmoney extends JavaPlugin {
     private ShadowSyncTask shadowSyncTask;
 
     private EconomicCircuitBreaker circuitBreaker;
+    private noietime.syncmoney.breaker.PlayerTransactionGuard playerTransactionGuard;
+    private noietime.syncmoney.breaker.NotificationService notificationService;
 
     private AuditLogger auditLogger;
     private AuditCommand auditCommand;
@@ -216,11 +218,11 @@ public final class Syncmoney extends JavaPlugin {
         if (localHandler != null) {
             this.economyFacade = new EconomyFacade(
                     this, syncmoneyConfig, cacheManager, redisManager,
-                    databaseManager, localHandler, economyWriteQueue, fallbackWrapper);
+                    databaseManager, localHandler, economyWriteQueue, fallbackWrapper, playerTransactionGuard);
         } else {
             this.economyFacade = new EconomyFacade(
                     this, syncmoneyConfig, cacheManager, redisManager,
-                    databaseManager, economyWriteQueue, fallbackWrapper);
+                    databaseManager, null, economyWriteQueue, fallbackWrapper, playerTransactionGuard);
         }
 
         this.nameResolver = new NameResolver(this, cacheManager, databaseManager);
@@ -433,6 +435,15 @@ public final class Syncmoney extends JavaPlugin {
                 redisManager,
                 syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
 
+        this.notificationService = null;
+        this.playerTransactionGuard = null;
+
+        if (syncmoneyConfig.isPlayerProtectionEnabled()) {
+            this.notificationService = new noietime.syncmoney.breaker.NotificationService(this, syncmoneyConfig);
+            this.playerTransactionGuard = new noietime.syncmoney.breaker.PlayerTransactionGuard(this, syncmoneyConfig, this.notificationService);
+            getLogger().log(Level.FINE, "PlayerTransactionGuard initialized.");
+        }
+
         if (circuitBreaker != null && circuitBreaker.getConnectionStateManager() != null) {
             circuitBreaker.getConnectionStateManager()
                     .setCallback(new noietime.syncmoney.breaker.ConnectionStateManager.ConnectionStateCallback() {
@@ -601,6 +612,14 @@ public final class Syncmoney extends JavaPlugin {
             circuitBreaker.getConnectionStateManager().shutdown();
         }
 
+        if (playerTransactionGuard != null) {
+            playerTransactionGuard.shutdown();
+        }
+
+        if (notificationService != null) {
+            notificationService.shutdown();
+        }
+
         if (redisManager != null) {
             redisManager.close();
         }
@@ -731,6 +750,14 @@ public final class Syncmoney extends JavaPlugin {
 
     public EconomicCircuitBreaker getCircuitBreaker() {
         return circuitBreaker;
+    }
+
+    public noietime.syncmoney.breaker.PlayerTransactionGuard getPlayerTransactionGuard() {
+        return playerTransactionGuard;
+    }
+
+    public noietime.syncmoney.breaker.NotificationService getNotificationService() {
+        return notificationService;
     }
 
     /**

@@ -146,6 +146,74 @@ circuit-breaker:
   # Connection pool exhausted warning threshold (remaining connections, default is 20% of the pool size)
   pool-exhausted-warning: 2
 
+# ===== Per-Player Protection System =====
+# L1: Rate Limiting - L2: Anomaly Detection - L3: Player Lock + Auto Unlock - L4: Global Lock
+player-protection:
+  # Whether to enable per-player protection
+  enabled: true
+  # L1: Rate Limiting
+  rate-limit:
+    # Maximum transactions per second per player
+    max-transactions-per-second: 5
+    # Maximum transactions per minute per player
+    max-transactions-per-minute: 50
+    # Maximum transaction amount per minute per player (0 = disabled)
+    max-amount-per-minute: 1000000
+  # L2: Anomaly Detection
+  anomaly-detection:
+    # Number of transactions within this time window to trigger WARNING (seconds)
+    warning-window-seconds: 30
+    # Transaction count threshold to trigger WARNING
+    warning-threshold: 30
+    # Balance change multiplier threshold (if exceeded, trigger warning)
+    balance-change-threshold: 50.0
+  # L3: Player Lock + Auto Unlock
+  auto-unlock:
+    # Lock duration in minutes before auto-unlock attempt
+    lock-duration-minutes: 5
+    # Maximum number of lock extensions (0 = infinite)
+    max-lock-extensions: 3
+    # Number of successful transactions required to confirm unlock
+    unlock-test-transactions: 3
+  # L4: Global Lock (integrates with circuit-breaker)
+  global-lock:
+    # Enable global lock when total economy spikes
+    enabled: true
+    # Total inflation threshold (if total increases by this percentage within inflation check interval, trigger global lock)
+    total-inflation-threshold: 0.2
+
+# ===== Discord Webhook Notification System =====
+discord-webhook:
+  # Master switch for Discord webhook notifications
+  enabled: false
+  # Webhook configurations (supports multiple webhooks)
+  webhooks:
+    # Private webhook (for admin eyes only)
+    - name: "admin-alerts"
+      url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
+      type: "private"
+      events:
+        - "player_warning"
+        - "player_locked"
+        - "player_unlocked"
+        - "global_lock"
+    # Public webhook (for server members)
+    # - name: "public-alerts"
+    #   url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
+    #   type: "public"
+    #   events:
+    #     - "global_lock"
+  # Embed customization
+  embed:
+    # Embed color (hex, e.g., FF5555 = red, 4ADE80 = green, FBBF24 = yellow)
+    color: "FF5555"
+    # Show player name in embed
+    show-player-name: true
+    # Show timestamp in embed
+    show-timestamp: true
+    # Bot username displayed in Discord
+    username: "Syncmoney Alert"
+
 # Cross-server portal protection
 transfer-guard:
   # Whether to enable portal protection

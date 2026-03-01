@@ -4,7 +4,10 @@ import noietime.syncmoney.economy.EconomyMode;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * [SYNC-CONFIG-001] Configuration loader for config.yml.
@@ -576,6 +579,145 @@ public final class SyncmoneyConfig {
      */
     public int getCircuitBreakerPoolExhaustedWarning() {
         return config.getInt("circuit-breaker.pool-exhausted-warning", 2);
+    }
+
+    // ===== Player Protection System =====
+
+    /**
+     * Whether to enable per-player protection system.
+     */
+    public boolean isPlayerProtectionEnabled() {
+        return config.getBoolean("player-protection.enabled", true);
+    }
+
+    /**
+     * Gets maximum transactions per second per player.
+     */
+    public int getPlayerProtectionMaxTransactionsPerSecond() {
+        return config.getInt("player-protection.rate-limit.max-transactions-per-second", 5);
+    }
+
+    /**
+     * Gets maximum transactions per minute per player.
+     */
+    public int getPlayerProtectionMaxTransactionsPerMinute() {
+        return config.getInt("player-protection.rate-limit.max-transactions-per-minute", 50);
+    }
+
+    /**
+     * Gets maximum transaction amount per minute per player (0 = disabled).
+     */
+    public long getPlayerProtectionMaxAmountPerMinute() {
+        return config.getLong("player-protection.rate-limit.max-amount-per-minute", 1000000);
+    }
+
+    /**
+     * Gets warning window in seconds.
+     */
+    public int getPlayerProtectionWarningWindowSeconds() {
+        return config.getInt("player-protection.anomaly-detection.warning-window-seconds", 30);
+    }
+
+    /**
+     * Gets transaction count threshold to trigger WARNING.
+     */
+    public int getPlayerProtectionWarningThreshold() {
+        return config.getInt("player-protection.anomaly-detection.warning-threshold", 30);
+    }
+
+    /**
+     * Gets balance change multiplier threshold.
+     */
+    public double getPlayerProtectionBalanceChangeThreshold() {
+        return config.getDouble("player-protection.anomaly-detection.balance-change-threshold", 50.0);
+    }
+
+    /**
+     * Gets lock duration in minutes before auto-unlock attempt.
+     */
+    public int getPlayerProtectionLockDurationMinutes() {
+        return config.getInt("player-protection.auto-unlock.lock-duration-minutes", 5);
+    }
+
+    /**
+     * Gets maximum number of lock extensions.
+     */
+    public int getPlayerProtectionMaxLockExtensions() {
+        return config.getInt("player-protection.auto-unlock.max-lock-extensions", 3);
+    }
+
+    /**
+     * Gets number of successful transactions required to confirm unlock.
+     */
+    public int getPlayerProtectionUnlockTestTransactions() {
+        return config.getInt("player-protection.auto-unlock.unlock-test-transactions", 3);
+    }
+
+    /**
+     * Whether to enable global lock when total economy spikes.
+     */
+    public boolean isPlayerProtectionGlobalLockEnabled() {
+        return config.getBoolean("player-protection.global-lock.enabled", true);
+    }
+
+    /**
+     * Gets total inflation threshold for global lock.
+     */
+    public double getPlayerProtectionGlobalLockThreshold() {
+        return config.getDouble("player-protection.global-lock.total-inflation-threshold", 0.2);
+    }
+
+    // ===== Discord Webhook =====
+
+    /**
+     * Whether to enable Discord webhook notifications.
+     */
+    public boolean isDiscordWebhookEnabled() {
+        return config.getBoolean("discord-webhook.enabled", false);
+    }
+
+    /**
+     * Gets Discord webhook embed color (hex).
+     */
+    public String getDiscordWebhookEmbedColor() {
+        return config.getString("discord-webhook.embed.color", "FF5555");
+    }
+
+    /**
+     * Whether to show player name in embed.
+     */
+    public boolean isDiscordWebhookShowPlayerName() {
+        return config.getBoolean("discord-webhook.embed.show-player-name", true);
+    }
+
+    /**
+     * Whether to show timestamp in embed.
+     */
+    public boolean isDiscordWebhookShowTimestamp() {
+        return config.getBoolean("discord-webhook.embed.show-timestamp", true);
+    }
+
+    /**
+     * Gets Discord webhook bot username.
+     */
+    public String getDiscordWebhookUsername() {
+        return config.getString("discord-webhook.embed.username", "Syncmoney Alert");
+    }
+
+    /**
+     * Gets all webhook configurations.
+     */
+    public List<Map<String, Object>> getDiscordWebhooks() {
+        List<Map<String, Object>> webhooks = new ArrayList<>();
+        var list = config.getMapList("discord-webhook.webhooks");
+        if (list != null) {
+            for (var item : list) {
+                if (item instanceof Map) {
+                    webhooks.add(new HashMap<>((Map<String, Object>) item));
+                }
+            }
+        }
+        return webhooks;
     }
 
 

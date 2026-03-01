@@ -80,4 +80,29 @@ public final class FormatUtil {
     public static String formatHitRate(double rate) {
         return String.format("%.2f", rate * 100);
     }
+
+    /**
+     * Formats time duration in milliseconds to human-readable format.
+     * Example: 300000 -> "5 minutes"
+     */
+    public static String formatTimeAgo(long milliseconds) {
+        if (milliseconds < 0) {
+            return "now";
+        }
+
+        long seconds = milliseconds / 1000;
+        long minutes = seconds / 60;
+        long hours = minutes / 60;
+        long days = hours / 24;
+
+        if (days > 0) {
+            return days + " day" + (days > 1 ? "s" : "");
+        } else if (hours > 0) {
+            return hours + " hour" + (hours > 1 ? "s" : "");
+        } else if (minutes > 0) {
+            return minutes + " minute" + (minutes > 1 ? "s" : "");
+        } else {
+            return seconds + " second" + (seconds != 1 ? "s" : "");
+        }
+    }
 }

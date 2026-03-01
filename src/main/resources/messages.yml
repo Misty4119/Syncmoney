@@ -175,6 +175,26 @@ breaker:
   usage-reset: ' <#F8FAFC>/syncmoney breaker reset <#475569>⦊ <white>Force reset breaker'
   usage-info: ' <#F8FAFC>/syncmoney breaker info <#475569>⦊ <white>View detailed info'
   usage-resources: ' <#F8FAFC>/syncmoney breaker resources <#475569>⦊ <white>View resource status'
+  usage-player: ' <#F8FAFC>/syncmoney breaker player <player> <#475569>⦊ <white>View player protection status'
+  usage-unlock: ' <#F8FAFC>/syncmoney breaker unlock <player> <#475569>⦊ <white>Unlock player account'
+  # Player protection status messages (for breaker player command)
+  player-status:
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Player Protection Status</bold></gradient> <#475569>▰▰▰▰'
+    player: ' <#38BDF8>▪ <#94A3B8>Player: <white>{player}'
+    status: ' <#38BDF8>▪ <#94A3B8>Status: <white>{state}'
+    transactions-per-second: ' <#38BDF8>▪ <#94A3B8>Transactions/sec: <white>{count}'
+    transactions-per-minute: ' <#38BDF8>▪ <#94A3B8>Transactions/min: <white>{count}'
+    warning-count: ' <#38BDF8>▪ <#94A3B8>Warning count: <white>{count}'
+    unlock-in: ' <#38BDF8>▪ <#94A3B8>Unlock in: <white>{minutes} minutes'
+    not-enabled: ' <#38BDF8>▪ <#94A3B8>Player protection system is not enabled'
+    not-found: '<#F43F5E>Player not found: {player}'
+  # Player unlock messages
+  unlock:
+    success: '<#4ADE80>Player {player} has been unlocked.'
+    failed: '<#F43F5E>Failed to unlock player {player}'
+    usage: '<#F43F5E>Usage: /syncmoney breaker unlock <player>'
+    player-not-found: '<#F43F5E>Player not found: {player}'
+    system-not-enabled: '<#94A3B8>Player protection system is not enabled'
 
 # Admin commands
 admin:
@@ -513,6 +533,61 @@ high-value-notification:
   sudden-change: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#F43F5E>WARNING: Player {player} balance spiked abnormally by {ratio}x! Amount: {amount}'
   rapid-inflation: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#F43F5E>WARNING: Total economy spiked rapidly by {ratio}%\nPrevious: {previous}\nCurrent: {current}'
   resource-warning: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#FBBF24>Resource Warning - {resource}: {details}'
+
+# Per-Player Protection System Messages
+player-protection:
+  # L1: Rate Limit messages
+  rate-limited:
+    per-second: '<#F43F5E>Transaction too fast, please wait a moment'
+    per-minute: '<#F43F5E>You have reached the maximum number of transactions per minute'
+    amount-limit: '<#F43F5E>You have exceeded the maximum transaction amount per minute'
+    broadcast: '<#F43F5E>[Rate Limit] Transaction rejected for {player}'
+  
+  # L2: Warning messages
+  warning:
+    title: '<#FBBF24>[WARNING] Player {player} has abnormal economic behavior'
+    content: '    Transactions: {count} / {limit}\n    Total Amount: {total}\n    Please monitor this player'
+    broadcast: '<#FBBF24>System detected abnormal economic behavior, recording in progress'
+    player-notify: '<#FBBF24>Your transactions are being monitored due to unusual activity'
+  
+  # L3: Lock messages
+  locked:
+    title: '<#F43F5E>[LOCKED] Player {player} has been locked by economic protection system'
+    content: '    Reason: {reason}\n    Unlock Time: {unlock_time}'
+    player-message: '<#F43F5E>Your account cannot process transactions temporarily, please wait {minutes} minutes and try again'
+    auto-unlock-success: '<#4ADE80>Player {player} has been automatically unlocked'
+    auto-unlock-fail: '<#F43F5E>Player {player} automatic unlock failed, remaining locked'
+    admin-locked: '<#F43F5E>Player {player} has been locked by admin. Reason: {reason}'
+  
+  # Unlock messages
+  unlocked:
+    by-admin: '<#4ADE80>Player {player}\''s economic protection has been lifted by admin'
+    by-timeout: '<#4ADE80>Player {player}\''s account has been automatically unlocked'
+    test-failed: '<#F43F5E>Unlock test failed, remaining locked for {minutes} minutes'
+    test-success: '<#4ADE80>Player {player} passed unlock test, protection lifted'
+  
+  # Status messages
+  status:
+    normal: '<green>Normal'
+    warning: '<yellow>Warning'
+    locked: '<red>Locked'
+    not-enabled: '<gray>Not Enabled'
+
+# Discord Webhook Messages Template
+discord-webhook:
+  embed-title: 'Syncmoney Economic Alert'
+  event-player-warning: 'Player Warning'
+  event-player-locked: 'Player Locked'
+  event-player-unlocked: 'Player Unlocked'
+  event-global-lock: 'Global Lock'
+  event-rate-limit: 'Rate Limited'
+  field-player: 'Player'
+  field-reason: 'Reason'
+  field-time: 'Time'
+  field-transactions: 'Transactions'
+  field-total-amount: 'Total Amount'
+  field-duration: 'Duration'
+  field-server: 'Server'
 
 # Resource monitoring summary (Resource Monitor)
 resource-monitor:

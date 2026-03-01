@@ -4,6 +4,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
+import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
 
@@ -37,6 +38,7 @@ public final class EconomyFacade {
     private final LocalEconomyHandler localEconomyHandler;
     private final EconomyWriteQueue writeQueue;
     private final FallbackEconomyWrapper fallbackWrapper;
+    private final PlayerTransactionGuard playerTransactionGuard;
 
     private final ConcurrentMap<UUID, EconomyState> memoryState;
 
@@ -54,6 +56,15 @@ public final class EconomyFacade {
             DatabaseManager databaseManager, LocalEconomyHandler localEconomyHandler,
             EconomyWriteQueue writeQueue,
             FallbackEconomyWrapper fallbackWrapper) {
+        this(plugin, config, cacheManager, redisManager, databaseManager, localEconomyHandler, writeQueue, fallbackWrapper, null);
+    }
+
+    public EconomyFacade(Plugin plugin, SyncmoneyConfig config,
+            CacheManager cacheManager, RedisManager redisManager,
+            DatabaseManager databaseManager, LocalEconomyHandler localEconomyHandler,
+            EconomyWriteQueue writeQueue,
+            FallbackEconomyWrapper fallbackWrapper,
+            PlayerTransactionGuard playerTransactionGuard) {
         this.plugin = plugin;
         this.config = config;
         this.cacheManager = cacheManager;
@@ -62,6 +73,7 @@ public final class EconomyFacade {
         this.localEconomyHandler = localEconomyHandler;
         this.writeQueue = writeQueue;
         this.fallbackWrapper = fallbackWrapper;
+        this.playerTransactionGuard = playerTransactionGuard;
         this.memoryState = new ConcurrentHashMap<>();
         this.isLocalMode = (localEconomyHandler != null);
     }
@@ -166,6 +178,14 @@ public final class EconomyFacade {
             return BigDecimal.valueOf(-1);
         }
 
+        if (playerTransactionGuard != null) {
+            var guardResult = playerTransactionGuard.checkTransaction(uuid, amount, EconomyEvent.EventType.DEPOSIT);
+            if (!guardResult.allowed()) {
+                plugin.getLogger().warning("Deposit rejected by PlayerTransactionGuard: " + guardResult.reason() + " for " + uuid);
+                return BigDecimal.valueOf(-1);
+            }
+        }
+
         ensureLoaded(uuid);
 
         long now = System.currentTimeMillis();
@@ -229,6 +249,14 @@ public final class EconomyFacade {
 
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.valueOf(-1);
+        }
+
+        if (playerTransactionGuard != null) {
+            var guardResult = playerTransactionGuard.checkTransaction(uuid, amount.negate(), EconomyEvent.EventType.WITHDRAW);
+            if (!guardResult.allowed()) {
+                plugin.getLogger().warning("Withdraw rejected by PlayerTransactionGuard: " + guardResult.reason() + " for " + uuid);
+                return BigDecimal.valueOf(-1);
+            }
         }
 
         ensureLoaded(uuid);
@@ -442,5 +470,34 @@ public final class EconomyFacade {
      */
     public int getCachedPlayerCount() {
         return memoryState.size();
+    }
+
+    /**
+     * Record successful transaction for unlock testing.
+     */
+    public void recordSuccessfulTransaction(UUID uuid) {
+        if (playerTransactionGuard != null) {
+            playerTransactionGuard.recordSuccessfulTransaction(uuid);
+        }
+    }
+
+    /**
+     * Manually unlock a player.
+     */
+    public boolean unlockPlayer(UUID uuid) {
+        if (playerTransactionGuard != null) {
+            return playerTransactionGuard.unlockPlayer(uuid);
+        }
+        return false;
+    }
+
+    /**
+     * Get player protection state.
+     */
+    public PlayerTransactionGuard.ProtectionState getPlayerProtectionState(UUID uuid) {
+        if (playerTransactionGuard != null) {
+            return playerTransactionGuard.getPlayerState(uuid);
+        }
+        return PlayerTransactionGuard.ProtectionState.NORMAL;
     }
 }
