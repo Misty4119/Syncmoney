@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/Misty4119/Syncmoney">
-    <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney?color=yellow" alt="Stars">
+    <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney" alt="Stars">
     <img src="https://img.shields.io/github/downloads/Misty4119/Syncmoney/total" alt="Downloads">
   </a>
   <br>
