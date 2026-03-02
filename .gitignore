@@ -92,8 +92,6 @@ cache/
 # =============================================
 # Compilation output (each person compiles themselves)
 out/
-syncmoney-*.jar
-syncmoney-papi-expansion-*.jar
 
 # Running configuration
 run/
