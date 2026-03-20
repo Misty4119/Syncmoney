@@ -50,7 +50,7 @@ public final class MonitorCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!sender.hasPermission("syncmoney.admin.monitor")) {
+        if (!sender.hasPermission("syncmoney.admin")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
             return true;
         }
@@ -305,7 +305,7 @@ public final class MonitorCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (!sender.hasPermission("syncmoney.admin.monitor")) {
+        if (!sender.hasPermission("syncmoney.admin")) {
             return Collections.emptyList();
         }
 

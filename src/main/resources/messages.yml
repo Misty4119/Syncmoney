@@ -1,21 +1,24 @@
 # Syncmoney Modernized Message Configuration File (Futuristic Sci-Fi Version)
-# Supports Minimessage format (<red>, <green>, <#FFFFFF> etc.)
+# Supports Minimessage format (<#F43F5E>, <#4ADE80>, <#FFFFFF> etc.)
 # Style: HUD (Holographic Terminal) / Purple gradient / Blue gradient
+
+# Config schema version (DO NOT EDIT) 
+version: "11"
 
 # System prefix (Purple gradient / Blue gradient)
 prefix: '<bold><gradient:#A78BFA:#38BDF8>SyncMoney</gradient></bold> <#475569>⦊ <reset>'
 
 # /money command (personal balance related)
 money:
-  self: '{prefix}<#94A3B8>Your wallet balance: <#F8FAFC>{balance}'
+  self: '{prefix}<#94A3B8>Personal Asset Ledger: <#F8FAFC>{balance}'
   hint-check-others: '<#475569>┗━ <#94A3B8>Type <#38BDF8>/money <player> <#94A3B8>to check others'' balance'
   others: '{prefix}<#94A3B8>Player <#38BDF8>{player}<#94A3B8>''s balance: <#F8FAFC>{balance}'
-  no-permission: '{prefix}<#F43F5E>Access Denied ⦊ <#94A3B8>You cannot view other players'' wallets.'
-  no-permission-others: '{prefix}<#F43F5E>Access Denied ⦊ <#94A3B8>Cannot access others'' financial data.'
+  no-permission: '{prefix}<#F43F5E>AUTHORIZATION DENIED ⦊ <#94A3B8>You cannot view other players'' wallets.'
+  no-permission-others: '{prefix}<#F43F5E>AUTHORIZATION DENIED ⦊ <#94A3B8>Cannot access others'' financial data.'
   hint-permission: '<#475569>┗━ <#94A3B8>Requires permission <#38BDF8>syncmoney.money.others <#94A3B8>to view others'' balance'
-  player-not-found: '{prefix}<#F43F5E>Query Failed ⦊ <#94A3B8>Player <white>{player} <#94A3B8>not found on the server.'
-  player-only: '<#F43F5E>System Prompt ⦊ <#94A3B8>This command is restricted to in-game players.'
-  console-usage: '{prefix}<#94A3B8>Usage: <#38BDF8>/money <player>'
+  player-not-found: '{prefix}<#F43F5E>QUERY FAILED ⦊ <#94A3B8>Target <white>{player} <#94A3B8>unreachable on the network grid.'
+  player-only: '<#F43F5E>SYSTEM PROMPT ⦊ <#94A3B8>Command execution restricted to physical in-game terminals.'
+  console-usage: '{prefix}<#94A3B8>Syntax Protocol: <#38BDF8>/money <player>'
   balance-visual: |
     {prefix}<#475569>╔═══════════════════════════════╗<reset>
     {prefix}<#475569>║<reset> <#94A3B8>Current Balance <reset>
@@ -24,40 +27,43 @@ money:
 
 # /pay command (transfer related)
 pay:
-  success-sender: '{prefix}<#94A3B8>Successfully transferred <#F8FAFC>{amount} <#94A3B8>to <#38BDF8>{player} <#475569>┇ <#94A3B8>Remaining balance: <#A78BFA>{balance}'
-  success-receiver: '{prefix}<#4ADE80>Funds received! <#94A3B8>Transfer from <#38BDF8>{player} <#4ADE80>+{amount}'
-  insufficient-funds: '{prefix}<#F43F5E>Transfer Failed ⦊ <#94A3B8>Insufficient wallet balance.'
-  self-transfer: '{prefix}<#F43F5E>Transfer Failed ⦊ <#94A3B8>Cannot transfer funds to yourself.'
-  invalid-amount: '{prefix}<#F43F5E>Format Error ⦊ <#94A3B8>Please enter a valid number greater than 0.'
-  amount-too-low: '{prefix}<#F43F5E>Transfer Failed ⦊ <#94A3B8>Single transfer amount cannot be lower than <white>{min}'
-  amount-too-high: '{prefix}<#F43F5E>Transfer Failed ⦊ <#94A3B8>Single transfer amount cannot be higher than <white>{max}'
-  cooldown: '{prefix}<#FBBF24>Operation Too Frequent ⦊ <#94A3B8>Please wait <white>{seconds} <#94A3B8>seconds before trying again.'
-  player-not-found: '{prefix}<#F43F5E>Transfer Failed ⦊ <#94A3B8>Target player <white>{player} <#94A3B8>not found, please check the name.'
-  target-not-found: '{prefix}<#F43F5E>Connection Anomaly ⦊ <#94A3B8>Unable to locate data for target player <white>{player}.'
-  lock-failed: '{prefix}<#FBBF24>System Busy ⦊ <#94A3B8>Transaction is processing, please try again later.'
-  transfer-failed: '{prefix}<#F43F5E>Transfer Interrupted ⦊ <white>{error}'
-  error: '{prefix}<#F43F5E>System Error ⦊ <#94A3B8>Transaction could not be completed, please contact an administrator for assistance.'
-  degraded-mode: '{prefix}<b><#F43F5E>[ System Protected ]</b> <#94A3B8>Economy sync service is under maintenance, all transfers are suspended.'
-  degraded-mode-transfer: '{prefix}<b><#FBBF24>[ Cross-Server Warning ]</b> <#94A3B8>Sync system is delayed, this transfer may only apply to the current server.'
-  player-only: '<#F43F5E>System Prompt ⦊ <#94A3B8>This command is restricted to in-game players.'
-  usage: '{prefix}<#94A3B8>Correct usage: <#38BDF8>/pay <player> <amount>'
-  degraded-mode-message: '{prefix}<#F43F5E>System protection mechanism activated, transfer functions suspended.'
-  invalid-amount-format: '{prefix}<#F43F5E>Format Error ⦊ <#94A3B8>Please enter a valid numerical amount.'
-  amount-must-be-positive: '{prefix}<#F43F5E>Format Error ⦊ <#94A3B8>Transfer amount must be greater than 0.'
-  confirm-request: '{prefix}<#FBBF24>System Prompt ⦊ <#94A3B8>Large transfer detected, please enter the command to confirm.'
+  success-sender: '{prefix}<#94A3B8>Transaction Authorized. <#F8FAFC>{amount} <#94A3B8>routed to <#38BDF8>{player} <#475569>┇ <#94A3B8>Remaining Capital: <#A78BFA>{balance}'
+  success-receiver: '{prefix}<#4ADE80>Incoming Transmission ⦊ <#94A3B8>Acquired <#4ADE80>+{amount} <#94A3B8>from <#38BDF8>{player}.'
+  insufficient-funds: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Insufficient capital reserves. (Available: {balance})'
+  self-transfer: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Circular routing to origin address is prohibited.'
+  invalid-amount: '{prefix}<#F43F5E>SYNTAX EXCEPTION ⦊ <#94A3B8>Value must be strictly positive.'
+  amount-too-low: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Value falls below the minimum threshold of <white>{min}.'
+  amount-too-high: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Value exceeds the maximum threshold of <white>{max}.'
+  cooldown: '{prefix}<#FBBF24>RATE LIMIT EXCEEDED ⦊ <#94A3B8>Cooling down. Please hold <white>{seconds} <#94A3B8>seconds.'
+  player-not-found: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Target <white>{player} <#94A3B8>unreachable or invalid.'
+  target-not-found: '{prefix}<#F43F5E>NETWORK ANOMALY ⦊ <#94A3B8>Failed to resolve destination coordinates for <white>{player}.'
+  target-uuid-not-found: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Identifier resolution failed for <white>{player}.'
+  lock-failed: '{prefix}<#FBBF24>PROCESSING QUEUE FULL ⦊ <#94A3B8>Transaction pending, please retry shortly.'
+  transfer-failed: '{prefix}<#F43F5E>TRANSMISSION INTERRUPTED ⦊ <white>{error}'
+  error: '{prefix}<#F43F5E>SYSTEM EXCEPTION ⦊ <#94A3B8>Transaction could not be completed, please contact a network administrator for assistance.'
+  degraded-mode-transfer: '{prefix}<b><#FBBF24>[ NETWORK DESYNC ]</b> <#94A3B8>Sync system is delayed, this transfer may only apply to the current server node.'
+  player-only: '<#F43F5E>SYSTEM PROMPT ⦊ <#94A3B8>Command execution restricted to physical in-game terminals.'
+  usage: '{prefix}<#94A3B8>Valid Protocol: <#38BDF8>/pay <player> <amount>'
+  degraded-mode-message: '{prefix}<#F43F5E>Security grid engaged. Financial routing temporarily suspended.'
+  invalid-amount-format: '{prefix}<#F43F5E>SYNTAX EXCEPTION ⦊ <#94A3B8>Unrecognized numerical format detected.'
+  amount-must-be-positive: '{prefix}<#F43F5E>SYNTAX EXCEPTION ⦊ <#94A3B8>Transaction values must remain strictly positive.'
+  confirm-request: '{prefix}<#FBBF24>VERIFICATION REQUIRED ⦊ <#94A3B8>High-volume transaction detected. Manual override needed.'
   confirm-details: '<#475569>┣━ <#94A3B8>Target: <#38BDF8>{player} <#94A3B8>Amount: <#F8FAFC>{amount}'
-  confirm-hint: '<#475569>┗━ <#4ADE80>Please enter <#38BDF8>/pay confirm <#4ADE80>within 30 seconds to proceed.'
-  confirm-expired: '{prefix}<#F43F5E>Confirmation Expired ⦊ <#94A3B8>Transfer request timed out, please re-enter the transfer command.'
-  hint-format: '<#475569>┗━ <#94A3B8>Correct format: <#38BDF8>/pay <player> <amount>'
+  confirm-hint: '<#475569>┗━ <#4ADE80>Awaiting <#38BDF8>/pay confirm <#4ADE80>within 30 seconds.'
+  confirm-expired: '{prefix}<#F43F5E>VERIFICATION TIMEOUT ⦊ <#94A3B8>Session expired. Please re-initiate the transaction.'
+  hint-format: '<#475569>┗━ <#94A3B8>Syntax Protocol: <#38BDF8>/pay <player> <amount>'
+  duplicate-transfer: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Duplicate packet detected. Please hold.'
+  database-error: '{prefix}<#F43F5E>TRANSACTION REJECTED ⦊ <#94A3B8>Database synchronization failure during execution.'
+  account-locked: '{prefix}<#F43F5E>ACCOUNT FROZEN ⦊ <#94A3B8>Assets locked by automated security grid. Contact administrator.'
 
 # General messages
 general:
-  degraded-warning: '{prefix}<b><#FBBF24>[ Connection Warning ]</b> <#94A3B8>Unable to connect to the central database, currently displaying local cached balance only.'
-  degraded-local: '{prefix}<b><#FBBF24>[ Offline Mode ]</b> <#94A3B8>Cross-server sync suspended, currently displaying local server data.'
-  error: '{prefix}<#F43F5E>An unexpected error occurred, please report it to the server administrator.'
-  no-permission: '{prefix}<#F43F5E>You do not have permission to execute this command.'
-  sync-error: '{prefix}<#F43F5E>Data synchronization failed. For data safety, please log back into the server.'
-  player-only: '<#F43F5E>System Prompt ⦊ <#94A3B8>This command is restricted to in-game players.'
+  degraded-warning: '{prefix}<b><#FBBF24>[ NETWORK DESYNC ]</b> <#94A3B8>Central database unreachable. Displaying cached local data only.'
+  degraded-local: '{prefix}<b><#FBBF24>[ OFFLINE STATUS ]</b> <#94A3B8>Cross-server protocols suspended. Reading local node data.'
+  error: '{prefix}<#F43F5E>Critical failure encountered. Please file a diagnostic report.'
+  no-permission: '{prefix}<#F43F5E>Insufficient clearance for this operation.'
+  sync-error: '{prefix}<#F43F5E>Data desynchronization detected. Re-authenticate to secure assets.'
+  player-only: '<#F43F5E>SYSTEM PROMPT ⦊ <#94A3B8>Command execution restricted to physical in-game terminals.'
   time-format:
     seconds-ago: '{seconds} seconds ago'
     minutes-ago: '{minutes} minutes ago'
@@ -66,9 +72,9 @@ general:
 
 # Command router (SyncmoneyCommandRouter)
 router:
-  unknown-command: '{prefix}<#F43F5E>Unknown command parameter: <white>{subcommand}'
+  unknown-command: '{prefix}<#F43F5E>INVALID SYNTAX ⦊ <white>{subcommand}'
   help:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SYNC.MONEY SYSTEM COMMANDS</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SYNC.MONEY PROTOCOL DIRECTORY</bold></gradient> <#475569>▰▰▰▰'
     admin: ' <#38BDF8>▪ <click:suggest_command:/syncmoney admin><#F8FAFC>/syncmoney admin</click> <#475569>⦊ <#94A3B8>Economy Management (Give/Set/Take)'
     breaker: ' <#38BDF8>▪ <click:suggest_command:/syncmoney breaker><#F8FAFC>/syncmoney breaker</click> <#475569>⦊ <#94A3B8>Breaker Protection Status'
     audit: ' <#38BDF8>▪ <click:suggest_command:/syncmoney audit><#F8FAFC>/syncmoney audit</click> <#475569>⦊ <#94A3B8>Financial Audit Log'
@@ -77,7 +83,13 @@ router:
     shadow: ' <#38BDF8>▪ <click:suggest_command:/syncmoney shadow><#F8FAFC>/syncmoney shadow</click> <#475569>⦊ <#94A3B8>Background Data Sync Status'
     reload: ' <#38BDF8>▪ <click:suggest_command:/syncmoney reload><#F8FAFC>/syncmoney reload</click> <#475569>⦊ <#94A3B8>Reload Configuration'
     migrate: ' <#38BDF8>▪ <click:suggest_command:/syncmoney migrate><#F8FAFC>/syncmoney migrate</click> <#475569>⦊ <#94A3B8>Legacy Data Migration Tool'
+    web: ' <#38BDF8>▪ <click:suggest_command:/syncmoney web><#F8FAFC>/syncmoney web</click> <#475569>⦊ <#94A3B8>Web Frontend Management'
     test: ' <#38BDF8>▪ <click:suggest_command:/syncmoney test><#F8FAFC>/syncmoney test</click> <#475569>⦊ <#94A3B8>System Stress Test'
+
+# Config upgrade notification (shown when config is upgraded)
+config-upgraded:
+  - '{prefix}<#4ADE80>ARCHITECTURE UPGRADED ⦊ <#94A3B8>Added <#38BDF8>{count} <#94A3B8>new parameters.'
+  - '<#475569>┗━ <#94A3B8>Execute <#38BDF8>/syncmoney reload <#94A3B8>to apply changes.'
 
 # Migration system (Migration)
 migration:
@@ -85,14 +97,14 @@ migration:
   progress: '{prefix}<#94A3B8>Migration Progress: <#38BDF8>{current}<#475569>/<#38BDF8>{total} <white>({percent}%)'
   completed: '{prefix}<#4ADE80>Migration Complete! <#94A3B8>Processed <white>{count} <#94A3B8>records, total circulating amount: <#F8FAFC>{total}'
   error: '{prefix}<#F43F5E>Migration encountered an error and was aborted: <white>{error}'
-  already-running: '{prefix}<#FBBF24>System Prompt ⦊ <#94A3B8>A migration task is already in progress.'
+  already-running: '{prefix}<#FBBF24>VERIFICATION REQUIRED ⦊ <#94A3B8>A migration task is already in progress.'
   not-running: '{prefix}<#94A3B8>No active migration task currently running.'
   stopped: '{prefix}<#94A3B8>Migration task manually aborted by administrator.'
   resuming: '{prefix}<#94A3B8>Resuming migration from the last checkpoint...'
   no-checkpoint: '{prefix}<#94A3B8>No historical checkpoint found, starting fresh.'
   cleared: '{prefix}<#94A3B8>All migration checkpoint records have been cleared.'
   cmi-connection-failed: '{prefix}<#F43F5E>Database connection failed (CMI): <white>{error}'
-  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Migration Status</bold></gradient> <#475569>▰▰▰▰'
+  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MIGRATION DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
   status-state: ' <#38BDF8>▪ <#94A3B8>Current State: <white>{state}'
   status-total-players: ' <#38BDF8>▪ <#94A3B8>Total Players: <white>{count}'
   status-migrated: ' <#38BDF8>▪ <#94A3B8>Migrated: <#4ADE80>{count}'
@@ -101,7 +113,7 @@ migration:
   status-start-time: ' <#38BDF8>▪ <#94A3B8>Start Time: <white>{time}'
   status-remaining: ' <#38BDF8>▪ <#94A3B8>Estimated Remaining: <white>{seconds} seconds'
   status-failures: '<#F43F5E>▪ Total Failure Count: {count} records'
-  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Migration Guide</bold></gradient> <#475569>▰▰▰▰'
+  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MIGRATION CONTROLS</bold></gradient> <#475569>▰▰▰▰'
   usage-cmi: ' <#F8FAFC>/syncmoney migrate cmi <#94A3B8>[-force] [-no-backup] <#475569>⦊ <white>Execute CMI migration'
   usage-status: ' <#F8FAFC>/syncmoney migrate status <#475569>⦊ <white>View current progress'
   usage-resume: ' <#F8FAFC>/syncmoney migrate resume <#475569>⦊ <white>Resume from last checkpoint'
@@ -111,8 +123,8 @@ migration:
   cmi-disabled-economy: '{prefix}<#4ADE80>System has automatically disabled the CMI economy module.'
   cmi-disable-failed: '{prefix}<#F43F5E>Failed to disable CMI economy module: <white>{error}'
   cmi-reload: '{prefix}<#4ADE80>CMI configuration files reloaded.'
-  preview-header: '<#A78BFA>┣━ [ Migration Preview Mode ]'
-  preview-multi-server-header: '<#A78BFA>┣━ [ Cross-Server Migration Preview Mode ]'
+  preview-header: '<#A78BFA>┣━ [ Simulation Preview Mode ]'
+  preview-multi-server-header: '<#A78BFA>┣━ [ Distributed Simulation Preview Mode ]'
   preview-player-count: '<#4ADE80>Expected to migrate <white>{count} <#4ADE80>player records:'
   preview-player-line: ' <#475569>├─ <#38BDF8>{player} <#475569>┇ <#F8FAFC>{balance}'
   preview-more-players: ' <#475569>└─ <#94A3B8>... and {count} other players'
@@ -127,31 +139,41 @@ migration:
   local-to-sync-started: '{prefix}<#94A3B8>Initiating local-to-sync migration...'
   local-to-sync-completed: '{prefix}<#4ADE80>Local-to-Sync migration complete! <#94A3B8>Processed <white>{count} <#94A3B8>records, failed: <#F43F5E>{failed}'
   usage-local-to-sync: ' <#F8FAFC>/syncmoney migrate local-to-sync <#94A3B8>[-force] [-no-backup] <#475569>⦊ <white>Migrate local data to database'
+  redis-failed-notification: '{prefix}<b><#F43F5E>[ Data Sync Alert ]</b> <#94A3B8>Redis population failed during migration. Partial data desync possible. Verify Redis connection and execute <#38BDF8>/syncmoney migrate resume<#94A3B8>.'
+  paused-redis: '{prefix}<b><#FBBF24>[ Migration Paused ]</b> <#94A3B8>Redis connection lost. Verify connection and execute <#38BDF8>/syncmoney migrate resume<#94A3B8>.'
+  summary-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MIGRATION MANIFEST</bold></gradient> <#475569>▰▰▰▰'
+  summary-players: ' <#38BDF8>▪ <#94A3B8>Processed Players: <#A78BFA>{count}'
+  summary-balance: ' <#38BDF8>▪ <#94A3B8>Total Assets Transferred: <#A78BFA>{total}'
+  summary-errors: ' <#38BDF8>▪ <#94A3B8>Anomalies Detected: <#F43F5E>{count}'
+  next-steps: '<#FBBF24>Recommended Post-Migration Diagnostics:'
+  step-1: ' <#475569>├─ <#94A3B8>Execute <#38BDF8>/syncmoney breaker status <#94A3B8>to verify protection grid'
+  step-2: ' <#475569>├─ <#94A3B8>Execute <#38BDF8>/syncmoney econstats <#94A3B8>to validate economic metrics'
+  step-3: ' <#475569>└─ <#94A3B8>If using CMI, a server reboot is required to fully detach legacy economy modules'
 
 # Breaker (Protection mechanism)
 breaker:
   enabled:
-    active: '<green>Active</green>'
-    inactive: '<red>Inactive</red>'
+    active: '<#4ADE80>Active'
+    inactive: '<#F43F5E>Inactive'
   health:
-    healthy: '<green>Healthy'
-    abnormal: '<red>Abnormal'
+    healthy: '<#4ADE80>Healthy'
+    abnormal: '<#F43F5E>Abnormal'
   notification:
-    abnormal-change: '<b><#F43F5E>[ Security Alert ]</b> <#94A3B8>Abnormal fund variation detected, administrators please review logs immediately!'
-    supply-spike: '<b><#F43F5E>[ Security Alert ]</b> <#94A3B8>Total currency supply spiked abnormally, breaker forcibly engaged!'
-    locked: '<b><#F43F5E>[ System Locked ]</b> <#94A3B8>Economy system entered protection mode. Reason: {reason}'
-    locked-broadcast: '<b><#F43F5E>[ Global Announcement ]</b> <#94A3B8>Economy transaction system suspended (Security Lock). Reason: {reason}'
+    abnormal-change: '<b><#F43F5E>[ SECURITY ALERT ]</b> <#94A3B8>Abnormal fund variation detected, administrators please review logs immediately!'
+    supply-spike: '<b><#F43F5E>[ SECURITY ALERT ]</b> <#94A3B8>Total currency supply spiked abnormally, breaker forcibly engaged!'
+    locked: '<b><#F43F5E>[ SYSTEM OVERRIDE ]</b> <#94A3B8>Economy system entered protection mode. Reason: {reason}'
+    locked-broadcast: '<b><#F43F5E>[ GLOBAL OVERRIDE ]</b> <#94A3B8>Economy transaction system suspended (Security Lock). Reason: {reason}'
     build-message: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#94A3B8>[{type}] {content}'
   status: '{prefix}<#94A3B8>Current Breaker Status: <white>{state}'
   reset-success: '{prefix}<#4ADE80>Protection mechanism forcibly released, system services restored.'
-  locked: '{prefix}<b><#F43F5E>[ Access Denied ]</b> <#94A3B8>Economy system locked, all financial flows frozen.'
-  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Economy Breaker Status</bold></gradient> <#475569>▰▰▰▰'
+  locked: '{prefix}<b><#F43F5E>[ ACCESS DENIED ]</b> <#94A3B8>Economy system locked, all financial flows frozen.'
+  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SECURITY GRID STATUS</bold></gradient> <#475569>▰▰▰▰'
   state: ' <#38BDF8>▪ <#94A3B8>Operation State: <white>{state}'
   locked-warning: ' <b><#F43F5E>[ Critical Warning ] System is in deep lockdown, rejecting all financial operations!</b>'
-  warning-state: ' <b><#FBBF24>[ Alert State ]</b> <#94A3B8>System is under abnormal observation period, high-risk functions are restricted.'
+  warning-state: ' <b><#FBBF24>[ ALERT STATE ]</b> <#94A3B8>System is under abnormal observation period, high-risk functions are restricted.'
   reset-success-full: '{prefix}<#4ADE80>System security lock released, economic activities reopened.'
-  info-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Protection Mechanism Monitor</bold></gradient> <#475569>▰▰▰▰'
-  resources-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Resource Monitoring Report</bold></gradient> <#475569>▰▰▰▰'
+  info-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>GRID DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
+  resources-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>RESOURCE ALLOCATION</bold></gradient> <#475569>▰▰▰▰'
   info:
     redis-available: ' <#38BDF8>▪ <#94A3B8>Redis Status: <white>{available}'
     redis-last-success: ' <#38BDF8>▪ <#94A3B8>Last Connection: <white>{time}'
@@ -166,20 +188,19 @@ breaker:
     resources: '<#475569>┣━ <#A78BFA>[ Server Resources ]'
     health-header: '<#475569>┣━ <#A78BFA>[ System Health ]'
   state-options:
-    normal: '<green>Normal (NORMAL)'
-    warning: '<yellow>Warning (WARNING)'
-    locked: '<red>Locked (LOCKED)'
-    not-enabled: '<gray>Not Enabled'
-  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Breaker Guide</bold></gradient> <#475569>▰▰▰▰'
+    normal: '<#4ADE80>Normal (NORMAL)'
+    warning: '<#FBBF24>Warning (WARNING)'
+    locked: '<#F43F5E>Locked (LOCKED)'
+    not-enabled: '<#94A3B8>Not Enabled'
+  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SECURITY CONTROLS</bold></gradient> <#475569>▰▰▰▰'
   usage-status: ' <#F8FAFC>/syncmoney breaker status <#475569>⦊ <white>View breaker status'
   usage-reset: ' <#F8FAFC>/syncmoney breaker reset <#475569>⦊ <white>Force reset breaker'
   usage-info: ' <#F8FAFC>/syncmoney breaker info <#475569>⦊ <white>View detailed info'
   usage-resources: ' <#F8FAFC>/syncmoney breaker resources <#475569>⦊ <white>View resource status'
   usage-player: ' <#F8FAFC>/syncmoney breaker player <player> <#475569>⦊ <white>View player protection status'
   usage-unlock: ' <#F8FAFC>/syncmoney breaker unlock <player> <#475569>⦊ <white>Unlock player account'
-  # Player protection status messages (for breaker player command)
   player-status:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Player Protection Status</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>ENTITY PROTECTION PROFILE</bold></gradient> <#475569>▰▰▰▰'
     player: ' <#38BDF8>▪ <#94A3B8>Player: <white>{player}'
     status: ' <#38BDF8>▪ <#94A3B8>Status: <white>{state}'
     transactions-per-second: ' <#38BDF8>▪ <#94A3B8>Transactions/sec: <white>{count}'
@@ -187,13 +208,12 @@ breaker:
     warning-count: ' <#38BDF8>▪ <#94A3B8>Warning count: <white>{count}'
     unlock-in: ' <#38BDF8>▪ <#94A3B8>Unlock in: <white>{minutes} minutes'
     not-enabled: ' <#38BDF8>▪ <#94A3B8>Player protection system is not enabled'
-    not-found: '{prefix}<#F43F5E>Query Failed ⦊ <#94A3B8>Player {player} not found'
-  # Player unlock messages
+    not-found: '{prefix}<#F43F5E>QUERY FAILED ⦊ <#94A3B8>Player {player} not found'
   unlock:
     success: '{prefix}<#4ADE80>Player {player} has been unlocked.'
     failed: '{prefix}<#F43F5E>Operation Failed ⦊ <#94A3B8>Failed to unlock player {player}'
-    usage: '{prefix}<#F43F5E>Usage Error ⦊ <#94A3B8>Usage: /syncmoney breaker unlock <player>'
-    player-not-found: '{prefix}<#F43F5E>Query Failed ⦊ <#94A3B8>Player {player} not found'
+    usage: '{prefix}<#F43F5E>USAGE ERROR ⦊ <#94A3B8>Usage: /syncmoney breaker unlock <player>'
+    player-not-found: '{prefix}<#F43F5E>QUERY FAILED ⦊ <#94A3B8>Player {player} not found'
     system-not-enabled: '{prefix}<#94A3B8>Player protection system is not enabled'
 
 # Admin commands
@@ -202,41 +222,45 @@ admin:
   give-success: '{prefix}<#94A3B8>Issued <#4ADE80>+{amount} <#94A3B8>to <#38BDF8>{player} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
   take-success: '{prefix}<#94A3B8>Confiscated <#F43F5E>-{amount} <#94A3B8>from <#38BDF8>{player} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
   reset-success: '{prefix}<#94A3B8>Player <#38BDF8>{player}<#94A3B8>''s account balance has been forcibly reset to zero.'
-  insufficient-funds: '{prefix}<#F43F5E>Deduction Failed ⦊ <#94A3B8>Player has insufficient funds. (Current: {balance})'
-  invalid-amount: '{prefix}<#F43F5E>Format Error ⦊ <#94A3B8>This is not a valid numerical value.'
-  breaker-blocked: '{prefix}<b><#F43F5E>[ Action Denied ]</b> <#94A3B8>Protection mechanism intercepted this action: <white>{reason}'
-  daily-limit-reached: '{prefix}<#F43F5E>Operation Restricted ⦊ <#94A3B8>You have reached your daily limit for issuing/deducting.'
+  insufficient-funds: '{prefix}<#F43F5E>DEDUCTION FAILED ⦊ <#94A3B8>Player has insufficient funds. (Current: {balance})'
+  invalid-amount: '{prefix}<#F43F5E>SYNTAX EXCEPTION ⦊ <#94A3B8>This is not a valid numerical value.'
+  breaker-blocked: '{prefix}<b><#F43F5E>[ ACTION DENIED ]</b> <#94A3B8>Protection mechanism intercepted this action: <white>{reason}'
+  daily-limit-reached: '{prefix}<#F43F5E>OPERATION RESTRICTED ⦊ <#94A3B8>You have reached your daily limit for issuing/deducting.'
   daily-remaining: '{prefix}<#94A3B8>Your remaining management quota for today is: <#38BDF8>{remaining}'
   usage:
-    set: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney set <player> <amount>'
-    give: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney give <player> <amount>'
-    take: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney take <player> <amount>'
-  balance-set-by-admin: '{prefix}<#FBBF24>Account Alteration ⦊ <#94A3B8>An administrator has adjusted your balance to <#F8FAFC>{balance}'
-  money-received: '{prefix}<#4ADE80>System Disbursement ⦊ <#94A3B8>Your account received <#4ADE80>+{amount} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
-  money-taken: '{prefix}<#F43F5E>System Deduction ⦊ <#94A3B8>Your account was deducted by <#F43F5E>-{amount} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
-  confirm-request: '{prefix}<#FBBF24>System Prompt ⦊ <#94A3B8>High-value operation detected, please enter the command to confirm.'
+    set: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney admin set <player> <amount>'
+    give: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney admin give <player> <amount>'
+    take: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney admin take <player> <amount>'
+    reset: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney admin reset <player>'
+    view: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney admin view <player>'
+  balance-set-by-admin: '{prefix}<#FBBF24>ACCOUNT ALTERATION ⦊ <#94A3B8>An administrator has adjusted your balance to <#F8FAFC>{balance}'
+  money-received: '{prefix}<#4ADE80>SYSTEM DISBURSEMENT ⦊ <#94A3B8>Your account received <#4ADE80>+{amount} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
+  money-taken: '{prefix}<#F43F5E>SYSTEM DEDUCTION ⦊ <#94A3B8>Your account was deducted by <#F43F5E>-{amount} <#475569>┇ <#94A3B8>New balance: <#A78BFA>{balance}'
+  confirm-request: '{prefix}<#FBBF24>VERIFICATION REQUIRED ⦊ <#94A3B8>High-value operation detected, please enter the command to confirm.'
   confirm-details: '<#475569>┣━ <#94A3B8>Operation Type: <#F8FAFC>{subCommand} <#94A3B8>Target Player: <#38BDF8>{player} <#94A3B8>Amount: <#F8FAFC>{amount}'
   confirm-hint: '<#475569>┗━ <#4ADE80>Please enter <#38BDF8>/syncmoney admin confirm <#4ADE80>within 30 seconds to execute.'
-  confirm-expired: '{prefix}<#F43F5E>Confirmation Expired ⦊ <#94A3B8>Operation request timed out, please re-enter the command.'
-  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Economy Management Tools</bold></gradient> <#475569>▰▰▰▰'
-  usage-set: ' <#F8FAFC>/syncmoney set <player> <amount> <#475569>⦊ <white>Set specific balance'
-  usage-give: ' <#F8FAFC>/syncmoney give <player> <amount> <#475569>⦊ <white>Issue specific amount'
-  usage-take: ' <#F8FAFC>/syncmoney take <player> <amount> <#475569>⦊ <white>Deduct specific amount'
-  usage-reset: ' <#F8FAFC>/syncmoney reset <player> <#475569>⦊ <white>Reset player account to zero'
-  usage-view: ' <#F8FAFC>/syncmoney view <player> <#475569>⦊ <white>Query player balance'
+  confirm-expired: '{prefix}<#F43F5E>VERIFICATION TIMEOUT ⦊ <#94A3B8>Operation request timed out, please re-enter the command.'
+  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>OVERRIDE PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
+  usage-set: ' <#F8FAFC>/syncmoney admin set <player> <amount> <#475569>⦊ <white>Set specific balance'
+  usage-give: ' <#F8FAFC>/syncmoney admin give <player> <amount> <#475569>⦊ <white>Issue specific amount'
+  usage-take: ' <#F8FAFC>/syncmoney admin take <player> <amount> <#475569>⦊ <white>Deduct specific amount'
+  usage-reset: ' <#F8FAFC>/syncmoney admin reset <player> <#475569>⦊ <white>Reset player account to zero'
+  usage-view: ' <#F8FAFC>/syncmoney admin view <player> <#475569>⦊ <white>Query player balance'
 
 # Test commands (stress test)
 test:
+  # Message shown when test commands are used in LOCAL mode
+  unavailable-local-mode: '{prefix}<#F43F5E>COMMAND UNAVAILABLE ⦊ <#94A3B8>This command requires Redis. Please use SYNC or LOCAL_REDIS mode.'
+
   concurrent-pay:
     usage: '{prefix}<#F43F5E>Usage: <#94A3B8>/syncmoney test concurrent-pay <threads> <iterations>'
-    usage-clickable: '{prefix}<click:suggest_command:/syncmoney test concurrent-pay ><#38BDF8>Click to autocomplete: /syncmoney test concurrent-pay <threads> <iterations></click>'
-    invalid-number: '{prefix}<#F43F5E>Parameter Error ⦊ <#94A3B8>Threads and iterations must be integers.'
-    invalid-threads: '{prefix}<#F43F5E>Parameter Error ⦊ <#94A3B8>Threads must be between 1 and 50.'
-    invalid-iterations: '{prefix}<#F43F5E>Parameter Error ⦊ <#94A3B8>Iterations must be between 1 and 10000.'
+    invalid-number: '{prefix}<#F43F5E>PARAMETER ERROR ⦊ <#94A3B8>Threads and iterations must be integers.'
+    invalid-threads: '{prefix}<#F43F5E>PARAMETER ERROR ⦊ <#94A3B8>Threads must be between 1 and 50.'
+    invalid-iterations: '{prefix}<#F43F5E>PARAMETER ERROR ⦊ <#94A3B8>Iterations must be between 1 and 10000.'
     starting: '{prefix}<#A78BFA>Initiating stress test... <#94A3B8>(Config: {threads} threads, {iterations} iterations each)'
     note: ' <#38BDF8>▪ <#94A3B8>Note: The system will execute <white>{total} <#94A3B8>transfers of 1 unit between virtual accounts A and B.'
     result:
-      header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Stress Test Report</bold></gradient> <#475569>▰▰▰▰'
+      header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>STRESS TEST DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
       time: ' <#38BDF8>▪ <#94A3B8>Total Time Elapsed: <white>{time}ms'
       success: ' <#38BDF8>▪ <#94A3B8>Successful Transactions: <#4ADE80>{success} <#475569>┇ <#94A3B8>Failed Transactions: <#F43F5E>{fail}'
       balance-header: ' <#38BDF8>▪ <#94A3B8>Post-Test Balances:'
@@ -248,23 +272,23 @@ test:
       zero-loss-pass: '<#4ADE80>Verification Passed: Zero attrition in Total Supply!'
       zero-loss-fail: '<#F43F5E>Verification Failed: Fund discrepancy detected {difference}!'
   total-supply:
-    unavailable: '{prefix}<#F43F5E>Calculation Failed ⦊ <#94A3B8>Redis is currently offline.'
+    unavailable: '{prefix}<#F43F5E>CALCULATION FAILED ⦊ <#94A3B8>Redis is currently offline.'
     checking: '{prefix}<#94A3B8>Conducting comprehensive audit of total currency supply...'
     result:
-      header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Global Asset Snapshot</bold></gradient> <#475569>▰▰▰▰'
+      header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MACRO-ASSET SNAPSHOT</bold></gradient> <#475569>▰▰▰▰'
       total: ' <#38BDF8>▪ <#94A3B8>Total Market Circulation: <#F8FAFC>{amount}'
       cached-players: ' <#38BDF8>▪ <#94A3B8>Cached Players Audited: <white>{count}'
+  mode-enabled: '<#4ADE80>Test mode enabled: rate limiting disabled'
+  mode-disabled: '<#F43F5E>Test mode disabled: rate limiting re-enabled'
   usage:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Developer Testing Tools</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DIAGNOSTIC PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
     concurrent-pay: '<#94A3B8>/syncmoney test concurrent-pay <threads> <iterations> - Concurrent transfer stress test'
-    concurrent-pay-clickable: '<click:suggest_command:/syncmoney test concurrent-pay ><#94A3B8>/syncmoney test concurrent-pay <threads> <iterations></click>'
     total-supply: '<#94A3B8>/syncmoney test total-supply - Calculate total global supply'
-    total-supply-clickable: '<click:suggest_command:/syncmoney test total-supply><#94A3B8>/syncmoney test total-supply</click>'
 
 # Monitoring commands (Monitor)
 monitor:
   overview:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>System Real-Time Monitor</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>CORE TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     system-status: '<#475569>┣━ <#A78BFA>[ Core Status ]'
     redis: ' <#38BDF8>▪ <#94A3B8>Redis Connection: {status}'
     database: ' <#38BDF8>▪ <#94A3B8>Database Status: {status}'
@@ -277,10 +301,10 @@ monitor:
     queue: ' <#38BDF8>▪ <#94A3B8>Pending DB Writes: <#A78BFA>{count} entries'
     hint: '<#475569>Type <#38BDF8>/syncmoney monitor [redis|cache|db] <#475569>to view detailed metrics'
   status:
-    online: '<green>Online'
-    offline: '<red>Offline'
+    online: '<#4ADE80>Online'
+    offline: '<#F43F5E>Offline'
   redis:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REDIS CLUSTER MONITOR</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REDIS CLUSTER TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     offline: '<#F43F5E>Connection Failed: Redis service offline or misconfigured'
     pool-header: '<#475569>┣━ <#A78BFA>[ Connection Pool Status ]'
     max-connections: ' <#38BDF8>▪ <#94A3B8>Max Allowed Connections: <#A78BFA>{max}'
@@ -294,7 +318,7 @@ monitor:
     total-supply: ' <#38BDF8>▪ <#94A3B8>Total System Issue: <#4ADE80>{total_supply}'
     error: '<#F43F5E>Data Read Failed: {error}'
   cache:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>LOCAL CACHE MONITOR</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>CACHE MATRIX TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     cached-players: ' <#38BDF8>▪ <#94A3B8>Active Players in Memory: <#A78BFA>{count}'
     redis-header: '<#475569>┣━ <#A78BFA>[ Distributed Cache ]'
     redis-hits: ' <#38BDF8>▪ <#94A3B8>Hits: <#4ADE80>{hits}'
@@ -302,14 +326,14 @@ monitor:
     hit-rate: ' <#38BDF8>▪ <#94A3B8>Hit Rate: <#A78BFA>{hit_rate}%'
     expiration: ' <#38BDF8>▪ <#94A3B8>Expiration Baseline: <#A78BFA>{minutes} minutes'
   database:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DATABASE I/O MONITOR</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DB I/O TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     offline: '<#F43F5E>Connection Failed: Database offline or misconfigured'
     status: ' <#38BDF8>▪ <#94A3B8>Operation State: <#4ADE80>Connection Normal'
     queue-header: '<#475569>┣━ <#A78BFA>[ Write Queue ]'
     pending: ' <#38BDF8>▪ <#94A3B8>Pending Write Tasks: <#A78BFA>{pending} entries'
     written: ' <#38BDF8>▪ <#94A3B8>Completed Writes: <#4ADE80>{written} entries'
   memory:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>JVM MEMORY ANALYSIS</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>JVM HEAP TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     allocation: ' <#38BDF8>▪ <#94A3B8>System Allocated: <#A78BFA>{allocated} MB'
     usage: ' <#38BDF8>▪ <#94A3B8>Application Usage: <#A78BFA>{used} MB <#94A3B8>({percent}%)'
     max: ' <#38BDF8>▪ <#94A3B8>Max Limit: <#A78BFA>{max} MB'
@@ -317,14 +341,14 @@ monitor:
     app-header: '<#475569>┣━ <#A78BFA>[ Module Footprint ]'
     cached-players: ' <#38BDF8>▪ <#94A3B8>Player Cache Objects: <#A78BFA>{count}'
   messages:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MESSAGE STRING CACHE</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>STRING CACHE TELEMETRY</bold></gradient> <#475569>▰▰▰▰'
     helper-cache: ' <#38BDF8>▪ <#94A3B8>Formatting Cache: <#A78BFA>{helper} entries <#94A3B8>(Max 500)'
     plugin-cache: ' <#38BDF8>▪ <#94A3B8>Node Key Cache: <#A78BFA>{plugin} entries <#94A3B8>(Max 256)'
     parse-header: '<#475569>┣━ <#A78BFA>[ Rendering Performance ]'
     hits-misses: ' <#38BDF8>▪ <#94A3B8>Hits: <#4ADE80>{hits} times <#475569>┇ <#94A3B8>Misses: <#F43F5E>{misses} times'
     hit-rate: ' <#38BDF8>▪ <#94A3B8>Render Hit Rate: <#A78BFA>{hit_rate}%'
   usage:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Monitor Panel Commands</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>TELEMETRY PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
     overview: '<click:suggest_command:/syncmoney monitor><#F8FAFC>/syncmoney monitor</click> <#475569>⦊ <white>System Overview'
     redis: '<click:suggest_command:/syncmoney monitor redis><#F8FAFC>/syncmoney monitor redis</click> <#475569>⦊ <white>Redis Status'
     cache: '<click:suggest_command:/syncmoney monitor cache><#F8FAFC>/syncmoney monitor cache</click> <#475569>⦊ <white>Cache Status'
@@ -335,39 +359,46 @@ monitor:
 # Audit log (Financial records)
 audit:
   usage: '{prefix}<#94A3B8>Usage: <#38BDF8>/syncmoney audit <player> [page]'
-  no-permission: '{prefix}<#F43F5E>Access Denied ⦊ <#94A3B8>Cannot access server financial audit records.'
-  player-not-found: '{prefix}<#94A3B8>No Data ⦊ <white>{player} <#94A3B8>currently has no financial records.'
-  invalid-page: '{prefix}<#F43F5E>Pagination Error ⦊ <#94A3B8>Please enter a valid page range.'
-  header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Financial Audit Records</bold></gradient> <#475569>▰▰▰▰'
+  no-permission: '{prefix}<#F43F5E>AUTHORIZATION DENIED ⦊ <#94A3B8>Cannot access server financial audit records.'
+  player-not-found: '{prefix}<#94A3B8>NO DATA ⦊ <white>{player} <#94A3B8>currently has no financial records.'
+  invalid-page: '{prefix}<#F43F5E>PAGINATION ERROR ⦊ <#94A3B8>Please enter a valid page range.'
+  header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>FINANCIAL AUDIT LEDGER</bold></gradient> <#475569>▰▰▰▰'
   entry: ' <#475569>[<#94A3B8>{time}<#475569>] <white>#{number} <#475569>┇ <#38BDF8>{type} <#475569>┇ <#A78BFA>{player} <#475569>⦊ <#94A3B8>Change: <#4ADE80>{amount} <#475569>(Balance: <#F8FAFC>{balance_after}<#475569>)'
-  footer: '<#475569>▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰'
+  local-entry: ' <#475569>[<#94A3B8>{time}<#475569>] <white>#{number} <#475569>┇ <#38BDF8>{type} <#475569>┇ <#A78BFA>{player} <#475569>⦊ <#94A3B8>Change: <#4ADE80>{amount} <#475569>(Balance: <#F8FAFC>{balance_after}<#475569>)'
+  footer: '<#475569>▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ <#94A3B8>Page <white>{page} <#475569>▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰'
   empty: '{prefix}<#94A3B8>This list currently has no financial records.'
   search-usage: '{prefix}<#94A3B8>Advanced Search: <#38BDF8>/syncmoney audit search --player <name> --type <type> --start <time> --end <time>'
-  at-least-one-condition: '{prefix}<#F43F5E>Search Failed ⦊ <#94A3B8>Please provide at least one filter condition.'
-  found-records: '{prefix}<#4ADE80>Search Complete ⦊ <#94A3B8>Found <#38BDF8>{count} <#94A3B8>matching records.'
+  at-least-one-condition: '{prefix}<#F43F5E>SEARCH FAILED ⦊ <#94A3B8>Please provide at least one filter condition.'
+  found-records: '{prefix}<#4ADE80>SEARCH COMPLETE ⦊ <#94A3B8>Found <#38BDF8>{count} <#94A3B8>matching records.'
   cleanup-feature: '{prefix}<#94A3B8>Hint: Old log cleanup is handled automatically by the AuditLogCleanup module.'
-  stats-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Audit Module Status</bold></gradient> <#475569>▰▰▰▰'
+  stats-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>AUDIT MODULE DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
   stats-buffer: ' <#38BDF8>▪ <#94A3B8>Buffer Size: <white>{buffer}'
   stats-enabled: ' <#38BDF8>▪ <#94A3B8>Enabled Status: <white>{enabled}'
   stats-local-mode: ' <#38BDF8>▪ <#94A3B8>Mode: <white>{mode}'
   stats-local-players: ' <#38BDF8>▪ <#94A3B8>Total Players: <white>{count}'
   stats-local-total: ' <#38BDF8>▪ <#94A3B8>Total Economy: <white>{total}'
-  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Audit Logging Tools</bold></gradient> <#475569>▰▰▰▰'
+  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>AUDIT PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
   usage-command1: ' <#F8FAFC>/syncmoney audit <player> [page] <#475569>⦊ <white>View personal records'
   usage-command2: ' <#F8FAFC>/syncmoney audit search [params] <#475569>⦊ <white>Condition filtered search'
   usage-command3: ' <#F8FAFC>/syncmoney audit stats <#475569>⦊ <white>View system log status'
+  type:
+    deposit: '<#4ADE80>+'
+    withdraw: '<#F43F5E>-'
+    set-balance: '<#FBBF24>='
+    transfer: '<#38BDF8>→'
+    critical-failure: '<#F43F5E>!'
 
 # Ranking (All-server wealth ranking)
 baltop:
-  header: '<#475569>▰▰▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Forbes Wealth Ranking</bold></gradient> <#475569>▰▰▰▰▰▰'
+  header: '<#475569>▰▰▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>GLOBAL WEALTH INDEX</bold></gradient> <#475569>▰▰▰▰▰▰'
   footer: '<#475569>▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰'
   entry: ' <#A78BFA><b>#{rank}</b> <#475569>┇ <#38BDF8>{player} <#475569>⦊ <#F8FAFC>{balance}'
   empty: '{prefix}<#94A3B8>Leaderboard data is currently compiling, please check back later.'
-  invalid-page: '{prefix}<#F43F5E>Pagination Error ⦊ <#94A3B8>Please enter a valid page range.'
+  invalid-page: '{prefix}<#F43F5E>PAGINATION ERROR ⦊ <#94A3B8>Please enter a valid page range.'
   page-info: '<#94A3B8>Page <#38BDF8>{page} <#94A3B8><#475569>/ <#94A3B8>Total <#38BDF8>{total} <#94A3B8>Pages'
   total-supply: '<#94A3B8>Server Total Market Funds: <#F8FAFC>{amount}'
   hint-self: '<#475569>┗━ <#94A3B8>Type <#38BDF8>/baltop me <#94A3B8>to view your personal rank'
-  self-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Personal Wealth Ranking</bold></gradient> <#475569>▰▰▰▰'
+  self-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>PERSONAL WEALTH INDEX</bold></gradient> <#475569>▰▰▰▰'
   self-rank: ' <#38BDF8>▪ <#94A3B8>Your Rank: <#A78BFA>#{rank} <#94A3B8>Current Assets: <#F8FAFC>{balance}'
   self-gap: ' <#38BDF8>▪ <#94A3B8>Gap to next tier: <#F43F5E>{amount} <#94A3B8>({player})'
   not-ranked: '{prefix}<#94A3B8>You are not currently ranked on the leaderboard.'
@@ -389,9 +420,9 @@ baltop:
 # Shadow sync (background sync mechanism)
 shadow:
   enabled:
-    running: '<green>Running</green>'
-    stopped: '<red>Stopped</red>'
-  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Background Shadow Sync</bold></gradient> <#475569>▰▰▰▰'
+    running: '<#4ADE80>Running'
+    stopped: '<#F43F5E>Stopped'
+  status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SHADOW REPLICATION GRID</bold></gradient> <#475569>▰▰▰▰'
   status-running: ' <#38BDF8>▪ <#94A3B8>Execution State: <white>{running}'
   status-queue: ' <#38BDF8>▪ <#94A3B8>Queued for processing: <#38BDF8>{count} entries'
   status-last-sync: ' <#38BDF8>▪ <#94A3B8>Last Sync: <white>{time}'
@@ -403,25 +434,25 @@ shadow:
   scheduled: '{prefix}<#94A3B8>Sync schedule established, will execute automatically shortly.'
   sync-triggered: '{prefix}<#4ADE80>Forced wakeup and immediate sync sequence executed.'
   sync-failed: '{prefix}<#F43F5E>Critical error during sync sequence: <white>{error}'
-  logs-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Recent Sync Logs</bold></gradient> <#475569>▰▰▰▰'
+  logs-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REPLICATION LOGS</bold></gradient> <#475569>▰▰▰▰'
   logs-empty: ' <#94A3B8>Currently no sync records available.'
-  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Shadow Sync Controls</bold></gradient> <#475569>▰▰▰▰'
+  usage-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REPLICATION PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
   usage-status: ' <#F8FAFC>/syncmoney shadow status <#475569>⦊ <white>View sync health'
   usage-now: ' <#F8FAFC>/syncmoney shadow now <#475569>⦊ <white>Force execute immediate sync'
   usage-logs: ' <#F8FAFC>/syncmoney shadow logs <#475569>⦊ <white>View backend execution logs'
   sync-target: ' <#38BDF8>▪ <#94A3B8>Sync Target Object: <#A78BFA>{target}'
-  log-entry: '<gray>{timestamp} <yellow>{player} <gray>-> <yellow>{balance} <white>({status})'
-  log-entry-failed: '<gray>{timestamp} <yellow>{player} <gray>-> <yellow>{balance} <white>({status}) <red>Reason: {reason}'
+  log-entry: '<#94A3B8>{timestamp} <#FBBF24>{player} <#475569>-> <#FBBF24>{balance} <#F8FAFC>({status})'
+  log-entry-failed: '<#94A3B8>{timestamp} <#FBBF24>{player} <#475569>-> <#FBBF24>{balance} <#F8FAFC>({status}) <#F43F5E>Reason: {reason}'
   log-status:
-    success: '<green>Success'
-    failed: '<red>Failed'
-    unknown: '<gray>Unknown'
+    success: '<#4ADE80>Success'
+    failed: '<#F43F5E>Failed'
+    unknown: '<#94A3B8>Unknown'
   history:
     usage: '<#F43F5E>Usage: <#38BDF8>/syncmoney shadow history <player> [page]'
-    invalid-page: '<#F43F5E>Pagination Error ⦊ <#94A3B8>Please enter a valid page number.'
+    invalid-page: '<#F43F5E>PAGINATION ERROR ⦊ <#94A3B8>Please enter a valid page number.'
     not-found: '{prefix}<#94A3B8>No history found for <white>{player}'
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>History - {player}</bold></gradient> <#475569>▰▰▰▰'
-    header-page: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>History - {player}</bold> <#475569>(Page {page}) <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>HISTORY TRACKER - {player}</bold></gradient> <#475569>▰▰▰▰'
+    header-page: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>HISTORY TRACKER - {player}</bold> <#475569>(Page {page}) <#475569>▰▰▰▰'
     entry: ' <#38BDF8>{timestamp} <#475569>┇ <#F8FAFC>{balance} <#475569>┇ <#A78BFA>{target} <#475569>⦊ <#94A3B8>{status}'
     status-success: '<#4ADE80>Success'
     status-failed: '<#F43F5E>Failed'
@@ -429,9 +460,9 @@ shadow:
   export:
     usage: '<#F43F5E>Usage: <#38BDF8>/syncmoney shadow export <player> [startDate] [endDate]'
     example: '<#475569>┣━ <#94A3B8>Example: <#38BDF8>/syncmoney shadow export Notch 2026-01-01 2026-03-01'
-    invalid-start-date: '<#F43F5E>Date Format Error ⦊ <#94A3B8>Invalid start date format. Use yyyy-MM-dd'
-    invalid-end-date: '<#F43F5E>Date Format Error ⦊ <#94A3B8>Invalid end date format. Use yyyy-MM-dd'
-    start-after-end: '<#F43F5E>Date Range Error ⦊ <#94A3B8>Start date must be before end date.'
+    invalid-start-date: '<#F43F5E>DATE FORMAT ERROR ⦊ <#94A3B8>Invalid start date format. Use yyyy-MM-dd'
+    invalid-end-date: '<#F43F5E>DATE FORMAT ERROR ⦊ <#94A3B8>Invalid end date format. Use yyyy-MM-dd'
+    start-after-end: '<#F43F5E>DATE RANGE ERROR ⦊ <#94A3B8>Start date must be before end date.'
     exporting: '{prefix}<#94A3B8>Exporting shadow sync history...'
     success: '{prefix}<#4ADE80>Exported <white>{count} <#4ADE80>records to <#38BDF8>{path}'
     no-records: '{prefix}<#94A3B8>No records found to export.'
@@ -447,16 +478,16 @@ permission:
 
 # Limit (admin guard)
 limit:
-  given: '<#94A3B8>Quota issued today: <#4ADE80>{amount}'
-  taken: '<#94A3B8>Quota deducted today: <#F43F5E>{amount}'
-  remaining: '<#94A3B8>Current remaining operational quota: <#38BDF8>{amount}'
+  given: '<#94A3B8>Daily Allocation Issued: <#4ADE80>{amount}'
+  taken: '<#94A3B8>Daily Allocation Deducted: <#F43F5E>{amount}'
+  remaining: '<#94A3B8>Remaining Operational Allocation: <#38BDF8>{amount}'
 
 # Vault deposit notification (system financial interaction)
 vault:
-  deposited: '<#94A3B8>Financial Credit <#4ADE80>+{amount} <#475569>┇ <#94A3B8>Balance: <#F8FAFC>{balance}'
-  deposit-failed: '<#F43F5E>Credit Failed ⦊ <#94A3B8>Please contact server administrator.'
-  withdrawn: '<#94A3B8>Financial Debit <#F43F5E>-{amount} <#475569>┇ <#94A3B8>Balance: <#F8FAFC>{balance}'
-  withdraw-failed: '<#F43F5E>Debit Failed ⦊ <#94A3B8>You have insufficient funds to cover this cost.'
+  deposited: '<#94A3B8>Financial Credit <#4ADE80>+{amount} <#475569>┇ <#94A3B8>Capital: <#F8FAFC>{balance}'
+  deposit-failed: '<#F43F5E>CREDIT FAILED ⦊ <#94A3B8>Awaiting system administrator override.'
+  withdrawn: '<#94A3B8>Financial Debit <#F43F5E>-{amount} <#475569>┇ <#94A3B8>Capital: <#F8FAFC>{balance}'
+  withdraw-failed: '<#F43F5E>DEBIT FAILED ⦊ <#94A3B8>Insufficient capital for execution.'
 
 # Reload command (Reload)
 reload:
@@ -473,7 +504,7 @@ reload:
   success-permissions: '{prefix}<#4ADE80>Permission configuration update complete!'
   fail-permissions: '{prefix}<#F43F5E>Permission configuration update failed: {error}'
   usage:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>System Reload Tools</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REINITIALIZATION PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
     all: '<click:suggest_command:/syncmoney reload><#F8FAFC>/syncmoney reload</click> <#475569>⦊ <white>Reload all configs'
     config: '<click:suggest_command:/syncmoney reload config><#F8FAFC>/syncmoney reload config</click> <#475569>⦊ <white>Reload main config only'
     messages: '<click:suggest_command:/syncmoney reload messages><#F8FAFC>/syncmoney reload messages</click> <#475569>⦊ <white>Reload message config only'
@@ -481,15 +512,15 @@ reload:
 
 # Cross-server notification (Cross-Server)
 cross-server:
-  money-received: '{prefix}<#4ADE80>Funds Received ⦊ <#94A3B8>From <white>{server} <#475569>┇ <#4ADE80>+{amount}'
-  money-spent: '{prefix}<#F43F5E>Funds Spent ⦊ <#94A3B8>Server <white>{server} <#475569>┇ <#F43F5E>-{amount}'
-  balance-synced: '<#38BDF8>Balance Synced ⦊ <#94A3B8>From server {server}'
+  money-received: '{prefix}<#4ADE80>FUNDS RECEIVED ⦊ <#94A3B8>From <white>{server} <#475569>┇ <#4ADE80>+{amount}'
+  money-spent: '{prefix}<#F43F5E>FUNDS SPENT ⦊ <#94A3B8>Server <white>{server} <#475569>┇ <#F43F5E>-{amount}'
+  balance-synced: '<#38BDF8>BALANCE SYNCED ⦊ <#94A3B8>From server {server}'
   from-plugin: '<#94A3B8>[Source: {plugin}] '
 
 # Economic statistics command (EconStats)
 econstats:
   overview:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Global Economy Stats Overview</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>MACROECONOMICS OVERVIEW</bold></gradient> <#475569>▰▰▰▰'
     supply-header: '<#475569>┣━ <#A78BFA>[ Market Funds ]'
     supply: ' <#38BDF8>▪ <#94A3B8>Total Currency Issued: <#4ADE80>{supply}'
     players-header: '<#475569>┣━ <#A78BFA>[ Activity Stats ]'
@@ -499,7 +530,7 @@ econstats:
     top-entry: '  <#FBBF24>#{rank} <#4ADE80>{player} <#F8FAFC>: <#4ADE80>{balance}'
     hint: '<#475569>Type <#38BDF8>/syncmoney econstats [supply|players] <#475569>to view detailed reports'
   supply:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Currency Issue Report</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>CURRENCY ISSUANCE DATA</bold></gradient> <#475569>▰▰▰▰'
     supply: ' <#38BDF8>▪ <#94A3B8>Total Currency Issued: <#4ADE80>{supply}'
     precise: ' <#38BDF8>▪ <#94A3B8>Precise Settled Value: <white>{precise}'
     avg-header: '<#475569>┣━ <#A78BFA>[ Average Analysis ]'
@@ -507,7 +538,7 @@ econstats:
     distribution-header: '<#475569>┣━ <#A78BFA>[ Wealth Concentration ]'
     top100: ' <#38BDF8>▪ <#94A3B8>Top 100 individuals hold <#A78BFA>{percent}% <#94A3B8>of market funds'
   players:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Player Tier Analysis</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>ENTITY TIER ANALYSIS</bold></gradient> <#475569>▰▰▰▰'
     total: ' <#38BDF8>▪ <#94A3B8>Total Registered: <#A78BFA>{total} players'
     online: ' <#38BDF8>▪ <#94A3B8>Currently Online: <#4ADE80>{online} players'
     offline: ' <#38BDF8>▪ <#94A3B8>Offline Idle: <#94A3B8>{offline} players'
@@ -517,11 +548,14 @@ econstats:
     rich-header: '<#475569>┣━ <#A78BFA>[ Affluent Class ]'
     millionaire: ' <#38BDF8>▪ <#94A3B8>100M+ Net Worth Players: <#A78BFA>{count} players'
   transactions:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Transaction Heat Stats</bold></gradient> <#475569>▰▰▰▰'
-    note: '<#94A3B8>Note: This page contains concise metrics, for detailed ledgers please access the audit log.'
-    audit-hint: '<#94A3B8>Hint: Type <#38BDF8>/syncmoney audit <player> <#94A3B8>to view personal ledger.'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>TRANSACTION VELOCITY</bold></gradient> <#475569>▰▰▰▰'
+    unavailable: '<#F59E0B>Transaction statistics service is not available.'
+    total-count: ' <#38BDF8>▪ <#94A3B8>Total Transactions: <#A78BFA>{count}'
+    today-count: ' <#38BDF8>▪ <#94A3B8>Today''s Transactions: <#4ADE80>{count}'
+    total-amount: ' <#38BDF8>▪ <#94A3B8>Recent Transaction Volume: <#FBBF24>{amount}'
+    error: '<#F43F5E>Failed to load transaction statistics.'
   usage:
-    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>Economic Analysis Reports</bold></gradient> <#475569>▰▰▰▰'
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>ECONOMIC ANALYSIS PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
     overview: '<click:suggest_command:/syncmoney econstats><#F8FAFC>/syncmoney econstats</click> <#475569>⦊ <white>View stats overview'
     supply: '<click:suggest_command:/syncmoney econstats supply><#F8FAFC>/syncmoney econstats supply</click> <#475569>⦊ <white>Analyze currency issue'
     players: '<click:suggest_command:/syncmoney econstats players><#F8FAFC>/syncmoney econstats players</click> <#475569>⦊ <white>Analyze player tiers'
@@ -529,66 +563,199 @@ econstats:
 
 # High value notification system (High Value Notification)
 high-value-notification:
-  high-value-transaction: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#94A3B8>Player {player} conducted a large {type} transaction: {amount}'
-  sudden-change: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#F43F5E>WARNING: Player {player} balance spiked abnormally by {ratio}x! Amount: {amount}'
-  rapid-inflation: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#F43F5E>WARNING: Total economy spiked rapidly by {ratio}%\nPrevious: {previous}\nCurrent: {current}'
-  resource-warning: '<#A78BFA>[SYNC.MONEY] <#475569>┇ <#FBBF24>Resource Warning - {resource}: {details}'
+  high-value-transaction: '<#A78BFA>[ CORE ALERT ] <#475569>┇ <#94A3B8>Entity {player} executed high-volume {type} transaction: {amount}'
+  sudden-change: '<#A78BFA>[ SECURITY ALERT ] <#475569>┇ <#F43F5E>Entity {player} capital spiked abnormally by {ratio}x! Value: {amount}'
+  rapid-inflation: '<#A78BFA>[ SECURITY ALERT ] <#475569>┇ <#F43F5E>Macroeconomy spiked rapidly by {ratio}%<newline>Previous: {previous}<newline>Current: {current}'
+  resource-warning: '<#A78BFA>[ SYSTEM WARNING ] <#475569>┇ <#FBBF24>Resource Threshold Breached - {resource}: {details}'
 
 # Per-Player Protection System Messages
 player-protection:
   # L1: Rate Limit messages
   rate-limited:
-    per-second: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>Transaction too fast, please wait a moment'
-    per-minute: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>You have reached the maximum number of transactions per minute'
-    amount-limit: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>You have exceeded the maximum transaction amount per minute'
-    broadcast: '{prefix}<#F43F5E>Rate Limit ⦊ <#94A3B8>Transaction rejected for player {player}'
+    per-second: '{prefix}<#F43F5E>RATE LIMIT ⦊ <#94A3B8>Transaction too fast, please wait a moment'
+    per-minute: '{prefix}<#F43F5E>RATE LIMIT ⦊ <#94A3B8>You have reached the maximum number of transactions per minute'
+    amount-limit: '{prefix}<#F43F5E>RATE LIMIT ⦊ <#94A3B8>You have exceeded the maximum transaction amount per minute'
+    broadcast: '{prefix}<#F43F5E>RATE LIMIT ⦊ <#94A3B8>Transaction rejected for player {player}'
 
   # L2: Warning messages
   warning:
     title: '<#FBBF24>[WARNING] Player {player} has abnormal economic behavior'
-    content: ' <#38BDF8>▪ <#94A3B8>Transactions: {count} / {limit}\n <#38BDF8>▪ <#94A3B8>Total Amount: {total}'
-    broadcast: '{prefix}<#FBBF24>Security Alert ⦊ <#94A3B8>System detected abnormal economic behavior, recording in progress'
-    player-notify: '{prefix}<#FBBF24>Security Alert ⦊ <#94A3B8>Your transactions are being monitored due to unusual activity'
+    content: ' <#38BDF8>▪ <#94A3B8>Transactions: {count} / {limit}<newline> <#38BDF8>▪ <#94A3B8>Total Amount: {total}'
+    broadcast: '{prefix}<#FBBF24>SECURITY ALERT ⦊ <#94A3B8>System detected abnormal economic behavior, recording in progress'
+    player-notify: '{prefix}<#FBBF24>SECURITY ALERT ⦊ <#94A3B8>Your transactions are being monitored due to unusual activity'
 
   # L3: Lock messages
   locked:
     title: '<#F43F5E>[LOCKED] Player {player} has been locked by economic protection system'
-    content: ' <#38BDF8>▪ <#94A3B8>Reason: {reason}\n <#38BDF8>▪ <#94A3B8>Unlock Time: {unlock_time}'
-    player-message: '{prefix}<#F43F5E>Access Denied ⦊ <#94A3B8>Your account cannot process transactions temporarily, please wait {minutes} minutes and try again'
-    auto-unlock-success: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player} has been automatically unlocked'
-    auto-unlock-fail: '{prefix}<#F43F5E>System Alert ⦊ <#94A3B8>Player {player} automatic unlock failed, remaining locked'
-    admin-locked: '{prefix}<#F43F5E>System Alert ⦊ <#94A3B8>Player {player} has been locked by admin. Reason: {reason}'
+    content: ' <#38BDF8>▪ <#94A3B8>Reason: {reason}<newline> <#38BDF8>▪ <#94A3B8>Unlock Time: {unlock_time}'
+    player-message: '{prefix}<#F43F5E>AUTHORIZATION DENIED ⦊ <#94A3B8>Your account cannot process transactions temporarily, please wait {minutes} minutes and try again'
+    auto-unlock-success: '{prefix}<#4ADE80>SYSTEM NOTIFICATION ⦊ <#94A3B8>Player {player} has been automatically unlocked'
+    auto-unlock-fail: '{prefix}<#F43F5E>SYSTEM ALERT ⦊ <#94A3B8>Player {player} automatic unlock failed, remaining locked'
+    admin-locked: '{prefix}<#F43F5E>SYSTEM ALERT ⦊ <#94A3B8>Player {player} has been locked by admin. Reason: {reason}'
 
   # Unlock messages
   unlocked:
-    by-admin: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player}\''s economic protection has been lifted by admin'
-    by-timeout: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player}\''s account has been automatically unlocked'
+    by-admin: '{prefix}<#4ADE80>SYSTEM NOTIFICATION ⦊ <#94A3B8>Player {player}''s economic protection has been lifted by admin'
+    by-timeout: '{prefix}<#4ADE80>SYSTEM NOTIFICATION ⦊ <#94A3B8>Player {player}''s account has been automatically unlocked'
     test-failed: '{prefix}<#F43F5E>Security Alert ⦊ <#94A3B8>Unlock test failed, remaining locked for {minutes} minutes'
-    test-success: '{prefix}<#4ADE80>System Notification ⦊ <#94A3B8>Player {player} passed unlock test, protection lifted'
+    test-success: '{prefix}<#4ADE80>SYSTEM NOTIFICATION ⦊ <#94A3B8>Player {player} passed unlock test, protection lifted'
 
   # Status messages
   status:
-    normal: '<green>Normal'
-    warning: '<yellow>Warning'
-    locked: '<red>Locked'
-    not-enabled: '<gray>Not Enabled'
+    normal: '<#4ADE80>Normal'
+    warning: '<#FBBF24>Warning'
+    locked: '<#F43F5E>Locked'
+    not-enabled: '<#94A3B8>Not Enabled'
 
 # Discord Webhook Messages Template
 discord-webhook:
-  embed-title: 'Syncmoney Economic Alert'
-  event-player-warning: 'Player Warning'
-  event-player-locked: 'Player Locked'
-  event-player-unlocked: 'Player Unlocked'
-  event-global-lock: 'Global Lock'
-  event-rate-limit: 'Rate Limited'
-  field-player: 'Player'
+  embed-title: 'Syncmoney Security Telemetry'
+  event-player-warning: 'Entity Warning'
+  event-player-locked: 'Entity Locked'
+  event-player-unlocked: 'Entity Unlocked'
+  event-global-lock: 'System Override'
+  event-rate-limit: 'Rate Limit Exceeded'
+  field-player: 'Entity'
   field-reason: 'Reason'
-  field-time: 'Time'
+  field-time: 'Timestamp'
   field-transactions: 'Transactions'
-  field-total-amount: 'Total Amount'
+  field-total-amount: 'Total Volume'
   field-duration: 'Duration'
-  field-server: 'Server'
+  field-server: 'Node'
 
 # Resource monitoring summary (Resource Monitor)
 resource-monitor:
   status-summary: '<#38BDF8>Memory: {memory}% ({available} MB available), Redis connections: {redis_connections}'
+
+# Web frontend commands
+web:
+  download:
+    starting: '{prefix}<#A78BFA>Initiating web frontend download sequence...'
+    success: '{prefix}<#4ADE80>Download Complete! <#94A3B8>Web frontend installed successfully.'
+    failed: '{prefix}<#F43F5E>DOWNLOAD FAILED ⦊ <#94A3B8>Check console for details.'
+    error: '{prefix}<#F43F5E>SYSTEM EXCEPTION ⦊ <#94A3B8>{error}'
+    extracting: '{prefix}<#A78BFA>Extracting files to syncmoney-web/...'
+    building: '{prefix}<#A78BFA>Running pnpm build... (this may take a few minutes)'
+  build:
+    starting: '{prefix}<#A78BFA>Initiating web frontend build sequence...'
+    not-found: '{prefix}<#F43F5E>BUILD ABORTED ⦊ <#94A3B8>Web frontend not found. Run <#38BDF8>/syncmoney web download <#94A3B8>first.'
+    success: '{prefix}<#4ADE80>Build Complete! <#94A3B8>Web frontend compiled successfully.'
+    failed: '{prefix}<#F43F5E>BUILD FAILED ⦊ <#94A3B8>Check console for details.'
+    error: '{prefix}<#F43F5E>SYSTEM EXCEPTION ⦊ <#94A3B8>{error}'
+    pnpm-not-found: '{prefix}<#F43F5E>BUILD ABORTED ⦊ <#94A3B8>pnpm/npm not found. Please install Node.js and pnpm on this server.'
+  open:
+    not-running: '{prefix}<#F43F5E>CONNECTION FAILED ⦊ <#94A3B8>Web server is not running. Start the server first.'
+    success: '{prefix}<#4ADE80>BROWSER LAUNCHED ⦊ <#94A3B8>Opening: <#38BDF8>{url}'
+    failed: '{prefix}<#F43F5E>BROWSER LAUNCH FAILED ⦊ <#94A3B8>{error}'
+    manual: '<#475569>┗━ <#94A3B8>Please open manually: <#38BDF8>{url}'
+  status:
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DASHBOARD CORE STATUS</bold></gradient> <#475569>▰▰▰▰'
+    directory: ' <#38BDF8>▪ <#94A3B8>Directory: <white>{path}'
+    tarball: ' <#38BDF8>▪ <#94A3B8>Tarball: <white>{path} {status}'
+    installed: ' <#38BDF8>▪ <#94A3B8>Source Ready: {status}'
+    build-ready: ' <#38BDF8>▪ <#94A3B8>Build Ready: {status}'
+    server-running: ' <#38BDF8>▪ <#94A3B8>Server Running: {status}'
+    web-address: ' <#38BDF8>▪ <#94A3B8>Web URL: <click:open_url:{url}><#38BDF8>{url}</click>'
+    status-yes: '<#4ADE80>Yes'
+    status-no: '<#F43F5E>No'
+  version:
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DASHBOARD VERSION DATA</bold></gradient> <#475569>▰▰▰▰'
+    bundled: ' <#38BDF8>▪ <#94A3B8>Bundled: <white>{version}'
+    current: ' <#38BDF8>▪ <#94A3B8>Current: <white>{version}'
+    latest: ' <#38BDF8>▪ <#94A3B8>Latest: <white>{version}'
+    up-to-date: '{prefix}<#4ADE80>Up to date'
+    update-available: '{prefix}<#F43F5E>Update available! Run <#38BDF8>/syncmoney web download'
+    check-failed: '{prefix}<#F43F5E>Failed to check latest version'
+  check:
+    update-available-clickable: '{prefix}<#FBBF24>New version {latest} available! → '
+  reload:
+    not-running: '{prefix}<#F43F5E>RELOAD FAILED ⦊ <#94A3B8>Web server is not running. Start it first.'
+    success: '{prefix}<#4ADE80>WEB RELOADED ⦊ <#94A3B8>Web frontend files re-read successfully.'
+    failed: '{prefix}<#F43F5E>RELOAD FAILED ⦊ <#94A3B8>{error}'
+  usage:
+    header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DASHBOARD PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
+    download: ' <#F8FAFC>/syncmoney web download <#475569>⦊ <white>Download web frontend from GitHub'
+    build: ' <#F8FAFC>/syncmoney web build <#475569>⦊ <white>Build web frontend locally'
+    reload: ' <#F8FAFC>/syncmoney web reload <#475569>⦊ <white>Reload web frontend (after rebuild)'
+    open: ' <#F8FAFC>/syncmoney web open <#475569>⦊ <white>Open dashboard in browser'
+    status: ' <#F8FAFC>/syncmoney web status <#475569>⦊ <white>Show frontend status'
+    check: ' <#F8FAFC>/syncmoney web check <#475569>⦊ <white>Check for updates'
+    version: ' <#F8FAFC>/syncmoney web version <#475569>⦊ <white>Show current version'
+
+# Web Admin Server internal messages (for logging)
+# Note: these are nested under "web:" so that getMessage("web.server.*") resolves correctly.
+  server:
+    disabled: '<#94A3B8>Web Admin is disabled in config.'
+    directory-created: '<#94A3B8>Created web directory: {path}'
+    started: '<#4ADE80>Web Admin Server started on {host}:{port}'
+    stopped: '<#94A3B8>Web Admin Server stopped.'
+    route-count: '<#94A3B8>Registered {count} API routes.'
+    extract-file: '<#94A3B8>Extracted default web file: {filename}'
+    version:
+      checking: '<#94A3B8>Auto-update protocol active, scanning for latest manifest...'
+      downloading: '<#A78BFA>Acquiring latest architecture {version}...'
+      download-complete: '<#4ADE80>Acquisition successful!'
+      download-failed: '<#F43F5E>Acquisition failed, reverting to local architecture.'
+      download-error: '<#F43F5E>Acquisition error: {error}'
+      update-available: '<#F43F5E>Dashboard architecture update available! Bundled: {bundled} | Local: {current} | Latest: {latest}'
+      up-to-date: '<#94A3B8>Dashboard architecture {version} (up to date)'
+    error-request: '<#F43F5E>Error handling request: {error}'
+
+# Debug economy command
+debug:
+  usage: '<#F43F5E>Usage: /syncmoney debug player <player>'
+  player-not-found: '<#F43F5E>Player not found: {player}'
+  header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DIAGNOSTIC TARGET: {player}</bold></gradient> <#475569>▰▰▰▰'
+  system-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>CORE SYSTEM DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
+  commands-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>DIAGNOSTIC PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
+  economy-status: '<#94A3B8>Economy Status: {status}'
+  tip-sync: '<#475569>Tip: Use /syncmoney sync-balance {player} to sync data'
+  memory-label: '<#94A3B8>Memory: <#A78BFA>{balance}'
+  redis-label: '<#94A3B8>Redis:  <#A78BFA>{balance}'
+  redis-error: '<#94A3B8>Redis:  <#F43F5E>Error - {error}'
+  redis-offline: '<#94A3B8>Redis:  <#FBBF24>Offline/Degraded'
+  db-label: '<#94A3B8>Database: <#A78BFA>{balance}'
+  db-no-record: '<#94A3B8>Database: <#FBBF24>No record'
+  db-error: '<#94A3B8>Database: <#F43F5E>Error - {error}'
+  db-offline: '<#94A3B8>Database: <#FBBF24>Offline'
+  version-available: '<#94A3B8>Version: <#A78BFA>{version}'
+  version-error: '<#94A3B8>Version: <#F43F5E>Error'
+  degraded-normal: '<#94A3B8>Status: <#4ADE80>NORMAL'
+  degraded-active: '<#94A3B8>Status: <#F43F5E>DEGRADED'
+  redis-status-ok: '<#94A3B8>Redis: <#4ADE80>Online'
+  redis-status-degraded: '<#94A3B8>Redis: <#F43F5E>Degraded'
+  redis-pool-normal: '<#94A3B8>Redis Pool: <#4ADE80>{avail}<#94A3B8>/<#A78BFA>{max}'
+  redis-pool-error: '<#94A3B8>Redis Pool: <#F43F5E>Error'
+  redis-not-init: '<#94A3B8>Redis: <#FBBF24>Not initialized'
+  db-status-ok: '<#94A3B8>Database: <#4ADE80>Connected'
+  db-status-fail: '<#94A3B8>Database: <#F43F5E>Disconnected'
+  db-not-init: '<#94A3B8>Database: <#FBBF24>Not initialized'
+  lua-loaded: '<#94A3B8>Lua: <#4ADE80>Loaded'
+  lua-not-loaded: '<#94A3B8>Lua: <#F43F5E>Not loaded'
+  drop-normal: '<#94A3B8>Dropped Events: <#4ADE80>{count}'
+  drop-abnormal: '<#94A3B8>Dropped Events: <#F43F5E>{count}'
+  cached-players: '<#94A3B8>Cached Players: <#A78BFA>{count}'
+  usage-line: '<#94A3B8>/syncmoney debug <player> - View player''s balance across layers'
+  usage-line2: '<#94A3B8>/syncmoney debug system - View system status'
+
+# Sync balance command
+sync-balance:
+  player-not-found: '<#F43F5E>Player not found: {player}'
+  header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>FORCED DATA REPLICATION</bold></gradient> <#475569>▰▰▰▰'
+  player-line: '<#94A3B8>Player: <#A78BFA>{player}'
+  balance-line: '<#94A3B8>Balance: <#A78BFA>{balance}'
+  redis-success: '<#4ADE80>Redis sync: SUCCESS'
+  redis-failed: '<#F43F5E>Redis sync: FAILED'
+  db-success: '<#4ADE80>Database sync: SUCCESS'
+  db-failed: '<#F43F5E>Database sync: FAILED (or disabled)'
+  success: '<#4ADE80>Balance synced successfully!'
+  partial-success: '<#FBBF24>Partial success - check server logs'
+  failed: '<#F43F5E>Sync failed completely. Check server logs.'
+  usage: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>REPLICATION PROTOCOLS</bold></gradient> <#475569>▰▰▰▰'
+  usage-line: '<#94A3B8>/syncmoney sync-balance <player> - Force sync player''s balance to Redis and Database'
+
+# Upgrade notifications
+upgrade:
+  database-higher-version: '{prefix}<b><#FBBF24>[ VERSION MISMATCH ]</b> <#94A3B8>Database version (<white>v{db_version}<#94A3B8>) exceeds plugin version (<white>v{plugin_version}<#94A3B8>). Plugin upgrade recommended.'
+  completed: '{prefix}<#4ADE80>DATABASE UPGRADED ⦊ <#94A3B8>Successfully migrated from <white>v{from_version} <#94A3B8>to <white>v{to_version}<#94A3B8>.'
+  required: '{prefix}<b><#F43F5E>[ UPGRADE FAILED ]</b> <#94A3B8>Database upgrade required but unsupported by current plugin version. Please update plugin.'

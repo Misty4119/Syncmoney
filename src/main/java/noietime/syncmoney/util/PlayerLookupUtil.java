@@ -3,7 +3,6 @@ package noietime.syncmoney.util;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
 
 import java.util.UUID;
 
@@ -12,7 +11,8 @@ import java.util.UUID;
  */
 public final class PlayerLookupUtil {
 
-    private PlayerLookupUtil() {}
+    private PlayerLookupUtil() {
+    }
 
     /**
      * Safely retrieves player (Folia-compatible).

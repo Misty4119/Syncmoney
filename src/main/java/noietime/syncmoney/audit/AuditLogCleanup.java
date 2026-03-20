@@ -34,19 +34,22 @@ public final class AuditLogCleanup {
      */
     public void start() {
         if (!config.isAuditCleanupEnabled()) {
-            logger.info("Audit log cleanup is disabled.");
+            logger.fine("Audit log cleanup is disabled.");
             return;
         }
 
+        long intervalHours = config.getAuditCleanupIntervalHours();
+        long intervalTicks = intervalHours * 1200L;
+        long initialDelay = intervalTicks;
 
         plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(
                 plugin,
                 task -> performCleanup(),
-                1,
-                1
+                initialDelay,
+                intervalTicks
         );
 
-        logger.info("Audit log cleanup scheduled every " + config.getAuditCleanupIntervalHours() + " hours.");
+        logger.fine("Audit log cleanup scheduled every " + intervalHours + " hours (" + intervalTicks + " ticks).");
     }
 
     /**
@@ -55,7 +58,7 @@ public final class AuditLogCleanup {
     public void performCleanup() {
         int retentionDays = config.getAuditRetentionDays();
         if (retentionDays <= 0) {
-            logger.info("Audit log retention is set to infinite, skipping cleanup.");
+            logger.fine("Audit log retention is set to infinite, skipping cleanup.");
             return;
         }
 
@@ -64,7 +67,7 @@ public final class AuditLogCleanup {
         int deleted = deleteOldRecords(cutoffTime);
 
         if (deleted > 0) {
-            logger.info("Cleaned up " + deleted + " audit log entries older than " + retentionDays + " days.");
+            logger.fine("Cleaned up " + deleted + " audit log entries older than " + retentionDays + " days.");
 
             optimizeTable();
         }
@@ -138,13 +141,26 @@ public final class AuditLogCleanup {
 
     /**
      * Optimizes database table.
+     * [AU07 FIX] Supports MySQL, PostgreSQL, and SQLite.
      */
     private void optimizeTable() {
         try (Connection conn = dataSource.getConnection();
              var stmt = conn.createStatement()) {
 
-            stmt.execute("OPTIMIZE TABLE syncmoney_audit_log");
-            logger.info("Audit log table optimized.");
+            String dbType = conn.getMetaData().getDatabaseProductName().toLowerCase();
+
+            if (dbType.contains("mysql")) {
+                stmt.execute("OPTIMIZE TABLE syncmoney_audit_log");
+                logger.fine("MySQL: Audit log table optimized.");
+            } else if (dbType.contains("postgresql")) {
+                stmt.execute("VACUUM ANALYZE syncmoney_audit_log");
+                logger.fine("PostgreSQL: Audit log table vacuumed and analyzed.");
+            } else if (dbType.contains("sqlite")) {
+                stmt.execute("VACUUM");
+                logger.fine("SQLite: Database vacuumed.");
+            } else {
+                logger.fine("Database type not supported for optimization: " + dbType);
+            }
 
         } catch (SQLException e) {
             logger.warning("Failed to optimize audit log table: " + e.getMessage());

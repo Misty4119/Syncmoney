@@ -4,6 +4,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
+import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.plugin.Plugin;
 
 import java.lang.management.ManagementFactory;
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class ResourceMonitor {
 
-    private static final long WARNING_INTERVAL_MS = 300000; // 5 minutes
+    private static final long WARNING_INTERVAL_MS = 300000;
 
     private final Plugin plugin;
     private final SyncmoneyConfig config;
@@ -32,19 +33,17 @@ public final class ResourceMonitor {
     private final Syncmoney syncMoneyPlugin;
     private final ScheduledExecutorService scheduler;
     private final MemoryMXBean memoryBean;
-
+    private DiscordWebhookNotifier discordNotifier;
 
     private volatile double currentMemoryUsagePercent = 0;
 
-
     private volatile long availableMemoryMb = 0;
-
 
     private volatile int redisAvailableConnections = 0;
 
-
     private volatile long lastWarningTime = 0;
 
+    private volatile SseManager sseManager;
 
     public ResourceMonitor(Plugin plugin, SyncmoneyConfig config, RedisManager redisManager) {
         this.plugin = plugin;
@@ -100,6 +99,14 @@ public final class ResourceMonitor {
                             " (" + usedMb + "/" + maxMb + " MB). " +
                             "Threshold: " + config.getCircuitBreakerMemoryWarningThreshold() + "%");
                     lastWarningTime = now;
+
+                    broadcastResourceAlert("memory_high",
+                        "High Memory Usage",
+                        String.format("Memory usage at %.1f%% (%d/%d MB)", usagePercent, usedMb, maxMb));
+
+                    if (discordNotifier != null) {
+                        discordNotifier.sendMemoryHighEvent(usagePercent, usedMb, maxMb);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -117,12 +124,24 @@ public final class ResourceMonitor {
             int active = redisManager.getActiveConnections();
             int maxTotal = redisManager.getMaxConnections();
 
-            if (active >= 18) {
+
+            int poolWarningThreshold = maxTotal - config.getCircuitBreakerPoolExhaustedWarning();
+            if (active >= poolWarningThreshold && active >= maxTotal * 8 / 10) {
                 long now = System.currentTimeMillis();
                 if (now - lastWarningTime > WARNING_INTERVAL_MS) {
                     plugin.getLogger().severe("ResourceMonitor: Redis connection pool critical! " +
-                            "Active: " + active + ", Max: " + maxTotal);
+                            "Active: " + active + ", Max: " + maxTotal +
+                            " (threshold: " + config.getCircuitBreakerPoolExhaustedWarning() + " available)");
                     lastWarningTime = now;
+
+                    broadcastResourceAlert("redis_pool_critical",
+                        "Redis Connection Pool Critical",
+                        String.format("Active connections: %d/%d (%.1f%%)", active, maxTotal,
+                            (double) active / maxTotal * 100));
+
+                    if (discordNotifier != null) {
+                        discordNotifier.sendRedisPoolCriticalEvent(active, maxTotal);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -159,7 +178,9 @@ public final class ResourceMonitor {
 
         boolean redisOk = true;
         if (redisManager != null && !redisManager.isDegraded()) {
-            redisOk = redisAvailableConnections > config.getCircuitBreakerPoolExhaustedWarning();
+            int active = redisManager.getActiveConnections();
+            int maxTotal = redisManager.getMaxConnections();
+            redisOk = (maxTotal - active) > config.getCircuitBreakerPoolExhaustedWarning();
         }
 
         return memoryOk && redisOk;
@@ -191,6 +212,37 @@ public final class ResourceMonitor {
         } catch (InterruptedException e) {
             scheduler.shutdownNow();
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Set SSE manager for broadcasting resource alerts to web clients.
+     */
+    public void setSseManager(SseManager sseManager) {
+        this.sseManager = sseManager;
+    }
+
+    /**
+     * Set Discord webhook notifier for sending resource alerts to Discord.
+     */
+    public void setDiscordWebhookNotifier(DiscordWebhookNotifier discordNotifier) {
+        this.discordNotifier = discordNotifier;
+    }
+
+    /**
+     * Broadcast resource alert to SSE clients.
+     */
+    private void broadcastResourceAlert(String type, String title, String message) {
+        if (sseManager != null && sseManager.isEnabled()) {
+            try {
+                String json = String.format(
+                    "{\"type\":\"%s\",\"title\":\"%s\",\"message\":\"%s\",\"timestamp\":%d}",
+                    type, title.replace("\"", "'"), message.replace("\"", "'"), System.currentTimeMillis()
+                );
+                sseManager.broadcastToChannel("system", json);
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to broadcast resource alert: " + e.getMessage());
+            }
         }
     }
 }

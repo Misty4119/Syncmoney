@@ -1,53 +1,45 @@
 package noietime.syncmoney;
 
 import net.kyori.adventure.text.Component;
-import noietime.syncmoney.command.CooldownManager;
-import noietime.syncmoney.command.EconStatsCommand;
-import noietime.syncmoney.command.MigrationCommand;
-import noietime.syncmoney.command.MoneyCommand;
-import noietime.syncmoney.command.MonitorCommand;
-import noietime.syncmoney.command.PayCommand;
-import noietime.syncmoney.command.ReloadCommand;
-import noietime.syncmoney.command.TestCommand;
-import noietime.syncmoney.command.SyncmoneyCommandRouter;
+import noietime.syncmoney.command.CommandServiceManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyEvent;
-import noietime.syncmoney.economy.EconomyEventConsumer;
 import noietime.syncmoney.economy.EconomyFacade;
-import noietime.syncmoney.economy.EconomyModeRouter;
 import noietime.syncmoney.economy.EconomyMode;
-import noietime.syncmoney.economy.LocalEconomyHandler;
-import noietime.syncmoney.economy.EconomyWriteQueue;
-import noietime.syncmoney.economy.FallbackEconomyWrapper;
+import noietime.syncmoney.economy.EconomyModeRouter;
+import noietime.syncmoney.economy.EconomyServiceManager;
+import noietime.syncmoney.economy.EventConsumerManager;
+import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
+import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
-import noietime.syncmoney.storage.TransferLockManager;
+import noietime.syncmoney.storage.StorageManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
-import noietime.syncmoney.storage.db.DbWriterConsumer;
-import noietime.syncmoney.sync.DebounceManager;
-import noietime.syncmoney.sync.PubsubSubscriber;
-import noietime.syncmoney.uuid.NameResolver;
-import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import noietime.syncmoney.schema.SchemaManager;
+import noietime.syncmoney.listener.ListenerServiceManager;
 import noietime.syncmoney.listener.PlayerJoinListener;
 import noietime.syncmoney.listener.PlayerQuitListener;
-import noietime.syncmoney.listener.CMIEconomyListener;
-import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.guard.PlayerTransferGuard;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
-import noietime.syncmoney.util.MessageHelper;
-import noietime.syncmoney.command.AdminCommand;
-import noietime.syncmoney.command.BreakerCommand;
-import noietime.syncmoney.command.ShadowCommand;
+import noietime.syncmoney.audit.AuditServiceManager;
 import noietime.syncmoney.audit.AuditLogger;
-import noietime.syncmoney.audit.AuditCommand;
-import noietime.syncmoney.audit.AuditLogCleanup;
-import noietime.syncmoney.audit.AuditLogExporter;
 import noietime.syncmoney.baltop.BaltopManager;
-import noietime.syncmoney.baltop.BaltopCommand;
+import noietime.syncmoney.permission.PermissionManager;
 import noietime.syncmoney.permission.AdminPermissionService;
+import noietime.syncmoney.breaker.BreakerManager;
+import noietime.syncmoney.sync.SyncManager;
+import noietime.syncmoney.event.SyncmoneyEventBus;
+import noietime.syncmoney.web.WebServiceManager;
+import noietime.syncmoney.web.server.WebAdminServer;
+import noietime.syncmoney.web.server.WebAdminConfig;
+import noietime.syncmoney.util.ConfigMerger;
+import noietime.syncmoney.util.MessageHelper;
+import noietime.syncmoney.util.MessageService;
+import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import noietime.syncmoney.breaker.NotificationService;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.command.Command;
@@ -60,11 +52,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
 import java.lang.reflect.Field;
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
@@ -86,82 +75,51 @@ import java.util.logging.Level;
  */
 public final class Syncmoney extends JavaPlugin {
 
-
-    private static Syncmoney instance;
-
     private SyncmoneyConfig syncmoneyConfig;
-    private FileConfiguration messagesConfig;
+    private MessageService messageService;
 
-    private final ConcurrentHashMap<String, Component> messageComponentCache = new ConcurrentHashMap<>();
-    private static final int MESSAGE_COMPONENT_CACHE_MAX = 256;
-    private RedisManager redisManager;
-    private CacheManager cacheManager;
-    private DatabaseManager databaseManager;
-    private DbWriteQueue dbWriteQueue;
-    private DbWriterConsumer dbWriterConsumer;
+    private StorageManager storageManager;
+    private EconomyServiceManager economyServiceManager;
+    private ListenerServiceManager listenerServiceManager;
+    private AuditServiceManager auditServiceManager;
+    private CommandServiceManager commandServiceManager;
+    private WebServiceManager webServiceManager;
+    private BaltopManager baltopManager;
 
-    private Thread dbWriterThread;
+    private SyncManager syncManager;
+    private BreakerManager breakerManager;
+    private PermissionManager permissionManager;
+    private EventConsumerManager eventConsumerManager;
+
+    private long startTime;
+    private PluginContext pluginContext;
 
     /**
-     * Debug-level log output.
-     * Only outputs when debug: true is set.
+     * Logs a debug message when debug mode is enabled in config.
+     *
+     * @param message debug message to log
      */
     private void debug(String message) {
         if (syncmoneyConfig != null && syncmoneyConfig.isDebug()) {
-            getLogger().info("[DEBUG] " + message);
+            getLogger().fine(message);
         }
     }
 
-    private EconomyFacade economyFacade;
-    private EconomyWriteQueue economyWriteQueue;
-    private EconomyEventConsumer economyEventConsumer;
-    private NameResolver nameResolver;
-    private FallbackEconomyWrapper fallbackWrapper;
-    private SyncmoneyVaultProvider vaultProvider;
-
-    private PubsubSubscriber pubsubSubscriber;
-    private DebounceManager debounceManager;
-
-    private CrossServerSyncManager crossServerSyncManager;
-    private EconomyModeRouter economyModeRouter;
-
-    private MoneyCommand moneyCommand;
-    private PayCommand payCommand;
-    private MigrationCommand migrationCommand;
-    private CooldownManager cooldownManager;
-    private TransferLockManager transferLockManager;
-
-    private PlayerJoinListener playerJoinListener;
-    private PlayerQuitListener playerQuitListener;
-    private CMIEconomyListener cmiListener;
-    private CMIEconomyHandler cmiHandler;
-    private PlayerTransferGuard playerTransferGuard;
-
-    private ShadowSyncTask shadowSyncTask;
-
-    private EconomicCircuitBreaker circuitBreaker;
-    private noietime.syncmoney.breaker.PlayerTransactionGuard playerTransactionGuard;
-    private noietime.syncmoney.breaker.NotificationService notificationService;
-
-    private AuditLogger auditLogger;
-    private AuditCommand auditCommand;
-    private AuditLogCleanup auditLogCleanup;
-    private AuditLogExporter auditLogExporter;
-
-    private BaltopManager baltopManager;
-    private BaltopCommand baltopCommand;
-
-    private AdminPermissionService permissionService;
-
-    private SyncmoneyCommandRouter syncmoneyRouter;
-
     @Override
     public void onEnable() {
-        instance = this;
+        this.startTime = System.currentTimeMillis();
 
         this.syncmoneyConfig = new SyncmoneyConfig(this);
         getLogger().log(Level.FINE, "Config loaded: server-name='" + syncmoneyConfig.getServerName()
                 + "', queue-capacity=" + syncmoneyConfig.getQueueCapacity());
+
+        try {
+            syncmoneyConfig.validate();
+        } catch (IllegalArgumentException e) {
+            getLogger().severe("Configuration validation failed: " + e.getMessage());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
 
         if (syncmoneyConfig.getServerName() == null || syncmoneyConfig.getServerName().isBlank()) {
             getLogger().severe("CRITICAL: server-name is not configured! Please set server-name in config.yml");
@@ -180,277 +138,69 @@ public final class Syncmoney extends JavaPlugin {
             }
         }
 
-        saveDefaultConfig();
-        this.messagesConfig = getConfig("messages.yml");
+        ConfigMerger configMerger = new ConfigMerger(this, "config.yml", "messages.yml");
+        List<String> mergedFiles = configMerger.mergeAll();
+        if (!mergedFiles.isEmpty()) {
+            getLogger().info("Config migration completed for: " + String.join(", ", mergedFiles));
+            reloadConfig();
+            this.syncmoneyConfig = new SyncmoneyConfig(this);
+            getLogger().info("Config reloaded after migration.");
+        }
+
         getLogger().log(Level.FINE, "Messages loaded.");
+        this.messageService = new MessageService(this);
+        messageService.loadMessages();
 
-        this.redisManager = new RedisManager(this, syncmoneyConfig, syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
+        this.storageManager = new StorageManager(this, syncmoneyConfig);
+        storageManager.initialize();
 
-        this.cacheManager = new CacheManager(this, redisManager, syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
+        this.economyServiceManager = new EconomyServiceManager(this, syncmoneyConfig, storageManager);
+        economyServiceManager.initialize();
 
-        EconomyMode mode = syncmoneyConfig.getEconomyMode();
-        if (mode != EconomyMode.LOCAL && mode != EconomyMode.LOCAL_REDIS) {
-            this.databaseManager = new DatabaseManager(this, syncmoneyConfig);
-        } else {
-            this.databaseManager = null;
-            getLogger().fine("Database manager skipped (" + mode + " mode)");
-        }
-
-        this.dbWriteQueue = new DbWriteQueue(syncmoneyConfig.getQueueCapacity());
-
-        this.dbWriterConsumer = new DbWriterConsumer(this, dbWriteQueue, databaseManager);
-
-        this.dbWriterThread = new Thread(dbWriterConsumer, "Syncmoney-DbWriter");
-        dbWriterThread.setDaemon(true);
-        dbWriterThread.start();
-
-
-        this.economyWriteQueue = new EconomyWriteQueue(syncmoneyConfig.getQueueCapacity(), getLogger());
-
-        this.fallbackWrapper = new FallbackEconomyWrapper(this, redisManager, mode == EconomyMode.LOCAL);
-
-        LocalEconomyHandler localHandler = null;
-        if (mode == EconomyMode.LOCAL) {
-            localHandler = new LocalEconomyHandler(this, syncmoneyConfig.getLocalSQLitePath());
-            getLogger().fine("Local Economy Handler initialized (SQLite mode)");
-        }
-
-        if (localHandler != null) {
-            this.economyFacade = new EconomyFacade(
-                    this, syncmoneyConfig, cacheManager, redisManager,
-                    databaseManager, localHandler, economyWriteQueue, fallbackWrapper, playerTransactionGuard);
-        } else {
-            this.economyFacade = new EconomyFacade(
-                    this, syncmoneyConfig, cacheManager, redisManager,
-                    databaseManager, null, economyWriteQueue, fallbackWrapper, playerTransactionGuard);
-        }
-
-        this.nameResolver = new NameResolver(this, cacheManager, databaseManager);
-
-        this.shadowSyncTask = new ShadowSyncTask(
+        this.syncManager = new SyncManager(
                 this,
                 syncmoneyConfig,
-                economyFacade,
-                cacheManager,
-                databaseManager);
-        shadowSyncTask.start();
+                storageManager.getCacheManager(),
+                economyServiceManager.getEconomyFacade(),
+                storageManager.getRedisManager());
+        syncManager.initialize();
+        syncManager.startPeriodicVersionCheck();
 
-
-        this.vaultProvider = new SyncmoneyVaultProvider(this, economyFacade, redisManager, nameResolver);
-
-        if (vaultProvider.setupEconomy()) {
-            getLogger().info("Syncmoney Vault Economy registered successfully.");
-        } else {
-            getLogger().warning("Vault Economy registration failed. Running without Vault integration.");
+        if (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL) {
+            getServer().getAsyncScheduler().runNow(this, (task) -> {
+                syncManager.getPubsubSubscriber().startSubscription();
+            });
         }
 
-
-        this.crossServerSyncManager = new CrossServerSyncManager(
-                this, syncmoneyConfig, redisManager, economyFacade, cacheManager);
-
-        vaultProvider.setSyncManager(crossServerSyncManager);
-        vaultProvider.setConfig(syncmoneyConfig);
-        getLogger().fine("CrossServerSyncManager initialized.");
-
-        this.economyModeRouter = new EconomyModeRouter(this, syncmoneyConfig);
-
-        EconomyModeRouter.EconomyFacadeWrapper wrapper = new EconomyModeRouter.EconomyFacadeWrapper() {
-            @Override
-            public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
-                return economyFacade.deposit(uuid, amount, source);
-            }
-
-            @Override
-            public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
-                return economyFacade.withdraw(uuid, amount, source);
-            }
-
-            @Override
-            public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
-                return economyFacade.setBalance(uuid, newBalance, source);
-            }
-
-            @Override
-            public BigDecimal getBalance(UUID uuid) {
-                return economyFacade.getBalance(uuid);
-            }
-        };
-
-        economyModeRouter.initialize(
-                wrapper,
-                localHandler,
-                null,
-                crossServerSyncManager
-        );
-        getLogger().fine("EconomyModeRouter initialized: " + syncmoneyConfig.getEconomyMode());
-
-        if (syncmoneyConfig.isCMIMode()) {
-            this.cmiHandler = new CMIEconomyHandler(
-                    this,
-                    syncmoneyConfig,
-                    redisManager,
-                    crossServerSyncManager
-            );
-            economyModeRouter.setCmiHandler(cmiHandler);
-            getLogger().fine("CMI Economy Handler initialized");
-
-            this.cmiListener = new CMIEconomyListener(this, cmiHandler, syncmoneyConfig);
-            getServer().getPluginManager().registerEvents(cmiListener, this);
-            getLogger().fine("CMI Economy Listener registered");
-        }
-
-
-        this.debounceManager = new DebounceManager(this);
-
-        this.pubsubSubscriber = new PubsubSubscriber(
+        this.breakerManager = new BreakerManager(
                 this,
                 syncmoneyConfig,
-                cacheManager,
-                economyFacade,
-                debounceManager,
-                redisManager,
-                syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
+                economyServiceManager.getEconomyFacade(),
+                storageManager.getRedisManager());
+        breakerManager.initialize();
 
-        getServer().getAsyncScheduler().runNow(this, (task) -> {
-            if (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL) {
-                pubsubSubscriber.startSubscription();
-            }
-        });
-
-
-        this.cooldownManager = new CooldownManager(this, syncmoneyConfig.getPayCooldownSeconds());
-
-        this.transferLockManager = new TransferLockManager(this, redisManager, syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
-
-        this.moneyCommand = new MoneyCommand(
-                this,
-                economyFacade,
-                nameResolver,
-                fallbackWrapper,
-                syncmoneyConfig.getCurrencyName(),
-                syncmoneyConfig.getDecimalPlaces());
-        registerCommand("money", moneyCommand, moneyCommand);
-
-        this.payCommand = new PayCommand(
-                this,
-                syncmoneyConfig,
-                economyFacade,
-                cacheManager,
-                redisManager,
-                nameResolver,
-                fallbackWrapper,
-                transferLockManager,
-                cooldownManager,
-                dbWriteQueue,
-                economyWriteQueue,
-                pubsubSubscriber,
-                baltopManager,
-                syncmoneyConfig.getPayMinAmount(),
-                syncmoneyConfig.getPayMaxAmount(),
-                syncmoneyConfig.isPayAllowedInDegraded(),
-                syncmoneyConfig.isLocalMode());
-        registerCommand("pay", payCommand, payCommand);
-
-
-        this.migrationCommand = new MigrationCommand(
-                this,
-                syncmoneyConfig,
-                economyFacade,
-                databaseManager,
-                redisManager,
-                nameResolver);
-
-        getLogger().log(Level.FINE, "Commands registered: /money, /pay, /syncmoney migrate");
-
-
-        this.playerJoinListener = new PlayerJoinListener(
-                this,
-                economyFacade,
-                nameResolver,
-                baltopManager);
-        getServer().getPluginManager().registerEvents(playerJoinListener, this);
-
-        this.playerQuitListener = new PlayerQuitListener(
-                this,
-                economyFacade,
-                nameResolver);
-        getServer().getPluginManager().registerEvents(playerQuitListener, this);
-
-        if (syncmoneyConfig.isTransferGuardEnabled()) {
-            this.playerTransferGuard = new PlayerTransferGuard(
-                    this,
-                    economyFacade,
-                    economyWriteQueue);
-            getServer().getPluginManager().registerEvents(playerTransferGuard, this);
-            getLogger().log(Level.FINE,
-                    "Transfer guard enabled (max wait: " + syncmoneyConfig.getTransferGuardMaxWaitMs() + "ms)");
+        if (breakerManager.getDiscordWebhookNotifier() != null) {
+            economyServiceManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
         }
 
-        getLogger().log(Level.FINE, "Player lifecycle listeners registered.");
-
-
-        this.auditLogger = new AuditLogger(this, syncmoneyConfig,
-                databaseManager != null ? databaseManager.getDataSource() : null);
-
-        this.auditCommand = new AuditCommand(this, syncmoneyConfig, auditLogger, nameResolver, localHandler);
-
-        getLogger().log(Level.FINE, "Audit commands registered: /syncmoney audit");
-
-        if (databaseManager != null) {
-            this.auditLogCleanup = new AuditLogCleanup(this, syncmoneyConfig, databaseManager.getDataSource());
-            auditLogCleanup.start();
-
-            this.auditLogExporter = new AuditLogExporter(this, syncmoneyConfig, databaseManager.getDataSource());
-            auditLogExporter.start();
+        if (economyServiceManager.getNameResolver() != null) {
+            breakerManager.setNameResolver(economyServiceManager.getNameResolver());
         }
 
-
-        this.baltopManager = new BaltopManager(this, syncmoneyConfig,
-                redisManager, nameResolver,
-                databaseManager != null ? databaseManager.getDataSource() : null,
-                localHandler);
-
-        this.baltopCommand = new BaltopCommand(this, syncmoneyConfig, baltopManager, economyFacade);
-        registerCommand("baltop", baltopCommand);
-
-
-        this.economyEventConsumer = new EconomyEventConsumer(
-                this, syncmoneyConfig, economyWriteQueue, cacheManager,
-                redisManager, dbWriteQueue, auditLogger, nameResolver, baltopManager,
-                shadowSyncTask);
-
-        getServer().getAsyncScheduler().runAtFixedRate(this, task -> {
-            if (economyEventConsumer != null && economyEventConsumer.isRunning()) {
-                economyEventConsumer.processPending();
-            }
-        }, 1, 50, TimeUnit.MILLISECONDS);
-
-        getLogger().log(Level.FINE, "EconomyEventConsumer started with Folia AsyncScheduler.");
-
-
-        this.circuitBreaker = new EconomicCircuitBreaker(
-                this,
-                syncmoneyConfig,
-                economyFacade,
-                redisManager,
-                syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL);
-
-        this.notificationService = null;
-        this.playerTransactionGuard = null;
-
-        if (syncmoneyConfig.isPlayerProtectionEnabled()) {
-            this.notificationService = new noietime.syncmoney.breaker.NotificationService(this, syncmoneyConfig);
-            this.playerTransactionGuard = new noietime.syncmoney.breaker.PlayerTransactionGuard(this, syncmoneyConfig, this.notificationService);
-            getLogger().log(Level.FINE, "PlayerTransactionGuard initialized.");
+        var economyFacade = economyServiceManager.getEconomyFacade();
+        if (economyFacade != null) {
+            economyFacade.setNameResolver(economyServiceManager.getNameResolver());
         }
 
-        if (circuitBreaker != null && circuitBreaker.getConnectionStateManager() != null) {
-            circuitBreaker.getConnectionStateManager()
+        if (breakerManager.getCircuitBreaker() != null &&
+                breakerManager.getCircuitBreaker().getConnectionStateManager() != null) {
+            breakerManager.getCircuitBreaker().getConnectionStateManager()
                     .setCallback(new noietime.syncmoney.breaker.ConnectionStateManager.ConnectionStateCallback() {
                         @Override
                         public void onConnectionRestored() {
-                            if (fallbackWrapper != null) {
-                                fallbackWrapper.updateDegradedState();
+                            var wrapper = economyServiceManager.getFallbackWrapper();
+                            if (wrapper != null) {
+                                wrapper.updateDegradedState();
                             }
                         }
 
@@ -460,118 +210,133 @@ public final class Syncmoney extends JavaPlugin {
                     });
         }
 
-        getServer().getAsyncScheduler().runAtFixedRate(
-                this,
-                (task) -> circuitBreaker.performPeriodicCheck(),
-                1,
-                1,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
+        if (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL_REDIS || storageManager.getRedisManager() != null) {
+            this.baltopManager = new BaltopManager(
+                    this,
+                    syncmoneyConfig,
+                    storageManager.getRedisManager(),
+                    economyServiceManager.getNameResolver(),
+                    storageManager.getDatabaseManager() != null ? storageManager.getDatabaseManager().getDataSource()
+                            : null,
+                    economyServiceManager.getLocalEconomyHandler());
+            getLogger().fine("BaltopManager initialized");
 
-        getLogger().log(Level.FINE, "Economic circuit breaker initialized.");
-
-        this.syncmoneyRouter = new SyncmoneyCommandRouter(this);
-
-        if (syncmoneyConfig.isCircuitBreakerEnabled()) {
-            BreakerCommand breakerCommand = new BreakerCommand(this, circuitBreaker);
-            syncmoneyRouter.register("breaker", breakerCommand);
-            getLogger().log(Level.FINE, "Breaker commands registered.");
+            if (economyServiceManager.getLocalEconomyHandler() != null) {
+                economyServiceManager.getLocalEconomyHandler().setBaltopManager(baltopManager);
+            }
         }
 
-        getServer().getAsyncScheduler().runAtFixedRate(
-                this,
-                (task) -> {
-                    if (economyFacade != null) {
-                        economyFacade.cleanupExpiredEntries();
-                    }
-                },
-                5,
-                5,
-                java.util.concurrent.TimeUnit.MINUTES);
-        getLogger().log(Level.FINE, "Memory cleanup scheduler initialized.");
+        if (syncmoneyConfig.isCMIMode()) {
+            CMIEconomyHandler cmiHandler = new CMIEconomyHandler(
+                    this,
+                    syncmoneyConfig,
+                    storageManager.getRedisManager(),
+                    economyServiceManager.getCrossServerSyncManager());
+            economyServiceManager.getEconomyModeRouter().setCmiHandler(cmiHandler);
+            getLogger().fine("CMI Economy Handler initialized");
+        }
 
-        getServer().getAsyncScheduler().runAtFixedRate(
-                this,
-                (task) -> {
-                    if (baltopManager != null) {
-                        baltopManager.saveToDatabase();
-                    }
-                },
-                10,
-                10,
-                java.util.concurrent.TimeUnit.MINUTES);
-        getLogger().log(Level.FINE, "Baltop database save scheduler initialized.");
+        this.listenerServiceManager = new ListenerServiceManager(this, economyServiceManager);
+        listenerServiceManager.initialize();
+        getLogger().log(Level.FINE, "Player lifecycle listeners registered.");
 
+        this.auditServiceManager = new AuditServiceManager(
+                this, syncmoneyConfig,
+                storageManager.getRedisManager(),
+                storageManager.getDatabaseManager() != null ? storageManager.getDatabaseManager().getDataSource()
+                        : null);
+        auditServiceManager.initialize();
 
-        this.permissionService = new AdminPermissionService(syncmoneyConfig);
+        if (storageManager.getDatabaseManager() != null) {
+            SchemaManager schemaManager = new SchemaManager(
+                    this,
+                    storageManager.getDatabaseManager().getDataSource(),
+                    syncmoneyConfig.getDatabaseType());
+            getLogger().fine("SchemaManager initialized (version " + schemaManager.getDatabaseVersion() + ")");
+        }
 
-        AdminCommand adminCommand = new AdminCommand(
+        this.eventConsumerManager = new EventConsumerManager(
                 this,
                 syncmoneyConfig,
-                economyFacade,
-                redisManager,
-                pubsubSubscriber,
-                circuitBreaker,
-                nameResolver,
+                economyServiceManager.getEconomyWriteQueue(),
+                storageManager.getCacheManager(),
+                storageManager.getRedisManager(),
+                storageManager.getDbWriteQueue(),
+                auditServiceManager.getAuditLogger(),
+                auditServiceManager.getHybridAuditManager(),
+                economyServiceManager.getNameResolver(),
                 baltopManager,
-                auditLogger);
-        getLogger().log(Level.FINE, "Admin command registered: /syncmoney admin");
+                economyServiceManager.getShadowSyncTask(),
+                economyServiceManager.getOverflowLog(),
+                storageManager.getDatabaseManager());
+        eventConsumerManager.initialize();
 
+        Thread eventConsumerThread = new Thread(eventConsumerManager.getEconomyEventConsumer(), "Syncmoney-EventConsumer");
+        eventConsumerThread.start();
+        getLogger().info("EconomyEventConsumer started");
 
-        syncmoneyRouter.register("admin", adminCommand);
-
-        syncmoneyRouter.register("migrate", migrationCommand);
-
-        syncmoneyRouter.register("audit", auditCommand);
-
-        if (syncmoneyConfig.isShadowSyncEnabled()) {
-            ShadowCommand shadowCommand = new ShadowCommand(this, shadowSyncTask);
-            syncmoneyRouter.register("shadow", shadowCommand);
-        }
-
-        MonitorCommand monitorCommand = new MonitorCommand(
+        this.commandServiceManager = new CommandServiceManager(
                 this,
-                economyFacade,
-                redisManager,
-                cacheManager,
-                databaseManager,
-                dbWriteQueue);
-        syncmoneyRouter.register("monitor", monitorCommand);
-        TestCommand testCommand = new TestCommand(this, economyFacade, redisManager);
-        syncmoneyRouter.register("test", testCommand);
+                syncmoneyConfig,
+                economyServiceManager.getEconomyFacade(),
+                storageManager,
+                economyServiceManager,
+                syncManager.getPubsubSubscriber(),
+                baltopManager,
+                auditServiceManager.getAuditLogger(),
+                auditServiceManager.getHybridAuditManager(),
+                economyServiceManager.getShadowSyncTask(),
+                breakerManager.getCircuitBreaker(),
+                economyServiceManager.getNameResolver());
+        commandServiceManager.initialize();
+        getLogger().log(Level.FINE, "Commands registered: /money, /pay, /syncmoney migrate");
 
-        getLogger().log(Level.FINE, "Monitor commands registered.");
+        this.permissionManager = new PermissionManager(this, syncmoneyConfig);
+        permissionManager.initialize();
+        getLogger().log(Level.FINE, "Permission service initialized.");
 
-        if (baltopManager != null) {
-            EconStatsCommand econStatsCommand = new EconStatsCommand(this, redisManager, baltopManager);
-            syncmoneyRouter.register("econstats", econStatsCommand);
-            getLogger().log(Level.FINE, "EconStats commands registered.");
+        registerCommand("syncmoney", commandServiceManager.getSyncmoneyRouter(),
+                commandServiceManager.getSyncmoneyRouter());
+        getLogger().log(Level.FINE, "Syncmoney command router initialized.");
+
+        SyncmoneyEventBus.init(this);
+        getLogger().fine("Event Bus initialized.");
+
+        this.webServiceManager = new WebServiceManager(this, syncmoneyConfig,
+                economyServiceManager.getEconomyFacade(), baltopManager,
+                auditServiceManager.getAuditLogger(), auditServiceManager.getHybridAuditManager());
+        webServiceManager.setDependencies(
+                storageManager.getRedisManager(),
+                storageManager.getDatabaseManager(),
+                breakerManager.getCircuitBreaker());
+        webServiceManager.setNameResolver(economyServiceManager.getNameResolver());
+        webServiceManager.setLocalEconomyHandler(economyServiceManager.getLocalEconomyHandler());
+        webServiceManager.initialize();
+
+        var hybridAuditManager = auditServiceManager.getHybridAuditManager();
+        var webAdminServer = getWebAdminServer();
+        if (hybridAuditManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+            hybridAuditManager.setSseManager(webAdminServer.getSseManager());
+            getLogger().fine("SseManager injected into HybridAuditManager (real-time audit SSE enabled).");
         }
 
-        ReloadCommand reloadCommand = new ReloadCommand(this);
-        syncmoneyRouter.register("reload", reloadCommand);
-        getLogger().log(Level.FINE, "Reload commands registered.");
+        var localEconomyHandler = economyServiceManager.getLocalEconomyHandler();
+        if (localEconomyHandler != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+            localEconomyHandler.setSseManager(webAdminServer.getSseManager());
+            getLogger().fine("SseManager injected into LocalEconomyHandler (LOCAL mode real-time audit SSE enabled).");
+        }
 
-        syncmoneyRouter.setDefaultHandler((sender, cmd, label, args) -> {
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.header"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.migrate"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.audit"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.monitor"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.econstats"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.reload"));
-            if (syncmoneyConfig.isCircuitBreakerEnabled()) {
-                MessageHelper.sendMessage(sender, this.getMessage("router.help.breaker"));
-            }
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.admin"));
-            MessageHelper.sendMessage(sender, this.getMessage("router.help.test"));
-            if (syncmoneyConfig.isShadowSyncEnabled()) {
-                MessageHelper.sendMessage(sender, this.getMessage("router.help.shadow"));
-            }
-            return true;
-        });
+        if (breakerManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+            breakerManager.setSseManager(webAdminServer.getSseManager());
+            getLogger().fine("SseManager injected into BreakerManager (circuit breaker & security alerts enabled).");
+        }
 
-        registerCommand("syncmoney", syncmoneyRouter, syncmoneyRouter);
+        if (breakerManager != null) {
+            breakerManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
+            getLogger().fine("DiscordWebhookNotifier injected into BreakerManager (resource alerts enabled).");
+        }
 
-        getLogger().log(Level.FINE, "Syncmoney command router initialized.");
+        initializePluginContext();
 
         getLogger().log(Level.FINE, "Syncmoney Economy system enabled.");
         getLogger().info("Syncmoney enabled successfully.");
@@ -581,54 +346,61 @@ public final class Syncmoney extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        if (pubsubSubscriber != null) {
-            pubsubSubscriber.stopSubscription();
+
+        if (webServiceManager != null) {
+            webServiceManager.shutdown();
         }
 
-        if (economyEventConsumer != null) {
-            economyEventConsumer.stop();
+        if (commandServiceManager != null) {
+            commandServiceManager.shutdown();
         }
 
-        if (dbWriterConsumer != null) {
-            dbWriterConsumer.stop();
-        }
-        if (dbWriterThread != null) {
-            dbWriterThread.interrupt();
-            try {
-                dbWriterThread.join(3000);
-            } catch (InterruptedException ignored) {
-            }
+        if (permissionManager != null) {
+            permissionManager.shutdown();
         }
 
-        if (databaseManager != null) {
-            databaseManager.close();
+        if (listenerServiceManager != null) {
+            listenerServiceManager.shutdown();
         }
 
-        if (shadowSyncTask != null) {
-            shadowSyncTask.stop();
+        if (auditServiceManager != null) {
+            auditServiceManager.shutdown();
         }
 
-        if (circuitBreaker != null && circuitBreaker.getConnectionStateManager() != null) {
-            circuitBreaker.getConnectionStateManager().shutdown();
+        if (breakerManager != null) {
+            breakerManager.shutdown();
         }
 
-        if (playerTransactionGuard != null) {
-            playerTransactionGuard.shutdown();
+        if (syncManager != null) {
+            syncManager.shutdown();
         }
 
-        if (notificationService != null) {
-            notificationService.shutdown();
+        if (economyServiceManager != null) {
+            economyServiceManager.shutdown();
         }
 
-        if (redisManager != null) {
-            redisManager.close();
+        if (eventConsumerManager != null) {
+            eventConsumerManager.shutdown();
+        }
+
+        if (baltopManager != null) {
+            baltopManager.saveToDatabase();
+        }
+
+        if (storageManager != null) {
+            storageManager.shutdown();
+        }
+
+        if (SyncmoneyEventBus.isInitialized()) {
+            SyncmoneyEventBus.getInstance().clearAll();
         }
 
         getLogger().info("Syncmoney disabled.");
     }
 
     /**
-     * Initializes bStats metrics (uses reflection to avoid class loading conflicts).
+     * Initializes bStats metrics (uses reflection to avoid class loading
+     * conflicts).
      */
     private void initBstats() {
         try {
@@ -642,122 +414,116 @@ public final class Syncmoney extends JavaPlugin {
         }
     }
 
-
     public SyncmoneyConfig getSyncmoneyConfig() {
         return syncmoneyConfig;
     }
 
-
     public RedisManager getRedisManager() {
-        return redisManager;
+        return storageManager != null ? storageManager.getRedisManager() : null;
     }
-
 
     public CacheManager getCacheManager() {
-        return cacheManager;
+        return storageManager != null ? storageManager.getCacheManager() : null;
     }
-
 
     public DatabaseManager getDatabaseManager() {
-        return databaseManager;
+        return storageManager != null ? storageManager.getDatabaseManager() : null;
     }
-
 
     public DbWriteQueue getDbWriteQueue() {
-        return dbWriteQueue;
+        return storageManager != null ? storageManager.getDbWriteQueue() : null;
     }
-
 
     public EconomyFacade getEconomyFacade() {
-        return economyFacade;
+        return economyServiceManager != null ? economyServiceManager.getEconomyFacade() : null;
     }
-
 
     public NameResolver getNameResolver() {
-        return nameResolver;
+        return economyServiceManager != null ? economyServiceManager.getNameResolver() : null;
     }
-
 
     public FallbackEconomyWrapper getFallbackWrapper() {
-        return fallbackWrapper;
+        return economyServiceManager != null ? economyServiceManager.getFallbackWrapper() : null;
     }
-
 
     public SyncmoneyVaultProvider getVaultProvider() {
-        return vaultProvider;
+        return economyServiceManager != null ? economyServiceManager.getVaultProvider() : null;
     }
-
 
     public CrossServerSyncManager getCrossServerSyncManager() {
-        return crossServerSyncManager;
+        return economyServiceManager != null ? economyServiceManager.getCrossServerSyncManager() : null;
     }
-
 
     public EconomyModeRouter getEconomyModeRouter() {
-        return economyModeRouter;
+        return economyServiceManager != null ? economyServiceManager.getEconomyModeRouter() : null;
     }
 
-
-    public PubsubSubscriber getPubsubSubscriber() {
-        return pubsubSubscriber;
+    public SyncManager getSyncManager() {
+        return syncManager;
     }
 
-
-    public DebounceManager getDebounceManager() {
-        return debounceManager;
+    public BreakerManager getBreakerManager() {
+        return breakerManager;
     }
 
+    public PermissionManager getPermissionManager() {
+        return permissionManager;
+    }
 
     public PlayerJoinListener getPlayerJoinListener() {
-        return playerJoinListener;
+        return listenerServiceManager != null ? listenerServiceManager.getPlayerJoinListener() : null;
     }
-
 
     public PlayerQuitListener getPlayerQuitListener() {
-        return playerQuitListener;
+        return listenerServiceManager != null ? listenerServiceManager.getPlayerQuitListener() : null;
     }
-
 
     public PlayerTransferGuard getPlayerTransferGuard() {
-        return playerTransferGuard;
+        return listenerServiceManager != null ? listenerServiceManager.getPlayerTransferGuard() : null;
     }
-
 
     public ShadowSyncTask getShadowSyncTask() {
-        return shadowSyncTask;
+        return economyServiceManager != null ? economyServiceManager.getShadowSyncTask() : null;
     }
-
 
     public AuditLogger getAuditLogger() {
-        return auditLogger;
+        return auditServiceManager != null ? auditServiceManager.getAuditLogger() : null;
     }
-
 
     public BaltopManager getBaltopManager() {
         return baltopManager;
     }
 
-
-    public static Syncmoney getInstance() {
-        return instance;
-    }
-
-
     public AdminPermissionService getPermissionService() {
-        return permissionService;
+        return permissionManager != null ? permissionManager.getPermissionService() : null;
     }
-
 
     public EconomicCircuitBreaker getCircuitBreaker() {
-        return circuitBreaker;
+        return breakerManager != null ? breakerManager.getCircuitBreaker() : null;
+    }
+
+    /**
+     * Returns the plugin start time in milliseconds.
+     * Used for uptime calculation in SystemApiHandler.
+     */
+    public long getStartTime() {
+        return startTime;
+    }
+
+    public WebAdminServer getWebAdminServer() {
+        return webServiceManager != null ? webServiceManager.getWebAdminServer() : null;
+    }
+
+    public WebAdminConfig getWebAdminConfig() {
+        return webServiceManager != null ? webServiceManager.getWebAdminConfig() : null;
     }
 
     public noietime.syncmoney.breaker.PlayerTransactionGuard getPlayerTransactionGuard() {
-        return playerTransactionGuard;
+        return breakerManager != null ? breakerManager.getPlayerTransactionGuard() : null;
     }
 
     public noietime.syncmoney.breaker.NotificationService getNotificationService() {
-        return notificationService;
+        return breakerManager != null ? breakerManager.getNotificationService() : null;
     }
 
     /**
@@ -784,58 +550,33 @@ public final class Syncmoney extends JavaPlugin {
      * @return message string, returns key if not found
      */
     public String getMessage(String key) {
-        if (messagesConfig == null) {
-            return key;
-        }
-        String message = messagesConfig.getString(key);
-        if (message == null) {
-            return key;
-        }
-        String prefix = messagesConfig.getString("prefix", "[Syncmoney] ");
-        return message.replace("{prefix}", prefix);
+        return messageService != null ? messageService.getMessage(key) : key;
     }
 
     /**
      * Gets the parsed Component (supports minimessage format).
-     * Uses message key cache to avoid repeated parsing causing TextColorReplacerImpl object accumulation.
+     * Uses message key cache to avoid repeated parsing causing
+     * TextColorReplacerImpl object accumulation.
      *
      * @param key message key
      * @return parsed Component
      */
     public Component getMessageComponent(String key) {
-        Component cached = messageComponentCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
-        if (messageComponentCache.size() >= MESSAGE_COMPONENT_CACHE_MAX) {
-            messageComponentCache.clear();
-        }
-        String message = getMessage(key);
-        if (message == null || message.isEmpty()) {
-            return Component.empty();
-        }
-        Component component = MessageHelper.getComponent(message);
-        messageComponentCache.put(key, component);
-        return component;
+        return messageService != null ? messageService.getMessageComponent(key) : Component.empty();
     }
 
     /**
-     * Gets the parsed Component with variable replacement (supports minimessage format).
-     * Uses cached template Component for variable replacement to avoid repeated parsing.
+     * Gets the parsed Component with variable replacement (supports minimessage
+     * format).
+     * Uses cached template Component for variable replacement to avoid repeated
+     * parsing.
      *
      * @param key       message key
      * @param variables variable map
      * @return parsed Component
      */
     public Component getMessageComponent(String key, java.util.Map<String, String> variables) {
-        Component template = getMessageComponent(key);
-        if (template == null || template.equals(Component.empty())) {
-            return template;
-        }
-        if (variables == null || variables.isEmpty()) {
-            return template;
-        }
-        return MessageHelper.replaceVariables(template, variables);
+        return messageService != null ? messageService.getMessageComponent(key, variables) : Component.empty();
     }
 
     /**
@@ -844,23 +585,19 @@ public final class Syncmoney extends JavaPlugin {
      * @return true if successful
      */
     public boolean reloadMessagesConfig() {
-        try {
-            this.messagesConfig = getConfig("messages.yml");
-            messageComponentCache.clear();
-            MessageHelper.clearComponentCache();
+        boolean result = messageService != null && messageService.reload();
+        if (result) {
             getLogger().fine("Messages configuration reloaded.");
-            return true;
-        } catch (Exception e) {
-            getLogger().severe("Failed to reload messages: " + e.getMessage());
-            return false;
         }
+        return result;
     }
 
     /**
-     * Returns the current number of message Component cache entries (for monitoring purposes).
+     * Returns the current number of message Component cache entries (for monitoring
+     * purposes).
      */
     public int getMessageComponentCacheSize() {
-        return messageComponentCache.size();
+        return messageService != null ? messageService.getCacheSize() : 0;
     }
 
     /**
@@ -882,49 +619,17 @@ public final class Syncmoney extends JavaPlugin {
 
     /**
      * Reloads SyncmoneyConfig (includes all configuration).
+     * Also propagates the new config to subsystems that cache snapshot values
+     * (command cooldowns, pay limits, display settings, etc.).
      */
     public void reloadSyncmoneyConfig() {
         this.syncmoneyConfig = new SyncmoneyConfig(this);
 
-        // Recreate CooldownManager with new cooldown seconds
-        this.cooldownManager = new CooldownManager(this, syncmoneyConfig.getPayCooldownSeconds());
-        getLogger().fine("CooldownManager reloaded with " + syncmoneyConfig.getPayCooldownSeconds() + "s cooldown.");
+        if (commandServiceManager != null) {
+            commandServiceManager.reload(syncmoneyConfig);
+        }
 
-        // Recreate PayCommand with new configuration
-        recreatePayCommand();
-
-        getLogger().fine("SyncmoneyConfig fully reloaded (including commands).");
-    }
-
-    /**
-     * Recreates PayCommand with fresh configuration.
-     */
-    private void recreatePayCommand() {
-        // Unregister existing pay command first
-        unregisterCommand("pay");
-
-        // Create new PayCommand with updated config
-        this.payCommand = new PayCommand(
-                this,
-                syncmoneyConfig,
-                economyFacade,
-                cacheManager,
-                redisManager,
-                nameResolver,
-                fallbackWrapper,
-                transferLockManager,
-                cooldownManager,
-                dbWriteQueue,
-                economyWriteQueue,
-                pubsubSubscriber,
-                baltopManager,
-                syncmoneyConfig.getPayMinAmount(),
-                syncmoneyConfig.getPayMaxAmount(),
-                syncmoneyConfig.isPayAllowedInDegraded(),
-                syncmoneyConfig.isLocalMode());
-        registerCommand("pay", payCommand, payCommand);
-        getLogger().info("PayCommand recreated with min=" + syncmoneyConfig.getPayMinAmount()
-                + ", max=" + syncmoneyConfig.getPayMaxAmount());
+        getLogger().fine("SyncmoneyConfig reloaded.");
     }
 
     /**
@@ -938,14 +643,13 @@ public final class Syncmoney extends JavaPlugin {
                 return;
             }
 
-            // Get the known commands and remove this one
             SimpleCommandMap simpleCommandMap = (SimpleCommandMap) commandMap;
             java.lang.reflect.Field knownCommandsField = SimpleCommandMap.class.getDeclaredField("knownCommands");
             knownCommandsField.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<String, Command> knownCommands = (Map<String, Command>) knownCommandsField.get(simpleCommandMap);
             knownCommands.remove(name);
-            knownCommands.remove("syncmoney:" + name); // Also remove namespaced version
+            knownCommands.remove("syncmoney:" + name);
             getLogger().log(Level.FINE, "Command unregistered: /" + name);
         } catch (Exception e) {
             getLogger().warning("Failed to unregister command " + name + ": " + e.getMessage());
@@ -956,22 +660,28 @@ public final class Syncmoney extends JavaPlugin {
      * Reloads permission service.
      */
     public void reloadPermissionService() {
-        this.permissionService = new AdminPermissionService(syncmoneyConfig);
-        getLogger().fine("Permission service reloaded.");
+        if (permissionManager != null) {
+            permissionManager.reload();
+            getLogger().fine("Permission service reloaded.");
+        }
     }
 
     /**
      * Reloads economy facade related services.
      */
     public void reloadEconomyFacade() {
-        if (vaultProvider != null) {
-            vaultProvider.setConfig(syncmoneyConfig);
+        if (economyServiceManager != null) {
+            var vaultProvider = economyServiceManager.getVaultProvider();
+            if (vaultProvider != null) {
+                vaultProvider.setConfig(syncmoneyConfig);
+            }
+            var crossServerSyncManager = economyServiceManager.getCrossServerSyncManager();
+            if (crossServerSyncManager != null) {
+                crossServerSyncManager.shutdown();
+                getLogger().warning("CrossServerSyncManager config changed, some changes require server restart.");
+            }
+            getLogger().fine("Economy facade services config updated.");
         }
-        if (crossServerSyncManager != null) {
-            crossServerSyncManager.shutdown();
-            getLogger().warning("CrossServerSyncManager config changed, some changes require server restart.");
-        }
-        getLogger().info("Economy facade services config updated.");
     }
 
     /**
@@ -1117,5 +827,50 @@ public final class Syncmoney extends JavaPlugin {
         } else {
             getLogger().warning("Command '" + name + "' not found in plugin.yml");
         }
+    }
+
+    /**
+     * [RED-05 FIX] Initialize PluginContext after all managers are ready.
+     * This provides a centralized way to access all plugin services.
+     */
+    private void initializePluginContext() {
+        this.pluginContext = new PluginContext.Builder()
+                .setConfig(syncmoneyConfig)
+                .setRedisManager(storageManager != null ? storageManager.getRedisManager() : null)
+                .setCacheManager(storageManager != null ? storageManager.getCacheManager() : null)
+                .setDatabaseManager(storageManager != null ? storageManager.getDatabaseManager() : null)
+                .setDbWriteQueue(storageManager != null ? storageManager.getDbWriteQueue() : null)
+                .setEconomyFacade(economyServiceManager != null ? economyServiceManager.getEconomyFacade() : null)
+                .setNameResolver(economyServiceManager != null ? economyServiceManager.getNameResolver() : null)
+                .setFallbackWrapper(economyServiceManager != null ? economyServiceManager.getFallbackWrapper() : null)
+                .setVaultProvider(economyServiceManager != null ? economyServiceManager.getVaultProvider() : null)
+                .setCrossServerSyncManager(economyServiceManager != null ? economyServiceManager.getCrossServerSyncManager() : null)
+                .setEconomyModeRouter(economyServiceManager != null ? economyServiceManager.getEconomyModeRouter() : null)
+                .setSyncManager(syncManager)
+                .setBreakerManager(breakerManager)
+                .setPermissionManager(permissionManager)
+                .setPlayerJoinListener(listenerServiceManager != null ? listenerServiceManager.getPlayerJoinListener() : null)
+                .setPlayerQuitListener(listenerServiceManager != null ? listenerServiceManager.getPlayerQuitListener() : null)
+                .setPlayerTransferGuard(listenerServiceManager != null ? listenerServiceManager.getPlayerTransferGuard() : null)
+                .setShadowSyncTask(economyServiceManager != null ? economyServiceManager.getShadowSyncTask() : null)
+                .setAuditLogger(auditServiceManager != null ? auditServiceManager.getAuditLogger() : null)
+                .setBaltopManager(baltopManager)
+                .setPermissionService(permissionManager != null ? permissionManager.getPermissionService() : null)
+                .setCircuitBreaker(breakerManager != null ? breakerManager.getCircuitBreaker() : null)
+                .setWebAdminServer(webServiceManager != null ? webServiceManager.getWebAdminServer() : null)
+                .setWebAdminConfig(webServiceManager != null ? webServiceManager.getWebAdminConfig() : null)
+                .setNotificationService(breakerManager != null ? breakerManager.getNotificationService() : null)
+                .build();
+
+        getLogger().fine("PluginContext initialized");
+    }
+
+    /**
+     * [RED-05 FIX] Get the PluginContext for centralized service access.
+     * 
+     * @return the PluginContext instance
+     */
+    public PluginContext getPluginContext() {
+        return pluginContext;
     }
 }

@@ -105,6 +105,7 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.shadow"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.reload"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.migrate"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("router.help.web"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.test"));
     }
 
@@ -112,6 +113,7 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 0) {
             return subCommands.keySet().stream()
+                    .filter(key -> hasSubcommandPermission(sender, key))
                     .sorted()
                     .collect(Collectors.toList());
         }
@@ -119,6 +121,7 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         if (args.length == 1) {
             return subCommands.keySet().stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
+                    .filter(key -> hasSubcommandPermission(sender, key))
                     .sorted()
                     .collect(Collectors.toList());
         }
@@ -134,5 +137,20 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         }
 
         return Collections.emptyList();
+    }
+
+    /**
+     * [CMD-M04 FIX] Check if sender has permission for subcommand.
+     */
+    private boolean hasSubcommandPermission(CommandSender sender, String subcommand) {
+        return switch (subcommand) {
+            case "admin" -> sender.hasPermission("syncmoney.admin");
+            case "breaker", "monitor", "econstats", "audit" -> sender.hasPermission("syncmoney.admin");
+            case "migrate", "shadow", "web" -> sender.hasPermission("syncmoney.admin");
+            case "test" -> sender.hasPermission("syncmoney.admin.test");
+            case "reload" -> sender.hasPermission("syncmoney.admin");
+            case "sync-balance" -> sender.hasPermission("syncmoney.admin");
+            default -> true;
+        };
     }
 }

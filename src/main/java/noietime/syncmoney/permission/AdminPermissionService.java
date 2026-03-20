@@ -4,11 +4,12 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Admin permission service.
@@ -104,7 +105,9 @@ public final class AdminPermissionService {
         }
 
         PermissionLevel level = getPermissionLevel(sender);
+
         if (level == null || level == PermissionLevel.FULL) {
+            return true;
         }
 
         if (!(sender instanceof Player)) {
@@ -221,12 +224,14 @@ public final class AdminPermissionService {
     }
 
     /**
-     * [SYNC-PERM-001] Daily limit record (using AtomicLong for thread safety).
+     * [SYNC-PERM-001] Daily limit record (using AtomicReference<BigDecimal> for thread-safe precise arithmetic).
+     * [L-3 FIX] Replaced AtomicLong with BigDecimal to eliminate floating-point precision errors.
      */
     private static class DailyLimit {
-        private final LocalDate date;
-        private final AtomicLong givenToday = new AtomicLong(0);
-        private final AtomicLong takenToday = new AtomicLong(0);
+
+        private volatile LocalDate date;
+        private final AtomicReference<BigDecimal> givenToday = new AtomicReference<>(BigDecimal.ZERO);
+        private final AtomicReference<BigDecimal> takenToday = new AtomicReference<>(BigDecimal.ZERO);
 
         DailyLimit() {
             this.date = LocalDate.now();
@@ -237,24 +242,25 @@ public final class AdminPermissionService {
         }
 
         void reset() {
-            givenToday.set(0);
-            takenToday.set(0);
+            this.date = LocalDate.now();
+            givenToday.set(BigDecimal.ZERO);
+            takenToday.set(BigDecimal.ZERO);
         }
 
         double getGivenToday() {
-            return givenToday.get() / 100.0;
+            return givenToday.get().doubleValue();
         }
 
         void addGiven(double amount) {
-            givenToday.addAndGet((long) (amount * 100));
+            givenToday.updateAndGet(v -> v.add(BigDecimal.valueOf(amount)));
         }
 
         double getTakenToday() {
-            return takenToday.get() / 100.0;
+            return takenToday.get().doubleValue();
         }
 
         void addTaken(double amount) {
-            takenToday.addAndGet((long) (amount * 100));
+            takenToday.updateAndGet(v -> v.add(BigDecimal.valueOf(amount)));
         }
     }
 }

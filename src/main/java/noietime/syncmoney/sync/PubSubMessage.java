@@ -17,7 +17,6 @@ public final class PubSubMessage {
 
     private static final Gson GSON = new GsonBuilder().create();
 
-
     public enum EventType {
         UNKNOWN,
         DEPOSIT,

@@ -6,6 +6,11 @@
 -- KEYS[4]: receiver version key
 -- ARGV[1]: transfer amount
 
+-- Helper function: truncate to 2 decimal places without rounding
+local function truncateToTwoDecimals(num)
+    return math.floor(num * 100 + 0.0000001) / 100
+end
+
 local senderBalanceKey = KEYS[1]
 local senderVersionKey = KEYS[2]
 local receiverBalanceKey = KEYS[3]
@@ -16,33 +21,25 @@ if not amount or amount <= 0 then
     return redis.error_reply('INVALID_AMOUNT')
 end
 
--- Get the sender's current balance
-local senderBalance = tonumber(redis.call('GET', senderBalanceKey) or '0')
-
--- Check if the sender's balance is sufficient
-if senderBalance < amount then
+-- Check if the sender's balance is sufficient before attempting transfer
+-- This uses WATCH to detect concurrent modifications
+local senderCurrent = tonumber(redis.call('GET', senderBalanceKey) or '0')
+if senderCurrent < amount then
     return redis.error_reply('INSUFFICIENT_FUNDS')
 end
 
--- Get the receiver's current balance
-local receiverBalance = tonumber(redis.call('GET', receiverBalanceKey) or '0')
+-- Use INCRBYFLOAT for atomic decrement/increment (atomic operation, no lost update)
+local senderNew = redis.call('INCRBYFLOAT', senderBalanceKey, -amount)
+local receiverNew = redis.call('INCRBYFLOAT', receiverBalanceKey, amount)
 
--- Increment the version number
+-- Increment the version numbers
 local senderNewVersion = redis.call('INCR', senderVersionKey)
 local receiverNewVersion = redis.call('INCR', receiverVersionKey)
 
--- Calculate the new balance
-local senderNewBalance = senderBalance - amount
-local receiverNewBalance = receiverBalance + amount
-
--- Set the new balance
-redis.call('SET', senderBalanceKey, string.format('%.2f', senderNewBalance))
-redis.call('SET', receiverBalanceKey, string.format('%.2f', receiverNewBalance))
-
 -- Return the result array
 return {
-    string.format('%.2f', senderNewBalance),
-    string.format('%.2f', receiverNewBalance),
+    string.format('%.2f', truncateToTwoDecimals(senderNew)),
+    string.format('%.2f', truncateToTwoDecimals(receiverNew)),
     tostring(senderNewVersion),
     tostring(receiverNewVersion)
 }

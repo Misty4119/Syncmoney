@@ -82,10 +82,23 @@ FROM players;
 -- Audit log table
 -- ============================================================
 
--- Create audit log table
+-- Add sequence column if not exists (for existing tables)
+ALTER TABLE syncmoney_audit_log
+ADD COLUMN IF NOT EXISTS sequence INT DEFAULT 0;
+
+-- Add composite index for timestamp + sequence sorting
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp_sequence
+ON syncmoney_audit_log(timestamp DESC, sequence DESC);
+
+-- Add player_uuid index if not exists
+CREATE INDEX IF NOT EXISTS idx_audit_player_uuid
+ON syncmoney_audit_log(player_uuid);
+
+-- Create audit log table (with sequence column)
 CREATE TABLE IF NOT EXISTS syncmoney_audit_log (
     id VARCHAR(36) PRIMARY KEY,
     timestamp BIGINT NOT NULL,
+    sequence INT DEFAULT 0,
     type VARCHAR(20) NOT NULL,
     player_uuid VARCHAR(36) NOT NULL,
     player_name VARCHAR(16),
@@ -96,7 +109,9 @@ CREATE TABLE IF NOT EXISTS syncmoney_audit_log (
     target_uuid VARCHAR(36),
     target_name VARCHAR(16),
     reason VARCHAR(255),
+    merged_count INT DEFAULT 1,
     INDEX idx_player_uuid (player_uuid),
     INDEX idx_timestamp (timestamp),
-    INDEX idx_type (type)
+    INDEX idx_type (type),
+    INDEX idx_audit_timestamp_sequence (timestamp DESC, sequence DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

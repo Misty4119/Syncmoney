@@ -1,7 +1,10 @@
 package noietime.syncmoney.migration;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.audit.AuditDbWriter;
+import noietime.syncmoney.audit.AuditRecord;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
@@ -10,9 +13,13 @@ import org.bukkit.plugin.Plugin;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
 
 /**
  * [SYNC-MIGRATE-002] Migration task for migrating from LOCAL mode to SYNC mode.
@@ -69,7 +76,7 @@ public final class LocalToSyncMigrationTask {
             return;
         }
 
-        if (!validatePrerequisites()) {
+        if (!force && !validatePrerequisites()) {
             reportError("Prerequisites validation failed: Redis or Database is not available");
             return;
         }
@@ -77,7 +84,7 @@ public final class LocalToSyncMigrationTask {
         if (config.isMigrationLockEconomy()) {
             MigrationLock.enable();
             MigrationLock.lock();
-            plugin.getLogger().info("Economy operations locked for migration");
+            plugin.getLogger().fine("Economy operations locked for migration");
         }
 
         running = true;
@@ -121,7 +128,9 @@ public final class LocalToSyncMigrationTask {
                                 config.getServerName()
                         );
 
-                        populateRedis(player.uuid(), player.balance(), player.version());
+                        if (config.isMigrationPopulateRedis()) {
+                            populateRedis(player.uuid(), player.balance(), player.version());
+                        }
 
                         successCount.incrementAndGet();
                     } catch (Exception e) {
@@ -137,6 +146,13 @@ public final class LocalToSyncMigrationTask {
 
                 checkpoint.complete();
 
+
+                int migratedTx = migrateTransactions(localDbPath);
+                if (migratedTx >= 0) {
+                    plugin.getLogger().info("[LOCAL-TO-SYNC] Transaction history migration complete: "
+                            + migratedTx + " records migrated to syncmoney_audit_log.");
+                }
+
                 validateMigration(players.size(), successCount.get(), failedCount.get());
 
                 reportComplete(successCount.get(), failedCount.get());
@@ -150,7 +166,7 @@ public final class LocalToSyncMigrationTask {
                 if (config.isMigrationLockEconomy()) {
                     MigrationLock.unlock();
                     MigrationLock.disable();
-                    plugin.getLogger().info("Economy operations unlocked after migration");
+                    plugin.getLogger().fine("Economy operations unlocked after migration");
                 }
             }
         });
@@ -176,7 +192,8 @@ public final class LocalToSyncMigrationTask {
                 while (rs.next()) {
                     String uuidStr = rs.getString("uuid");
                     String name = rs.getString("name");
-                    BigDecimal balance = rs.getBigDecimal("balance");
+
+                    BigDecimal balance = BigDecimal.valueOf(rs.getDouble("balance"));
                     long version = rs.getLong("version");
 
                     if (uuidStr != null && balance != null) {
@@ -200,6 +217,183 @@ public final class LocalToSyncMigrationTask {
      */
     private String getTableName(String dbPath) {
         return "player_balances";
+    }
+
+    /**
+     * [SYNC-MIGRATE-003] Migrates transaction history from SQLite transactions table
+     * to syncmoney_audit_log in the target MySQL/PostgreSQL database.
+     *
+     * Field mapping:
+     * - id (INTEGER AUTOINCREMENT)  → new UUID
+     * - uuid                        → player_uuid
+     * - name                        → player_name
+     * - type (DEPOSIT/WITHDRAW/TRANSFER/SET_BALANCE) → type
+     * - amount (signed REAL)        → amount (DECIMAL)
+     * - balance_after (REAL)        → balance_after (DECIMAL)
+     * - source                      → source (EventSource enum name)
+     * - timestamp                   → timestamp
+     * - sequence (nanotime frag)    → sequence (new monotonic counter)
+     * - target_name                 → target_name; target_uuid resolved from player_balances
+     * - balance_before (LOCAL only) → stored in reason field as "balance_before:X"
+     * - server (not in LOCAL)       → fixed "LOCAL"
+     *
+     * @param sqliteJdbcPath full JDBC URL for the SQLite database (jdbc:sqlite:...)
+     * @return number of records successfully migrated, or -1 on fatal error
+     */
+    private int migrateTransactions(String sqliteJdbcPath) {
+        if (databaseManager == null || !databaseManager.isConnected()) {
+            plugin.getLogger().warning("[LOCAL-TO-SYNC] Database not available - skipping transaction history migration.");
+            return -1;
+        }
+
+
+        Map<String, String> nameToUuid = buildNameToUuidMap(sqliteJdbcPath);
+
+        AtomicInteger seqCounter = new AtomicInteger(0);
+        int migrated = 0;
+
+        try (Connection sqliteConn = DriverManager.getConnection(sqliteJdbcPath);
+             Statement countStmt = sqliteConn.createStatement()) {
+
+
+            boolean txTableExists;
+            try (ResultSet tables = sqliteConn.getMetaData().getTables(null, null, "transactions", null)) {
+                txTableExists = tables.next();
+            }
+            if (!txTableExists) {
+                plugin.getLogger().fine("[LOCAL-TO-SYNC] No transactions table found in SQLite - nothing to migrate.");
+                return 0;
+            }
+
+            int totalTx;
+            try (ResultSet countRs = countStmt.executeQuery("SELECT COUNT(*) FROM transactions")) {
+                totalTx = countRs.next() ? countRs.getInt(1) : 0;
+            }
+
+            if (totalTx == 0) {
+                plugin.getLogger().fine("[LOCAL-TO-SYNC] No transaction records to migrate.");
+                return 0;
+            }
+
+            plugin.getLogger().info("[LOCAL-TO-SYNC] Migrating " + totalTx + " transaction records to audit log...");
+
+            try (Statement readStmt = sqliteConn.createStatement();
+                 ResultSet rs = readStmt.executeQuery(
+                         "SELECT * FROM transactions ORDER BY timestamp ASC, sequence ASC");
+                 Connection dbConn = databaseManager.getConnection();
+                 PreparedStatement pstmt = dbConn.prepareStatement(AuditDbWriter.INSERT_SQL)) {
+
+                int batchCount = 0;
+
+                while (rs.next()) {
+                    String uuidStr = rs.getString("uuid");
+                    if (uuidStr == null) continue;
+
+                    String playerName = rs.getString("name");
+                    String typeStr = rs.getString("type");
+                    double amount = rs.getDouble("amount");
+                    double balanceAfter = rs.getDouble("balance_after");
+                    double balanceBefore = rs.getDouble("balance_before");
+                    String sourceStr = rs.getString("source");
+                    long timestamp = rs.getLong("timestamp");
+                    String targetName = rs.getString("target_name");
+
+
+                    if ("PLAYER_TRANSFER".equals(sourceStr) && !"TRANSFER".equalsIgnoreCase(typeStr)) {
+                        typeStr = "TRANSFER";
+                    }
+
+
+                    AuditRecord.AuditType auditType;
+                    try {
+                        auditType = AuditRecord.AuditType.valueOf(typeStr.toUpperCase());
+                    } catch (IllegalArgumentException e) {
+                        auditType = AuditRecord.AuditType.DEPOSIT;
+                    }
+
+
+                    EconomyEvent.EventSource eventSource;
+                    try {
+                        eventSource = EconomyEvent.EventSource.valueOf(sourceStr != null ? sourceStr : "ADMIN_GIVE");
+                    } catch (IllegalArgumentException e) {
+                        eventSource = switch (auditType) {
+                            case DEPOSIT -> EconomyEvent.EventSource.ADMIN_GIVE;
+                            case WITHDRAW -> EconomyEvent.EventSource.ADMIN_TAKE;
+                            case TRANSFER -> EconomyEvent.EventSource.PLAYER_TRANSFER;
+                            default -> EconomyEvent.EventSource.COMMAND_ADMIN;
+                        };
+                    }
+
+
+                    String targetUuid = targetName != null ? nameToUuid.get(targetName.toLowerCase()) : null;
+
+
+                    String reason = "balance_before:" + BigDecimal.valueOf(balanceBefore).toPlainString();
+
+
+                    if (playerName != null && playerName.length() > 16) playerName = playerName.substring(0, 16);
+                    if (targetName != null && targetName.length() > 16) targetName = targetName.substring(0, 16);
+
+                    pstmt.setString(1, UUID.randomUUID().toString());
+                    pstmt.setLong(2, timestamp);
+                    pstmt.setInt(3, seqCounter.incrementAndGet());
+                    pstmt.setString(4, auditType.name());
+                    pstmt.setString(5, uuidStr);
+                    pstmt.setString(6, playerName);
+                    pstmt.setBigDecimal(7, BigDecimal.valueOf(amount));
+                    pstmt.setBigDecimal(8, BigDecimal.valueOf(balanceAfter));
+                    pstmt.setString(9, eventSource.name());
+                    pstmt.setString(10, "LOCAL");
+                    pstmt.setString(11, targetUuid);
+                    pstmt.setString(12, targetName);
+                    pstmt.setString(13, reason);
+                    pstmt.setInt(14, 1);
+                    pstmt.addBatch();
+                    batchCount++;
+
+                    if (batchCount % 500 == 0) {
+                        pstmt.executeBatch();
+                        migrated += batchCount;
+                        batchCount = 0;
+                        plugin.getLogger().fine("[LOCAL-TO-SYNC] Migrated " + migrated + "/" + totalTx + " transactions...");
+                    }
+                }
+
+
+                if (batchCount > 0) {
+                    pstmt.executeBatch();
+                    migrated += batchCount;
+                }
+            }
+
+        } catch (Exception e) {
+            plugin.getLogger().warning("[LOCAL-TO-SYNC] Transaction migration error: " + e.getMessage());
+            return migrated;
+        }
+
+        return migrated;
+    }
+
+    /**
+     * Builds a lowercase-name → UUID string map from the SQLite player_balances table.
+     * Used for resolving target_uuid during transaction migration.
+     */
+    private Map<String, String> buildNameToUuidMap(String sqliteJdbcPath) {
+        Map<String, String> nameToUuid = new HashMap<>();
+        try (Connection conn = DriverManager.getConnection(sqliteJdbcPath);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT uuid, name FROM player_balances")) {
+            while (rs.next()) {
+                String name = rs.getString("name");
+                String uuid = rs.getString("uuid");
+                if (name != null && uuid != null) {
+                    nameToUuid.put(name.toLowerCase(), uuid);
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[LOCAL-TO-SYNC] Failed to build name-to-UUID map: " + e.getMessage());
+        }
+        return nameToUuid;
     }
 
     /**
@@ -240,7 +434,7 @@ public final class LocalToSyncMigrationTask {
             return false;
         }
 
-        plugin.getLogger().info("Migration prerequisites validated successfully.");
+        plugin.getLogger().fine("Migration prerequisites validated successfully.");
         return true;
     }
 
@@ -256,13 +450,13 @@ public final class LocalToSyncMigrationTask {
 
         try {
             BigDecimal sqliteTotal = calculateSQLiteTotalBalance();
-            plugin.getLogger().info("Migration validation - SQLite total balance: " + sqliteTotal);
+            plugin.getLogger().fine("Migration validation - SQLite total balance: " + sqliteTotal);
 
             BigDecimal redisTotal = calculateRedisTotalBalance(totalPlayers);
-            plugin.getLogger().info("Migration validation - Redis total balance: " + redisTotal);
+            plugin.getLogger().fine("Migration validation - Redis total balance: " + redisTotal);
 
             if (sqliteTotal.compareTo(redisTotal) == 0) {
-                plugin.getLogger().info("Migration validation PASSED: SQLite and Redis balances match!");
+                plugin.getLogger().fine("Migration validation PASSED: SQLite and Redis balances match!");
             } else {
                 double diffPercent = Math.abs(sqliteTotal.subtract(redisTotal).doubleValue()) /
                                    Math.max(sqliteTotal.doubleValue(), 1.0) * 100;
@@ -270,7 +464,7 @@ public final class LocalToSyncMigrationTask {
                     String.format("%.2f", diffPercent) + "%");
             }
 
-            plugin.getLogger().info("Migration validation summary - Total: " + totalPlayers +
+            plugin.getLogger().fine("Migration validation summary - Total: " + totalPlayers +
                 ", Success: " + successCount + ", Failed: " + failedCount);
 
         } catch (Exception e) {
@@ -306,28 +500,42 @@ public final class LocalToSyncMigrationTask {
 
     /**
      * Calculates total balance from Redis.
-     * Scans all balance keys and sums up.
+     * [DATA-SYNC FIX] Uses SCAN instead of KEYS to avoid Redis blocking.
+     * Uses pipeline for batch fetching values.
      */
     private BigDecimal calculateRedisTotalBalance(int expectedCount) {
         BigDecimal total = BigDecimal.ZERO;
         try (var jedis = redisManager.getResource()) {
             String pattern = KEY_PREFIX_BALANCE + "*";
-            var keys = jedis.keys(pattern);
+            ScanParams params = new ScanParams().match(pattern).count(1000);
 
+            String cursor = ScanParams.SCAN_POINTER_START;
             int count = 0;
-            for (String key : keys) {
-                String value = jedis.get(key);
-                if (value != null) {
-                    try {
-                        total = total.add(new BigDecimal(value));
-                        count++;
-                    } catch (NumberFormatException e) {
-                        plugin.getLogger().warning("Invalid balance value in Redis: " + value);
+
+            do {
+                ScanResult<String> scanResult = jedis.scan(cursor, params);
+                List<String> keys = scanResult.getResult();
+
+                if (keys != null && !keys.isEmpty()) {
+
+                    List<String> values = jedis.mget(keys.toArray(new String[0]));
+
+                    for (String value : values) {
+                        if (value != null) {
+                            try {
+                                total = total.add(new BigDecimal(value));
+                                count++;
+                            } catch (NumberFormatException e) {
+                                plugin.getLogger().warning("Invalid balance value in Redis: " + value);
+                            }
+                        }
                     }
                 }
-            }
 
-            plugin.getLogger().info("Redis balance scan found " + count + " player records");
+                cursor = scanResult.getCursor();
+            } while (!"0".equals(cursor));
+
+            plugin.getLogger().fine("Redis balance scan found " + count + " player records");
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to calculate Redis total balance: " + e.getMessage());
         }

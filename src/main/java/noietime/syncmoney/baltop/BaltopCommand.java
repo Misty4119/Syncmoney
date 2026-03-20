@@ -20,8 +20,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Baltop command handler.
- * Provides /baltop command.
+ * [SYNC-BAL-001] Baltop command handler.
+ * Provides /baltop command implementation.
  */
 public final class BaltopCommand implements CommandExecutor, TabCompleter {
 
@@ -41,6 +41,11 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!sender.hasPermission("syncmoney.money")) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return true;
+        }
+
         int page = 1;
 
         if (args.length > 0) {
@@ -106,7 +111,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Builds baltop entry component (with HoverEvent).
+     * [SYNC-BAL-002] Builds baltop entry component (with HoverEvent).
      */
     private Component buildEntryComponent(RankEntry entry, int currentPage, int totalPages) {
         String balanceStr = formatBalance(entry.balance());
@@ -126,7 +131,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Build hover content from messages.yml (supports MiniMessage format).
+     * [SYNC-BAL-003] Build hover content from messages.yml.
      */
     private Component buildHoverContent(RankEntry entry, String playerName) {
         String playerTemplate = plugin.getMessage("baltop.hover.player")
@@ -149,11 +154,9 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Sends page footer (with pagination buttons).
+     * [SYNC-BAL-004] Sends page footer (with pagination buttons).
      */
     private void sendPageFooter(CommandSender sender, int page, int totalPages) {
-        Component footerComponent = Component.empty();
-
         String prevText = plugin.getMessage("baltop.pagination.prev");
         String prevDisabledText = plugin.getMessage("baltop.pagination.prev-disabled");
         String nextText = plugin.getMessage("baltop.pagination.next");
@@ -164,38 +167,37 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
         String hoverPrevText = plugin.getMessage("baltop.pagination.hover-prev");
         String hoverNextText = plugin.getMessage("baltop.pagination.hover-next");
 
+        net.kyori.adventure.text.TextComponent.Builder builder = Component.text();
+
         if (page > 1) {
-            Component prevButton = Component.text(prevText)
-                    .color(net.kyori.adventure.text.format.NamedTextColor.AQUA)
+            Component prevButton = MessageHelper.getComponent(prevText)
                     .clickEvent(ClickEvent.runCommand("/baltop " + (page - 1)))
-                    .hoverEvent(HoverEvent.showText(Component.text(hoverPrevText, net.kyori.adventure.text.format.NamedTextColor.GRAY)));
-            footerComponent.append(prevButton);
+                    .hoverEvent(HoverEvent.showText(MessageHelper.getComponent(hoverPrevText)));
+            builder.append(prevButton);
         } else {
-            footerComponent.append(Component.text(prevDisabledText).color(net.kyori.adventure.text.format.NamedTextColor.DARK_GRAY));
+            builder.append(MessageHelper.getComponent(prevDisabledText));
         }
 
-        footerComponent.append(Component.text("  ").color(net.kyori.adventure.text.format.NamedTextColor.GRAY));
+        builder.append(Component.text("  "));
 
-        footerComponent.append(Component.text(pageInfoText)
-                .color(net.kyori.adventure.text.format.NamedTextColor.WHITE));
+        builder.append(MessageHelper.getComponent(pageInfoText));
 
-        footerComponent.append(Component.text("  ").color(net.kyori.adventure.text.format.NamedTextColor.GRAY));
+        builder.append(Component.text("  "));
 
         if (page < totalPages) {
-            Component nextButton = Component.text(nextText)
-                    .color(net.kyori.adventure.text.format.NamedTextColor.AQUA)
+            Component nextButton = MessageHelper.getComponent(nextText)
                     .clickEvent(ClickEvent.runCommand("/baltop " + (page + 1)))
-                    .hoverEvent(HoverEvent.showText(Component.text(hoverNextText, net.kyori.adventure.text.format.NamedTextColor.GRAY)));
-            footerComponent.append(nextButton);
+                    .hoverEvent(HoverEvent.showText(MessageHelper.getComponent(hoverNextText)));
+            builder.append(nextButton);
         } else {
-            footerComponent.append(Component.text(nextDisabledText).color(net.kyori.adventure.text.format.NamedTextColor.DARK_GRAY));
+            builder.append(MessageHelper.getComponent(nextDisabledText));
         }
 
-        sender.sendMessage(footerComponent);
+        sender.sendMessage(builder.build());
     }
 
     /**
-     * Displays player's personal ranking.
+     * [SYNC-BAL-005] Displays player's personal ranking.
      */
     private boolean showPlayerRank(Player player) {
         UUID uuid = player.getUniqueId();
@@ -229,7 +231,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Gets economy facade balance (requires external injection or plugin retrieval).
+     * [SYNC-BAL-006] Gets economy facade balance.
      */
     private double getPlayerBalance(UUID uuid) {
         try {
@@ -242,7 +244,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Formats balance.
+     * [SYNC-BAL-007] Formats balance based on config.
      */
     private String formatBalance(double balance) {
         String format = config.getBaltopFormat();
@@ -258,7 +260,8 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             List<String> pages = new ArrayList<>();
 
-            int totalPages = Math.max(1, (baltopManager.getTotalPlayers() + ENTRIES_PER_PAGE - 1) / ENTRIES_PER_PAGE);
+            int entriesPerPage = config.getBaltopEntriesPerPage();
+            int totalPages = Math.max(1, (baltopManager.getTotalPlayers() + entriesPerPage - 1) / entriesPerPage);
             for (int i = 1; i <= Math.min(totalPages, 10); i++) {
                 pages.add(String.valueOf(i));
             }

@@ -1,0 +1,320 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Design System — Syncmoney Web Admin
+   ============================================================ */
+
+@layer base {
+  :root {
+    /* Light Theme (Default / .light) */
+    --color-primary: theme('colors.violet.500');
+    --color-primary-hover: theme('colors.violet.600');
+    --color-primary-glow: rgba(139, 92, 246, 0.3);
+    --color-secondary: theme('colors.indigo.500');
+
+    /* Surfaces (Light) */
+    --surface-bg: theme('colors.surface.50');
+    --surface-base: theme('colors.surface.200');
+    --surface-elevated: theme('colors.white');
+    --surface-overlay: rgba(255, 255, 255, 0.85);
+    --surface-border: theme('colors.surface.200');
+
+    /* Text (Light) */
+    --text-primary: theme('colors.surface.900');
+    --text-secondary: theme('colors.surface.600');
+    --text-muted: theme('colors.surface.400');
+
+    /* Glassmorphism (Light) */
+    --glass-bg: rgba(255, 255, 255, 0.3);;
+    --glass-border: rgba(148, 163, 184, 0.2);
+    --glass-blur: 24px;
+    --glass-shadow-color: rgba(31, 38, 135, 0.07);
+
+    /* Grid (Light) */
+    --grid-color: rgba(139, 92, 246, 0.05);
+  }
+
+  .dark {
+    /* Dark Theme */
+    --color-primary: theme('colors.cyan.500');
+    --color-primary-hover: theme('colors.cyan.400');
+    --color-primary-glow: rgba(6, 182, 212, 0.25);
+    --color-secondary: theme('colors.lavender.500');
+
+    /* Surfaces (Dark / Slate 900) */
+    --surface-bg: theme('colors.surface.950');
+    --surface-base: theme('colors.surface.900');
+    --surface-elevated: theme('colors.surface.800');
+    --surface-overlay: rgba(15, 23, 42, 0.85);
+    --surface-border: theme('colors.surface.700');
+
+    /* Text (Dark) */
+    --text-primary: theme('colors.surface.100');
+    --text-secondary: theme('colors.surface.400');
+    --text-muted: theme('colors.surface.500');
+
+    /* Glassmorphism (Dark) */
+    --glass-bg: rgba(15, 23, 42, 0.65);
+    --glass-border: rgba(148, 163, 184, 0.1);
+    --glass-blur: 24px;
+    --glass-shadow-color: rgba(0, 0, 0, 0.25);
+
+    /* Grid (Dark) */
+    --grid-color: rgba(6, 182, 212, 0.04);
+  }
+
+  body {
+    background-color: var(--surface-bg);
+    color: var(--text-primary);
+    @apply font-sans antialiased relative transition-colors duration-500;
+  }
+
+  /* Tech Grid Background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(circle at center, black, transparent 80%);
+    -webkit-mask-image: radial-gradient(circle at center, black, transparent 80%);
+    transition: background-image 0.5s ease;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-600;
+  }
+
+  /* Selection */
+  ::selection {
+    background-color: var(--color-primary-glow);
+    color: var(--text-primary);
+  }
+}
+
+@layer components {
+
+  /* ---- Glassmorphism cards ---- */
+  .glass-card {
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    @apply rounded-xl;
+    box-shadow: 0 8px 32px var(--glass-shadow-color);
+    will-change: transform, backdrop-filter;
+  }
+
+  .glass-card-hoverable {
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    @apply rounded-xl transition-all duration-300 ease-out;
+    box-shadow: 0 8px 32px var(--glass-shadow-color);
+    will-change: transform, box-shadow, backdrop-filter;
+  }
+
+  .glass-card-hoverable:hover {
+    border-color: rgba(148, 163, 184, 0.25);
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 12px 40px var(--glass-shadow-color), 0 0 15px var(--color-primary-glow);
+  }
+
+  /* ---- Gradients ---- */
+  .gradient-primary {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* ---- Button ripple ---- */
+  .btn-ripple {
+    position: relative;
+    overflow: hidden;
+    transform: translateZ(0);
+    /* For performance */
+  }
+
+  .btn-ripple::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    transform: translate(-50%, -50%);
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1), height 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+  }
+
+  .btn-ripple:active::after {
+    width: 250%;
+    height: 250%;
+    opacity: 0;
+  }
+
+  /* ---- Skeleton shimmer ---- */
+  .skeleton {
+    background-color: var(--surface-border);
+    @apply rounded relative overflow-hidden;
+    animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    animation: shimmer 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  /* ---- Hoverable utility ---- */
+  .hoverable {
+    @apply transition-all duration-300 ease-out;
+    will-change: transform, box-shadow;
+  }
+
+  .hoverable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px var(--glass-shadow-color), 0 0 20px var(--color-primary-glow);
+  }
+
+  /* ---- Status dot ---- */
+  .status-dot {
+    @apply w-2.5 h-2.5 rounded-full relative inline-block;
+  }
+
+  .status-dot.connected {
+    @apply bg-success;
+  }
+
+  .status-dot.connected::after {
+    content: '';
+    @apply absolute inset-0 rounded-full bg-success;
+    animation: pulseDot 2s ease-in-out infinite;
+  }
+
+  .status-dot.disconnected {
+    @apply bg-error;
+  }
+
+  .status-dot.warning {
+    @apply bg-warning;
+  }
+
+  .status-dot.loading {
+    @apply bg-surface-400 animate-pulse;
+  }
+
+  /* ---- Page transitions ---- */
+  .page-enter-active,
+  .page-leave-active {
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+
+  .page-enter-from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  .page-leave-to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  /* ---- Sidebar transitions ---- */
+  .sidebar-label {
+    @apply transition-all duration-200;
+  }
+
+  .sidebar-collapsed .sidebar-label {
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
+  }
+
+  /* ---- Modal transitions ---- */
+  .modal-enter-active,
+  .modal-leave-active {
+    transition: opacity 0.2s ease;
+  }
+
+  .modal-enter-from,
+  .modal-leave-to {
+    opacity: 0;
+  }
+
+  .modal-content-enter-active,
+  .modal-content-leave-active {
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  .modal-content-enter-from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+
+  .modal-content-leave-to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  /* ---- Toast transitions ---- */
+  .toast-enter-active {
+    transition: all 0.3s ease;
+  }
+
+  .toast-leave-active {
+    transition: all 0.2s ease;
+  }
+
+  .toast-enter-from {
+    opacity: 0;
+    transform: translateX(100%) scale(0.8);
+  }
+
+  .toast-leave-to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+@layer utilities {
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

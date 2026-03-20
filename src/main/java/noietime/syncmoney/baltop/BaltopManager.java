@@ -20,7 +20,8 @@ import java.util.logging.Logger;
 
 /**
  * Cross-server leaderboard manager.
- * Implements leaderboard functionality using Redis ZSET (or SQLite for LOCAL mode).
+ * Implements leaderboard functionality using Redis ZSET (or SQLite for LOCAL
+ * mode).
  *
  * [AsyncScheduler] This class can be safely executed on async threads.
  */
@@ -49,14 +50,14 @@ public final class BaltopManager {
     private final List<NumberFormatEntry> numberFormatList;
 
     public BaltopManager(Plugin plugin, SyncmoneyConfig config,
-                        RedisManager redisManager, NameResolver nameResolver,
-                        HikariDataSource dataSource) {
+            RedisManager redisManager, NameResolver nameResolver,
+            HikariDataSource dataSource) {
         this(plugin, config, redisManager, nameResolver, dataSource, null);
     }
 
     public BaltopManager(Plugin plugin, SyncmoneyConfig config,
-                        RedisManager redisManager, NameResolver nameResolver,
-                        HikariDataSource dataSource, LocalEconomyHandler localEconomyHandler) {
+            RedisManager redisManager, NameResolver nameResolver,
+            HikariDataSource dataSource, LocalEconomyHandler localEconomyHandler) {
         this.plugin = plugin;
         this.config = config;
         this.redisManager = redisManager;
@@ -116,8 +117,8 @@ public final class BaltopManager {
 
         if (result.isEmpty()) {
             result.add(new NumberFormatEntry(1_000_000_000_000.0, "T"));
-            result.add(new NumberFormatEntry(1_000_000_000.0, "億"));
-            result.add(new NumberFormatEntry(10_000.0, "萬"));
+            result.add(new NumberFormatEntry(1_000_000_000.0, "B"));
+            result.add(new NumberFormatEntry(1_000_000.0, "M"));
             result.add(new NumberFormatEntry(1_000.0, "K"));
         }
 
@@ -127,26 +128,27 @@ public final class BaltopManager {
     /**
      * Record for number format entry (threshold and label)
      */
-    private record NumberFormatEntry(double threshold, String label) {}
+    private record NumberFormatEntry(double threshold, String label) {
+    }
 
     /**
      * Initializes database schema.
      */
     private void initializeSchema() {
         String sql = """
-            CREATE TABLE IF NOT EXISTS syncmoney_baltop (
-                player_uuid VARCHAR(36) PRIMARY KEY,
-                player_name VARCHAR(16),
-                balance DECIMAL(20, 2) NOT NULL,
-                rank INT,
-                last_update BIGINT NOT NULL
-            )
-            """;
+                CREATE TABLE IF NOT EXISTS syncmoney_baltop (
+                    player_uuid VARCHAR(36) PRIMARY KEY,
+                    player_name VARCHAR(16),
+                    balance DECIMAL(20, 2) NOT NULL,
+                    rank INT,
+                    last_update BIGINT NOT NULL
+                )
+                """;
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.executeUpdate();
-            logger.info("Baltop table initialized.");
+            logger.fine("Baltop table initialized.");
 
             loadFromDatabase();
         } catch (SQLException e) {
@@ -162,7 +164,7 @@ public final class BaltopManager {
             return;
         }
 
-        logger.info("Baltop initialized in LOCAL mode using SQLite.");
+        logger.fine("Baltop initialized in LOCAL mode using SQLite.");
     }
 
     /**
@@ -172,8 +174,8 @@ public final class BaltopManager {
         String sql = "SELECT player_uuid, player_name, balance FROM syncmoney_baltop ORDER BY balance DESC LIMIT 1000";
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql);
-             ResultSet rs = stmt.executeQuery()) {
+                PreparedStatement stmt = conn.prepareStatement(sql);
+                ResultSet rs = stmt.executeQuery()) {
 
             try (Jedis jedis = redisManager.getResource()) {
                 jedis.del(BALTOP_KEY);
@@ -198,7 +200,7 @@ public final class BaltopManager {
                 }
 
                 jedis.set(TOTAL_SUPPLY_KEY, String.valueOf(totalSupply));
-                logger.info("Loaded " + (rank - 1) + " players from database to baltop.");
+                logger.fine("Loaded " + (rank - 1) + " players from database to baltop.");
             }
         } catch (Exception e) {
             logger.warning("Failed to load baltop from database: " + e.getMessage());
@@ -221,18 +223,18 @@ public final class BaltopManager {
         List<RankEntry> topList = getTopRank(1000);
 
         if (topList.isEmpty()) {
-            logger.info("Baltop database save skipped - no players in ranking.");
+            logger.fine("Baltop database save skipped - no players in ranking.");
             return;
         }
 
         String sql = """
-            INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
-            VALUES (?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), balance = VALUES(balance), rank = VALUES(rank), last_update = VALUES(last_update)
-            """;
+                INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), balance = VALUES(balance), rank = VALUES(rank), last_update = VALUES(last_update)
+                """;
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             long now = System.currentTimeMillis();
             int batchCount = 0;
@@ -259,16 +261,17 @@ public final class BaltopManager {
             }
 
             int[] results = stmt.executeBatch();
-            logger.info("Saved " + batchCount + " players to baltop database.");
+            logger.fine("Saved " + batchCount + " players to baltop database.");
         } catch (Exception e) {
             logger.severe("Failed to save baltop to database: " + e.getMessage());
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "Baltop save stacktrace", e);
         }
     }
 
     /**
      * Updates player rank.
-     * @param uuid Player UUID
+     * 
+     * @param uuid    Player UUID
      * @param balance Player balance
      */
     public void updatePlayerRank(UUID uuid, double balance) {
@@ -288,9 +291,9 @@ public final class BaltopManager {
 
             long added = jedis.zadd(BALTOP_KEY, balance, uuid.toString());
             if (added == 0) {
-                logger.info("Updated baltop for player " + uuid + ": " + oldBalance + " -> " + balance);
+                logger.fine("Updated baltop for player " + uuid + ": " + oldBalance + " -> " + balance);
             } else {
-                logger.info("Added new player to baltop: " + uuid + " with balance " + balance);
+                logger.fine("Added new player to baltop: " + uuid + " with balance " + balance);
             }
 
             double delta = balance - oldBalance;
@@ -333,6 +336,7 @@ public final class BaltopManager {
 
     /**
      * Gets leaderboard top N players.
+     * 
      * @param count Number of entries
      * @return Rank list
      */
@@ -454,7 +458,8 @@ public final class BaltopManager {
                     UUID uuid = UUID.fromString(uuidStr);
 
                     boolean isValidName = name != null && !name.isEmpty() &&
-                            !name.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+                            !name.matches(
+                                    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
                     if (!isValidName) {
                         name = nameResolver.getName(uuid);
@@ -492,6 +497,7 @@ public final class BaltopManager {
 
     /**
      * Gets player rank position (1-indexed).
+     * 
      * @return Rank position, -1 if not exists
      */
     public int getPlayerRank(UUID uuid) {
@@ -690,7 +696,7 @@ public final class BaltopManager {
      */
     private boolean isCacheValid() {
         return lastCacheTime > 0 &&
-               (System.currentTimeMillis() - lastCacheTime) < cacheExpirationMs;
+                (System.currentTimeMillis() - lastCacheTime) < cacheExpirationMs;
     }
 
     /**
@@ -702,6 +708,7 @@ public final class BaltopManager {
 
     /**
      * Synchronously queries player name from database.
+     * 
      * @param uuid Player UUID
      * @return Player name, or null if not found
      */
@@ -712,7 +719,7 @@ public final class BaltopManager {
 
         String sql = "SELECT player_name FROM players WHERE player_uuid = ?";
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, uuid.toString());
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {

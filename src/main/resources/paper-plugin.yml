@@ -10,7 +10,10 @@ dependencies:
     Vault:
       load: AFTER
       required: true
-softdepend:
-  - CMI
-  - PlaceholderAPI
+    CMI:
+      load: AFTER
+      required: false
+    PlaceholderAPI:
+      load: AFTER
+      required: false
 

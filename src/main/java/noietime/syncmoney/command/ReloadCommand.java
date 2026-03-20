@@ -3,6 +3,7 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.util.MessageHelper;
+import noietime.syncmoney.util.ConfigMerger;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -84,6 +85,12 @@ public final class ReloadCommand implements CommandExecutor, TabCompleter {
 
     private boolean reloadConfig(CommandSender sender, boolean notify) {
         try {
+            ConfigMerger configMerger = new ConfigMerger(plugin, "config.yml", "messages.yml");
+            List<String> mergedFiles = configMerger.mergeAll();
+            if (!mergedFiles.isEmpty()) {
+                plugin.getLogger().info("Config migration completed for: " + String.join(", ", mergedFiles));
+            }
+
             plugin.reloadConfig();
 
             plugin.reloadSyncmoneyConfig();

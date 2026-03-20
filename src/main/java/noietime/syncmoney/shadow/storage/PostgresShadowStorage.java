@@ -79,7 +79,7 @@ public final class PostgresShadowStorage implements ShadowSyncStorage {
             }
 
             initialized = true;
-            plugin.getLogger().info("ShadowSync PostgreSQL storage initialized: " + database);
+            plugin.getLogger().fine("ShadowSync PostgreSQL storage initialized: " + database);
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to initialize ShadowSync PostgreSQL storage: " + e.getMessage());
             throw new RuntimeException(e);
@@ -445,7 +445,7 @@ public final class PostgresShadowStorage implements ShadowSyncStorage {
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
-            plugin.getLogger().info("ShadowSync PostgreSQL storage closed.");
+            plugin.getLogger().fine("ShadowSync PostgreSQL storage closed.");
         }
     }
 

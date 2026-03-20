@@ -32,14 +32,13 @@ public final class CMIDatabaseWriter {
     private final boolean debug;
 
     /**
-     * Debug level log output.
+     * Debug-level log output.
      */
     private void debug(String message) {
         if (debug) {
-            plugin.getLogger().info("[DEBUG] " + message);
+            plugin.getLogger().fine(message);
         }
     }
-
 
     private static final String TABLE_SQLITE = "user";
     private static final String TABLE_MYSQL = "cmi_user";
@@ -72,9 +71,9 @@ public final class CMIDatabaseWriter {
         if (!sqliteFile.exists()) {
             File serverDir = plugin.getDataFolder().getParentFile();
             File[] possiblePaths = {
-                new File(serverDir, "CMI/cmi.sqlite.db"),
-                new File(serverDir, "plugins/CMI/cmi.sqlite.db"),
-                new File("plugins/CMI/cmi.sqlite.db")
+                    new File(serverDir, "CMI/cmi.sqlite.db"),
+                    new File(serverDir, "plugins/CMI/cmi.sqlite.db"),
+                    new File("plugins/CMI/cmi.sqlite.db")
             };
 
             for (File path : possiblePaths) {
@@ -94,10 +93,11 @@ public final class CMIDatabaseWriter {
                 debug("CMI Database Writer initialized (SQLite): " + sqlitePath);
                 return;
             } catch (Exception e) {
-                plugin.getLogger().warning("SQLite initialization failed: " + e.getMessage() + ", falling back to MySQL");
+                plugin.getLogger()
+                        .warning("SQLite initialization failed: " + e.getMessage() + ", falling back to MySQL");
             }
         } else {
-            plugin.getLogger().info("CMI SQLite file not found, falling back to MySQL");
+            plugin.getLogger().fine("CMI SQLite file not found, falling back to MySQL");
         }
 
         try {
@@ -200,8 +200,7 @@ public final class CMIDatabaseWriter {
 
         String sql = String.format(
                 "UPDATE %s SET %s = ? WHERE LOWER(playername) = ?",
-                getTableName(), balanceColumn
-        );
+                getTableName(), balanceColumn);
 
         int updatedCount = 0;
 
@@ -262,11 +261,10 @@ public final class CMIDatabaseWriter {
 
         String sql = String.format(
                 "UPDATE %s SET %s = ? WHERE LOWER(playername) = ?",
-                getTableName(), balanceColumn
-        );
+                getTableName(), balanceColumn);
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             stmt.setBigDecimal(1, balance);
             stmt.setString(2, playerName.toLowerCase());
@@ -294,11 +292,10 @@ public final class CMIDatabaseWriter {
 
         String sql = String.format(
                 "SELECT %s FROM %s WHERE LOWER(playername) = ?",
-                balanceColumn, getTableName()
-        );
+                balanceColumn, getTableName());
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             stmt.setString(1, playerName.toLowerCase());
 
@@ -329,12 +326,12 @@ public final class CMIDatabaseWriter {
      * @return balance column name, or null if not found
      */
     private String detectBalanceColumn() {
-        String[] columnNames = {"balance", "money", "coint"};
+        String[] columnNames = { "balance", "money", "coint" };
         String sql = "SELECT * FROM " + getTableName() + " LIMIT 1";
 
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql);
-             java.sql.ResultSet rs = stmt.executeQuery()) {
+                PreparedStatement stmt = conn.prepareStatement(sql);
+                java.sql.ResultSet rs = stmt.executeQuery()) {
 
             for (String columnName : columnNames) {
                 try {
@@ -356,7 +353,7 @@ public final class CMIDatabaseWriter {
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
-            plugin.getLogger().info("CMI database writer connection closed.");
+            plugin.getLogger().fine("CMI database writer connection closed.");
         }
         initialized = false;
     }

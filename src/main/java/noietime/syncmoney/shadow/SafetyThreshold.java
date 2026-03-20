@@ -11,12 +11,9 @@ import java.math.RoundingMode;
  */
 public final class SafetyThreshold {
 
-
     private static final BigDecimal MAX_BALANCE = new BigDecimal("1000000000000");
 
-
     private static final BigDecimal MIN_BALANCE = BigDecimal.ZERO;
-
 
     private static final double INFLATION_THRESHOLD = 100.0;
 

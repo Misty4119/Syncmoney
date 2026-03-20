@@ -26,10 +26,9 @@ public final class DbWriterConsumer implements Runnable {
      */
     private void debug(String message) {
         if (debug) {
-            plugin.getLogger().info("[DEBUG] " + message);
+            plugin.getLogger().fine(message);
         }
     }
-
 
     public DbWriterConsumer(Plugin plugin, DbWriteQueue queue, DatabaseManager dbManager) {
         this.plugin = plugin;
@@ -57,14 +56,19 @@ public final class DbWriterConsumer implements Runnable {
 
                 if (!batch.isEmpty()) {
                     processBatch(batch);
+                } else {
+                    Thread.sleep(50);
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
             } catch (Exception e) {
                 plugin.getLogger().severe("Error in DB Writer Consumer: " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(java.util.logging.Level.SEVERE, "DB Writer Consumer stacktrace", e);
             }
         }
 
-        plugin.getLogger().info("DB Writer Consumer stopped.");
+        plugin.getLogger().fine("DB Writer Consumer stopped.");
     }
 
     /**
@@ -75,7 +79,7 @@ public final class DbWriterConsumer implements Runnable {
         long startTime = System.currentTimeMillis();
 
         while (batch.size() < Constants.BATCH_SIZE &&
-               (System.currentTimeMillis() - startTime) < Constants.BATCH_TIMEOUT_MS) {
+                (System.currentTimeMillis() - startTime) < Constants.BATCH_TIMEOUT_MS) {
             try {
                 DbWriteQueue.DbWriteTask task = queue.poll();
                 if (task == null) {
@@ -124,12 +128,11 @@ public final class DbWriterConsumer implements Runnable {
                     task.playerName(),
                     task.balance(),
                     task.version(),
-                    task.serverName()
-            );
+                    task.serverName());
             queue.incrementWrittenCount();
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to write player data to DB: " + e.getMessage());
-            e.printStackTrace();
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "DB write task stacktrace", e);
         }
     }
 

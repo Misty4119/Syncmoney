@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -12,8 +13,12 @@ import java.math.RoundingMode;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 
 /**
  * EconomicCircuitBreaker - Multi-layer protection mechanism for economic transactions.
@@ -35,22 +40,22 @@ public final class EconomicCircuitBreaker {
     private final ConnectionStateManager connectionStateManager;
     private final ResourceMonitor resourceMonitor;
     private final HighValueNotification notification;
-
+    private volatile SseManager sseManager;
 
     private volatile CircuitState state = CircuitState.NORMAL;
-
+    private volatile String lockReason = null;
 
     private final ConcurrentMap<Long, AtomicInteger> transactionsPerSecond;
 
-
     private volatile BigDecimal lastTotalBalance = BigDecimal.ZERO;
-
 
     private volatile long lastInflationCheckTime = 0;
 
-
     private final ConcurrentMap<UUID, BalanceChangeRecord> balanceChangeRecords;
 
+    private final ScheduledExecutorService cleanupScheduler;
+
+    private static final Logger logger = Logger.getLogger(EconomicCircuitBreaker.class.getName());
 
     private record BalanceChangeRecord(BigDecimal previousBalance, long timestamp) {}
 
@@ -64,9 +69,17 @@ public final class EconomicCircuitBreaker {
         this.transactionsPerSecond = new ConcurrentHashMap<>();
         this.balanceChangeRecords = new ConcurrentHashMap<>();
 
-        // Only create ConnectionStateManager if Redis is required (non-LOCAL mode)
+        this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "syncmoney-breaker-cleanup");
+            t.setDaemon(true);
+            return t;
+        });
+
+        startCleanupTask();
+        startPeriodicInflationCheck();
+
         if (redisRequired) {
-            this.connectionStateManager = new ConnectionStateManager(plugin, config, redisManager, redisRequired);
+            this.connectionStateManager = new ConnectionStateManager(plugin, config, redisManager, redisRequired, this);
         } else {
             this.connectionStateManager = null;
         }
@@ -107,7 +120,7 @@ public final class EconomicCircuitBreaker {
         int currentCount = counter.incrementAndGet();
 
         if (currentCount > config.getCircuitBreakerMaxTransactionsPerSecond()) {
-            plugin.getLogger().warning("CircuitBreaker: Transaction rate limit exceeded. Count: " + currentCount);
+            plugin.getLogger().warning("CircuitBreaker: Transaction rate limit exceeded, blocking transaction to prevent desync (Count: " + currentCount + ", Source: " + source + ")");
             return new CheckResult(false, "Transaction frequency too high, please try again later");
         }
 
@@ -204,22 +217,144 @@ public final class EconomicCircuitBreaker {
     }
 
     /**
+     * Starts the cleanup task for balance change records.
+     * [MEM-02 FIX] Runs every 60 minutes to remove records older than 60 minutes.
+     */
+    private void startCleanupTask() {
+        cleanupScheduler.scheduleAtFixedRate(() -> {
+            try {
+                cleanupExpiredBalanceRecords();
+            } catch (Exception e) {
+                logger.warning("Error cleaning up balance change records: " + e.getMessage());
+            }
+        }, 60, 60, TimeUnit.MINUTES);
+    }
+
+    /**
+     * Starts the periodic inflation check task.
+     * Runs at the interval configured in config (inflation-check-interval-minutes).
+     */
+    private void startPeriodicInflationCheck() {
+        long intervalMinutes = config.getCircuitBreakerInflationCheckIntervalMinutes();
+        cleanupScheduler.scheduleAtFixedRate(() -> {
+            try {
+                performPeriodicCheck();
+            } catch (Exception e) {
+                logger.warning("Error performing periodic inflation check: " + e.getMessage());
+            }
+        }, intervalMinutes, intervalMinutes, TimeUnit.MINUTES);
+        logger.info("CircuitBreaker: Periodic inflation check scheduled every " + intervalMinutes + " minutes");
+    }
+
+    /**
+     * Removes balance change records older than 1 hour.
+     * [MEM-02 FIX] Changed from 30 minutes to 1 hour per proposal requirements.
+     */
+    private void cleanupExpiredBalanceRecords() {
+        long expirationTime = System.currentTimeMillis() - (60 * 60 * 1000);
+        int initialSize = balanceChangeRecords.size();
+
+        balanceChangeRecords.entrySet().removeIf(entry ->
+            entry.getValue().timestamp() < expirationTime
+        );
+
+        int removed = initialSize - balanceChangeRecords.size();
+        if (removed > 0) {
+            logger.fine("Cleaned up " + removed + " expired balance change records");
+        }
+    }
+
+    /**
+     * Shuts down the cleanup scheduler.
+     */
+    public void shutdown() {
+        cleanupScheduler.shutdown();
+        try {
+            if (!cleanupScheduler.awaitTermination(30, TimeUnit.SECONDS)) {
+                cleanupScheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            cleanupScheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
      * Triggers circuit breaker lockdown.
      */
     public void triggerLockdown(String reason) {
         state = CircuitState.LOCKED;
+        lockReason = reason;
         plugin.getLogger().severe("CircuitBreaker: LOCKDOWN triggered. Reason: " + reason);
         notification.notifyLockdown(reason);
+        broadcastCircuitBreakerEvent("LOCKDOWN", reason);
+    }
+
+    /**
+     * Broadcast circuit breaker state change to SSE clients.
+     */
+    private void broadcastCircuitBreakerEvent(String state, String reason) {
+        if (sseManager != null && sseManager.isEnabled()) {
+            try {
+                String json = String.format(
+                    "{\"state\":\"%s\",\"reason\":\"%s\",\"timestamp\":%d}",
+                    state, reason.replace("\"", "'"), System.currentTimeMillis()
+                );
+                sseManager.broadcastToChannel(SseManager.CHANNEL_BREAKER, json);
+            } catch (Exception e) {
+                logger.warning("Failed to broadcast circuit breaker event: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Set SSE manager for broadcasting events to web clients.
+     */
+    public void setSseManager(SseManager sseManager) {
+        this.sseManager = sseManager;
+    }
+
+    /**
+     * Set Discord webhook notifier for high value notifications.
+     */
+    public void setDiscordWebhookNotifier(DiscordWebhookNotifier discordNotifier) {
+        if (notification != null) {
+            notification.setDiscordWebhookNotifier(discordNotifier);
+        }
+    }
+
+    /**
+     * Get the high value notification service.
+     */
+    public HighValueNotification getNotification() {
+        return notification;
     }
 
     /**
      * Resets circuit breaker.
      */
     public void reset() {
+        String previousState = state.name();
         state = CircuitState.NORMAL;
+        lockReason = null;
         transactionsPerSecond.clear();
         balanceChangeRecords.clear();
-        plugin.getLogger().info("CircuitBreaker: Reset to NORMAL state");
+        logger.fine("CircuitBreaker: Reset to NORMAL state");
+        broadcastCircuitBreakerEvent("NORMAL", "Manual reset");
+    }
+
+    /**
+     * Checks if circuit breaker is in LOCKED state.
+     */
+    public boolean isLocked() {
+        return state == CircuitState.LOCKED;
+    }
+
+    /**
+     * Gets the reason for LOCKED state.
+     */
+    public String getLockReason() {
+        return lockReason;
     }
 
     /**

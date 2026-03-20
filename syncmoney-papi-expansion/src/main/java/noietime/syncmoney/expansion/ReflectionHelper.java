@@ -4,14 +4,14 @@ import java.lang.reflect.Method;
 import java.util.UUID;
 
 /**
- * Helper class for reflection operations with caching.
+ * [SYNC-PAPI-002] Helper class for reflection operations with caching.
  */
 public final class ReflectionHelper {
 
     private ReflectionHelper() {}
 
     /**
-     * Invoke a method on an object with caching support.
+     * [SYNC-PAPI-003] Invoke a method on an object with caching support.
      */
     public static Object invokeMethod(Object obj, String methodName, Object... args) {
         if (obj == null) return null;
@@ -39,7 +39,7 @@ public final class ReflectionHelper {
     }
 
     /**
-     * Find method using reflection with various type matching strategies.
+     * [SYNC-PAPI-004] Find method using reflection with various type matching strategies.
      */
     private static Method findMethod(Class<?> clazz, String methodName, Object[] args) {
         Class<?>[] argClasses = new Class[args.length];
@@ -106,7 +106,7 @@ public final class ReflectionHelper {
     }
 
     /**
-     * Get field value from object.
+     * [SYNC-PAPI-005] Get field value from object.
      */
     public static Object getField(Object obj, String fieldName) {
         if (obj == null) return null;
@@ -118,7 +118,7 @@ public final class ReflectionHelper {
     }
 
     /**
-     * Get balance from RankEntry record (supports Java records).
+     * [SYNC-PAPI-006] Get balance from RankEntry record (supports Java records).
      */
     public static double getRecordBalance(Object entry) {
         if (entry == null) return -1;

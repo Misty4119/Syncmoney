@@ -4,6 +4,11 @@
 -- KEYS[2] = version key (syncmoney:version:{uuid})
 -- ARGV[1] = amount to add (positive = deposit, negative = withdraw)
 
+-- Helper function: truncate to 2 decimal places without rounding
+local function truncateToTwoDecimals(num)
+    return math.floor(num * 100 + 0.0000001) / 100
+end
+
 local keyBalance = KEYS[1]
 local keyVersion = KEYS[2]
 local amount = tonumber(ARGV[1])
@@ -29,4 +34,4 @@ local resultBalance = redis.call('INCRBYFLOAT', keyBalance, amount)
 local newVersion = redis.call('INCR', keyVersion)
 
 -- Return the new balance and the new version number
-return {string.format('%.2f', resultBalance), tostring(newVersion)}
+return {string.format('%.2f', truncateToTwoDecimals(resultBalance)), tostring(newVersion)}

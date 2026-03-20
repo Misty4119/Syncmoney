@@ -6,7 +6,7 @@ import org.bukkit.OfflinePlayer;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Syncmoney PlaceholderAPI Expansion.
+ * [SYNC-PAPI-001] Syncmoney PlaceholderAPI Expansion.
  *
  * Available placeholders:
  * - %syncmoney_balance% - Get player's own balance
@@ -56,7 +56,7 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getVersion() {
-        return "1.0.0";
+        return "1.1.0";
     }
 
     @Override
@@ -87,7 +87,7 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     private void log(String message) {
         if (DEBUG_MODE) {
-            Bukkit.getLogger().info("[Syncmoney-PAPI-Debug] " + message);
+            Bukkit.getLogger().fine("[Syncmoney-PAPI-Debug] " + message);
         }
     }
 }

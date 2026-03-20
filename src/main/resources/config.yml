@@ -2,6 +2,9 @@
 # Syncmoney Main Configuration File
 # ==========================================
 
+# Config schema version (DO NOT EDIT)
+config-version: 11
+
 # ==========================================
 # 1. Core and Basic Settings
 # ==========================================
@@ -63,6 +66,16 @@ economy:
     vault-whitelist: []
     # Ignored commands
     ignore-commands: []
+    # [THR-07 FIX] Known plugin classes for economy detection
+    known-plugin-classes:
+      - "QuickShop-Hikari"
+      - "PlayerPoints"
+      - "Jobs"
+      - "DailyShop"
+      - "CrateReloaded"
+      - "zAuctionHouse"
+      - "BankSystem"
+      - "TokenManager"
   cmi:
     # Redis prefix
     redis-prefix: "syncmoney:cmi"
@@ -103,8 +116,6 @@ pay:
 
 # ===== Cross-server ranking and PAPI =====
 baltop:
-  # Whether to enable the ranking
-  enabled: true
   # Cache seconds
   cache-seconds: 30
   # Number of entries per page
@@ -131,13 +142,13 @@ circuit-breaker:
   enabled: true
   # Single transaction limit (blocks transactions exceeding this amount)
   max-single-transaction: 100000000
-  # Transaction frequency limit (maximum transactions per second)
-  max-transactions-per-second: 10
-  # Rapid inflation threshold (total increase percentage within 5 minutes, if exceeded, the circuit breaker will be triggered)
+  # Transaction frequency limit (maximum global transactions per second)
+  max-transactions-per-second: 5
+  # Rapid inflation threshold (total increase percentage within check interval, triggers global lockdown)
   rapid-inflation-threshold: 0.2
   # Rapid inflation check interval (minutes)
   inflation-check-interval-minutes: 5
-  # Abnormal large change detection (balance change multiplier, if exceeded, the balance will be locked immediately)
+  # Abnormal large change detection (balance change multiplier, if exceeded, transaction will be blocked)
   sudden-change-threshold: 100
   # Redis disconnect after how many seconds enter LOCKED mode (seconds)
   redis-disconnect-lock-seconds: 5
@@ -146,46 +157,67 @@ circuit-breaker:
   # Connection pool exhausted warning threshold (remaining connections, default is 20% of the pool size)
   pool-exhausted-warning: 2
 
-# ===== Per-Player Protection System =====
-# L1: Rate Limiting - L2: Anomaly Detection - L3: Player Lock + Auto Unlock - L4: Global Lock
-player-protection:
-  # Whether to enable per-player protection
-  enabled: true
-  # L1: Rate Limiting
-  rate-limit:
-    # Maximum transactions per second per player
-    max-transactions-per-second: 5
-    # Maximum transactions per minute per player
-    max-transactions-per-minute: 50
-    # Maximum transaction amount per minute per player (0 = disabled)
-    max-amount-per-minute: 1000000
-  # L2: Anomaly Detection
-  anomaly-detection:
-    # Number of transactions within this time window to trigger WARNING (seconds)
-    warning-window-seconds: 30
-    # Transaction count threshold to trigger WARNING
-    warning-threshold: 30
-    # Balance change multiplier threshold (if exceeded, trigger warning)
-    balance-change-threshold: 50.0
-  # L3: Player Lock + Auto Unlock
-  auto-unlock:
-    # Lock duration in minutes before auto-unlock attempt
-    lock-duration-minutes: 5
-    # Maximum number of lock extensions (0 = infinite)
-    max-lock-extensions: 3
-    # Number of successful transactions required to confirm unlock
-    unlock-test-transactions: 3
-  # L4: Global Lock (integrates with circuit-breaker)
-  global-lock:
-    # Enable global lock when total economy spikes
+  # ===== Per-Player Protection (L1-L3) =====
+  # L1: Rate Limiting - L2: Anomaly Detection - L3: Player Lock + Auto Unlock
+  player-protection:
+    # Whether to enable per-player protection
     enabled: true
-    # Total inflation threshold (if total increases by this percentage within inflation check interval, trigger global lock)
-    total-inflation-threshold: 0.2
+    # L1: Rate Limiting
+    rate-limit:
+      # Maximum transactions per second per player
+      max-transactions-per-second: 5
+      # Maximum transactions per minute per player
+      max-transactions-per-minute: 50
+      # Maximum transaction amount per minute per player (0 = disabled)
+      max-amount-per-minute: 1000000
+    # L2: Anomaly Detection
+    anomaly-detection:
+      # Number of seconds in the window to trigger WARNING
+      warning-window-seconds: 30
+      # Transaction count threshold to trigger WARNING
+      warning-threshold: 30
+      # Balance change multiplier threshold (if exceeded, player will be locked)
+      balance-change-threshold: 50.0
+    # L3: Player Lock + Auto Unlock
+    auto-unlock:
+      # Lock duration in minutes before auto-unlock attempt
+      lock-duration-minutes: 5
+      # Maximum number of lock extensions (0 = infinite)
+      max-lock-extensions: 3
+      # Number of successful transactions required to confirm unlock
+      unlock-test-transactions: 3
+    # Transfer Protection: Lock receiver temporarily after large transfers
+    transfer-protection:
+      # Whether to lock receiver when receiving large transfers
+      lock-receiver: true
+      # Amount threshold for locking receiver (0 = disabled)
+      receiver-lock-threshold: 100000
 
 # ===== Discord Webhook Notification System =====
 discord-webhook:
   # Master switch for Discord webhook notifications
   enabled: false
+
+  # ===== Available Events =====
+  # Player Protection:
+  #   - rate_limit: Player exceeded transaction rate limit
+  #   - player_warning: Player entered warning state
+  #   - player_locked: Player account locked due to suspicious activity
+  #   - player_unlocked: Player account unlocked
+  # System Security:
+  #   - global_lock: Entire economy system locked
+  #   - circuit_breaker_trigger: Circuit breaker triggered
+  # Resource Monitoring:
+  #   - memory_high: Server memory usage too high
+  #   - redis_pool_critical: Redis connection pool exhausted
+  # Transactions:
+  #   - high_value_transaction: Transaction exceeds threshold
+  # Database:
+  #   - schema_upgrade: Database schema upgraded
+  # Migration:
+  #   - migration_complete: CMI migration completed
+  #   - migration_failed: CMI migration failed
+
   # Webhook configurations (supports multiple webhooks)
   webhooks:
     # Private webhook (for admin eyes only)
@@ -193,10 +225,24 @@ discord-webhook:
       url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
       type: "private"
       events:
+        # Player protection events
+        - "rate_limit"
         - "player_warning"
         - "player_locked"
         - "player_unlocked"
+        # System security events
         - "global_lock"
+        - "circuit_breaker_trigger"
+        # Resource monitoring events
+        - "memory_high"
+        - "redis_pool_critical"
+        # Transaction events
+        - "high_value_transaction"
+        # Database events
+        - "schema_upgrade"
+        # Migration events
+        - "migration_complete"
+        - "migration_failed"
     # Public webhook (for server members)
     # - name: "public-alerts"
     #   url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
@@ -225,8 +271,10 @@ transfer-guard:
 audit:
   # Whether to enable audit log
   enabled: true
-  # Batch write size (set to 1 to ensure immediate write for each operation)
-  batch-size: 1
+  # Batch write size (100 is recommended for better performance)
+  batch-size: 100
+  # Flush interval in milliseconds (5000 = 5 seconds, 0 = disabled)
+  flush-interval-ms: 5000
   # Retention days (0 = permanent)
   retention-days: 90
   # Automatic cleanup settings
@@ -243,6 +291,27 @@ audit:
     export-folder: "./plugins/Syncmoney/logs/"
     # Whether to delete database records after export
     delete-after-export: true
+  # Redis hybrid audit settings (Redis sliding window + DB persistence)
+  redis:
+    # Enable Redis sliding window for real-time audit
+    enabled: true
+    # Sliding window size (100-200 recommended)
+    window-size: 200
+    # Migration threshold (trigger migration when pending >= threshold)
+    migration-threshold: 5
+    # Migration batch size
+    migration-batch-size: 20
+    # Migration interval (milliseconds)
+    migration-interval-ms: 1000
+    # Time-based flush threshold (trigger migration after this time even if below threshold)
+    # 0 = disabled, 2000 = 2 seconds
+    flush-interval-ms: 2000
+  # Deduplication settings
+  deduplication:
+    # Enable deduplication (recommended for production)
+    enabled: true
+    # Server-side deduplication window in seconds (3600 = 1 hour)
+    server-window-seconds: 3600
 
 
 # ==========================================
@@ -304,7 +373,7 @@ messages:
 # Cross-server notifications
 cross-server-notifications:
   enabled: true
-  notify-type: "all"
+  notify-type: "all" # all: all types, deposit-only: only deposit, withdraw-only: only withdraw, none: none
   show-actionbar: true
   actionbar-duration: 80
 
@@ -346,6 +415,9 @@ migration:
   batch-size: 100
   # Automatic backup before migration
   auto-backup: true
+  # Number of backups to keep (auto-cleanup old backups)
+  backup:
+    keep-count: 10
   # Populate Redis during migration (strongly recommended for SYNC mode)
   populate-redis: true
   # Lock economy operations during migration (prevents data inconsistency)
@@ -415,3 +487,63 @@ shadow-sync:
     history-enabled: true
     # History retention days (0 = permanent)
     history-retention-days: 90
+
+# ==========================================
+# 8. Web Admin Dashboard
+# ==========================================
+web-admin:
+  # Whether to enable Web Admin Dashboard
+  enabled: false
+
+  # Central management mode - act as a central panel that proxies to multiple game servers
+  central-mode: false
+
+  # Bundled web version in JAR (update this when releasing new version)
+  bundled-version: "1.1.0"
+
+  # HTTP server configuration
+  server:
+    host: "localhost"
+    port: 8080
+
+  # Central mode: list of game server nodes to manage
+  nodes:
+    # - name: "Survival Server 1"
+    #   url: "http://192.168.1.105:8080"
+    #   api-key: "your-api-key-here"
+    #   enabled: true
+    # - name: "Factions Server 1"
+    #   url: "http://192.168.1.105:8081"
+    #   api-key: "your-api-key-here"
+    #   enabled: true
+    # - name: "Create Server 1"
+    #   url: "http://192.168.1.106:8080"
+    #   api-key: "your-api-key-here"
+    #   enabled: true
+
+  # Web frontend configuration
+  web:
+    path: "syncmoney-web"
+    # Auto-download latest version on startup (conservative mode: false)
+    auto-update: false
+    # Auto-build frontend after download (requires Node.js + pnpm/npm on server)
+    auto-build: false
+    github-repo: "Misty4119/Syncmoney-web"
+
+  # Security configuration
+  security:
+    api-key: "change-me-in-production"
+    rate-limit:
+      enabled: true
+      requests-per-minute: 120
+    # CORS allowed origins (comma-separated). Set specific domains in production for security.
+    # Use [] for no origins (blocks all cross-origin requests), or ["https://domain1.com", "https://domain2.com"] for specific domains.
+    # Using "*" is NOT recommended for production - only use for development/testing.
+    cors-allowed-origins: []  # [SEC-03 FIX] Default to empty array for security
+
+  # UI configuration
+  ui:
+    theme: "dark"
+    language: "zh-TW"
+    # Timezone offset from UTC: UTC, UTC+1, UTC+2, ..., UTC+12, UTC-1, ..., UTC-12
+    timezone: "UTC"

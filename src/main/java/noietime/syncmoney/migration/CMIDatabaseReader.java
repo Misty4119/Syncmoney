@@ -37,24 +37,18 @@ public final class CMIDatabaseReader {
     private StorageType storageType;
     private boolean initialized = false;
 
-
     public enum StorageType {
         MySQL,
         SQLite
     }
 
-
     private String detectedTableName;
-
 
     private static final String BALANCE_COLUMN = "Balance";
 
-
     private static final String UUID_COLUMN = "player_uuid";
 
-
     private static final String USERNAME_COLUMN = "username";
-
 
     private static final String LASTLOGOFF_COLUMN = "LastLogoffTime";
 
@@ -102,7 +96,7 @@ public final class CMIDatabaseReader {
         }
 
         initialized = true;
-        plugin.getLogger().info("CMI Reader connected: type=" + storageType + ", table=" + tableName);
+        plugin.getLogger().fine("CMI Reader connected: type=" + storageType + ", table=" + tableName);
     }
 
     /**
@@ -118,7 +112,7 @@ public final class CMIDatabaseReader {
     public synchronized void shutdown() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
-            plugin.getLogger().info("CMI Reader connection closed.");
+            plugin.getLogger().fine("CMI Reader connection closed.");
         }
         initialized = false;
     }
@@ -437,12 +431,11 @@ public final class CMIDatabaseReader {
                     config.database = yaml.getString("mysql.database", "minecraft");
                     config.tablePrefix = yaml.getString("mysql.tablePrefix", "CMI_");
 
-                    plugin.getLogger().info("CMI MySQL config: host=" + config.host + ", database=" + config.database);
+                    plugin.getLogger().fine("CMI MySQL config: host=" + config.host + ", database=" + config.database);
                 } else {
                     config.tablePrefix = "";
-                    // SQLite path typically at plugins/CMI/cmi.sqlite.db
                     config.sqlitePath = new File(plugin.getDataFolder().getParent(), "CMI/cmi.sqlite.db").getAbsolutePath();
-                    plugin.getLogger().info("CMI SQLite config: path=" + config.sqlitePath);
+                    plugin.getLogger().fine("CMI SQLite config: path=" + config.sqlitePath);
                 }
 
             } catch (Exception e) {

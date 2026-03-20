@@ -5,6 +5,8 @@ import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * CMI multi-server database merger.
@@ -16,7 +18,7 @@ import java.util.*;
 public final class CMIMultiServerMerger {
 
     private final Plugin plugin;
-    private final Map<UUID, PlayerLatestBalance> latestBalances = new HashMap<>();
+    private final ConcurrentMap<UUID, PlayerLatestBalance> latestBalances = new ConcurrentHashMap<>();
 
     /**
      * Player latest balance record.
@@ -42,7 +44,7 @@ public final class CMIMultiServerMerger {
                 int offset = 0;
                 int batchSize = 100;
 
-                plugin.getLogger().info("Reading from CMI database: " + reader.getTableName());
+                plugin.getLogger().fine("Reading from CMI database: " + reader.getTableName());
 
                 while (offset < totalPlayers) {
                     List<CMIDatabaseReader.CMIPlayerData> players = reader.readPlayers(offset, batchSize);
@@ -56,7 +58,7 @@ public final class CMIMultiServerMerger {
                     offset += batchSize;
                 }
 
-                plugin.getLogger().info("Finished reading from database, total players: " + latestBalances.size());
+                plugin.getLogger().fine("Finished reading from database, total players: " + latestBalances.size());
 
             } catch (Exception e) {
                 plugin.getLogger().severe("Failed to read from CMI database: " + e.getMessage());

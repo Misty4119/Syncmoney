@@ -2,8 +2,11 @@ package noietime.syncmoney.breaker;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.MessageHelper;
+import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -26,6 +29,9 @@ public final class NotificationService {
 
     private final Set<String> notifiedAdmins;
 
+    private volatile SseManager sseManager;
+    private volatile NameResolver nameResolver;
+
     public NotificationService(Syncmoney plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
         this.config = config;
@@ -34,9 +40,37 @@ public final class NotificationService {
     }
 
     /**
+     * Set NameResolver for player name resolution.
+     */
+    public void setNameResolver(NameResolver nameResolver) {
+        this.nameResolver = nameResolver;
+    }
+
+    /**
+     * Get player name from UUID, with fallback to UUID string.
+     */
+    private String getPlayerName(UUID playerId) {
+        if (nameResolver != null) {
+            String name = nameResolver.getName(playerId);
+            if (name != null && !name.isBlank()) {
+                return name;
+            }
+        }
+
+        Player player = Bukkit.getPlayer(playerId);
+        if (player != null) {
+            return player.getName();
+        }
+
+        return playerId.toString();
+    }
+
+    /**
      * Send rate limit notification.
      */
     public void sendRateLimitNotification(UUID playerId, String limitType) {
+        String playerName = getPlayerName(playerId);
+
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
             String message = plugin.getMessage("player-protection.rate-limited." + limitType);
@@ -44,8 +78,13 @@ public final class NotificationService {
         }
 
         String adminMessage = plugin.getMessage("player-protection.rate-limited.broadcast")
-                .replace("{player}", playerId.toString());
+                .replace("{player}", playerName);
         broadcastToAdmins(adminMessage);
+
+
+        String title = "Rate Limit Exceeded";
+        String content = String.format("Player %s exceeded %s limit", playerName, limitType);
+        broadcastSystemAlert("rate_limit", title, content);
 
         discordNotifier.sendRateLimitEvent(playerId, limitType);
     }
@@ -54,8 +93,10 @@ public final class NotificationService {
      * Send warning notification.
      */
     public void sendWarningNotification(UUID playerId, int transactionCount, int threshold, BigDecimal totalAmount) {
+        String playerName = getPlayerName(playerId);
+
         String title = plugin.getMessage("player-protection.warning.title")
-                .replace("{player}", playerId.toString());
+                .replace("{player}", playerName);
         String content = plugin.getMessage("player-protection.warning.content")
                 .replace("{count}", String.valueOf(transactionCount))
                 .replace("{limit}", String.valueOf(threshold))
@@ -63,6 +104,9 @@ public final class NotificationService {
 
         String fullMessage = title + "\n" + content;
         broadcastToAdmins(fullMessage);
+
+
+        broadcastSystemAlert("player_warning", title, content);
 
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
@@ -77,14 +121,19 @@ public final class NotificationService {
      * Send locked notification.
      */
     public void sendLockedNotification(UUID playerId, String reason) {
+        String playerName = getPlayerName(playerId);
+
         String title = plugin.getMessage("player-protection.locked.title")
-                .replace("{player}", playerId.toString());
+                .replace("{player}", playerName);
         String content = plugin.getMessage("player-protection.locked.content")
                 .replace("{reason}", reason)
                 .replace("{unlock_time}", FormatUtil.formatTimeAgo(config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
 
         String fullMessage = title + "\n" + content;
         broadcastToAdmins(fullMessage);
+
+
+        broadcastSystemAlert("player_locked", title, reason);
 
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
@@ -100,11 +149,15 @@ public final class NotificationService {
      * Send unlocked notification.
      */
     public void sendUnlockedNotification(UUID playerId, String reason) {
+        String playerName = getPlayerName(playerId);
         String messageKey = "player-protection.unlocked.by-" + reason;
         String message = plugin.getMessage(messageKey)
-                .replace("{player}", playerId.toString());
+                .replace("{player}", playerName);
 
         broadcastToAdmins(message);
+
+
+        broadcastSystemAlert("player_unlocked", "Player Unlocked", message);
 
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
@@ -125,6 +178,9 @@ public final class NotificationService {
 
         Bukkit.broadcastMessage(message);
 
+
+        broadcastSystemAlert("global_lock", "System Locked", reason);
+
         discordNotifier.sendGlobalLockEvent(reason);
     }
 
@@ -144,6 +200,30 @@ public final class NotificationService {
      */
     private String[] getAdminList() {
         return plugin.getConfig().getStringList("notify-admins").toArray(new String[0]);
+    }
+
+    /**
+     * Set SSE manager for broadcasting system alerts to web clients.
+     */
+    public void setSseManager(SseManager sseManager) {
+        this.sseManager = sseManager;
+    }
+
+    /**
+     * Broadcast system alert to SSE clients.
+     */
+    private void broadcastSystemAlert(String type, String title, String message) {
+        if (sseManager != null && sseManager.isEnabled()) {
+            try {
+                String json = String.format(
+                    "{\"type\":\"%s\",\"title\":\"%s\",\"message\":\"%s\",\"timestamp\":%d}",
+                    type, title.replace("\"", "'"), message.replace("\"", "'"), System.currentTimeMillis()
+                );
+                sseManager.broadcastToChannel("system", json);
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to broadcast system alert: " + e.getMessage());
+            }
+        }
     }
 
     /**

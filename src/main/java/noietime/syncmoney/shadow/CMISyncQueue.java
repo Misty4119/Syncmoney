@@ -12,13 +12,13 @@ import java.util.concurrent.TimeUnit;
  */
 public final class CMISyncQueue {
 
-
     public record SyncEvent(UUID uuid, String playerName, BigDecimal balance, long timestamp) {}
 
     private final ConcurrentLinkedQueue<SyncEvent> queue = new ConcurrentLinkedQueue<>();
     private final int batchSize;
     private final long maxDelayMs;
     private final ScheduledExecutorService scheduler;
+    private final java.util.concurrent.atomic.AtomicInteger queueSize = new java.util.concurrent.atomic.AtomicInteger(0);
 
     public CMISyncQueue(int batchSize, long maxDelayMs) {
         this.batchSize = batchSize;
@@ -30,26 +30,31 @@ public final class CMISyncQueue {
         });
     }
 
-
     public void offer(SyncEvent event) {
-        queue.offer(event);
+        if (queue.offer(event)) {
+            queueSize.incrementAndGet();
+        }
     }
-
 
     public ConcurrentLinkedQueue<SyncEvent> drainAll() {
         ConcurrentLinkedQueue<SyncEvent> drained = new ConcurrentLinkedQueue<>();
         SyncEvent event;
+        int count = 0;
         while ((event = queue.poll()) != null) {
             drained.offer(event);
+            count++;
         }
+        queueSize.addAndGet(-count);
         return drained;
     }
 
-
+    /**
+     * Returns the current queue size using atomic counter.
+     * This is more accurate than queue.size() for monitoring purposes.
+     */
     public int size() {
-        return queue.size();
+        return queueSize.get();
     }
-
 
     public void shutdown() {
         scheduler.shutdown();

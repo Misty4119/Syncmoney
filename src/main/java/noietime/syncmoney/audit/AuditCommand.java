@@ -1,8 +1,6 @@
 package noietime.syncmoney.audit;
 
 import noietime.syncmoney.Syncmoney;
-import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.LocalEconomyHandler;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.MessageHelper;
@@ -11,32 +9,31 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
-import org.bukkit.entity.Player;
 
 import java.math.BigDecimal;
 import java.util.*;
 
 /**
- * Audit log query command.
+ * [SYNC-AUD-001] Audit log query command handler.
  * Provides /syncmoney audit command for querying transaction records.
  */
 public final class AuditCommand implements CommandExecutor, TabCompleter {
 
     private final Syncmoney plugin;
-    private final SyncmoneyConfig config;
     private final AuditLogger auditLogger;
+    private final HybridAuditManager hybridAuditManager;
     private final NameResolver nameResolver;
     private final LocalEconomyHandler localEconomyHandler;
 
-
     private static final int ENTRIES_PER_PAGE = 10;
 
-    public AuditCommand(Syncmoney plugin, SyncmoneyConfig config,
-                       AuditLogger auditLogger, NameResolver nameResolver,
+    public AuditCommand(Syncmoney plugin,
+                       AuditLogger auditLogger, HybridAuditManager hybridAuditManager,
+                       NameResolver nameResolver,
                        LocalEconomyHandler localEconomyHandler) {
         this.plugin = plugin;
-        this.config = config;
         this.auditLogger = auditLogger;
+        this.hybridAuditManager = hybridAuditManager;
         this.nameResolver = nameResolver;
         this.localEconomyHandler = localEconomyHandler;
     }
@@ -66,7 +63,7 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Handles player search query.
+     * [SYNC-AUD-002] Handles player search query.
      */
     private void handlePlayerSearch(CommandSender sender, String[] args) {
         String playerName = args[0];
@@ -96,8 +93,8 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
             resolvedName = playerName;
         }
 
-        if (localEconomyHandler != null) {
-            List<Map<String, Object>> records = localEconomyHandler.getTransactionHistory(uuid, page * ENTRIES_PER_PAGE);
+        if (hybridAuditManager != null && hybridAuditManager.isEnabled()) {
+            List<AuditRecord> records = hybridAuditManager.queryAudit(uuid, ENTRIES_PER_PAGE, (page - 1) * ENTRIES_PER_PAGE);
 
             if (records.isEmpty()) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("audit.empty"));
@@ -107,23 +104,42 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
             MessageHelper.sendMessage(sender, plugin.getMessage("audit.header")
                     .replace("{player}", resolvedName));
 
-            int start = (page - 1) * ENTRIES_PER_PAGE;
-            int end = Math.min(start + ENTRIES_PER_PAGE, records.size());
-
-            for (int i = start; i < end; i++) {
-                Map<String, Object> record = records.get(i);
-                String entry = formatLocalRecord(record, i + 1);
+            for (int i = 0; i < records.size(); i++) {
+                AuditRecord record = records.get(i);
+                String entry = formatRecord(record, i + 1 + (page - 1) * ENTRIES_PER_PAGE);
                 MessageHelper.sendMessage(sender, entry);
             }
 
-            int totalPages = (records.size() + ENTRIES_PER_PAGE - 1) / ENTRIES_PER_PAGE;
             MessageHelper.sendMessage(sender, plugin.getMessage("audit.footer")
                     .replace("{page}", String.valueOf(page))
-                    .replace("{total}", String.valueOf(totalPages)));
+                    .replace("{total}", records.size() < ENTRIES_PER_PAGE ? String.valueOf(page) : "?"));
             return;
         }
 
-        List<AuditRecord> records = auditLogger.getPlayerRecords(uuid, page * ENTRIES_PER_PAGE);
+        if (localEconomyHandler != null) {
+            List<Map<String, Object>> records = localEconomyHandler.getTransactionHistory(uuid, ENTRIES_PER_PAGE, (page - 1) * ENTRIES_PER_PAGE);
+
+            if (records.isEmpty()) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("audit.empty"));
+                return;
+            }
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("audit.header")
+                    .replace("{player}", resolvedName));
+
+            for (int i = 0; i < records.size(); i++) {
+                Map<String, Object> record = records.get(i);
+                String entry = formatLocalRecord(record, i + 1 + (page - 1) * ENTRIES_PER_PAGE);
+                MessageHelper.sendMessage(sender, entry);
+            }
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("audit.footer")
+                    .replace("{page}", String.valueOf(page))
+                    .replace("{total}", records.size() < ENTRIES_PER_PAGE ? String.valueOf(page) : "?"));
+            return;
+        }
+
+        List<AuditRecord> records = auditLogger.getPlayerRecords(uuid, ENTRIES_PER_PAGE, (page - 1) * ENTRIES_PER_PAGE);
 
         if (records.isEmpty()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("audit.empty"));
@@ -133,23 +149,20 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.header")
                 .replace("{player}", resolvedName));
 
-        int start = (page - 1) * ENTRIES_PER_PAGE;
-        int end = Math.min(start + ENTRIES_PER_PAGE, records.size());
-
-        for (int i = start; i < end; i++) {
+        for (int i = 0; i < records.size(); i++) {
             AuditRecord record = records.get(i);
-            String entry = formatRecord(record, i + 1);
+            String entry = formatRecord(record, i + 1 + (page - 1) * ENTRIES_PER_PAGE);
             MessageHelper.sendMessage(sender, entry);
         }
 
-        int totalPages = (records.size() + ENTRIES_PER_PAGE - 1) / ENTRIES_PER_PAGE;
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.footer")
                 .replace("{page}", String.valueOf(page))
-                .replace("{total}", String.valueOf(totalPages)));
+                .replace("{total}", records.size() < ENTRIES_PER_PAGE ? String.valueOf(page) : "?"));
     }
 
     /**
-     * Formats a local (SQLite) audit record for display.
+     * [SYNC-AUD-003] Formats a local (SQLite) audit record for display.
+     * Unified to use same format as SYNC mode.
      */
     private String formatLocalRecord(Map<String, Object> record, int index) {
         String type = (String) record.get("type");
@@ -157,34 +170,45 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
         double balanceAfter = (double) record.get("balance_after");
         long timestamp = (long) record.get("timestamp");
         String source = (String) record.get("source");
+        String playerName = (String) record.get("name");
 
-        String typeIcon = switch (type) {
-            case "DEPOSIT", "TRANSFER_IN" -> "<green>+";
-            case "WITHDRAW", "TRANSFER_OUT" -> "<red>-";
-            case "SET" -> "<yellow>=";
-            default -> "<gray>?";
-        };
+        String typeSymbol;
+        if ("PLAYER_TRANSFER".equals(source)) {
+            typeSymbol = plugin.getMessage("audit.type.transfer");
+        } else {
+            typeSymbol = switch (type) {
+                case "DEPOSIT", "TRANSFER_IN" -> plugin.getMessage("audit.type.deposit");
+                case "WITHDRAW", "TRANSFER_OUT" -> plugin.getMessage("audit.type.withdraw");
+                case "SET", "SET_BALANCE" -> plugin.getMessage("audit.type.set-balance");
+                default -> "<gray>?";
+            };
+        }
 
-        String typeName = switch (type) {
-            case "DEPOSIT" -> "Deposit";
-            case "WITHDRAW" -> "Withdraw";
-            case "TRANSFER_IN" -> "Receive";
-            case "TRANSFER_OUT" -> "Transfer";
-            case "SET" -> "Set";
-            default -> type;
-        };
+        String amountStr;
+        if ("PLAYER_TRANSFER".equals(source)) {
+            amountStr = (amount >= 0 ? "+" : "") + FormatUtil.formatCurrency(amount);
+        } else {
+            boolean isNegative = "WITHDRAW".equals(type) || "TRANSFER_OUT".equals(type);
+            if (isNegative) {
+                amountStr = "-" + FormatUtil.formatCurrency(Math.abs(amount));
+            } else {
+                amountStr = "+" + FormatUtil.formatCurrency(Math.abs(amount));
+            }
+        }
 
         String timeStr = formatTimestampLocal(timestamp);
 
-        return " <#38BDF8>" + index + ". <#94A3B8>" + typeIcon + FormatUtil.formatCurrency(amount) +
-                " <#475569>⦊ <#F8FAFC>" + typeName +
-                " <#475569>⦊ <#A78BFA>" + FormatUtil.formatCurrency(balanceAfter) +
-                " <#475569>│ <#94A3B8>" + timeStr +
-                " <#475569>│ <#94A3B8>" + source;
+        return plugin.getMessage("audit.entry")
+                .replace("{number}", String.valueOf(index))
+                .replace("{time}", timeStr)
+                .replace("{type}", typeSymbol)
+                .replace("{amount}", amountStr)
+                .replace("{player}", playerName != null ? playerName : "Unknown")
+                .replace("{balance_after}", FormatUtil.formatCurrency(balanceAfter));
     }
 
     /**
-     * Formats timestamp for local records.
+     * [SYNC-AUD-004] Formats timestamp for local records.
      */
     private String formatTimestampLocal(long timestamp) {
         java.time.Instant instant = java.time.Instant.ofEpochMilli(timestamp);
@@ -194,7 +218,7 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Handles search command.
+     * [SYNC-AUD-005] Handles search command.
      */
     private void handleSearch(CommandSender sender, String[] args) {
         if (args.length < 2) {
@@ -301,8 +325,15 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        var criteria = new AuditLogger.AuditSearchCriteria(playerUuid, startTime, endTime, type, limit);
-        List<AuditRecord> records = auditLogger.search(criteria);
+        var criteria = new AuditLogger.AuditSearchCriteria(playerUuid, startTime, endTime, type, limit, null);
+
+        List<AuditRecord> records;
+        if (hybridAuditManager != null && hybridAuditManager.isEnabled()) {
+            records = hybridAuditManager.queryAuditFiltered(
+                playerUuid, type, startTime, endTime, limit, 0);
+        } else {
+            records = auditLogger.search(criteria);
+        }
 
         if (records.isEmpty()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("audit.empty"));
@@ -320,7 +351,7 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Handles cleanup command.
+     * [SYNC-AUD-006] Handles cleanup command.
      */
     private void handleCleanup(CommandSender sender, String[] args) {
         if (!sender.hasPermission("syncmoney.admin.full")) {
@@ -332,7 +363,7 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
-     * Handles stats command.
+     * [SYNC-AUD-007] Handles stats command.
      */
     private void handleStats(CommandSender sender) {
         if (localEconomyHandler != null) {
@@ -350,23 +381,36 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
         }
 
         int bufferSize = auditLogger.getBufferSize();
+        int pendingMigration = 0;
+        boolean redisEnabled = false;
+
+        if (hybridAuditManager != null && hybridAuditManager.isEnabled()) {
+            pendingMigration = hybridAuditManager.getPendingMigrationCount();
+            redisEnabled = hybridAuditManager.isRedisEnabled();
+        }
+
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.stats-header"));
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.stats-buffer")
                 .replace("{buffer}", String.valueOf(bufferSize)));
+        if (redisEnabled) {
+            MessageHelper.sendMessage(sender, "<gray>Redis: <green>Enabled</green> | Window: "
+                    + (hybridAuditManager != null ? hybridAuditManager.getWindowSize() : 0)
+                    + " | Pending Migration: " + pendingMigration);
+        }
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.stats-enabled")
                 .replace("{enabled}", auditLogger.isEnabled() ? "<green>Enabled" : "<red>Disabled"));
     }
 
     /**
-     * Formats record for display.
+     * [SYNC-AUD-008] Formats record for display.
      */
     private String formatRecord(AuditRecord record, int number) {
         String typeStr = switch (record.type()) {
-            case DEPOSIT -> "<green>+</green>";
-            case WITHDRAW -> "<red>-</red>";
-            case SET_BALANCE -> "<yellow>=</yellow>";
-            case TRANSFER -> "<aqua>→</aqua>";
-            case CRITICAL_FAILURE -> "<red>!</red>";
+            case DEPOSIT -> plugin.getMessage("audit.type.deposit");
+            case WITHDRAW -> plugin.getMessage("audit.type.withdraw");
+            case SET_BALANCE -> plugin.getMessage("audit.type.set-balance");
+            case TRANSFER -> plugin.getMessage("audit.type.transfer");
+            case CRITICAL_FAILURE -> plugin.getMessage("audit.type.critical-failure");
         };
 
         String amountStr;
@@ -376,14 +420,17 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
             amountStr = record.getFormattedAmount();
         }
 
-        return "  <yellow>#" + number + " <gray>- <green>" + record.getFormattedTime() +
-                " <gray>| " + typeStr + " <yellow>" + amountStr +
-                " <gray>| <aqua>" + record.playerName() +
-                " <gray>→ <yellow>" + record.balanceAfter().toPlainString();
+        return plugin.getMessage("audit.entry")
+                .replace("{number}", String.valueOf(number))
+                .replace("{time}", record.getFormattedTime())
+                .replace("{type}", typeStr)
+                .replace("{amount}", amountStr)
+                .replace("{player}", record.playerName())
+                .replace("{balance_after}", record.balanceAfter().toPlainString());
     }
 
     /**
-     * Sends usage instructions.
+     * [SYNC-AUD-009] Sends usage instructions.
      */
     private void sendUsage(CommandSender sender) {
         MessageHelper.sendMessage(sender, plugin.getMessage("audit.usage-header"));

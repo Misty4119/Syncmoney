@@ -4,10 +4,8 @@ import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.plugin.Plugin;
 
 /**
- * Fallback logic wrapper.
+ * [SYNC-ECO-001] Fallback logic wrapper.
  * Logs and marks degraded status when Redis is unavailable.
- *
- * [MainThread] This class is primarily called from main thread, no Redis operations.
  */
 public final class FallbackEconomyWrapper {
 
@@ -27,8 +25,7 @@ public final class FallbackEconomyWrapper {
     }
 
     /**
-     * Check if system is in degraded mode.
-     * In LOCAL mode, this always returns false since Redis is not required.
+     * [SYNC-ECO-002] Check if system is in degraded mode.
      */
     public boolean isDegraded() {
         if (localMode) {
@@ -38,14 +35,14 @@ public final class FallbackEconomyWrapper {
     }
 
     /**
-     * Check if in local mode.
+     * [SYNC-ECO-003] Check if in local mode.
      */
     public boolean isLocalMode() {
         return localMode;
     }
 
     /**
-     * Update degraded status.
+     * [SYNC-ECO-004] Update degraded status.
      */
     public void updateDegradedState() {
         boolean redisDegraded = redisManager.isDegraded();
@@ -55,12 +52,12 @@ public final class FallbackEconomyWrapper {
             plugin.getLogger().warning("Economy system entered degraded mode - Redis unavailable");
         } else if (!redisDegraded && degraded) {
             degraded = false;
-            plugin.getLogger().info("Economy system exited degraded mode - Redis recovered");
+            plugin.getLogger().fine("Economy system exited degraded mode - Redis recovered");
         }
     }
 
     /**
-     * Log operation executed in degraded mode.
+     * [SYNC-ECO-005] Log operation executed in degraded mode.
      */
     public void logDegradedOperation(String operation) {
         if (isDegraded()) {

@@ -1,8 +1,9 @@
 package noietime.syncmoney.command;
 
 import noietime.syncmoney.Syncmoney;
-import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyEvent;
+import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.EconomyMode;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
@@ -40,6 +41,12 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("syncmoney.admin.test")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return true;
+        }
+
+
+        if (plugin.getSyncmoneyConfig().getEconomyMode() == EconomyMode.LOCAL) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("test.unavailable-local-mode"));
             return true;
         }
 
@@ -94,6 +101,13 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
         UUID userA = UUID.nameUUIDFromBytes("syncmoney-test-a".getBytes());
         UUID userB = UUID.nameUUIDFromBytes("syncmoney-test-b".getBytes());
 
+
+        var guard = plugin.getPlayerTransactionGuard();
+        if (guard != null) {
+            guard.setTestModeBypass(true);
+            MessageHelper.sendMessage(sender, plugin.getMessage("test.mode-enabled"));
+        }
+
         BigDecimal initialAmount = BigDecimal.valueOf(1000000);
         economyFacade.setBalance(userA, initialAmount, EconomyEvent.EventSource.TEST);
         economyFacade.setBalance(userB, initialAmount, EconomyEvent.EventSource.TEST);
@@ -116,7 +130,6 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
             final int threadId = i;
             plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
                 for (int j = 0; j < iterations; j++) {
-                    // A pays 1 to B - TEST mode does not trigger real economic events
                     try {
                         BigDecimal withdrawResult = economyFacade.withdraw(userA, BigDecimal.ONE,
                                 EconomyEvent.EventSource.TEST);
@@ -182,6 +195,12 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
             MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.zero-loss-fail")
                     .replace("{difference}", FormatUtil.formatCurrency(difference)));
         }
+
+
+        if (guard != null) {
+            guard.setTestModeBypass(false);
+            MessageHelper.sendMessage(sender, plugin.getMessage("test.mode-disabled"));
+        }
     }
 
     /**
@@ -217,6 +236,11 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (!sender.hasPermission("syncmoney.admin.test")) {
+            return Collections.emptyList();
+        }
+
+
+        if (plugin.getSyncmoneyConfig().getEconomyMode() == EconomyMode.LOCAL) {
             return Collections.emptyList();
         }
 

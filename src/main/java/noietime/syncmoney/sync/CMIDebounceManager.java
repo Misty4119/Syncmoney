@@ -30,13 +30,11 @@ public final class CMIDebounceManager {
      * If a task already exists for the UUID, it will be cancelled and replaced.
      */
     public void scheduleDebounced(UUID uuid, Runnable action) {
-        // Cancel existing task
         BukkitTask existing = pendingTasks.get(uuid);
         if (existing != null) {
             existing.cancel();
         }
 
-        // Schedule new task
         BukkitTask task = plugin.getServer().getScheduler().runTaskLater(
             plugin,
             () -> {
@@ -53,13 +51,11 @@ public final class CMIDebounceManager {
      * Schedule a debounced action with parameter.
      */
     public void scheduleDebounced(UUID uuid, Consumer<UUID> action) {
-        // Cancel existing task
         BukkitTask existing = pendingTasks.get(uuid);
         if (existing != null) {
             existing.cancel();
         }
 
-        // Schedule new task
         BukkitTask task = plugin.getServer().getScheduler().runTaskLater(
             plugin,
             () -> {

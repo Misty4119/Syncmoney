@@ -7,7 +7,7 @@ import java.sql.ResultSet;
 import java.util.UUID;
 
 /**
- * Manages cached plugin references and provides database access.
+ * [SYNC-PAPI-014] Manages cached plugin references and provides database access.
  */
 public final class PluginCache {
 
@@ -27,7 +27,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get cached economy facade (with periodic refresh).
+     * [SYNC-PAPI-015] Get cached economy facade (with periodic refresh).
      */
     public Object getEconomyFacade() {
         refreshIfNeeded();
@@ -35,7 +35,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get cached baltop manager (with periodic refresh).
+     * [SYNC-PAPI-016] Get cached baltop manager (with periodic refresh).
      */
     public Object getBaltopManager() {
         refreshIfNeeded();
@@ -43,7 +43,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get cached name resolver (with periodic refresh).
+     * [SYNC-PAPI-017] Get cached name resolver (with periodic refresh).
      */
     public Object getNameResolver() {
         refreshIfNeeded();
@@ -51,7 +51,7 @@ public final class PluginCache {
     }
 
     /**
-     * Refresh cache if expired.
+     * [SYNC-PAPI-018] Refresh cache if expired.
      */
     private void refreshIfNeeded() {
         long now = System.currentTimeMillis();
@@ -69,7 +69,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get plugin description for version.
+     * [SYNC-PAPI-019] Get plugin description for version.
      */
     public String getVersion() {
         Object desc = ReflectionHelper.invokeMethod(plugin, "getDescription");
@@ -83,7 +83,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get DataSource from DatabaseManager.
+     * [SYNC-PAPI-020] Get DataSource from DatabaseManager.
      */
     public DataSource getDataSource() {
         Object databaseManager = ReflectionHelper.invokeMethod(plugin, "getDatabaseManager");
@@ -94,7 +94,7 @@ public final class PluginCache {
     }
 
     /**
-     * Get player name from database by UUID.
+     * [SYNC-PAPI-021] Get player name from database by UUID.
      */
     public String getPlayerNameFromDatabase(UUID uuid) {
         DataSource ds = getDataSource();
@@ -114,6 +114,6 @@ public final class PluginCache {
     }
 
     private void log(String message) {
-        org.bukkit.Bukkit.getLogger().info("[Syncmoney-PAPI-Debug] " + message);
+        org.bukkit.Bukkit.getLogger().fine("[Syncmoney-PAPI-Debug] " + message);
     }
 }

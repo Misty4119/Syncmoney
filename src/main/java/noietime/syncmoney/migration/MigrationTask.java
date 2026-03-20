@@ -8,12 +8,15 @@ import noietime.syncmoney.migration.CMIDatabaseReader.CMIPlayerData;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -35,17 +38,30 @@ public final class MigrationTask {
     private final MigrationBackup backup;
     private final CMIEconomyDisabler economyDisabler;
 
-
     private final int batchSize;
-
 
     private volatile boolean running = false;
 
-
     private MigrationProgressCallback progressCallback;
 
-
     private CMIMultiServerReader multiServerReader;
+
+
+    private final List<FailedRedisEntry> failedRedisQueue = new CopyOnWriteArrayList<>();
+
+    private static class FailedRedisEntry {
+        final UUID uuid;
+        final BigDecimal balance;
+        final long version;
+        final String playerName;
+
+        FailedRedisEntry(UUID uuid, BigDecimal balance, long version, String playerName) {
+            this.uuid = uuid;
+            this.balance = balance;
+            this.version = version;
+            this.playerName = playerName;
+        }
+    }
 
     public MigrationTask(Plugin plugin, SyncmoneyConfig config,
                          CMIDatabaseReader cmiReader, EconomyFacade economyFacade,
@@ -134,7 +150,7 @@ public final class MigrationTask {
         if (config.isMigrationLockEconomy()) {
             MigrationLock.enable();
             MigrationLock.lock();
-            plugin.getLogger().info("Economy operations locked for CMI migration");
+            plugin.getLogger().fine("Economy operations locked for CMI migration");
         }
 
         int totalPlayers;
@@ -182,6 +198,16 @@ public final class MigrationTask {
                     try {
                         migratePlayer(player, force);
                         successCount.incrementAndGet();
+
+
+                        if (!checkRedisHealthDuringMigration(successCount.get())) {
+
+                            plugin.getLogger().warning("Migration paused due to Redis health issue");
+                            if (progressCallback != null) {
+                                progressCallback.onError("Migration paused: Redis connection issue");
+                            }
+                            return;
+                        }
                     } catch (Exception ex) {
                         String pName = player.playerName();
                         String reason = ex.getMessage();
@@ -344,9 +370,11 @@ public final class MigrationTask {
             );
         }
 
-        populateRedis(uuid, balance, 1L);
+        if (config.isMigrationPopulateRedis()) {
+            populateRedis(uuid, balance, 1L);
+        }
 
-        plugin.getLogger().info("Migrated player: " + playerName + " with balance " + balance);
+        plugin.getLogger().fine("Migrated player: " + playerName + " with balance " + balance);
     }
 
     /**
@@ -356,6 +384,9 @@ public final class MigrationTask {
     private void populateRedis(UUID uuid, BigDecimal balance, long version) {
         if (redisManager == null || !redisManager.isConnected()) {
             plugin.getLogger().warning("Redis not available, skipping Redis population for: " + uuid);
+
+            String playerName = nameResolver != null ? nameResolver.getName(uuid) : uuid.toString();
+            failedRedisQueue.add(new FailedRedisEntry(uuid, balance, version, playerName));
             return;
         }
 
@@ -369,7 +400,85 @@ public final class MigrationTask {
             plugin.getLogger().fine("CMI Migration: Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to populate Redis for " + uuid + ": " + e.getMessage());
+
+            String playerName = nameResolver != null ? nameResolver.getName(uuid) : uuid.toString();
+            failedRedisQueue.add(new FailedRedisEntry(uuid, balance, version, playerName));
+
+
+            if (failedRedisQueue.size() % 10 == 0) {
+                notifyRedisFailure();
+            }
         }
+    }
+
+    /**
+     * Notify admins about Redis failures during migration.
+     */
+    private void notifyRedisFailure() {
+        String message;
+        if (plugin instanceof Syncmoney) {
+            message = ((Syncmoney) plugin).getMessage("migration.redis-failed-notification")
+                    .replace("{count}", String.valueOf(failedRedisQueue.size()));
+        } else {
+            message = "Warning: " + failedRedisQueue.size() + " Redis population failures during migration.";
+        }
+
+
+        Bukkit.getOnlinePlayers().forEach(player -> {
+            if (player.hasPermission("syncmoney.admin")) {
+                player.sendMessage(net.kyori.adventure.text.Component.text(message));
+            }
+        });
+
+        plugin.getLogger().warning("Migration Redis failures: " + failedRedisQueue.size() + " entries failed. Use /syncmoney migrate resume to retry.");
+    }
+
+    /**
+     * Retry failed Redis entries.
+     * @return number of successfully retried entries
+     */
+    public int retryFailedRedisEntries() {
+        if (failedRedisQueue.isEmpty()) {
+            return 0;
+        }
+
+        int successCount = 0;
+        List<FailedRedisEntry> remaining = new ArrayList<>();
+
+        for (FailedRedisEntry entry : failedRedisQueue) {
+            try {
+                if (redisManager != null && redisManager.isConnected()) {
+                    try (var jedis = redisManager.getResource()) {
+                        String keyBalance = "syncmoney:balance:" + entry.uuid.toString();
+                        String keyVersion = "syncmoney:version:" + entry.uuid.toString();
+
+                        jedis.set(keyBalance, entry.balance.toPlainString());
+                        jedis.set(keyVersion, String.valueOf(entry.version));
+                        successCount++;
+                    }
+                } else {
+                    remaining.add(entry);
+                }
+            } catch (Exception e) {
+                remaining.add(entry);
+            }
+        }
+
+        failedRedisQueue.clear();
+        failedRedisQueue.addAll(remaining);
+
+        if (successCount > 0) {
+            plugin.getLogger().info("Retry completed: " + successCount + " Redis entries restored, " + failedRedisQueue.size() + " still failed");
+        }
+
+        return successCount;
+    }
+
+    /**
+     * Get failed Redis entry count.
+     */
+    public int getFailedRedisCount() {
+        return failedRedisQueue.size();
     }
 
     /**
@@ -383,15 +492,127 @@ public final class MigrationTask {
             return false;
         }
 
-        plugin.getLogger().info("CMI Migration prerequisites validated successfully.");
+        plugin.getLogger().fine("CMI Migration prerequisites validated successfully.");
         return true;
+    }
+
+    /**
+     * Check Redis health during migration.
+     * @param processedCount number of records processed so far
+     * @return true if Redis is healthy, false if migration should pause
+     */
+    public boolean checkRedisHealthDuringMigration(int processedCount) {
+
+        if (processedCount % 100 != 0) {
+            return true;
+        }
+
+        if (redisManager == null) {
+            notifyRedisHealthIssue("Redis manager is null");
+            return false;
+        }
+
+        try {
+            if (!redisManager.isConnected()) {
+                notifyRedisHealthIssue("Redis disconnected");
+                return false;
+            }
+
+
+            try (var jedis = redisManager.getResource()) {
+                String pong = jedis.ping();
+                if (!"PONG".equals(pong)) {
+                    notifyRedisHealthIssue("Redis ping failed");
+                    return false;
+                }
+            }
+        } catch (Exception e) {
+            notifyRedisHealthIssue("Redis health check failed: " + e.getMessage());
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Notify admins about Redis health issues.
+     */
+    private void notifyRedisHealthIssue(String reason) {
+        String message;
+        if (plugin instanceof Syncmoney) {
+            message = ((Syncmoney) plugin).getMessage("migration.paused-redis")
+                    .replace("{reason}", reason);
+        } else {
+            message = "Warning: Migration paused - " + reason;
+        }
+
+        Bukkit.getOnlinePlayers().forEach(player -> {
+            if (player.hasPermission("syncmoney.admin")) {
+                player.sendMessage(net.kyori.adventure.text.Component.text(message));
+            }
+        });
+
+        plugin.getLogger().warning("Migration paused: " + reason);
+    }
+
+    /**
+     * Show migration summary to admins.
+     */
+    private void showMigrationSummary(int successCount, int failedCount, BigDecimal totalAmount, int redisFailedCount) {
+        String header;
+        String playersInfo;
+        String amountInfo;
+        String failedInfo;
+        String nextSteps;
+
+        if (plugin instanceof Syncmoney) {
+            header = ((Syncmoney) plugin).getMessage("migration.summary-header");
+            playersInfo = ((Syncmoney) plugin).getMessage("migration.summary-players")
+                    .replace("{count}", String.valueOf(successCount));
+            amountInfo = ((Syncmoney) plugin).getMessage("migration.summary-amount")
+                    .replace("{amount}", totalAmount.toPlainString());
+            failedInfo = ((Syncmoney) plugin).getMessage("migration.summary-failed")
+                    .replace("{count}", String.valueOf(failedCount));
+            nextSteps = ((Syncmoney) plugin).getMessage("migration.summary-next-steps");
+        } else {
+            header = "===== Migration Complete =====";
+            playersInfo = "Migrated players: " + successCount;
+            amountInfo = "Total amount: " + totalAmount;
+            failedInfo = "Failed: " + failedCount;
+            nextSteps = "Run /syncmoney reload to apply changes";
+        }
+
+
+        Bukkit.getOnlinePlayers().forEach(player -> {
+            if (player.hasPermission("syncmoney.admin")) {
+                player.sendMessage(net.kyori.adventure.text.Component.text(header));
+                player.sendMessage(net.kyori.adventure.text.Component.text(playersInfo));
+                player.sendMessage(net.kyori.adventure.text.Component.text(amountInfo));
+                player.sendMessage(net.kyori.adventure.text.Component.text(failedInfo));
+                if (redisFailedCount > 0) {
+                    String redisInfo = "Redis failed: " + redisFailedCount + " (use /syncmoney migrate resume)";
+                    player.sendMessage(net.kyori.adventure.text.Component.text(redisInfo));
+                }
+                player.sendMessage(net.kyori.adventure.text.Component.text(nextSteps));
+            }
+        });
+
+
+        plugin.getLogger().info(header);
+        plugin.getLogger().info(playersInfo);
+        plugin.getLogger().info(amountInfo);
+        plugin.getLogger().info(failedInfo);
+        if (redisFailedCount > 0) {
+            plugin.getLogger().warning("Redis failures: " + redisFailedCount);
+        }
+        plugin.getLogger().info(nextSteps);
     }
 
     /**
      * Creates backup.
      */
     private void createBackup() {
-        plugin.getLogger().info("Creating CMI backup...");
+        plugin.getLogger().fine("Creating CMI backup...");
 
         int totalPlayers;
         if (multiServerReader != null) {
@@ -414,7 +635,7 @@ public final class MigrationTask {
 
         String backupPath = backup.save();
         if (backupPath != null) {
-            plugin.getLogger().info("Backup created: " + backupPath);
+            plugin.getLogger().fine("Backup created: " + backupPath);
         }
     }
 
@@ -429,8 +650,12 @@ public final class MigrationTask {
             progressCallback.onComplete(checkpoint.getMigratedCount(), checkpoint.getFailedCount());
         }
 
-        plugin.getLogger().info("Migration completed! Migrated: " + checkpoint.getMigratedCount() +
+        plugin.getLogger().fine("Migration completed! Migrated: " + checkpoint.getMigratedCount() +
                 ", Failed: " + checkpoint.getFailedCount());
+
+
+        showMigrationSummary(checkpoint.getMigratedCount(), checkpoint.getFailedCount(),
+                checkpoint.getTotalBackupAmount(), failedRedisQueue.size());
 
         if (economyDisabler != null) {
             scheduleCMIEconomyDisable();
@@ -439,7 +664,7 @@ public final class MigrationTask {
         if (MigrationLock.isEnabled()) {
             MigrationLock.unlock();
             MigrationLock.disable();
-            plugin.getLogger().info("Economy operations unlocked after CMI migration");
+            plugin.getLogger().fine("Economy operations unlocked after CMI migration");
         }
 
         cancel();
@@ -454,7 +679,7 @@ public final class MigrationTask {
                 if (config.isCMIAutoDisableCommands()) {
                     boolean commandsDisabled = economyDisabler.disableEconomyCommands();
                     if (commandsDisabled) {
-                        plugin.getLogger().info("CMI economy commands disabled successfully");
+                        plugin.getLogger().fine("CMI economy commands disabled successfully");
                     } else {
                         plugin.getLogger().warning("Failed to disable CMI economy commands");
                     }
@@ -463,14 +688,14 @@ public final class MigrationTask {
                 if (config.isCMIAutoDisableEconomy()) {
                     boolean economyDisabled = economyDisabler.disableEconomyModule();
                     if (economyDisabled) {
-                        plugin.getLogger().info("CMI economy module disabled successfully");
+                        plugin.getLogger().fine("CMI economy module disabled successfully");
                     } else {
                         plugin.getLogger().warning("Failed to disable CMI economy module");
                     }
                 }
 
                 economyDisabler.reloadCMI();
-                plugin.getLogger().info("CMI reload completed");
+                plugin.getLogger().fine("CMI reload completed");
 
             } catch (Exception e) {
                 plugin.getLogger().severe("Error during CMI economy disable: " + e.getMessage());

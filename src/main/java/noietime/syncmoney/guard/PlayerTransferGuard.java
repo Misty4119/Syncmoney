@@ -1,7 +1,6 @@
 package noietime.syncmoney.guard;
 
 import noietime.syncmoney.economy.EconomyWriteQueue;
-import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.util.Constants;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -27,19 +26,15 @@ import java.util.logging.Logger;
 public final class PlayerTransferGuard implements Listener {
 
     private final Plugin plugin;
-    private final EconomyFacade economyFacade;
     private final EconomyWriteQueue writeQueue;
     private final Logger logger;
 
-
     private final ConcurrentMap<UUID, TransferWait> waitingTransfers;
-
 
     private record TransferWait(UUID playerUuid, long startTime, PlayerTeleportEvent event) {}
 
-    public PlayerTransferGuard(Plugin plugin, EconomyFacade economyFacade, EconomyWriteQueue writeQueue) {
+    public PlayerTransferGuard(Plugin plugin, EconomyWriteQueue writeQueue) {
         this.plugin = plugin;
-        this.economyFacade = economyFacade;
         this.writeQueue = writeQueue;
         this.logger = plugin.getLogger();
         this.waitingTransfers = new ConcurrentHashMap<>();
@@ -47,9 +42,16 @@ public final class PlayerTransferGuard implements Listener {
 
     /**
      * Intercept teleport event, check if there are pending economic transactions.
+     * Only applies protection for cross-world/cross-server teleports.
+     * Same-server teleports (bed, /spawn, /home, ender pearl) are ignored.
      */
     @EventHandler(ignoreCancelled = true)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
+
+        if (!isCrossWorldTeleport(event)) {
+            return;
+        }
+
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
 
@@ -89,6 +91,33 @@ public final class PlayerTransferGuard implements Listener {
     }
 
     /**
+     * Check if this is a cross-world/cross-server teleport.
+     * Same-server teleports (bed, /spawn, /home, ender pearl, etc.) return false.
+     *
+     * Works on Paper 1.20+ and Folia.
+     *
+     * @param event The teleport event
+     * @return true if this is a cross-world transfer, false for same-server teleport
+     */
+    private boolean isCrossWorldTeleport(PlayerTeleportEvent event) {
+
+
+
+
+
+
+        var fromWorld = event.getFrom().getWorld();
+        var toWorld = event.getTo().getWorld();
+
+
+        if (fromWorld == null || toWorld == null) {
+            return true;
+        }
+
+        return !fromWorld.getUID().equals(toWorld.getUID());
+    }
+
+    /**
      * Handle player quit event, clear wait record and handle pending transactions.
      */
     @EventHandler
@@ -96,12 +125,12 @@ public final class PlayerTransferGuard implements Listener {
         UUID uuid = event.getPlayer().getUniqueId();
 
         if (writeQueue.hasPending(uuid)) {
-            logger.info("Player " + event.getPlayer().getName() + " is quitting with pending transactions. Attempting to drain...");
+            logger.fine("Player " + event.getPlayer().getName() + " is quitting with pending transactions. Attempting to drain...");
 
             int drained = writeQueue.drainPendingForPlayer(uuid, 10);
 
             if (drained > 0) {
-                logger.info("Drained " + drained + " pending events for " + event.getPlayer().getName());
+                logger.fine("Drained " + drained + " pending events for " + event.getPlayer().getName());
             }
 
             if (writeQueue.hasPending(uuid)) {
@@ -119,10 +148,10 @@ public final class PlayerTransferGuard implements Listener {
                     logger.warning("Player " + event.getPlayer().getName() + " quit with " +
                         writeQueue.getPendingCount(uuid) + " pending transactions (data already saved to Redis).");
                 } else {
-                    logger.info("Player " + event.getPlayer().getName() + " pending transactions cleared.");
+                    logger.fine("Player " + event.getPlayer().getName() + " pending transactions cleared.");
                 }
             } else {
-                logger.info("Player " + event.getPlayer().getName() + " pending transactions drained successfully.");
+                logger.fine("Player " + event.getPlayer().getName() + " pending transactions drained successfully.");
             }
         }
 

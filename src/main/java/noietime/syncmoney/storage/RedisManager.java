@@ -15,35 +15,34 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * [SYNC-REDIS-001] Redis connection manager with connection pooling.
- * Implements connection pool, health checks, reconnection handling, and degraded mode.
+ * Implements connection pool, health checks, reconnection handling, and
+ * degraded mode.
  *
  * [AsyncScheduler] All Redis operations should be called from async threads.
  */
 public final class RedisManager implements AutoCloseable {
 
     private final Plugin plugin;
-    private final JedisPool jedisPool;
+    private JedisPool jedisPool;
     private final JedisPoolConfig poolConfig;
     private volatile boolean degraded = false;
     private final boolean debug;
     private final boolean redisRequired;
-
 
     private final String redisHost;
     private final int redisPort;
     private final String redisPassword;
     private final int redisDatabase;
 
-
     private final AtomicInteger connectionFailureCount = new AtomicInteger(0);
     private static final int MAX_FAILURES_BEFORE_WARNING = 5;
 
     /**
-     * Debug level log output.
+     * Debug-level log output.
      */
     private void debug(String message) {
         if (debug) {
-            plugin.getLogger().info("[DEBUG] " + message);
+            plugin.getLogger().fine(message);
         }
     }
 
@@ -52,7 +51,6 @@ public final class RedisManager implements AutoCloseable {
         this.debug = config.isDebug();
         this.redisRequired = redisRequired;
 
-        // Skip Redis connection entirely if not required
         if (!redisRequired) {
             this.redisHost = config.getRedisHost();
             this.redisPort = config.getRedisPort();
@@ -72,13 +70,14 @@ public final class RedisManager implements AutoCloseable {
 
         this.poolConfig = new JedisPoolConfig();
         poolConfig.setMaxTotal(config.getRedisPoolSize());
-        poolConfig.setMaxIdle(config.getRedisPoolSize());
+        poolConfig.setMaxIdle(Math.min(10, config.getRedisPoolSize()));
+        poolConfig.setMinIdle(Math.min(5, config.getRedisPoolSize() / 2));
+        poolConfig.setMaxWaitMillis(3000);
 
         poolConfig.setTestOnBorrow(true);
         poolConfig.setTestOnReturn(true);
         poolConfig.setTestWhileIdle(true);
         poolConfig.setTestOnCreate(true);
-
 
         int timeout = 5000;
         if (config.getRedisPassword() != null && !config.getRedisPassword().isEmpty()) {
@@ -88,8 +87,7 @@ public final class RedisManager implements AutoCloseable {
                     config.getRedisPort(),
                     timeout,
                     config.getRedisPassword(),
-                    config.getRedisDatabase()
-            );
+                    config.getRedisDatabase());
         } else {
             this.jedisPool = new JedisPool(
                     poolConfig,
@@ -97,8 +95,7 @@ public final class RedisManager implements AutoCloseable {
                     config.getRedisPort(),
                     timeout,
                     (String) null,
-                    config.getRedisDatabase()
-            );
+                    config.getRedisDatabase());
         }
 
         if (!isConnected()) {
@@ -121,7 +118,7 @@ public final class RedisManager implements AutoCloseable {
                     jedis.ping();
                 }
             }
-            plugin.getLogger().info("Redis connection pool warmed up with " + warmUpCount + " connections.");
+            plugin.getLogger().fine("Redis connection pool warmed up with " + warmUpCount + " connections.");
         } catch (Exception e) {
             debug("Failed to warm up Redis connection pool: " + e.getMessage());
         }
@@ -133,7 +130,7 @@ public final class RedisManager implements AutoCloseable {
      */
     public Jedis getResource() {
         if (jedisPool == null) {
-            throw new IllegalStateException("Redis not available in LOCAL mode");
+            throw new IllegalStateException("Redis pool is not initialized. Call connect() or ensure Redis is available.");
         }
         return jedisPool.getResource();
     }
@@ -145,7 +142,7 @@ public final class RedisManager implements AutoCloseable {
         if (jedisPool == null) {
             return false;
         }
-        
+
         try (Jedis jedis = jedisPool.getResource()) {
             String result = jedis.ping();
             if ("PONG".equals(result)) {
@@ -159,7 +156,8 @@ public final class RedisManager implements AutoCloseable {
             }
             int failures = connectionFailureCount.incrementAndGet();
             if (failures >= MAX_FAILURES_BEFORE_WARNING) {
-                plugin.getLogger().warning("Redis connection issues detected (" + failures + " failures). Consider checking Redis server.");
+                plugin.getLogger().warning("Redis connection issues detected (" + failures
+                        + " failures). Consider checking Redis server.");
             }
             debug("Redis connection test failed: " + e.getMessage());
             return false;
@@ -193,6 +191,7 @@ public final class RedisManager implements AutoCloseable {
 
     /**
      * Attempts to reconnect.
+     * 
      * @return true if connection successful
      */
     public boolean tryReconnect() {
@@ -201,7 +200,7 @@ public final class RedisManager implements AutoCloseable {
         }
         if (isConnected()) {
             setDegraded(false);
-            plugin.getLogger().info("Redis connection restored.");
+            plugin.getLogger().fine("Redis connection restored.");
             return true;
         }
         try {
@@ -209,23 +208,21 @@ public final class RedisManager implements AutoCloseable {
                 jedisPool.close();
             }
             if (redisPassword != null && !redisPassword.isEmpty()) {
-                new JedisPool(
+                this.jedisPool = new JedisPool(
                         poolConfig,
                         redisHost,
                         redisPort,
                         5000,
                         redisPassword,
-                        redisDatabase
-                );
+                        redisDatabase);
             } else {
-                new JedisPool(
+                this.jedisPool = new JedisPool(
                         poolConfig,
                         redisHost,
                         redisPort,
                         5000,
                         (String) null,
-                        redisDatabase
-                );
+                        redisDatabase);
             }
             return isConnected();
         } catch (Exception e) {

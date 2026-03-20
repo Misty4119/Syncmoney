@@ -27,8 +27,8 @@ import java.util.logging.Level;
 public final class PubsubSubscriber {
 
     private static final String CHANNEL = "syncmoney:balance:update";
-    private static final long INITIAL_RETRY_DELAY_MS = 1000; // Start with 1 second
-    private static final long MAX_RETRY_DELAY_MS = 30000; // Cap at 30 seconds
+    private static final long INITIAL_RETRY_DELAY_MS = 1000;
+    private static final long MAX_RETRY_DELAY_MS = 30000;
 
     private final Plugin plugin;
     private final SyncmoneyConfig config;
@@ -60,7 +60,7 @@ public final class PubsubSubscriber {
      */
     public void startSubscription() {
         if (!config.isPubsubEnabled()) {
-            plugin.getLogger().info("Pub/Sub is disabled in config.");
+            plugin.getLogger().fine("Pub/Sub is disabled in config.");
             return;
         }
 
@@ -70,7 +70,7 @@ public final class PubsubSubscriber {
         }
 
         if (!running.compareAndSet(false, true)) {
-            plugin.getLogger().warning("Pub/Sub subscription already running.");
+            plugin.getLogger().fine("Pub/Sub subscription already running.");
             return;
         }
 
@@ -85,7 +85,7 @@ public final class PubsubSubscriber {
         subscriberThread.setDaemon(true);
         subscriberThread.start();
 
-        plugin.getLogger().info("Pub/Sub subscription started on channel: " + CHANNEL);
+        plugin.getLogger().fine("Pub/Sub subscription started on channel: " + CHANNEL);
     }
 
     /**
@@ -94,16 +94,19 @@ public final class PubsubSubscriber {
      * Note: Uses dedicated connection here, not connection pool, to avoid long-term occupation of pool resources.
      */
     private void runSubscription() {
-        plugin.getLogger().info("Starting Pub/Sub subscription thread...");
+        plugin.getLogger().fine("Starting Pub/Sub subscription thread...");
 
         long retryDelayMs = INITIAL_RETRY_DELAY_MS;
 
         while (running.get()) {
             redis.clients.jedis.Jedis jedis = null;
             try {
+
                 jedis = new redis.clients.jedis.Jedis(
                     config.getRedisHost(),
-                    config.getRedisPort()
+                    config.getRedisPort(),
+                    5000,
+                    5000
                 );
 
                 String redisPassword = config.getRedisPassword();
@@ -133,7 +136,6 @@ public final class PubsubSubscriber {
 
                 jedis.subscribe(pubSub, CHANNEL);
 
-                // Reset retry delay on successful connection
                 retryDelayMs = INITIAL_RETRY_DELAY_MS;
 
             } catch (redis.clients.jedis.exceptions.JedisConnectionException e) {
@@ -147,7 +149,6 @@ public final class PubsubSubscriber {
                         Thread.currentThread().interrupt();
                         break;
                     }
-                    // Exponential backoff: double the delay, cap at max
                     retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
                 }
             } catch (Exception e) {
@@ -161,7 +162,6 @@ public final class PubsubSubscriber {
                         Thread.currentThread().interrupt();
                         break;
                     }
-                    // Exponential backoff: double the delay, cap at max
                     retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
                 }
             } finally {
@@ -174,7 +174,7 @@ public final class PubsubSubscriber {
             }
         }
 
-        plugin.getLogger().info("Pub/Sub subscription thread ended.");
+        plugin.getLogger().fine("Pub/Sub subscription thread ended.");
     }
 
     /**
@@ -192,7 +192,7 @@ public final class PubsubSubscriber {
             }
         }
 
-        plugin.getLogger().info("Pub/Sub subscription stopped.");
+        plugin.getLogger().fine("Pub/Sub subscription stopped.");
     }
 
     /**

@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.0.0'
+version = '1.1.0'
 
 repositories {
     mavenCentral()
@@ -28,16 +28,9 @@ dependencies {
     // Paper API
     compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
 
-    // PlaceholderAPI - 必須使用伺服器提供的類別
     compileOnly("me.clip:placeholderapi:2.12.2")
-
-    // HikariCP (for DataSource) - provided by server
     compileOnly("com.zaxxer:HikariCP:5.1.0")
-
-    // MySQL driver - provided by server
     compileOnly("mysql:mysql-connector-java:8.0.33")
-
-    // PostgreSQL driver - provided by server
     compileOnly("org.postgresql:postgresql:42.7.1")
 }
 

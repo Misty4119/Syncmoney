@@ -9,6 +9,11 @@ import java.math.RoundingMode;
  */
 public final class NumericUtil {
 
+    public static final BigDecimal ZERO = BigDecimal.ZERO;
+    public static final BigDecimal ONE = BigDecimal.ONE;
+    public static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+    public static final BigDecimal NEGATIVE_ONE = BigDecimal.valueOf(-1);
+
     private NumericUtil() {}
 
     /**
@@ -17,7 +22,7 @@ public final class NumericUtil {
      */
     public static BigDecimal normalize(BigDecimal amount) {
         if (amount == null) {
-            return BigDecimal.ZERO;
+            return ZERO;
         }
         return amount.setScale(2, RoundingMode.HALF_UP);
     }

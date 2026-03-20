@@ -35,7 +35,6 @@ public final class AuditLogExporter {
     private final HikariDataSource dataSource;
     private final Logger logger;
 
-
     private final Path exportFolder;
 
     public AuditLogExporter(Plugin plugin, SyncmoneyConfig config, HikariDataSource dataSource) {
@@ -59,7 +58,7 @@ public final class AuditLogExporter {
      */
     public void start() {
         if (!config.isAuditExportEnabled()) {
-            logger.info("Audit log export is disabled in config.");
+            logger.fine("Audit log export is disabled in config.");
             return;
         }
 
@@ -78,7 +77,7 @@ public final class AuditLogExporter {
                 intervalTicks
         );
 
-        logger.info("Audit log export task scheduled.");
+        logger.fine("Audit log export task scheduled.");
     }
 
     /**
@@ -88,7 +87,7 @@ public final class AuditLogExporter {
      */
     public int exportToLogFile(int daysOld) {
         if (!config.isAuditExportEnabled()) {
-            logger.info("Audit log export is disabled.");
+            logger.fine("Audit log export is disabled.");
             return -1;
         }
 
@@ -102,7 +101,7 @@ public final class AuditLogExporter {
         List<AuditRecord> records = queryOldRecords(cutoffTime);
 
         if (records.isEmpty()) {
-            logger.info("No records older than " + daysOld + " days to export.");
+            logger.fine("No records older than " + daysOld + " days to export.");
             return 0;
         }
 
@@ -115,7 +114,7 @@ public final class AuditLogExporter {
 
             writeToFile(filePath, records);
 
-            logger.info("Exported " + records.size() + " audit records to " + filename);
+            logger.fine("Exported " + records.size() + " audit records to " + filename);
 
             if (config.isAuditDeleteAfterExport()) {
                 deleteExportedRecords(cutoffTime);
@@ -201,7 +200,7 @@ public final class AuditLogExporter {
             stmt.setLong(1, cutoffTime);
             int deleted = stmt.executeUpdate();
 
-            logger.info("Deleted " + deleted + " exported audit records from database.");
+            logger.fine("Deleted " + deleted + " exported audit records from database.");
 
         } catch (SQLException e) {
             logger.severe("Failed to delete exported records: " + e.getMessage());
@@ -210,23 +209,10 @@ public final class AuditLogExporter {
 
     /**
      * Maps ResultSet to AuditRecord.
+     * [REFACTORED] Now delegates to AuditDbWriter.mapToRecord()
      */
     private AuditRecord mapToRecord(ResultSet rs) throws SQLException {
-        return new AuditRecord(
-                rs.getString("id"),
-                rs.getLong("timestamp"),
-                AuditRecord.AuditType.valueOf(rs.getString("type")),
-                UUID.fromString(rs.getString("player_uuid")),
-                rs.getString("player_name"),
-                rs.getBigDecimal("amount"),
-                rs.getBigDecimal("balance_after"),
-                noietime.syncmoney.economy.EconomyEvent.EventSource.valueOf(rs.getString("source")),
-                rs.getString("server"),
-                rs.getString("target_uuid") != null ? UUID.fromString(rs.getString("target_uuid")) : null,
-                rs.getString("target_name"),
-                rs.getString("reason"),
-                rs.getInt("merged_count")
-        );
+        return AuditDbWriter.mapToRecord(rs);
     }
 
     /**
@@ -268,7 +254,7 @@ public final class AuditLogExporter {
 
         try {
             Files.delete(filePath);
-            logger.info("Deleted exported file: " + filename);
+            logger.fine("Deleted exported file: " + filename);
             return true;
         } catch (IOException e) {
             logger.severe("Failed to delete exported file: " + e.getMessage());

@@ -96,7 +96,7 @@ public final class ServerIdentityManager {
                 ServerIdData data = parseIdFile(reader);
                 if (data != null && data.serverId != null) {
                     cachedServerId = data.serverId;
-                    plugin.getLogger().info("Loaded server ID: " + cachedServerId);
+                    plugin.getLogger().fine("Loaded server ID: " + cachedServerId);
                     return cachedServerId;
                 }
             } catch (IOException e) {
@@ -108,7 +108,7 @@ public final class ServerIdentityManager {
 
         saveServerId(cachedServerId);
 
-        plugin.getLogger().info("Generated new server ID: " + cachedServerId);
+        plugin.getLogger().fine("Generated new server ID: " + cachedServerId);
         return cachedServerId;
     }
 

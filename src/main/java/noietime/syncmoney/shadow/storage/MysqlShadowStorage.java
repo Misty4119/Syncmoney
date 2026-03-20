@@ -79,7 +79,7 @@ public final class MysqlShadowStorage implements ShadowSyncStorage {
             }
 
             initialized = true;
-            plugin.getLogger().info("ShadowSync MySQL storage initialized: " + database);
+            plugin.getLogger().fine("ShadowSync MySQL storage initialized: " + database);
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to initialize ShadowSync MySQL storage: " + e.getMessage());
             throw new RuntimeException(e);
@@ -430,7 +430,7 @@ public final class MysqlShadowStorage implements ShadowSyncStorage {
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
-            plugin.getLogger().info("ShadowSync MySQL storage closed.");
+            plugin.getLogger().fine("ShadowSync MySQL storage closed.");
         }
     }
 

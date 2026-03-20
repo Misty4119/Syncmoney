@@ -29,7 +29,7 @@ public class CMIEconomyHandler {
     private final String redisPrefix;
     private final CMIBalanceMode balanceMode;
 
-    private final ConcurrentHashMap<UUID, Double> lastKnownBalance = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, BigDecimal> lastKnownBalance = new ConcurrentHashMap<>();
     private final AtomicLong versionCounter = new AtomicLong(0L);
 
     private Connection cmiConnection;
@@ -59,11 +59,11 @@ public class CMIEconomyHandler {
      * Handle external balance change from CMI event.
      * This is called when CMI detects a balance change.
      */
-    public void handleExternalBalanceChange(UUID uuid, double diff, boolean isDeposit, String sourceName) {
+    public void handleExternalBalanceChange(UUID uuid, BigDecimal diff, boolean isDeposit, String sourceName) {
         try {
-            double currentRedisBalance = getRedisBalance(uuid);
+            BigDecimal currentRedisBalance = getRedisBalance(uuid);
 
-            double newBalance = currentRedisBalance + diff;
+            BigDecimal newBalance = currentRedisBalance.add(diff);
 
             setRedisBalance(uuid, newBalance);
 
@@ -71,9 +71,9 @@ public class CMIEconomyHandler {
                 String eventType = isDeposit ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
                 syncManager.publishAndNotify(
                     uuid,
-                    BigDecimal.valueOf(newBalance),
+                    newBalance,
                     eventType,
-                    diff,
+                    diff.doubleValue(),
                     "CMI"
                 );
             }
@@ -81,7 +81,7 @@ public class CMIEconomyHandler {
             lastKnownBalance.put(uuid, newBalance);
 
             if (config.isDebug()) {
-                plugin.getLogger().info("[CMI] External balance change: " + uuid +
+                plugin.getLogger().fine("[CMI] External balance change: " + uuid +
                     ", diff: " + diff + ", new balance: " + newBalance);
             }
         } catch (Exception e) {
@@ -102,12 +102,12 @@ public class CMIEconomyHandler {
      * Get direct balance from CMI database.
      * Used by polling fallback mechanism.
      */
-    public double getCMIDirectBalance(UUID uuid) {
+    public BigDecimal getCMIDirectBalance(UUID uuid) {
         try {
-            return getCMIBalance(uuid);
+            return NumericUtil.normalize(getCMIBalance(uuid));
         } catch (SQLException e) {
             plugin.getLogger().warning("Failed to get CMI balance: " + e.getMessage());
-            return 0.0;
+            return BigDecimal.ZERO;
         }
     }
 
@@ -120,7 +120,7 @@ public class CMIEconomyHandler {
             if (sqlitePath != null && !sqlitePath.isEmpty()) {
                 String dbUrl = "jdbc:sqlite:" + sqlitePath;
                 cmiConnection = DriverManager.getConnection(dbUrl);
-                plugin.getLogger().info("CMI SQLite database connected: " + sqlitePath);
+                plugin.getLogger().fine("CMI SQLite database connected: " + sqlitePath);
             } else {
                 String host = config.getCMIDatabaseHost();
                 int port = config.getCMIDatabasePort();
@@ -130,7 +130,7 @@ public class CMIEconomyHandler {
 
                 String dbUrl = "jdbc:mysql://" + host + ":" + port + "/" + db;
                 cmiConnection = DriverManager.getConnection(dbUrl, user, pass);
-                plugin.getLogger().info("CMI MySQL database connected: " + host + ":" + port);
+                plugin.getLogger().fine("CMI MySQL database connected: " + host + ":" + port);
             }
         } catch (SQLException e) {
             plugin.getLogger().warning("CMI database connection failed: " + e.getMessage());
@@ -142,19 +142,19 @@ public class CMIEconomyHandler {
      */
     public void syncPlayerFromCMI(UUID uuid) {
         try {
-            double cmiBalance = getCMIBalance(uuid);
+            BigDecimal cmiBalance = getCMIBalance(uuid);
 
-            double redisBalance = getRedisBalance(uuid);
+            BigDecimal redisBalance = getRedisBalance(uuid);
 
-            if (Math.abs(cmiBalance - redisBalance) > 0.01) {
+            if (cmiBalance.subtract(redisBalance).abs().compareTo(BigDecimal.valueOf(0.01)) > 0) {
                 setRedisBalance(uuid, cmiBalance);
 
                 if (config.isCMICrossServerSync() && syncManager != null) {
                     syncManager.publishAndNotify(
                         uuid,
-                        BigDecimal.valueOf(cmiBalance),
+                        cmiBalance,
                         "CMI_DEPOSIT",
-                        cmiBalance - redisBalance,
+                        cmiBalance.subtract(redisBalance).doubleValue(),
                         "CMI"
                     );
                 }
@@ -171,7 +171,7 @@ public class CMIEconomyHandler {
     /**
      * Reads balance from CMI database.
      */
-    private double getCMIBalance(UUID uuid) throws SQLException {
+    private BigDecimal getCMIBalance(UUID uuid) throws SQLException {
         String tablePrefix = config.getCMITablePrefix();
         String sql = "SELECT * FROM " + tablePrefix + "users WHERE uuid = ?";
 
@@ -180,35 +180,35 @@ public class CMIEconomyHandler {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    return rs.getDouble("money");
+                    return NumericUtil.normalize(rs.getDouble("money"));
                 }
             }
         }
 
-        return 0.0;
+        return BigDecimal.ZERO;
     }
 
     /**
      * Reads balance from Redis.
      */
-    private double getRedisBalance(UUID uuid) {
+    private BigDecimal getRedisBalance(UUID uuid) {
         String key = redisPrefix + ":" + uuid.toString();
 
         try (var jedis = redisManager.getResource()) {
             String value = jedis.get(key);
-            return value != null ? Double.parseDouble(value) : 0.0;
+            return value != null ? NumericUtil.normalize(value) : BigDecimal.ZERO;
         }
     }
 
     /**
      * Sets Redis balance.
      */
-    private void setRedisBalance(UUID uuid, double balance) {
+    private void setRedisBalance(UUID uuid, BigDecimal balance) {
         String key = redisPrefix + ":" + uuid.toString();
         String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
 
         try (var jedis = redisManager.getResource()) {
-            jedis.set(key, String.valueOf(balance));
+            jedis.set(key, balance.toPlainString());
             jedis.incr(versionKey);
         }
     }
@@ -221,23 +221,23 @@ public class CMIEconomyHandler {
         String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
 
         try (var jedis = redisManager.getResource()) {
-            double current = getRedisBalance(uuid);
-            double newBalance = current + amount.doubleValue();
+            BigDecimal current = getRedisBalance(uuid);
+            BigDecimal newBalance = current.add(amount);
 
-            jedis.set(key, String.valueOf(newBalance));
+            jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
             if (config.isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishAndNotify(
                     uuid,
-                    BigDecimal.valueOf(newBalance),
+                    newBalance,
                     "CMI_DEPOSIT",
                     amount.doubleValue(),
                     "CMI"
                 );
             }
 
-            return NumericUtil.normalize(newBalance);
+            return newBalance;
         }
     }
 
@@ -249,26 +249,27 @@ public class CMIEconomyHandler {
         String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
 
         try (var jedis = redisManager.getResource()) {
-            double current = getRedisBalance(uuid);
-            if (current < amount.doubleValue()) {
+            BigDecimal current = getRedisBalance(uuid);
+            if (current.compareTo(amount) < 0) {
+                throw new IllegalArgumentException("Insufficient funds: cannot withdraw " + amount + " from balance " + current);
             }
 
-            double newBalance = current - amount.doubleValue();
+            BigDecimal newBalance = current.subtract(amount);
 
-            jedis.set(key, String.valueOf(newBalance));
+            jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
             if (config.isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishAndNotify(
                     uuid,
-                    BigDecimal.valueOf(newBalance),
+                    newBalance,
                     "CMI_WITHDRAW",
                     -amount.doubleValue(),
                     "CMI"
                 );
             }
 
-            return NumericUtil.normalize(newBalance);
+            return newBalance;
         }
     }
 
@@ -276,7 +277,7 @@ public class CMIEconomyHandler {
      * Gets balance.
      */
     public BigDecimal getBalance(UUID uuid) {
-        return NumericUtil.normalize(getRedisBalance(uuid));
+        return getRedisBalance(uuid);
     }
 
     /**
@@ -287,7 +288,7 @@ public class CMIEconomyHandler {
         String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
 
         try (var jedis = redisManager.getResource()) {
-            jedis.set(key, String.valueOf(newBalance.doubleValue()));
+            jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
             if (config.isCMICrossServerSync() && syncManager != null) {
@@ -300,7 +301,7 @@ public class CMIEconomyHandler {
                 );
             }
 
-            return NumericUtil.normalize(newBalance);
+            return newBalance;
         }
     }
 

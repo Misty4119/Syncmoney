@@ -25,18 +25,16 @@ import java.util.concurrent.TimeUnit;
  */
 public final class HighValueNotification {
 
-    private static final long NOTIFICATION_COOLDOWN_MS = 300000; // 5 minutes
+    private static final long NOTIFICATION_COOLDOWN_MS = 300000;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final ScheduledExecutorService scheduler;
-
+    private DiscordWebhookNotifier discordNotifier;
 
     private final Set<String> notifiedAdmins;
 
-
     private final ConcurrentHashMap<UUID, Long> highValueNotifications;
-
 
     public HighValueNotification(Syncmoney plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
@@ -61,6 +59,13 @@ public final class HighValueNotification {
             highValueNotifications.entrySet().removeIf(entry ->
                     now - entry.getValue() > NOTIFICATION_COOLDOWN_MS);
         }, 1, 1, TimeUnit.MINUTES);
+    }
+
+    /**
+     * Set Discord webhook notifier.
+     */
+    public void setDiscordWebhookNotifier(DiscordWebhookNotifier discordNotifier) {
+        this.discordNotifier = discordNotifier;
     }
 
     /**
@@ -90,6 +95,11 @@ public final class HighValueNotification {
 
         for (String admin : admins) {
             sendMessage(admin, message);
+        }
+
+
+        if (discordNotifier != null) {
+            discordNotifier.sendHighValueTransactionEvent(playerId, amount, type);
         }
     }
 

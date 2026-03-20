@@ -171,7 +171,7 @@ public final class EconStatsCommand implements CommandExecutor, TabCompleter {
                 plugin.getLogger().fine("Rich count skipped - LOCAL mode or Redis unavailable");
             } else {
                 try (var jedis = redisManager.getResource()) {
-                    var count = jedis.zcount("syncmoney:baltop", Double.POSITIVE_INFINITY, 100000000);
+                    var count = jedis.zcount("syncmoney:baltop", 100000000, Double.POSITIVE_INFINITY);
                     richCount = count;
                 }
             }
@@ -189,9 +189,55 @@ public final class EconStatsCommand implements CommandExecutor, TabCompleter {
     private void handleTransactions(CommandSender sender) {
         MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.header"));
 
+        try {
+            var auditLogger = plugin.getAuditLogger();
 
-        MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.note"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.audit-hint"));
+            if (auditLogger == null) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.unavailable"));
+                return;
+            }
+
+            long now = System.currentTimeMillis();
+            long todayStart = getTodayStartMillis();
+
+            int totalCount = auditLogger.countByTimeRange(0, now);
+            int todayCount = auditLogger.countByTimeRange(todayStart, now);
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.total-count")
+                    .replace("{count}", String.valueOf(totalCount)));
+            MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.today-count")
+                    .replace("{count}", String.valueOf(todayCount)));
+
+            var criteria = new noietime.syncmoney.audit.AuditLogger.AuditSearchCriteria(
+                    null, 0, now, null, 100, null
+            );
+            var recentRecords = auditLogger.search(criteria);
+
+            if (!recentRecords.isEmpty()) {
+                java.math.BigDecimal totalAmount = recentRecords.stream()
+                        .map(noietime.syncmoney.audit.AuditRecord::amount)
+                        .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+
+                MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.total-amount")
+                        .replace("{amount}", FormatUtil.formatCurrency(totalAmount)));
+            }
+
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to load transaction stats: " + e.getMessage());
+            MessageHelper.sendMessage(sender, plugin.getMessage("econstats.transactions.error"));
+        }
+    }
+
+    /**
+     * Gets the start of today in milliseconds (midnight).
+     */
+    private long getTodayStartMillis() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        cal.set(java.util.Calendar.MINUTE, 0);
+        cal.set(java.util.Calendar.SECOND, 0);
+        cal.set(java.util.Calendar.MILLISECOND, 0);
+        return cal.getTimeInMillis();
     }
 
     /**

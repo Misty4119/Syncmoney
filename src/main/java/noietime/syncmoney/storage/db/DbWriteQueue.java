@@ -25,9 +25,18 @@ public final class DbWriteQueue {
 
     /**
      * Inserts DB write task (non-blocking).
+     * [STORE-02 FIX] Added backpressure: rejects when queue usage > 80%.
      * @return true if successfully inserted
      */
     public boolean offer(DbWriteTask task) {
+
+        int currentSize = queue.size();
+        int usageThreshold = (int) (capacity * 0.8);
+        
+        if (currentSize >= usageThreshold) {
+            return false;
+        }
+        
         return queue.offer(task);
     }
 

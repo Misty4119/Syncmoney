@@ -70,7 +70,7 @@ public final class SqliteShadowStorage implements ShadowSyncStorage {
             }
 
             initialized = true;
-            plugin.getLogger().info("ShadowSync SQLite storage initialized: " + dbPath);
+            plugin.getLogger().fine("ShadowSync SQLite storage initialized: " + dbPath);
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to initialize ShadowSync SQLite storage: " + e.getMessage());
             throw new RuntimeException(e);
@@ -405,7 +405,7 @@ public final class SqliteShadowStorage implements ShadowSyncStorage {
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
-            plugin.getLogger().info("ShadowSync SQLite storage closed.");
+            plugin.getLogger().fine("ShadowSync SQLite storage closed.");
         }
     }
 

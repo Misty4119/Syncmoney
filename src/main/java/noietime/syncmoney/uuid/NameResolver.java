@@ -38,7 +38,6 @@ public final class NameResolver {
         this.uuidToNameCache = new ConcurrentHashMap<>();
     }
 
-
     private void evictIfOverCapacity() {
         if (nameToUuidCache.size() >= MAX_CACHE_SIZE || uuidToNameCache.size() >= MAX_CACHE_SIZE) {
             nameToUuidCache.clear();
@@ -91,7 +90,6 @@ public final class NameResolver {
             nameToUuidCache.put(nameLower, uuid);
             return Optional.of(uuid);
         }
-
 
         return Optional.empty();
     }
@@ -175,6 +173,10 @@ public final class NameResolver {
         }
 
         if (databaseManager == null) {
+            return;
+        }
+
+        if (!plugin.isEnabled()) {
             return;
         }
 

@@ -17,7 +17,6 @@ public final class CMIEconomyDisabler {
 
     private final JavaPlugin plugin;
 
-
     private static final List<String> ECONOMY_COMMANDS = Arrays.asList(
             "balance", "baltop", "money", "pay"
     );
@@ -50,17 +49,17 @@ public final class CMIEconomyDisabler {
                     if (current) {
                         config.set(path, false);
                         modified = true;
-                        plugin.getLogger().info("Disabled CMI command: /" + command);
+                        plugin.getLogger().fine("Disabled CMI command: /" + command);
                     }
                 }
             }
 
             if (modified) {
                 config.save(aliasFile);
-                plugin.getLogger().info("CMI Alias.yml updated, commands disabled");
+                plugin.getLogger().fine("CMI Alias.yml updated, commands disabled");
                 return true;
             } else {
-                plugin.getLogger().info("No CMI economy commands needed to be disabled");
+                plugin.getLogger().fine("No CMI economy commands needed to be disabled");
                 return true;
             }
 
@@ -92,10 +91,10 @@ public final class CMIEconomyDisabler {
                 if (current) {
                     config.set(path, false);
                     config.save(configFile);
-                    plugin.getLogger().info("CMI Economy module disabled");
+                    plugin.getLogger().fine("CMI Economy module disabled");
                     return true;
                 } else {
-                    plugin.getLogger().info("CMI Economy is already disabled");
+                    plugin.getLogger().fine("CMI Economy is already disabled");
                     return true;
                 }
             } else {

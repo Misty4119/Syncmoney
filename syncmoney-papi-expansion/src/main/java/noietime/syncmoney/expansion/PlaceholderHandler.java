@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Handles all placeholder requests.
+ * [SYNC-PAPI-024] Handles all placeholder requests.
  */
 public final class PlaceholderHandler {
 
@@ -21,7 +21,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Main entry point for placeholder requests.
+     * [SYNC-PAPI-025] Main entry point for placeholder requests.
      */
     public String handle(OfflinePlayer player, @NotNull String params) {
         if (debugMode) {
@@ -45,7 +45,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Check if placeholder is global (doesn't need player).
+     * [SYNC-PAPI-026] Check if placeholder is global (doesn't need player).
      */
     private boolean isGlobalPlaceholder(String params) {
         String lower = params.toLowerCase();
@@ -58,7 +58,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Handle global placeholder.
+     * [SYNC-PAPI-027] Handle global placeholder.
      */
     private String handleGlobal(String params) {
         String lower = params.toLowerCase();
@@ -94,7 +94,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Handle player-specific placeholder.
+     * [SYNC-PAPI-028] Handle player-specific placeholder.
      */
     private String handlePlayer(OfflinePlayer player, String params) {
         Object economyFacade = pluginCache.getEconomyFacade();
@@ -164,7 +164,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Handle top N placeholder.
+     * [SYNC-PAPI-029] Handle top N placeholder.
      */
     private String handleTop(String params) {
         Object baltopManager = pluginCache.getBaltopManager();
@@ -213,7 +213,7 @@ public final class PlaceholderHandler {
     }
 
     /**
-     * Handle balance for another player.
+     * [SYNC-PAPI-030] Handle balance for another player.
      */
     private String handleOtherPlayerBalance(String params) {
         String playerName = params.substring(8).trim();
@@ -255,7 +255,7 @@ public final class PlaceholderHandler {
 
     private void log(String message) {
         if (debugMode) {
-            org.bukkit.Bukkit.getLogger().info("[Syncmoney-PAPI-Debug] PlaceholderHandler: " + message);
+            org.bukkit.Bukkit.getLogger().fine("[Syncmoney-PAPI-Debug] PlaceholderHandler: " + message);
         }
     }
 }

@@ -12,6 +12,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * CMI Multi-Server Database Reader.
@@ -24,7 +25,6 @@ import java.util.*;
  */
 public final class CMIMultiServerReader {
 
-
     public enum MergeStrategy {
         LATEST,
         SUM,
@@ -33,22 +33,17 @@ public final class CMIMultiServerReader {
 
     private final Plugin plugin;
     private final SyncmoneyConfig config;
-    private final List<HikariDataSource> dataSources = new ArrayList<>();
-    private final List<String> dbPaths = new ArrayList<>();
+    private final List<HikariDataSource> dataSources = new CopyOnWriteArrayList<>();
+    private final List<String> dbPaths = new CopyOnWriteArrayList<>();
     private MergeStrategy mergeStrategy;
-
 
     private static final String BALANCE_COLUMN = "Balance";
 
-
     private static final String UUID_COLUMN = "player_uuid";
-
 
     private static final String USERNAME_COLUMN = "username";
 
-
     private static final String LASTLOGOFF_COLUMN = "LastLogoffTime";
-
 
     private static final String TABLE_NAME = "users";
 
@@ -93,8 +88,8 @@ public final class CMIMultiServerReader {
             }
         }
 
-        plugin.getLogger().info("CMI Multi-Server: " + dbPaths.size() + " database paths configured");
-        plugin.getLogger().info("CMI Multi-Server: strategy=" + mergeStrategy.name());
+        plugin.getLogger().fine("CMI Multi-Server: " + dbPaths.size() + " database paths configured");
+        plugin.getLogger().fine("CMI Multi-Server: strategy=" + mergeStrategy.name());
     }
 
     /**
@@ -126,7 +121,7 @@ public final class CMIMultiServerReader {
             try {
                 HikariDataSource ds = createSQLiteDataSource(dbPath);
                 dataSources.add(ds);
-                plugin.getLogger().info("CMI Multi-Server: connected to " + dbPath);
+                plugin.getLogger().fine("CMI Multi-Server: connected to " + dbPath);
             } catch (Exception e) {
                 plugin.getLogger().severe("Failed to connect to CMI database " + dbPath + ": " + e.getMessage());
             }
@@ -244,7 +239,7 @@ public final class CMIMultiServerReader {
                         count++;
                     }
 
-                    plugin.getLogger().info("CMI Multi-Server: read " + count + " players from " + dbPath);
+                    plugin.getLogger().fine("CMI Multi-Server: read " + count + " players from " + dbPath);
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("Failed to read from CMI database " + dbPath + ": " + e.getMessage());
@@ -277,7 +272,7 @@ public final class CMIMultiServerReader {
             merged.add(mergedData);
         }
 
-        plugin.getLogger().info("CMI Multi-Server: merged to " + merged.size() + " unique players (strategy=" + mergeStrategy.name() + ")");
+        plugin.getLogger().fine("CMI Multi-Server: merged to " + merged.size() + " unique players (strategy=" + mergeStrategy.name() + ")");
         return merged;
     }
 
@@ -360,6 +355,6 @@ public final class CMIMultiServerReader {
             }
         }
         dataSources.clear();
-        plugin.getLogger().info("CMI Multi-Server: all connections closed");
+        plugin.getLogger().fine("CMI Multi-Server: all connections closed");
     }
 }

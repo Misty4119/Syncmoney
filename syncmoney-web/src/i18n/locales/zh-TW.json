@@ -1,0 +1,642 @@
+{
+  "common": {
+    "loading": "載入中...",
+    "save": "儲存",
+    "cancel": "取消",
+    "search": "搜尋",
+    "noData": "無資料",
+    "refresh": "重新整理",
+    "edit": "編輯",
+    "delete": "刪除",
+    "enabled": "已啟用",
+    "disabled": "已停用",
+    "status": "狀態",
+    "actions": "操作"
+  },
+  "notFound": {
+    "title": "404 - 頁面不存在",
+    "message": "抱歉，您訪問的頁面不存在或已被移除。",
+    "goHome": "返回首頁"
+  },
+  "auth": {
+    "appName": "Syncmoney",
+    "subtitle": "管理控制台",
+    "login": "登入",
+    "logout": "登出",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "請輸入 API Key"
+  },
+  "nav": {
+    "dashboard": "儀表板",
+    "auditLog": "審計日誌",
+    "systemStatus": "系統狀態",
+    "settings": "設定",
+    "collapse": "收起",
+    "config": "插件設定",
+    "toggleTheme": "切換主題",
+    "notifications": "通知",
+    "centralDashboard": "中央儀表板",
+    "nodesManagement": "節點管理"
+  },
+  "notifications": {
+    "title": "通知",
+    "empty": "暫無通知",
+    "clearAll": "清除全部"
+  },
+  "dashboard": {
+    "totalSupply": "總貨幣供應",
+    "totalPlayers": "總玩家數",
+    "todayTransactions": "今日交易",
+    "onlinePlayers": "在線玩家",
+    "circuitBreaker": "熔斷器狀態",
+    "systemHealth": "系統狀態",
+    "connection": "連線狀態",
+    "connected": "已連線",
+    "disconnected": "已斷線",
+    "lastUpdated": "最後更新",
+    "unknownPlayer": "未知玩家"
+  },
+  "audit": {
+    "realtime": "即時更新",
+    "player": "玩家",
+    "type": "類型",
+    "amount": "金額",
+    "balance": "餘額",
+    "source": "來源",
+    "server": "伺服器",
+    "time": "時間",
+    "reason": "原因",
+    "loadingMore": "載入更多...",
+    "noMoreData": "沒有更多資料了",
+    "status": {
+      "connected": "已連線",
+      "connecting": "連線中",
+      "disconnected": "已斷線",
+      "error": "連線錯誤"
+    },
+    "typeOptions": {
+      "all": "全部",
+      "deposit": "存入",
+      "withdraw": "取出",
+      "transfer": "轉帳",
+      "setBalance": "設定餘額",
+      "set_balance": "設定餘額"
+    },
+    "filters": {
+      "player": "玩家名稱",
+      "type": "交易類型",
+      "startTime": "開始時間",
+      "endTime": "結束時間",
+      "dateRange": "選擇日期範圍"
+    },
+    "dateShortcut": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "last7": "近7天",
+      "last30": "近30天",
+      "all": "全部"
+    },
+    "newRecords": "筆新記錄",
+    "export": {
+      "failed": "匯出失敗"
+    }
+  },
+  "system": {
+    "plugin": "插件狀態",
+    "connectivity": "連線狀態",
+    "version": "版本",
+    "version-fallback": "未知",
+    "dbVersion": "資料庫版本",
+    "mode": "模式",
+    "modeLocal": "本地模式",
+    "uptime": "運行時間",
+    "redis": "Redis 連線",
+    "database": "資料庫",
+    "sseStream": "SSE 即時串流",
+    "circuitBreaker": "熔斷器",
+    "memory": "記憶體",
+    "threads": "執行緒",
+    "memoryUsage": "使用率",
+    "tps": "TPS",
+    "tpsHealthy": "正常",
+    "tpsDegraded": "效能降低",
+    "tpsCritical": "嚴重",
+    "status": {
+      "connected": "已連線",
+      "disconnected": "已斷線",
+      "normal": "正常",
+      "warning": "警告",
+      "locked": "鎖定"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "theme": "主題",
+    "language": "語言",
+    "languageOptions": {
+      "zh-TW": "繁體中文",
+      "en-US": "English"
+    },
+    "timezone": "時區",
+    "save": "儲存設定",
+    "saveSuccess": "設定已儲存",
+    "saveFailed": "儲存設定失敗，請重試",
+    "themeOptions": {
+      "light": "淺色",
+      "dark": "深色"
+    },
+    "timezoneOptions": {
+      "UTC": "UTC 標準時間",
+      "Asia/Taipei": "台北時間 (Asia/Taipei)",
+      "America/New_York": "美東時間 (America/New_York)",
+      "Europe/London": "倫敦時間 (Europe/London)"
+    }
+  },
+  "config": {
+    "title": "插件設定",
+    "enabled": "已啟用",
+    "disabled": "已停用",
+    "reload": "重新載入設定",
+    "reloadSuccess": "設定已重新載入",
+    "reloadSuccessDesc": "插件設定已成功重新載入",
+    "reloadError": "重新載入失敗",
+    "reloadErrorDesc": "無法重新載入設定，請查看伺服器日誌",
+    "loadError": "載入失敗",
+    "loadErrorDesc": "無法載入插件設定",
+    "saveSuccess": "設定已儲存",
+    "saveSuccessDesc": "設定已成功儲存並熱更新",
+    "saveError": "儲存失敗",
+    "saveErrorDesc": "無法儲存設定，請查看伺服器日誌",
+    "unsavedChanges": "未儲存變更",
+    "unsavedChangesDesc": "您有未儲存的變更，是否放棄？",
+    "sections": {
+      "core": {
+        "title": "核心設定",
+        "description": "伺服器基本配置"
+      },
+      "economy": {
+        "title": "經濟設定",
+        "description": "經濟模式與同步設定"
+      },
+      "display": {
+        "title": "顯示設定",
+        "description": "貨幣顯示格式"
+      },
+      "pay": {
+        "title": "轉帳設定",
+        "description": "轉帳功能相關設定"
+      },
+      "baltop": {
+        "title": "排行榜設定",
+        "description": "經濟排行顯示設定"
+      },
+      "circuit-breaker": {
+        "title": "經濟熔斷器",
+        "description": "全域保護 + 玩家保護"
+      },
+      "circuitBreaker": {
+        "title": "經濟熔斷器",
+        "description": "防止經濟系統異常"
+      },
+      "player-protection": {
+        "title": "玩家保護",
+        "description": "L1-L3 玩家維度防護"
+      },
+      "playerProtection": {
+        "title": "玩家保護",
+        "description": "L1-L3 玩家維度防護"
+      },
+      "discord-webhook": {
+        "title": "Discord 通知",
+        "description": "Discord Webhook 通知設定"
+      },
+      "discordWebhook": {
+        "title": "Discord 通知",
+        "description": "Discord Webhook 通知設定"
+      },
+      "audit": {
+        "title": "審計日誌",
+        "description": "交易紀錄與歷史"
+      },
+      "admin-permissions": {
+        "title": "管理員權限",
+        "description": "管理員權限分級設定"
+      },
+      "adminPermissions": {
+        "title": "管理員權限",
+        "description": "管理員權限分級設定"
+      },
+      "messages": {
+        "title": "訊息設定",
+        "description": "遊戲內訊息格式設定"
+      },
+      "cross-server-notifications": {
+        "title": "跨服通知",
+        "description": "跨伺服器訊息通知"
+      },
+      "crossServerNotifications": {
+        "title": "跨服通知",
+        "description": "跨伺服器訊息通知"
+      },
+      "shadow-sync": {
+        "title": "影子同步",
+        "description": "備份同步設定"
+      },
+      "shadowSync": {
+        "title": "影子同步",
+        "description": "備份同步設定"
+      },
+      "web-admin.ui": {
+        "title": "Web 管理介面",
+        "description": "網頁介面外觀設定"
+      },
+      "webAdminUi": {
+        "title": "Web 管理介面",
+        "description": "網頁介面外觀設定"
+      }
+    },
+    "fields": {
+      "serverName": { "label": "伺服器名稱", "description": "多用於 Pub/Sub 識別" },
+      "server-name": { "label": "伺服器名稱", "description": "多用於 Pub/Sub 識別" },
+      "queueCapacity": { "label": "事件佇列容量", "description": "BlockingQueue 容量" },
+      "queue-capacity": { "label": "事件佇列容量", "description": "BlockingQueue 容量" },
+      "debug": { "label": "偵錯模式", "description": "輸出詳細日誌" },
+      "mode": { "label": "經濟模式", "description": "選擇經濟同步模式" },
+      "currencyName": { "label": "貨幣名稱", "description": "顯示名稱" },
+      "currency-name": { "label": "貨幣名稱", "description": "顯示名稱" },
+      "decimalPlaces": { "label": "小數位數", "description": "小數點位數" },
+      "decimal-places": { "label": "小數位數", "description": "小數點位數" },
+      "cooldownSeconds": { "label": "冷卻時間", "description": "轉帳冷卻秒數" },
+      "cooldown-seconds": { "label": "冷卻時間", "description": "轉帳冷卻秒數" },
+      "minAmount": { "label": "最低金額", "description": "單筆最低轉帳金額" },
+      "min-amount": { "label": "最低金額", "description": "單筆最低轉帳金額" },
+      "maxAmount": { "label": "最高金額", "description": "單筆最高轉帳金額" },
+      "max-amount": { "label": "最高金額", "description": "單筆最高轉帳金額" },
+      "confirmThreshold": { "label": "確認閾值", "description": "超過此金額需確認" },
+      "confirm-threshold": { "label": "確認閾值", "description": "超過此金額需確認" },
+      "allowInDegraded": { "label": "降級模式允許", "description": "是否在降級模式下允許轉帳" },
+      "allow-in-degraded": { "label": "降級模式允許", "description": "是否在降級模式下允許轉帳" },
+      "enabled": { "label": "啟用", "description": "是否啟用此功能" },
+      "host": { "label": "主機", "description": "伺服器主機位址" },
+      "port": { "label": "連接埠", "description": "伺服器連接埠" },
+      "password": { "label": "密碼", "description": "連線密碼" },
+      "database": { "label": "資料庫", "description": "資料庫名稱" },
+      "type": { "label": "類型", "description": "資料庫類型" },
+      "timeout": { "label": "逾時", "description": "連線逾時時間（毫秒）" },
+      "batchSize": { "label": "批次大小", "description": "資料庫批次寫入大小" },
+      "batch-size": { "label": "批次大小", "description": "資料庫批次寫入大小" },
+      "flushInterval": { "label": "刷新間隔", "description": "刷新間隔（毫秒）" },
+      "flush-interval": { "label": "刷新間隔", "description": "刷新間隔（毫秒）" },
+      "sync": {
+        "vaultIntercept": { "label": "Vault 攔截", "description": "是否攔截 Vault 經濟操作" },
+        "vault-intercept": { "label": "Vault 攔截", "description": "是否攔截 Vault 經濟操作" },
+        "vaultInterceptDeposit": { "label": "Vault 存款攔截", "description": "是否攔截存款操作" },
+        "vault-intercept-deposit": { "label": "Vault 存款攔截", "description": "是否攔截存款操作" },
+        "vaultInterceptWithdraw": { "label": "Vault 取款攔截", "description": "是否攔截取款操作" },
+        "vault-intercept-withdraw": { "label": "Vault 取款攔截", "description": "是否攔截取款操作" }
+      },
+      "cmi": {
+        "detectIntervalMs": { "label": "偵測間隔 (ms)", "description": "CMI 經濟變動偵測間隔" },
+        "detect-interval-ms": { "label": "偵測間隔 (ms)", "description": "CMI 經濟變動偵測間隔" },
+        "crossServerSync": { "label": "跨服同步", "description": "啟用 CMI 跨服同步" },
+        "cross-server-sync": { "label": "跨服同步", "description": "啟用 CMI 跨服同步" },
+        "balanceMode": { "label": "餘額模式", "description": "餘額操作模式 (api/internal)" },
+        "balance-mode": { "label": "餘額模式", "description": "餘額操作模式 (api/internal)" }
+      },
+      "baltop": {
+        "cacheSeconds": { "label": "快取秒數", "description": "排行快取時間" },
+        "cache-seconds": { "label": "快取秒數", "description": "排行快取時間" },
+        "entriesPerPage": { "label": "每頁筆數", "description": "每頁顯示玩家數" },
+        "entries-per-page": { "label": "每頁筆數", "description": "每頁顯示玩家數" },
+        "format": { "label": "數字格式", "description": "餘額顯示格式" }
+      },
+      "circuitBreaker": {
+        "enabled": { "label": "啟用熔斷器", "description": "啟用經濟融斷機制" },
+        "maxSingleTransaction": { "label": "單筆交易上限", "description": "單筆交易金額上限" },
+        "max-single-transaction": { "label": "單筆交易上限", "description": "單筆交易金額上限" },
+        "maxTransactionsPerSecond": { "label": "每秒交易上限", "description": "每秒交易次數上限" },
+        "max-transactions-per-second": { "label": "每秒交易上限", "description": "每秒交易次數上限" },
+        "rapidInflationThreshold": { "label": "快速通膨閾值", "description": "5 分鐘內總增幅超過此值觸發" },
+        "rapid-inflation-threshold": { "label": "快速通膨閾值", "description": "5 分鐘內總增幅超過此值觸發" },
+        "inflationCheckIntervalMinutes": { "label": "通膨檢查間隔", "description": "通膨檢查間隔（分鐘）" },
+        "inflation-check-interval-minutes": { "label": "通膨檢查間隔", "description": "通膨檢查間隔（分鐘）" },
+        "suddenChangeThreshold": { "label": "異常變動閾值", "description": "餘額變動倍數超過此值鎖定" },
+        "sudden-change-threshold": { "label": "異常變動閾值", "description": "餘額變動倍數超過此值鎖定" },
+        "redisDisconnectLockSeconds": { "label": "Redis 斷線鎖定", "description": "Redis 斷線後鎖定秒數" },
+        "redis-disconnect-lock-seconds": { "label": "Redis 斷線鎖定", "description": "Redis 斷線後鎖定秒數" },
+        "memoryWarningThreshold": { "label": "記憶體警告閾值", "description": "記憶體使用率超過此值警告" },
+        "memory-warning-threshold": { "label": "記憶體警告閾值", "description": "記憶體使用率超過此值警告" },
+        "poolExhaustedWarning": { "label": "連線池警告", "description": "連線池剩餘數低於此值警告" },
+        "pool-exhausted-warning": { "label": "連線池警告", "description": "連線池剩餘數低於此值警告" },
+        "playerProtection": {
+          "enabled": { "label": "啟用玩家保護", "description": "啟用玩家交易保護" },
+          "rateLimit": {
+            "maxTransactionsPerSecond": { "label": "每秒交易限制", "description": "玩家每秒交易次數上限" },
+            "max-transactions-per-second": { "label": "每秒交易限制", "description": "玩家每秒交易次數上限" },
+            "maxTransactionsPerMinute": { "label": "每分鐘交易限制", "description": "玩家每分鐘交易次數上限" },
+            "max-transactions-per-minute": { "label": "每分鐘交易限制", "description": "玩家每分鐘交易次數上限" },
+            "maxAmountPerMinute": { "label": "每分鐘金額上限", "description": "玩家每分鐘交易金額上限" },
+            "max-amount-per-minute": { "label": "每分鐘金額上限", "description": "玩家每分鐘交易金額上限" }
+          },
+          "anomalyDetection": {
+            "warningWindowSeconds": { "label": "警告視窗", "description": "異常偵測時間視窗（秒）" },
+            "warning-window-seconds": { "label": "警告視窗", "description": "異常偵測時間視窗（秒）" },
+            "warningThreshold": { "label": "警告閾值", "description": "觸發警告的交易次數" },
+            "warning-threshold": { "label": "警告閾值", "description": "觸發警告的交易次數" },
+            "balanceChangeThreshold": { "label": "餘額變動閾值", "description": "餘額變動倍數閾值" },
+            "balance-change-threshold": { "label": "餘額變動閾值", "description": "餘額變動倍數閾值" }
+          },
+          "autoUnlock": {
+            "lockDurationMinutes": { "label": "鎖定持續時間", "description": "自動解鎖等待時間（分鐘）" },
+            "lock-duration-minutes": { "label": "鎖定持續時間", "description": "自動解鎖等待時間（分鐘）" },
+            "maxLockExtensions": { "label": "最大鎖定延長次數", "description": "最大延長次數" },
+            "max-lock-extensions": { "label": "最大鎖定延長次數", "description": "最大延長次數" },
+            "unlockTestTransactions": { "label": "解鎖測試交易", "description": "確認解鎖所需成功交易次數" },
+            "unlock-test-transactions": { "label": "解鎖測試交易", "description": "確認解鎖所需成功交易次數" }
+          }
+        },
+        "player-protection": {
+          "enabled": { "label": "啟用玩家保護", "description": "啟用玩家交易保護" },
+          "rate-limit": {
+            "max-transactions-per-second": { "label": "每秒交易限制", "description": "玩家每秒交易次數上限" },
+            "max-transactions-per-minute": { "label": "每分鐘交易限制", "description": "玩家每分鐘交易次數上限" },
+            "max-amount-per-minute": { "label": "每分鐘金額上限", "description": "玩家每分鐘交易金額上限" }
+          },
+          "anomaly-detection": {
+            "warning-window-seconds": { "label": "警告視窗", "description": "異常偵測時間視窗（秒）" },
+            "warning-threshold": { "label": "警告閾值", "description": "觸發警告的交易次數" },
+            "balance-change-threshold": { "label": "餘額變動閾值", "description": "餘額變動倍數閾值" }
+          },
+          "auto-unlock": {
+            "lock-duration-minutes": { "label": "鎖定持續時間", "description": "自動解鎖等待時間（分鐘）" },
+            "max-lock-extensions": { "label": "最大鎖定延長次數", "description": "最大延長次數" },
+            "unlock-test-transactions": { "label": "解鎖測試交易", "description": "確認解鎖所需成功交易次數" }
+          }
+        }
+      },
+      "playerProtection": {
+        "enabled": { "label": "啟用玩家保護", "description": "啟用玩家交易保護" },
+        "rateLimit": {
+          "maxTransactionsPerSecond": { "label": "每秒交易限制", "description": "玩家每秒交易次數上限" },
+          "max-transactions-per-second": { "label": "每秒交易限制", "description": "玩家每秒交易次數上限" },
+          "maxTransactionsPerMinute": { "label": "每分鐘交易限制", "description": "玩家每分鐘交易次數上限" },
+          "max-transactions-per-minute": { "label": "每分鐘交易限制", "description": "玩家每分鐘交易次數上限" },
+          "maxAmountPerMinute": { "label": "每分鐘金額上限", "description": "玩家每分鐘交易金額上限" },
+          "max-amount-per-minute": { "label": "每分鐘金額上限", "description": "玩家每分鐘交易金額上限" }
+        },
+        "anomalyDetection": {
+          "warningWindowSeconds": { "label": "警告視窗", "description": "異常偵測時間視窗（秒）" },
+          "warning-window-seconds": { "label": "警告視窗", "description": "異常偵測時間視窗（秒）" },
+          "warningThreshold": { "label": "警告閾值", "description": "觸發警告的交易次數" },
+          "warning-threshold": { "label": "警告閾值", "description": "觸發警告的交易次數" },
+          "balanceChangeThreshold": { "label": "餘額變動閾值", "description": "餘額變動倍數閾值" },
+          "balance-change-threshold": { "label": "餘額變動閾值", "description": "餘額變動倍數閾值" }
+        },
+        "autoUnlock": {
+          "lockDurationMinutes": { "label": "鎖定持續時間", "description": "自動解鎖等待時間（分鐘）" },
+          "lock-duration-minutes": { "label": "鎖定持續時間", "description": "自動解鎖等待時間（分鐘）" },
+          "maxLockExtensions": { "label": "最大鎖定延長次數", "description": "最大延長次數" },
+          "max-lock-extensions": { "label": "最大鎖定延長次數", "description": "最大延長次數" },
+          "unlockTestTransactions": { "label": "解鎖測試交易", "description": "確認解鎖所需成功交易次數" },
+          "unlock-test-transactions": { "label": "解鎖測試交易", "description": "確認解鎖所需成功交易次數" }
+        },
+        "globalLock": {
+          "enabled": { "label": "啟用全局鎖定", "description": "總體經濟異常時啟用全局鎖定" },
+          "totalInflationThreshold": { "label": "總通膨閾值", "description": "總增幅超過此值觸發全局鎖定" },
+          "total-inflation-threshold": { "label": "總通膨閾值", "description": "總增幅超過此值觸發全局鎖定" }
+        },
+        "transferProtection": {
+          "lockReceiver": { "label": "鎖定收款人", "description": "轉帳時鎖定收款人" },
+          "lock-receiver": { "label": "鎖定收款人", "description": "轉帳時鎖定收款人" },
+          "receiverLockThreshold": { "label": "收款人鎖定閾值", "description": "超過此金額鎖定收款人" },
+          "receiver-lock-threshold": { "label": "收款人鎖定閾值", "description": "超過此金額鎖定收款人" }
+        }
+      },
+      "discordWebhook": {
+        "enabled": { "label": "啟用 Discord 通知", "description": "啟用 Discord Webhook 通知" },
+        "webhooks": { "label": "Webhooks", "description": "Webhook 設定列表" },
+        "embed": {
+          "color": { "label": "顏色", "description": "嵌入訊息顏色 (HEX)" },
+          "showPlayerName": { "label": "顯示玩家名稱", "description": "在嵌入中顯示玩家名稱" },
+          "show-player-name": { "label": "顯示玩家名稱", "description": "在嵌入中顯示玩家名稱" },
+          "showTimestamp": { "label": "顯示時間戳", "description": "在嵌入中顯示時間戳" },
+          "show-timestamp": { "label": "顯示時間戳", "description": "在嵌入中顯示時間戳" },
+          "username": { "label": "使用者名稱", "description": "Discord 機器人顯示名稱" }
+        }
+      },
+      "audit": {
+        "enabled": { "label": "啟用審計日誌", "description": "啟用交易審計記錄" },
+        "batchSize": { "label": "批次大小", "description": "資料庫批次寫入大小" },
+        "batch-size": { "label": "批次大小", "description": "資料庫批次寫入大小" },
+        "flushIntervalMs": { "label": "刷新間隔", "description": "刷新間隔（毫秒）" },
+        "flush-interval-ms": { "label": "刷新間隔", "description": "刷新間隔（毫秒）" },
+        "retentionDays": { "label": "保留天數", "description": "日誌保留天數（0 為永久）" },
+        "retention-days": { "label": "保留天數", "description": "日誌保留天數（0 為永久）" },
+        "cleanup": {
+          "enabled": { "label": "啟用清理", "description": "自動清理過期日誌" },
+          "intervalHours": { "label": "清理間隔", "description": "清理執行間隔（小時）" },
+          "interval-hours": { "label": "清理間隔", "description": "清理執行間隔（小時）" }
+        },
+        "export": {
+          "enabled": { "label": "啟用匯出", "description": "啟用日誌匯出功能" },
+          "exportFolder": { "label": "匯出資料夾", "description": "日誌匯出儲存位置" },
+          "export-folder": { "label": "匯出資料夾", "description": "日誌匯出儲存位置" },
+          "deleteAfterExport": { "label": "匯出後刪除", "description": "匯出後刪除資料庫記錄" },
+          "delete-after-export": { "label": "匯出後刪除", "description": "匯出後刪除資料庫記錄" }
+        },
+        "redis": {
+          "enabled": { "label": "啟用 Redis 快取", "description": "使用 Redis 緩存審計日誌" },
+          "windowSize": { "label": "快取視窗大小", "description": "Redis 快取視窗大小" },
+          "window-size": { "label": "快取視窗大小", "description": "Redis 快取視窗大小" },
+          "migrationThreshold": { "label": "遷移閾值", "description": "觸發遷移的待處理數量" },
+          "migration-threshold": { "label": "遷移閾值", "description": "觸發遷移的待處理數量" },
+          "migrationBatchSize": { "label": "遷移批次大小", "description": "每次遷移的數量" },
+          "migration-batch-size": { "label": "遷移批次大小", "description": "每次遷移的數量" },
+          "migrationIntervalMs": { "label": "遷移間隔", "description": "遷移間隔（毫秒）" },
+          "migration-interval-ms": { "label": "遷移間隔", "description": "遷移間隔（毫秒）" }
+        },
+        "deduplication": {
+          "enabled": { "label": "啟用去重", "description": "啟用伺服器端去重" },
+          "serverWindowSeconds": { "label": "去重時間窗口", "description": "去重時間窗口（秒）" },
+          "server-window-seconds": { "label": "去重時間窗口", "description": "去重時間窗口（秒）" }
+        }
+      },
+      "adminPermissions": {
+        "enforceDailyLimit": { "label": "強制每日限額", "description": "強制執行管理員每日操作限額" },
+        "enforce-daily-limit": { "label": "強制每日限額", "description": "強制執行管理員每日操作限額" },
+        "confirmThreshold": { "label": "確認閾值", "description": "超過此金額需管理員確認" },
+        "confirm-threshold": { "label": "確認閾值", "description": "超過此金額需管理員確認" },
+        "levels": { "label": "權限等級", "description": "管理員權限分級設定" },
+        "observe": { "label": "觀察", "description": "僅能查看資料" },
+        "reward": { "label": "獎勵", "description": "可發放獎勵" },
+        "general": { "label": "一般", "description": "一般管理權限" },
+        "full": { "label": "完整", "description": "完整管理權限" },
+        "permission": { "label": "權限節點", "description": "權限節點名稱" },
+        "dailyGiveLimit": { "label": "每日給予上限", "description": "每日給予貨幣上限" },
+        "daily-give-limit": { "label": "每日給予上限", "description": "每日給予貨幣上限" },
+        "dailyTakeLimit": { "label": "每日扣除上限", "description": "每日扣除貨幣上限" },
+        "daily-take-limit": { "label": "每日扣除上限", "description": "每日扣除貨幣上限" }
+      },
+      "messages": {
+        "legacyColorSupport": { "label": "舊版顏色支援", "description": "支援 & 顏色代碼" },
+        "legacy-color-support": { "label": "舊版顏色支援", "description": "支援 & 顏色代碼" },
+        "legacyCharacter": { "label": "舊版字元", "description": "舊版顏色前綴字元" },
+        "legacy-character": { "label": "舊版字元", "description": "舊版顏色前綴字元" },
+        "minimessageSupport": { "label": "MiniMessage 支援", "description": "支援 MiniMessage 格式" },
+        "minimessage-support": { "label": "MiniMessage 支援", "description": "支援 MiniMessage 格式" },
+        "hexColors": { "label": "HEX 顏色", "description": "支援 HEX 顏色代碼" },
+        "hex-colors": { "label": "HEX 顏色", "description": "支援 HEX 顏色代碼" }
+      },
+      "crossServerNotifications": {
+        "enabled": { "label": "啟用跨服通知", "description": "啟用跨伺服器訊息通知" },
+        "notifyType": { "label": "通知類型", "description": "通知類型 (all/deposit-only/withdraw-only/none)" },
+        "notify-type": { "label": "通知類型", "description": "通知類型 (all/deposit-only/withdraw-only/none)" },
+        "showActionbar": { "label": "顯示 ActionBar", "description": "在 ActionBar 顯示通知" },
+        "show-actionbar": { "label": "顯示 ActionBar", "description": "在 ActionBar 顯示通知" },
+        "actionbarDuration": { "label": "ActionBar 持續時間", "description": "ActionBar 顯示時間（刻）" },
+        "actionbar-duration": { "label": "ActionBar 持續時間", "description": "ActionBar 顯示時間（刻）" }
+      },
+      "shadowSync": {
+        "enabled": { "label": "啟用影子同步", "description": "啟用餘額備份同步" },
+        "target": { "label": "同步目標", "description": "寫入目標 (local/cmi/all)" },
+        "trigger": {
+          "batchSize": { "label": "觸發批次大小", "description": "累積多少變更觸發同步" },
+          "batch-size": { "label": "觸發批次大小", "description": "累積多少變更觸發同步" },
+          "maxDelayMs": { "label": "最大延遲", "description": "最大延遲時間（毫秒）" },
+          "max-delay-ms": { "label": "最大延遲", "description": "最大延遲時間（毫秒）" }
+        },
+        "storage": {
+          "type": { "label": "儲存類型", "description": "儲存類型 (jsonl/sqlite/mysql/postgresql)" }
+        },
+        "features": {
+          "historyEnabled": { "label": "啟用歷史記錄", "description": "記錄餘額變動歷史" },
+          "history-enabled": { "label": "啟用歷史記錄", "description": "記錄餘額變動歷史" },
+          "historyRetentionDays": { "label": "歷史保留天數", "description": "歷史記錄保留天數" },
+          "history-retention-days": { "label": "歷史保留天數", "description": "歷史記錄保留天數" }
+        }
+      },
+      "shadow-sync": {
+        "enabled": { "label": "啟用影子同步", "description": "啟用餘額備份同步" },
+        "target": { "label": "同步目標", "description": "寫入目標 (local/cmi/all)" },
+        "trigger": {
+          "batchSize": { "label": "觸發批次大小", "description": "累積多少變更觸發同步" },
+          "batch-size": { "label": "觸發批次大小", "description": "累積多少變更觸發同步" },
+          "maxDelayMs": { "label": "最大延遲", "description": "最大延遲時間（毫秒）" },
+          "max-delay-ms": { "label": "最大延遲", "description": "最大延遲時間（毫秒）" }
+        },
+        "storage": {
+          "type": { "label": "儲存類型", "description": "儲存類型 (jsonl/sqlite/mysql/postgresql)" }
+        },
+        "features": {
+          "historyEnabled": { "label": "啟用歷史記錄", "description": "記錄餘額變動歷史" },
+          "history-enabled": { "label": "啟用歷史記錄", "description": "記錄餘額變動歷史" },
+          "historyRetentionDays": { "label": "歷史保留天數", "description": "歷史記錄保留天數" },
+          "history-retention-days": { "label": "歷史保留天數", "description": "歷史記錄保留天數" }
+        }
+      },
+      "webAdminUi": {
+        "theme": { "label": "介面主題", "description": "Web 管理介面顯示主題 (dark/light)" },
+        "language": { "label": "介面語言", "description": "Web 管理介面使用語言" },
+        "timezone": { "label": "時區設定", "description": "顯示時間所使用的時區" }
+      }
+    }
+  },
+  "app": {
+    "disconnected": "SSE 連線已斷開",
+    "reconnect": "重新連線"
+  },
+  "nodes": {
+    "selectServer": "選擇伺服器...",
+    "addNode": "新增節點",
+    "editNode": "編輯節點",
+    "deleteNode": "刪除節點",
+    "nodeName": "節點名稱",
+    "nodeNamePlaceholder": "請輸入節點名稱",
+    "nodeUrl": "節點網址",
+    "nodeUrlPlaceholder": "https://example.com:8080",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "請輸入 API Key",
+    "enabled": "啟用",
+    "status": "狀態",
+    "online": "在線",
+    "offline": "離線",
+    "unknown": "未知",
+    "actions": "操作",
+    "ping": "Ping",
+    "confirmDelete": "確定要刪除此節點嗎？",
+    "addSuccess": "節點新增成功",
+    "updateSuccess": "節點更新成功",
+    "deleteSuccess": "節點刪除成功",
+    "addFailed": "節點新增失敗",
+    "updateFailed": "節點更新失敗",
+    "deleteFailed": "節點刪除失敗",
+    "saveFailed": "儲存失敗",
+    "pingSuccess": "Ping 成功",
+    "pingFailed": "Ping 失敗",
+    "invalidUrl": "無效的 URL",
+    "ssrfBlocked": "URL 被 SSRF 防護阻止",
+    "noNodes": {
+      "title": "尚無節點",
+      "description": "點擊上方按鈕新增第一個節點"
+    },
+    "addFirstNode": "新增第一個節點",
+    "managementDescription": "管理所有已連接的伺服器節點",
+    "rank": "排名",
+    "deleteConfirm": {
+      "title": "確認刪除",
+      "description": "此操作無法撤銷，確定要刪除此節點嗎？"
+    },
+    "errors": {
+      "nameRequired": "請輸入節點名稱",
+      "urlRequired": "請輸入節點網址",
+      "urlInvalid": "請輸入有效的 URL",
+      "apiKeyRequired": "請輸入 API Key"
+    }
+  },
+  "central": {
+    "title": "中央管理",
+    "totalSupply": "總供應量",
+    "totalPlayers": "總玩家數",
+    "onlinePlayers": "線上人數",
+    "todayTransactions": "今日交易",
+    "allNodes": "所有節點",
+    "nodes": "節點狀態",
+    "server": "伺服器",
+    "statsError": "無法載入跨伺服器統計資料",
+    "nodesError": "無法載入節點狀態",
+    "noNodes": {
+      "title": "暫無節點",
+      "description": "在節點管理頁面新增伺服器節點"
+    },
+    "crossServerRank": "跨服排行榜",
+    "noRankData": {
+      "title": "暫無排行資料",
+      "description": "尚無足夠的資料顯示排行榜"
+    },
+    "rank": "排名"
+  },
+  "notification": {
+    "playerJoined": "玩家加入",
+    "playerLeft": "玩家離開",
+    "playerJoinedMessage": "{player} 加入了伺服器",
+    "playerLeftMessage": "{player} 離開了伺服器",
+    "newTransaction": "新交易",
+    "newAudit": "新審計記錄",
+    "newAuditDesc": "檢視新交易記錄",
+    "transactionReceived": "收到新交易記錄",
+    "circuitBreaker": "熔斷器觸發",
+    "circuitBreakerAlert": "熔斷器警報",
+    "circuitBreakerWarning": "熔斷器已觸發，系統已鎖定",
+    "systemAlert": "系統警告",
+    "systemError": "系統錯誤發生",
+    "newTransactionDesc": "{player}: {amount}",
+    "newVersionAvailable": "新版本可用",
+    "securityAlert": "安全警報",
+    "playerLocked": "玩家被鎖定",
+    "playerWarning": "玩家警告",
+    "playerUnlocked": "玩家解鎖",
+    "systemLocked": "系統鎖定",
+    "highMemory": "記憶體過高",
+    "redisPoolCritical": "Redis 連線池緊迫"
+  }
+}

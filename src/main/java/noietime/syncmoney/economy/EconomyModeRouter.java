@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Economy Mode Router.
+ * [SYNC-ECO-073] Economy Mode Router.
  * Determines the handling logic for economic operations based on configured mode.
  */
 public class EconomyModeRouter {
@@ -29,7 +29,7 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Initialize handlers.
+     * [SYNC-ECO-074] Initialize handlers.
      */
     public void initialize(EconomyFacadeWrapper syncmoneyFacade,
                          LocalEconomyHandler localHandler,
@@ -42,7 +42,7 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Set CMI handler after initialization.
+     * [SYNC-ECO-075] Set CMI handler after initialization.
      * Used when CMI mode is detected at runtime.
      */
     public void setCmiHandler(CMIEconomyHandler cmiHandler) {
@@ -50,27 +50,27 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Get CMI handler.
+     * [SYNC-ECO-076] Get CMI handler.
      */
     public CMIEconomyHandler getCmiHandler() {
         return cmiHandler;
     }
 
     /**
-     * Get current economy mode.
+     * [SYNC-ECO-077] Get current economy mode.
      */
     public EconomyMode getMode() {
         return mode;
     }
 
     /**
-     * Handle deposit operation.
+     * [SYNC-ECO-078] Handle deposit operation.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
         return switch (mode) {
             case LOCAL -> {
                 if (localHandler != null) {
-                    yield localHandler.deposit(uuid, null, amount);
+                    yield localHandler.deposit(uuid, null, amount, source != null ? source.name() : "LOCAL");
                 }
                 yield BigDecimal.ZERO;
             }
@@ -90,7 +90,6 @@ public class EconomyModeRouter {
                 yield BigDecimal.ZERO;
             }
             case LOCAL_REDIS -> {
-                // LOCAL_REDIS is similar to SYNC but without MySQL
                 if (syncmoneyFacade != null && syncManager != null) {
                     BigDecimal result = syncmoneyFacade.deposit(uuid, amount, source);
                     syncManager.publishAndNotify(uuid, result,
@@ -103,13 +102,13 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Handle withdrawal operation.
+     * [SYNC-ECO-079] Handle withdrawal operation.
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
         return switch (mode) {
             case LOCAL -> {
                 if (localHandler != null) {
-                    yield localHandler.withdraw(uuid, null, amount);
+                    yield localHandler.withdraw(uuid, null, amount, source != null ? source.name() : "LOCAL");
                 }
                 yield BigDecimal.ZERO;
             }
@@ -141,7 +140,7 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Handle balance query.
+     * [SYNC-ECO-080] Handle balance query.
      */
     public BigDecimal getBalance(UUID uuid) {
         return switch (mode) {
@@ -167,13 +166,13 @@ public class EconomyModeRouter {
     }
 
     /**
-     * Handle balance setting.
+     * [SYNC-ECO-081] Handle balance setting.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
         return switch (mode) {
             case LOCAL -> {
                 if (localHandler != null) {
-                    yield localHandler.setBalance(uuid, null, newBalance);
+                    yield localHandler.setBalance(uuid, null, newBalance, source != null ? source.name() : "LOCAL");
                 }
                 yield BigDecimal.ZERO;
             }
@@ -205,7 +204,7 @@ public class EconomyModeRouter {
     }
 
     /**
-     * EconomyFacade wrapper interface.
+     * [SYNC-ECO-082] EconomyFacade wrapper interface.
      * Provides unified interface for economy operations.
      */
     public interface EconomyFacadeWrapper {

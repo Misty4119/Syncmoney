@@ -4,6 +4,11 @@
 -- KEYS[2] = balance key (syncmoney:balance:{uuid})
 -- ARGV[1] = new balance (number)
 
+-- Helper function: truncate to 2 decimal places without rounding
+local function truncateToTwoDecimals(num)
+    return math.floor(num * 100 + 0.0000001) / 100
+end
+
 local keyVersion = KEYS[1]
 local keyBalance = KEYS[2]
 local newBalance = tonumber(ARGV[1])
@@ -13,5 +18,5 @@ if newBalance < 0 then
 end
 
 local newVersion = redis.call('INCR', keyVersion)
-redis.call('SET', keyBalance, string.format('%.2f', newBalance))
+redis.call('SET', keyBalance, string.format('%.2f', truncateToTwoDecimals(newBalance)))
 return tostring(newVersion)

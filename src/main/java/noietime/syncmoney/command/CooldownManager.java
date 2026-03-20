@@ -15,11 +15,23 @@ import java.util.concurrent.ConcurrentMap;
 public final class CooldownManager {
 
     private final ConcurrentMap<UUID, Long> cooldowns;
-    private final long cooldownMillis;
+    private volatile long cooldownMillis;
 
     public CooldownManager(Plugin plugin, int cooldownSeconds) {
         this.cooldownMillis = cooldownSeconds * 1000L;
         this.cooldowns = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * Hot-reloads the cooldown duration.
+     * Clears all in-progress cooldowns so players don't get locked out
+     * if the cooldown is being shortened by the admin.
+     *
+     * @param cooldownSeconds new cooldown period in seconds (0 = disabled)
+     */
+    public void reload(int cooldownSeconds) {
+        this.cooldownMillis = cooldownSeconds * 1000L;
+        cooldowns.clear();
     }
 
     /**

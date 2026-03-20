@@ -60,3 +60,18 @@ permissions:
   syncmoney.admin.reload:
     description: Allow reloading configuration
     default: op
+  syncmoney.admin.test:
+    description: Allow running stress test commands
+    default: op
+  syncmoney.admin.full:
+    description: Full admin access including unlimited economy operations and audit cleanup
+    default: op
+  syncmoney.admin.observe:
+    description: Read-only admin access (view only, no economy operations)
+    default: false
+  syncmoney.admin.reward:
+    description: Can give up to 100,000 currency per day
+    default: false
+  syncmoney.admin.general:
+    description: Can give/take up to 1,000,000 currency per day
+    default: false

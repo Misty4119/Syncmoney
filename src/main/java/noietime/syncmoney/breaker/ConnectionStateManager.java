@@ -9,6 +9,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import noietime.syncmoney.breaker.EconomicCircuitBreaker;
+
 /**
  * Connection state manager.
  * Monitors Redis connection status, enters LOCKED mode after disconnection.
@@ -21,35 +23,31 @@ public final class ConnectionStateManager {
     private final SyncmoneyConfig config;
     private final RedisManager redisManager;
     private final ScheduledExecutorService scheduler;
-
+    private final EconomicCircuitBreaker circuitBreaker;
 
     private volatile long lastSuccessfulConnection = System.currentTimeMillis();
 
-
     private volatile long lastCheckTime = System.currentTimeMillis();
-
 
     private volatile boolean redisAvailable = true;
 
-
     private final AtomicLong consecutiveFailures = new AtomicLong(0);
-
 
     private ConnectionStateCallback callback;
     private final boolean redisRequired;
 
-    public ConnectionStateManager(Plugin plugin, SyncmoneyConfig config, RedisManager redisManager, boolean redisRequired) {
+    public ConnectionStateManager(Plugin plugin, SyncmoneyConfig config, RedisManager redisManager, boolean redisRequired, EconomicCircuitBreaker circuitBreaker) {
         this.plugin = plugin;
         this.config = config;
         this.redisManager = redisManager;
         this.redisRequired = redisRequired;
+        this.circuitBreaker = circuitBreaker;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "Syncmoney-ConnectionStateManager");
             t.setDaemon(true);
             return t;
         });
 
-        // Skip monitoring in LOCAL mode (no Redis required)
         if (!redisRequired) {
             plugin.getLogger().fine("ConnectionStateManager: Skipping Redis monitoring in LOCAL mode");
             return;
@@ -66,6 +64,15 @@ public final class ConnectionStateManager {
     }
 
     /**
+     * Trigger circuit breaker lockdown.
+     */
+    private void triggerCircuitBreakerLockdown(String reason) {
+        if (circuitBreaker != null) {
+            circuitBreaker.triggerLockdown(reason);
+        }
+    }
+
+    /**
      * Check Redis connection status.
      */
     private void checkConnection() {
@@ -79,11 +86,17 @@ public final class ConnectionStateManager {
                 if (!redisAvailable) {
                     redisAvailable = true;
                     if (redisRequired) {
-                        plugin.getLogger().info("ConnectionStateManager: Redis connection restored");
+                        plugin.getLogger().fine("ConnectionStateManager: Redis connection restored");
                     }
                     if (redisManager.tryReconnect()) {
                         if (redisRequired) {
-                            plugin.getLogger().info("ConnectionStateManager: Successfully reconnected to Redis");
+                            plugin.getLogger().fine("ConnectionStateManager: Successfully reconnected to Redis");
+                        }
+                        if (circuitBreaker != null && circuitBreaker.isLocked()
+                                && circuitBreaker.getLockReason() != null
+                                && circuitBreaker.getLockReason().contains("Redis")) {
+                            circuitBreaker.reset();
+                            plugin.getLogger().info("CircuitBreaker: Auto-reset after Redis reconnection");
                         }
                     }
                     if (callback != null) {
@@ -94,18 +107,19 @@ public final class ConnectionStateManager {
                 long failureCount = consecutiveFailures.incrementAndGet();
                 long disconnectDuration = (System.currentTimeMillis() - lastSuccessfulConnection) / 1000;
 
-                if (disconnectDuration >= config.getCircuitBreakerRedisDisconnectLockSeconds()) {
-                    if (redisAvailable) {
-                        redisAvailable = false;
-                        if (redisRequired) {
-                            plugin.getLogger().severe("ConnectionStateManager: Redis disconnected for " +
-                                    disconnectDuration + "s, triggering LOCKDOWN");
-                        }
-                        if (callback != null) {
-                            callback.onConnectionLost(disconnectDuration);
+                    if (disconnectDuration >= config.getCircuitBreakerRedisDisconnectLockSeconds()) {
+                        if (redisAvailable) {
+                            redisAvailable = false;
+                            if (redisRequired) {
+                                plugin.getLogger().severe("ConnectionStateManager: Redis disconnected for " +
+                                        disconnectDuration + "s, triggering LOCKDOWN");
+                            }
+                            if (callback != null) {
+                                callback.onConnectionLost(disconnectDuration);
+                            }
+                            triggerCircuitBreakerLockdown("Redis disconnected for " + disconnectDuration + "s");
                         }
                     }
-                }
 
                 if (failureCount % 10 == 0) {
                     if (redisRequired) {
@@ -190,15 +204,9 @@ public final class ConnectionStateManager {
      * Connection state callback interface.
      */
     public interface ConnectionStateCallback {
-        /**
-         * Called when connection is restored.
-         */
         void onConnectionRestored();
-
-        /**
-         * Called when connection is lost.
-         * @param disconnectDuration Disconnection duration in seconds
-         */
         void onConnectionLost(long disconnectDuration);
+        default void onTriggerLockdown(String reason) {
+        }
     }
 }

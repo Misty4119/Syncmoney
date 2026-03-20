@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.sync.CMIDebounceManager;
 import noietime.syncmoney.util.FormatUtil;
+import noietime.syncmoney.util.MessageHelper;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
@@ -14,6 +15,7 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -34,12 +36,10 @@ public final class CMIEconomyListener implements Listener {
     private final CMIDebounceManager debounceManager;
     private final boolean cmiAvailable;
 
-    // Fallback polling
     private BukkitTask pollingTask;
-    private final ConcurrentHashMap<UUID, Double> lastKnownCMIBalance = new ConcurrentHashMap<>();
-    private static final long POLLING_INTERVAL_TICKS = 20L; // 1 second
+    private final ConcurrentHashMap<UUID, BigDecimal> lastKnownCMIBalance = new ConcurrentHashMap<>();
+    private static final long POLLING_INTERVAL_TICKS = 20L;
 
-    // CMI event class (cached via reflection)
     private static Class<?> cmiEventClass = null;
     private static Method getUserMethod = null;
     private static Method getFromMethod = null;
@@ -91,7 +91,6 @@ public final class CMIEconomyListener implements Listener {
 
         pollingTask = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             try {
-                // Check all online players
                 for (Player player : plugin.getServer().getOnlinePlayers()) {
                     UUID uuid = player.getUniqueId();
                     checkAndSyncBalance(uuid);
@@ -103,7 +102,7 @@ public final class CMIEconomyListener implements Listener {
             }
         }, POLLING_INTERVAL_TICKS, POLLING_INTERVAL_TICKS);
 
-        plugin.getLogger().info("CMI balance polling started (interval: " + POLLING_INTERVAL_TICKS + " ticks)");
+        plugin.getLogger().fine("CMI balance polling started (interval: " + POLLING_INTERVAL_TICKS + " ticks)");
     }
 
     /**
@@ -113,23 +112,21 @@ public final class CMIEconomyListener implements Listener {
         if (cmiHandler == null) return;
 
         try {
-            double currentBalance = cmiHandler.getCMIDirectBalance(uuid);
-            Double previousBalance = lastKnownCMIBalance.get(uuid);
+            BigDecimal currentBalance = cmiHandler.getCMIDirectBalance(uuid);
+            BigDecimal previousBalance = lastKnownCMIBalance.get(uuid);
 
             if (previousBalance == null) {
-                // First time seeing this player
                 lastKnownCMIBalance.put(uuid, currentBalance);
                 return;
             }
 
-            double diff = currentBalance - previousBalance;
-            if (Math.abs(diff) > 0.01) {
-                // Balance changed, trigger sync
-                boolean isDeposit = diff > 0;
+            BigDecimal diff = currentBalance.subtract(previousBalance);
+            if (diff.abs().compareTo(BigDecimal.valueOf(0.01)) > 0) {
+                boolean isDeposit = diff.compareTo(BigDecimal.ZERO) > 0;
                 cmiHandler.handleExternalBalanceChange(uuid, diff, isDeposit, "CMI-POLLING");
 
                 if (config.isDebug()) {
-                    plugin.getLogger().info("[CMI Polling] Player: " + uuid +
+                    plugin.getLogger().fine("[CMI Polling] Player: " + uuid +
                             ", Change: " + (isDeposit ? "+" : "") + diff +
                             ", From: " + previousBalance + ", To: " + currentBalance);
                 }
@@ -152,7 +149,6 @@ public final class CMIEconomyListener implements Listener {
             return;
         }
 
-        // Check if this is a CMI event
         if (cmiAvailable && cmiEventClass != null && cmiEventClass.isInstance(event)) {
             handleCMIEvent(event);
         }
@@ -164,7 +160,6 @@ public final class CMIEconomyListener implements Listener {
             double fromBalance = (double) getFromMethod.invoke(cmiEvent);
             double toBalance = (double) getToMethod.invoke(cmiEvent);
 
-            // Skip if no change or values are 0 (API issue)
             if (Double.compare(fromBalance, toBalance) == 0) {
                 return;
             }
@@ -178,7 +173,6 @@ public final class CMIEconomyListener implements Listener {
             double diff = toBalance - fromBalance;
             boolean isDeposit = diff > 0;
 
-            // Get source name if available
             String sourceName = "Unknown";
             try {
                 Object source = getSourceMethod.invoke(cmiEvent);
@@ -189,27 +183,23 @@ public final class CMIEconomyListener implements Listener {
             } catch (Exception ignored) {
             }
 
-            // Use debounce to prevent redundant syncs
-            final double finalDiff = diff;
+            final BigDecimal finalDiff = BigDecimal.valueOf(diff);
             final boolean finalIsDeposit = isDeposit;
             final String finalSourceName = sourceName;
             debounceManager.scheduleDebounced(uuid, () -> {
                 cmiHandler.handleExternalBalanceChange(uuid, finalDiff, finalIsDeposit, finalSourceName);
             });
 
-            // Update known balance
-            lastKnownCMIBalance.put(uuid, toBalance);
+            lastKnownCMIBalance.put(uuid, BigDecimal.valueOf(toBalance));
 
-            // Log debug info
             if (config.isDebug()) {
                 String playerName = getNameFromCMIUser(cmiUser);
-                plugin.getLogger().info("[CMI Event] Player: " + playerName +
+                plugin.getLogger().fine("[CMI Event] Player: " + playerName +
                         ", Change: " + (isDeposit ? "+" : "") + diff +
                         ", From: " + fromBalance + ", To: " + toBalance +
                         ", Source: " + sourceName);
             }
 
-            // Send notification if enabled
             Player player = Bukkit.getServer().getPlayer(uuid);
             if (player != null && player.isOnline() && config.isCrossServerNotificationsEnabled()) {
                 sendNotification(player, Math.abs(diff), isDeposit);
@@ -245,7 +235,7 @@ public final class CMIEconomyListener implements Listener {
         if (message != null) {
             message = message.replace("{amount}", FormatUtil.formatCurrency(amount));
             message = message.replace("{server}", config.getServerName());
-            player.sendMessage(message);
+            MessageHelper.sendMessage(player, message);
         }
     }
 

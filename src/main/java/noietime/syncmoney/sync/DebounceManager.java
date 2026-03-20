@@ -16,8 +16,8 @@ import java.util.UUID;
 public final class DebounceManager {
 
     private static final int MAX_ENTRIES = 10_000;
-    private static final long MESSAGE_TTL_MS = 5000; // 5 seconds
-    private static final long CLEANUP_INTERVAL_MS = 60000; // 60 seconds
+    private static final long MESSAGE_TTL_MS = 5000;
+    private static final long CLEANUP_INTERVAL_MS = 60000;
 
     private final Plugin plugin;
     private final ConcurrentMap<String, ProcessedMessage> processedMessages;

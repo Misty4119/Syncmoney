@@ -1,0 +1,7 @@
+import{c as r}from"./index-CGNwwQM1.js";import{d as i,A as s,C as d,J as c,L as l,u as m,H as n,D as a,$ as y,z as t}from"./vue-vendor-DIcWDhku.js";/**
+ * @license lucide-vue-next v0.576.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const u=r("inbox",[["polyline",{points:"22 12 16 12 14 15 10 15 8 12 2 12",key:"o97t9d"}],["path",{d:"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",key:"oot6mr"}]]),x={class:"flex flex-col items-center justify-center py-12 text-center"},k={class:"p-4 rounded-2xl bg-gray-100 dark:bg-surface-800/50 mb-4"},f={key:0,class:"text-lg font-medium text-gray-700 dark:text-surface-300 mb-1"},h={key:1,class:"text-sm text-gray-500 dark:text-surface-500 max-w-sm"},p={key:2,class:"mt-4"},_=i({__name:"EmptyState",props:{icon:{},title:{},description:{}},setup(e){return(o,g)=>(t(),s("div",x,[d("div",k,[e.icon?(t(),c(l(e.icon),{key:0,class:"w-10 h-10 text-gray-400 dark:text-surface-500"})):(t(),c(m(u),{key:1,class:"w-10 h-10 text-gray-400 dark:text-surface-500"}))]),e.title?(t(),s("h3",f,n(e.title),1)):a("",!0),e.description?(t(),s("p",h,n(e.description),1)):a("",!0),o.$slots.action?(t(),s("div",p,[y(o.$slots,"action")])):a("",!0)]))}});export{_};
+//# sourceMappingURL=EmptyState.vue_vue_type_script_setup_true_lang-D7n8OCOm.js.map

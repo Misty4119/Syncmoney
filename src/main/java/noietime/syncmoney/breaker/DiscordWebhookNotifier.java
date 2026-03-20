@@ -2,6 +2,9 @@ package noietime.syncmoney.breaker;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.uuid.NameResolver;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.awt.Color;
@@ -21,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * DiscordWebhookNotifier - Handles Discord webhook notifications.
  * Sends async notifications to configured Discord webhooks.
- * 
+ *
  * [ThreadSafe] This class is thread-safe for concurrent operations.
  */
 public final class DiscordWebhookNotifier {
@@ -29,6 +32,7 @@ public final class DiscordWebhookNotifier {
     private final Plugin plugin;
     private final SyncmoneyConfig config;
     private final ExecutorService executor;
+    private volatile NameResolver nameResolver;
 
     public DiscordWebhookNotifier(Plugin plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
@@ -38,6 +42,32 @@ public final class DiscordWebhookNotifier {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    /**
+     * Set NameResolver for player name resolution.
+     */
+    public void setNameResolver(NameResolver nameResolver) {
+        this.nameResolver = nameResolver;
+    }
+
+    /**
+     * Get player name from UUID, with fallback to UUID string.
+     */
+    private String getPlayerName(java.util.UUID playerId) {
+        if (nameResolver != null) {
+            String name = nameResolver.getName(playerId);
+            if (name != null && !name.isBlank()) {
+                return name;
+            }
+        }
+
+        Player player = Bukkit.getPlayer(playerId);
+        if (player != null) {
+            return player.getName();
+        }
+
+        return playerId.toString();
     }
 
     /**
@@ -53,6 +83,7 @@ public final class DiscordWebhookNotifier {
             return;
         }
 
+        String playerName = getPlayerName(playerId);
         String embedColor = config.getDiscordWebhookEmbedColor();
         String eventName = "rate_limit";
 
@@ -70,7 +101,7 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Rate Limit Triggered",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerId.toString() : "Hidden"),
+                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Limit Type: " + limitType,
                     config.isDiscordWebhookShowTimestamp());
         }
@@ -89,6 +120,7 @@ public final class DiscordWebhookNotifier {
             return;
         }
 
+        String playerName = getPlayerName(playerId);
         String embedColor = config.getDiscordWebhookEmbedColor();
         String eventName = "player_warning";
 
@@ -106,7 +138,7 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Warning",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerId.toString() : "Hidden"),
+                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Transactions: " + transactionCount + " / " + threshold + "\n" +
                     "Total Amount: " + noietime.syncmoney.util.FormatUtil.formatCurrency(totalAmount),
                     config.isDiscordWebhookShowTimestamp());
@@ -126,7 +158,8 @@ public final class DiscordWebhookNotifier {
             return;
         }
 
-        String embedColor = "FF5555"; // Red for locked
+        String playerName = getPlayerName(playerId);
+        String embedColor = "FF5555";
         String eventName = "player_locked";
 
         for (Map<String, Object> webhook : webhooks) {
@@ -143,7 +176,7 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Locked",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerId.toString() : "Hidden"),
+                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Reason: " + reason + "\n" +
                     "Duration: " + durationMinutes + " minutes",
                     config.isDiscordWebhookShowTimestamp());
@@ -163,7 +196,8 @@ public final class DiscordWebhookNotifier {
             return;
         }
 
-        String embedColor = "4ADE80"; // Green for unlocked
+        String playerName = getPlayerName(playerId);
+        String embedColor = "4ADE80";
         String eventName = "player_unlocked";
 
         for (Map<String, Object> webhook : webhooks) {
@@ -180,7 +214,7 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Unlocked",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerId.toString() : "Hidden"),
+                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Unlocked by: " + reason,
                     config.isDiscordWebhookShowTimestamp());
         }
@@ -199,7 +233,7 @@ public final class DiscordWebhookNotifier {
             return;
         }
 
-        String embedColor = "FF0000"; // Dark red for global lock
+        String embedColor = "FF0000";
         String eventName = "global_lock";
 
         for (Map<String, Object> webhook : webhooks) {
@@ -218,6 +252,260 @@ public final class DiscordWebhookNotifier {
                     "GLOBAL ECONOMY LOCK",
                     "Server: " + config.getServerName(),
                     "Reason: " + reason,
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send schema upgrade event to Discord.
+     */
+    public void sendSchemaUpgradeEvent(int fromVersion, int toVersion) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "00FF00";
+        String eventName = "schema_upgrade";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "Database Schema Upgraded",
+                    "Server: " + config.getServerName(),
+                    "Version: " + fromVersion + " → " + toVersion,
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send circuit breaker trigger event to Discord.
+     */
+    public void sendCircuitBreakerEvent(String state, String reason) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "FF0000";
+        String eventName = "circuit_breaker_trigger";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "Circuit Breaker Triggered",
+                    "Server: " + config.getServerName(),
+                    "State: " + state + "\nReason: " + reason,
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send high memory event to Discord.
+     */
+    public void sendMemoryHighEvent(double usagePercent, long usedMb, long maxMb) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "FFAA00";
+        String eventName = "memory_high";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "High Memory Usage Warning",
+                    "Server: " + config.getServerName(),
+                    String.format("Memory: %.1f%% (%d/%d MB)", usagePercent, usedMb, maxMb),
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send Redis connection pool critical event to Discord.
+     */
+    public void sendRedisPoolCriticalEvent(int activeConnections, int maxConnections) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "FF0000";
+        String eventName = "redis_pool_critical";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            double usagePercent = (double) activeConnections / maxConnections * 100;
+            sendEmbedAsync(url, embedColor,
+                    "Redis Connection Pool Critical",
+                    "Server: " + config.getServerName(),
+                    String.format("Active: %d/%d (%.1f%%)", activeConnections, maxConnections, usagePercent),
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send high value transaction event to Discord.
+     */
+    public void sendHighValueTransactionEvent(java.util.UUID playerId, java.math.BigDecimal amount, String transactionType) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String playerName = getPlayerName(playerId);
+        String embedColor = "FFAA00";
+        String eventName = "high_value_transaction";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "High Value Transaction",
+                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Amount: " + noietime.syncmoney.util.FormatUtil.formatCurrency(amount) + "\nType: " + transactionType,
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send migration complete event to Discord.
+     */
+    public void sendMigrationCompleteEvent(int successCount, int failedCount) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "4ADE80";
+        String eventName = "migration_complete";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "Migration Completed",
+                    "Server: " + config.getServerName(),
+                    "Success: " + successCount + "\nFailed: " + failedCount,
+                    config.isDiscordWebhookShowTimestamp());
+        }
+    }
+
+    /**
+     * Send migration failed event to Discord.
+     */
+    public void sendMigrationFailedEvent(String errorMessage) {
+        if (!config.isDiscordWebhookEnabled()) {
+            return;
+        }
+
+        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        if (webhooks.isEmpty()) {
+            return;
+        }
+
+        String embedColor = "FF0000";
+        String eventName = "migration_failed";
+
+        for (Map<String, Object> webhook : webhooks) {
+            @SuppressWarnings("unchecked")
+            List<String> events = (List<String>) webhook.get("events");
+            if (events == null || !events.contains(eventName)) {
+                continue;
+            }
+
+            String url = (String) webhook.get("url");
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+
+            sendEmbedAsync(url, embedColor,
+                    "Migration Failed",
+                    "Server: " + config.getServerName(),
+                    "Error: " + errorMessage,
                     config.isDiscordWebhookShowTimestamp());
         }
     }

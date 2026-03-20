@@ -19,7 +19,6 @@ public final class TransferLockManager {
 
     private static final String LOCK_PREFIX = Constants.LOCK_PREFIX;
 
-    // Lua script for safe lock release (only delete if value matches)
     private static final String SAFE_UNLOCK_SCRIPT =
         "if redis.call('get', KEYS[1]) == ARGV[1] then " +
         "    return redis.call('del', KEYS[1]) " +
@@ -142,28 +141,38 @@ public final class TransferLockManager {
      */
     private boolean acquireMemoryLock(UUID uuid) {
         String lockValue = UUID.randomUUID().toString();
-        
+        long startTime = System.currentTimeMillis();
+        int maxRetries = Constants.LOCK_MAX_RETRIES;
+
         String existing = memoryLocks.putIfAbsent(uuid, lockValue);
         if (existing == null) {
             lockValues.put(uuid, lockValue);
             return true;
         }
-        
-        for (int i = 0; i < Constants.LOCK_MAX_RETRIES; i++) {
+
+        for (int i = 0; i < maxRetries; i++) {
+            if (i > 0) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                if (elapsed >= Constants.LOCK_TIMEOUT_SECONDS * 1000L) {
+                    plugin.getLogger().warning("acquireMemoryLock: timeout for " + uuid);
+                    return false;
+                }
+            }
+
             try {
-                    Thread.sleep(Constants.LOCK_RETRY_MILLIS);
+                Thread.sleep(Constants.LOCK_RETRY_MILLIS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            
+
             existing = memoryLocks.putIfAbsent(uuid, lockValue);
             if (existing == null) {
                 lockValues.put(uuid, lockValue);
                 return true;
             }
         }
-        
+
         return false;
     }
 
@@ -172,7 +181,8 @@ public final class TransferLockManager {
      */
     private void releaseLock(UUID uuid) {
         if (localMode) {
-            releaseMemoryLock(uuid);
+            String lockValue = lockValues.get(uuid);
+            releaseMemoryLock(uuid, lockValue);
             return;
         }
         
@@ -198,8 +208,11 @@ public final class TransferLockManager {
     /**
      * Releases in-memory lock (LOCAL mode).
      */
-    private void releaseMemoryLock(UUID uuid) {
-        lockValues.remove(uuid);
-        memoryLocks.remove(uuid);
+    private void releaseMemoryLock(UUID uuid, String expectedLockValue) {
+        String currentLockValue = lockValues.get(uuid);
+        if (expectedLockValue != null && expectedLockValue.equals(currentLockValue)) {
+            lockValues.remove(uuid);
+            memoryLocks.remove(uuid);
+        }
     }
 }

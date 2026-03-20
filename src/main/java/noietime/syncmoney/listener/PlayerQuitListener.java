@@ -1,7 +1,10 @@
 package noietime.syncmoney.listener;
 
+import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.web.server.WebAdminServer;
+import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -41,6 +44,26 @@ public final class PlayerQuitListener implements Listener {
         }
 
 
-        // plugin.getServer().getAsyncScheduler().runDelayed(...)
+        broadcastPlayerQuitEvent(name, uuid);
+    }
+
+    /**
+     * Broadcast player quit event to SSE for real-time updates.
+     */
+    private void broadcastPlayerQuitEvent(String playerName, UUID uuid) {
+        try {
+            WebAdminServer webAdminServer = ((Syncmoney) plugin).getWebAdminServer();
+            if (webAdminServer != null) {
+                SseManager sseManager = webAdminServer.getSseManager();
+                if (sseManager != null) {
+                    String json = String.format(
+                            "{\"type\":\"player_quit\",\"playerName\":\"%s\",\"uuid\":\"%s\",\"timestamp\":%d}",
+                            playerName, uuid.toString(), System.currentTimeMillis());
+                    sseManager.broadcastToChannel("system", json);
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().fine("Failed to broadcast player quit event: " + e.getMessage());
+        }
     }
 }

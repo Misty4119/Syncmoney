@@ -25,9 +25,7 @@ public final class ShadowSyncLog {
     private final ObjectMapper objectMapper;
     private final File logDirectory;
 
-
     private final ConcurrentLinkedQueue<SyncRecord> recentLogs;
-
 
     private static final int MAX_RECENT_LOGS = 1000;
 

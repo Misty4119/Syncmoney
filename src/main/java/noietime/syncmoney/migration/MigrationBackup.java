@@ -6,8 +6,15 @@ import noietime.syncmoney.Syncmoney;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -25,20 +32,19 @@ import java.util.concurrent.ConcurrentMap;
 public final class MigrationBackup {
 
     private final Plugin plugin;
+    private final Syncmoney syncmoney;
     private final ObjectMapper objectMapper;
     private File backupDirectory;
 
-
     private final ConcurrentMap<String, BackupEntry> backupData;
-
 
     private volatile BigDecimal totalBackupAmount;
 
-
     private volatile int totalBackupCount;
 
-    public MigrationBackup(Plugin plugin) {
+    public MigrationBackup(Plugin plugin, Syncmoney syncmoney) {
         this.plugin = plugin;
+        this.syncmoney = (Syncmoney) plugin;
         this.objectMapper = new ObjectMapper();
         this.backupData = new ConcurrentHashMap<>();
         this.totalBackupAmount = BigDecimal.ZERO;
@@ -83,6 +89,117 @@ public final class MigrationBackup {
     }
 
     /**
+     * Creates a full database backup in the specified format.
+     * @param format backup format (mysql, postgresql, sqlite)
+     * @return backup file path, or null if failed
+     */
+    public String createFullDatabaseBackup(String format) {
+        try {
+
+            Connection conn = getDatabaseConnection();
+            if (conn == null) {
+                plugin.getLogger().severe("Cannot create database backup: no database connection");
+                return null;
+            }
+
+            String fileName = "full_backup_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + "." + format;
+            File backupFile = new File(backupDirectory, fileName);
+
+            try (PrintWriter writer = new PrintWriter(new FileWriter(backupFile))) {
+                writer.println("-- Syncmoney Full Database Backup");
+                writer.println("-- Created: " + LocalDateTime.now());
+                writer.println("-- Format: " + format);
+                writer.println();
+
+
+                backupTable(writer, conn, "players", format);
+
+
+                if (tableExists(conn, "audit_log")) {
+                    backupTable(writer, conn, "audit_log", format);
+                }
+            }
+
+            plugin.getLogger().info("Full database backup created: " + backupFile.getAbsolutePath());
+            conn.close();
+            return backupFile.getAbsolutePath();
+
+        } catch (SQLException | IOException e) {
+            plugin.getLogger().severe("Failed to create database backup: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private Connection getDatabaseConnection() {
+        try {
+            var dbManager = syncmoney.getDatabaseManager();
+            if (dbManager != null) {
+                return dbManager.getConnection();
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Failed to get database connection: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Checks if a table exists in the database.
+     */
+    private boolean tableExists(Connection conn, String tableName) throws SQLException {
+        DatabaseMetaData metaData = conn.getMetaData();
+        try (ResultSet rs = metaData.getTables(null, null, tableName, null)) {
+            return rs.next();
+        }
+    }
+
+    /**
+     * Backs up a table to SQL statements.
+     */
+    private void backupTable(PrintWriter writer, Connection conn, String tableName, String format) throws SQLException {
+        writer.println("-- Table: " + tableName);
+        writer.println();
+
+
+        String selectSql = "SELECT * FROM " + tableName;
+        try (PreparedStatement stmt = conn.prepareStatement(selectSql);
+             ResultSet rs = stmt.executeQuery()) {
+
+            while (rs.next()) {
+                StringBuilder insert = new StringBuilder("INSERT INTO ").append(tableName).append(" VALUES (");
+
+                int columnCount = rs.getMetaData().getColumnCount();
+                for (int i = 1; i <= columnCount; i++) {
+                    Object value = rs.getObject(i);
+                    if (value == null) {
+                        insert.append("NULL");
+                    } else if (value instanceof Number) {
+                        insert.append(value.toString());
+                    } else if (value instanceof java.sql.Timestamp) {
+                        insert.append("'").append(value.toString()).append("'");
+                    } else {
+                        insert.append("'").append(value.toString().replace("'", "''")).append("'");
+                    }
+                    if (i < columnCount) {
+                        insert.append(", ");
+                    }
+                }
+                insert.append(");");
+                writer.println(insert);
+            }
+        }
+        writer.println();
+    }
+
+    /**
+     * Backs up as SQL format (convenience method).
+     * @return backup file path
+     */
+    public String backupAsSql() {
+        String format = syncmoney.getConfig().getString("database.type", "mysql");
+        return createFullDatabaseBackup(format.toLowerCase());
+    }
+
+    /**
      * Saves backup to file.
      * @return backup file path, or null if failed
      */
@@ -104,7 +221,7 @@ public final class MigrationBackup {
 
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(backupFile, metadata);
-            plugin.getLogger().info("Backup saved: " + backupFile.getAbsolutePath());
+            plugin.getLogger().fine("Backup saved: " + backupFile.getAbsolutePath());
             return backupFile.getAbsolutePath();
         } catch (JsonProcessingException e) {
             plugin.getLogger().severe("Failed to serialize backup: " + e.getMessage());
@@ -207,11 +324,10 @@ public final class MigrationBackup {
         int toDelete = files.size() - keepCount;
         for (int i = 0; i < toDelete; i++) {
             if (files.get(i).delete()) {
-                plugin.getLogger().info("Deleted old backup: " + files.get(i).getName());
+                plugin.getLogger().fine("Deleted old backup: " + files.get(i).getName());
             }
         }
     }
-
 
     public int getTotalBackupCount() {
         return totalBackupCount;

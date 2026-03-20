@@ -1,0 +1,642 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "search": "Search",
+    "noData": "No Data",
+    "refresh": "Refresh",
+    "edit": "Edit",
+    "delete": "Delete",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "status": "Status",
+    "actions": "Actions"
+  },
+  "notFound": {
+    "title": "404 - Page Not Found",
+    "message": "Sorry, the page you're looking for doesn't exist or has been removed.",
+    "goHome": "Go Home"
+  },
+  "auth": {
+    "appName": "Syncmoney",
+    "subtitle": "Admin Console",
+    "login": "Login",
+    "logout": "Logout",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Enter API Key"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "auditLog": "Audit Log",
+    "systemStatus": "System Status",
+    "settings": "Settings",
+    "collapse": "Collapse",
+    "config": "Plugin Config",
+    "toggleTheme": "Toggle Theme",
+    "notifications": "Notifications",
+    "centralDashboard": "Central Dashboard",
+    "nodesManagement": "Nodes Management"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "empty": "No notifications yet",
+    "clearAll": "Clear all"
+  },
+  "dashboard": {
+    "totalSupply": "Total Supply",
+    "totalPlayers": "Total Players",
+    "todayTransactions": "Today's Transactions",
+    "onlinePlayers": "Online Players",
+    "circuitBreaker": "Circuit Breaker",
+    "systemHealth": "System Health",
+    "connection": "Connection",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "lastUpdated": "Last Updated",
+    "unknownPlayer": "Unknown Player"
+  },
+  "audit": {
+    "realtime": "Real-time",
+    "player": "Player",
+    "type": "Type",
+    "amount": "Amount",
+    "balance": "Balance",
+    "source": "Source",
+    "server": "Server",
+    "time": "Time",
+    "reason": "Reason",
+    "loadingMore": "Loading more...",
+    "noMoreData": "No more data",
+    "status": {
+      "connected": "Connected",
+      "connecting": "Connecting",
+      "disconnected": "Disconnected",
+      "error": "Connection Error"
+    },
+    "typeOptions": {
+      "all": "All",
+      "deposit": "Deposit",
+      "withdraw": "Withdraw",
+      "transfer": "Transfer",
+      "setBalance": "Set Balance",
+      "set_balance": "Set Balance"
+    },
+    "filters": {
+      "player": "Player Name",
+      "type": "Transaction Type",
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "dateRange": "Select Date Range"
+    },
+    "dateShortcut": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "last7": "Last 7d",
+      "last30": "Last 30d",
+      "all": "All"
+    },
+    "newRecords": "new records",
+    "export": {
+      "failed": "Export failed"
+    }
+  },
+  "system": {
+    "plugin": "Plugin Status",
+    "connectivity": "Connectivity",
+    "version": "Version",
+    "version-fallback": "Unknown",
+    "dbVersion": "Database Version",
+    "mode": "Mode",
+    "modeLocal": "Local",
+    "uptime": "Uptime",
+    "redis": "Redis Connection",
+    "database": "Database",
+    "sseStream": "SSE Stream",
+    "circuitBreaker": "Circuit Breaker",
+    "memory": "Memory",
+    "threads": "Threads",
+    "memoryUsage": "Usage",
+    "tps": "TPS",
+    "tpsHealthy": "Healthy",
+    "tpsDegraded": "Degraded",
+    "tpsCritical": "Critical",
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "normal": "Normal",
+      "warning": "Warning",
+      "locked": "Locked"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "theme": "Theme",
+    "language": "Language",
+    "languageOptions": {
+      "zh-TW": "繁體中文",
+      "en-US": "English"
+    },
+    "timezone": "Timezone",
+    "save": "Save Settings",
+    "saveSuccess": "Settings saved",
+    "saveFailed": "Failed to save settings, please try again",
+    "themeOptions": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "timezoneOptions": {
+      "UTC": "UTC Time",
+      "Asia/Taipei": "Taipei Time (Asia/Taipei)",
+      "America/New_York": "Eastern Time (America/New_York)",
+      "Europe/London": "London Time (Europe/London)"
+    }
+  },
+  "config": {
+    "title": "Plugin Config",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "reload": "Reload Config",
+    "reloadSuccess": "Config Reloaded",
+    "reloadSuccessDesc": "Plugin configuration has been reloaded successfully",
+    "reloadError": "Reload Failed",
+    "reloadErrorDesc": "Failed to reload configuration, check server logs",
+    "loadError": "Load Failed",
+    "loadErrorDesc": "Failed to load plugin configuration",
+    "saveSuccess": "Settings Saved",
+    "saveSuccessDesc": "Settings saved and hot reloaded successfully",
+    "saveError": "Save Failed",
+    "saveErrorDesc": "Failed to save settings, check server logs",
+    "unsavedChanges": "Unsaved Changes",
+    "unsavedChangesDesc": "You have unsaved changes, discard?",
+    "sections": {
+      "core": {
+        "title": "Core Settings",
+        "description": "Server basic configuration"
+      },
+      "economy": {
+        "title": "Economy Settings",
+        "description": "Economy mode and sync settings"
+      },
+      "display": {
+        "title": "Display Settings",
+        "description": "Currency display format"
+      },
+      "pay": {
+        "title": "Pay Settings",
+        "description": "Transfer related settings"
+      },
+      "baltop": {
+        "title": "Leaderboard Settings",
+        "description": "Economy ranking display settings"
+      },
+      "circuit-breaker": {
+        "title": "Circuit Breaker",
+        "description": "Global + Player Protection"
+      },
+      "circuitBreaker": {
+        "title": "Circuit Breaker",
+        "description": "Prevent economy system anomalies"
+      },
+      "player-protection": {
+        "title": "Player Protection",
+        "description": "L1-L3 player-level protection"
+      },
+      "playerProtection": {
+        "title": "Player Protection",
+        "description": "L1-L3 player-level protection"
+      },
+      "discord-webhook": {
+        "title": "Discord Notifications",
+        "description": "Discord webhook notification settings"
+      },
+      "discordWebhook": {
+        "title": "Discord Notifications",
+        "description": "Discord webhook notification settings"
+      },
+      "audit": {
+        "title": "Audit Log",
+        "description": "Transaction records and history"
+      },
+      "admin-permissions": {
+        "title": "Admin Permissions",
+        "description": "Admin permission level settings"
+      },
+      "adminPermissions": {
+        "title": "Admin Permissions",
+        "description": "Admin permission level settings"
+      },
+      "messages": {
+        "title": "Message Settings",
+        "description": "In-game message format settings"
+      },
+      "cross-server-notifications": {
+        "title": "Cross-Server Notifications",
+        "description": "Cross-server message notifications"
+      },
+      "crossServerNotifications": {
+        "title": "Cross-Server Notifications",
+        "description": "Cross-server message notifications"
+      },
+      "shadow-sync": {
+        "title": "Shadow Sync",
+        "description": "Backup sync settings"
+      },
+      "shadowSync": {
+        "title": "Shadow Sync",
+        "description": "Backup sync settings"
+      },
+      "web-admin.ui": {
+        "title": "Web Admin UI",
+        "description": "Web interface appearance settings"
+      },
+      "webAdminUi": {
+        "title": "Web Admin UI",
+        "description": "Web interface appearance settings"
+      }
+    },
+    "fields": {
+      "serverName": { "label": "Server Name", "description": "Used for Pub/Sub identification" },
+      "server-name": { "label": "Server Name", "description": "Used for Pub/Sub identification" },
+      "queueCapacity": { "label": "Event Queue Capacity", "description": "BlockingQueue capacity" },
+      "queue-capacity": { "label": "Event Queue Capacity", "description": "BlockingQueue capacity" },
+      "debug": { "label": "Debug Mode", "description": "Output detailed logs" },
+      "mode": { "label": "Economy Mode", "description": "Select economy sync mode" },
+      "currencyName": { "label": "Currency Name", "description": "Display name" },
+      "currency-name": { "label": "Currency Name", "description": "Display name" },
+      "decimalPlaces": { "label": "Decimal Places", "description": "Number of decimal places" },
+      "decimal-places": { "label": "Decimal Places", "description": "Number of decimal places" },
+      "cooldownSeconds": { "label": "Cooldown", "description": "Transfer cooldown in seconds" },
+      "cooldown-seconds": { "label": "Cooldown", "description": "Transfer cooldown in seconds" },
+      "minAmount": { "label": "Minimum Amount", "description": "Minimum transfer amount" },
+      "min-amount": { "label": "Minimum Amount", "description": "Minimum transfer amount" },
+      "maxAmount": { "label": "Maximum Amount", "description": "Maximum transfer amount" },
+      "max-amount": { "label": "Maximum Amount", "description": "Maximum transfer amount" },
+      "confirmThreshold": { "label": "Confirmation Threshold", "description": "Amount requiring confirmation" },
+      "confirm-threshold": { "label": "Confirmation Threshold", "description": "Amount requiring confirmation" },
+      "allowInDegraded": { "label": "Allow in Degraded", "description": "Allow transfers in degraded mode" },
+      "allow-in-degraded": { "label": "Allow in Degraded", "description": "Allow transfers in degraded mode" },
+      "enabled": { "label": "Enabled", "description": "Enable this feature" },
+      "host": { "label": "Host", "description": "Server host address" },
+      "port": { "label": "Port", "description": "Server port" },
+      "password": { "label": "Password", "description": "Connection password" },
+      "database": { "label": "Database", "description": "Database name" },
+      "type": { "label": "Type", "description": "Database type" },
+      "timeout": { "label": "Timeout", "description": "Connection timeout (ms)" },
+      "batchSize": { "label": "Batch Size", "description": "Database batch write size" },
+      "batch-size": { "label": "Batch Size", "description": "Database batch write size" },
+      "flushInterval": { "label": "Flush Interval", "description": "Flush interval (ms)" },
+      "flush-interval": { "label": "Flush Interval", "description": "Flush interval (ms)" },
+      "sync": {
+        "vaultIntercept": { "label": "Vault Intercept", "description": "Intercept Vault economy operations" },
+        "vault-intercept": { "label": "Vault Intercept", "description": "Intercept Vault economy operations" },
+        "vaultInterceptDeposit": { "label": "Vault Deposit Intercept", "description": "Intercept deposit operations" },
+        "vault-intercept-deposit": { "label": "Vault Deposit Intercept", "description": "Intercept deposit operations" },
+        "vaultInterceptWithdraw": { "label": "Vault Withdraw Intercept", "description": "Intercept withdraw operations" },
+        "vault-intercept-withdraw": { "label": "Vault Withdraw Intercept", "description": "Intercept withdraw operations" }
+      },
+      "cmi": {
+        "detectIntervalMs": { "label": "Detect Interval (ms)", "description": "CMI economy change detection interval" },
+        "detect-interval-ms": { "label": "Detect Interval (ms)", "description": "CMI economy change detection interval" },
+        "crossServerSync": { "label": "Cross-Server Sync", "description": "Enable CMI cross-server sync" },
+        "cross-server-sync": { "label": "Cross-Server Sync", "description": "Enable CMI cross-server sync" },
+        "balanceMode": { "label": "Balance Mode", "description": "Balance operation mode (api/internal)" },
+        "balance-mode": { "label": "Balance Mode", "description": "Balance operation mode (api/internal)" }
+      },
+      "baltop": {
+        "cacheSeconds": { "label": "Cache Duration", "description": "Leaderboard cache time" },
+        "cache-seconds": { "label": "Cache Duration", "description": "Leaderboard cache time" },
+        "entriesPerPage": { "label": "Entries Per Page", "description": "Number of players per page" },
+        "entries-per-page": { "label": "Entries Per Page", "description": "Number of players per page" },
+        "format": { "label": "Number Format", "description": "Balance display format" }
+      },
+      "circuitBreaker": {
+        "enabled": { "label": "Enable Circuit Breaker", "description": "Enable economic circuit breaker" },
+        "maxSingleTransaction": { "label": "Max Single Transaction", "description": "Maximum single transaction amount" },
+        "max-single-transaction": { "label": "Max Single Transaction", "description": "Maximum single transaction amount" },
+        "maxTransactionsPerSecond": { "label": "Max TPS", "description": "Maximum transactions per second" },
+        "max-transactions-per-second": { "label": "Max TPS", "description": "Maximum transactions per second" },
+        "rapidInflationThreshold": { "label": "Rapid Inflation Threshold", "description": "Trigger if total increases by this within 5 minutes" },
+        "rapid-inflation-threshold": { "label": "Rapid Inflation Threshold", "description": "Trigger if total increases by this within 5 minutes" },
+        "inflationCheckIntervalMinutes": { "label": "Inflation Check Interval", "description": "Inflation check interval (minutes)" },
+        "inflation-check-interval-minutes": { "label": "Inflation Check Interval", "description": "Inflation check interval (minutes)" },
+        "suddenChangeThreshold": { "label": "Sudden Change Threshold", "description": "Lock if balance multiplier exceeds this" },
+        "sudden-change-threshold": { "label": "Sudden Change Threshold", "description": "Lock if balance multiplier exceeds this" },
+        "redisDisconnectLockSeconds": { "label": "Redis Disconnect Lock", "description": "Lock seconds after Redis disconnect" },
+        "redis-disconnect-lock-seconds": { "label": "Redis Disconnect Lock", "description": "Lock seconds after Redis disconnect" },
+        "memoryWarningThreshold": { "label": "Memory Warning Threshold", "description": "Warn if memory usage exceeds this" },
+        "memory-warning-threshold": { "label": "Memory Warning Threshold", "description": "Warn if memory usage exceeds this" },
+        "poolExhaustedWarning": { "label": "Pool Exhausted Warning", "description": "Warn if pool connections below this" },
+        "pool-exhausted-warning": { "label": "Pool Exhausted Warning", "description": "Warn if pool connections below this" },
+        "playerProtection": {
+          "enabled": { "label": "Enable Player Protection", "description": "Enable player transaction protection" },
+          "rateLimit": {
+            "maxTransactionsPerSecond": { "label": "Max TPS", "description": "Max transactions per second" },
+            "max-transactions-per-second": { "label": "Max TPS", "description": "Max transactions per second" },
+            "maxTransactionsPerMinute": { "label": "Max TPM", "description": "Max transactions per minute" },
+            "max-transactions-per-minute": { "label": "Max TPM", "description": "Max transactions per minute" },
+            "maxAmountPerMinute": { "label": "Max Amount Per Minute", "description": "Max transaction amount per minute" },
+            "max-amount-per-minute": { "label": "Max Amount Per Minute", "description": "Max transaction amount per minute" }
+          },
+          "anomalyDetection": {
+            "warningWindowSeconds": { "label": "Warning Window", "description": "Warning time window (seconds)" },
+            "warning-window-seconds": { "label": "Warning Window", "description": "Warning time window (seconds)" },
+            "warningThreshold": { "label": "Warning Threshold", "description": "Transaction count to trigger warning" },
+            "warning-threshold": { "label": "Warning Threshold", "description": "Transaction count to trigger warning" },
+            "balanceChangeThreshold": { "label": "Balance Change Threshold", "description": "Balance change multiplier threshold" },
+            "balance-change-threshold": { "label": "Balance Change Threshold", "description": "Balance change multiplier threshold" }
+          },
+          "autoUnlock": {
+            "lockDurationMinutes": { "label": "Lock Duration", "description": "Auto unlock wait time (minutes)" },
+            "lock-duration-minutes": { "label": "Lock Duration", "description": "Auto unlock wait time (minutes)" },
+            "maxLockExtensions": { "label": "Max Extensions", "description": "Max lock extension times" },
+            "max-lock-extensions": { "label": "Max Extensions", "description": "Max lock extension times" },
+            "unlockTestTransactions": { "label": "Test Transactions", "description": "Success transactions to confirm unlock" },
+            "unlock-test-transactions": { "label": "Test Transactions", "description": "Success transactions to confirm unlock" }
+          }
+        },
+        "player-protection": {
+          "enabled": { "label": "Enable Player Protection", "description": "Enable player transaction protection" },
+          "rate-limit": {
+            "max-transactions-per-second": { "label": "Max TPS", "description": "Max transactions per second" },
+            "max-transactions-per-minute": { "label": "Max TPM", "description": "Max transactions per minute" },
+            "max-amount-per-minute": { "label": "Max Amount Per Minute", "description": "Max transaction amount per minute" }
+          },
+          "anomaly-detection": {
+            "warning-window-seconds": { "label": "Warning Window", "description": "Warning time window (seconds)" },
+            "warning-threshold": { "label": "Warning Threshold", "description": "Transaction count to trigger warning" },
+            "balance-change-threshold": { "label": "Balance Change Threshold", "description": "Balance change multiplier threshold" }
+          },
+          "auto-unlock": {
+            "lock-duration-minutes": { "label": "Lock Duration", "description": "Auto unlock wait time (minutes)" },
+            "max-lock-extensions": { "label": "Max Extensions", "description": "Max lock extension times" },
+            "unlock-test-transactions": { "label": "Test Transactions", "description": "Success transactions to confirm unlock" }
+          }
+        }
+      },
+      "playerProtection": {
+        "enabled": { "label": "Enable Player Protection", "description": "Enable player transaction protection" },
+        "rateLimit": {
+          "maxTransactionsPerSecond": { "label": "Max TPS", "description": "Max transactions per second" },
+          "max-transactions-per-second": { "label": "Max TPS", "description": "Max transactions per second" },
+          "maxTransactionsPerMinute": { "label": "Max TPM", "description": "Max transactions per minute" },
+          "max-transactions-per-minute": { "label": "Max TPM", "description": "Max transactions per minute" },
+          "maxAmountPerMinute": { "label": "Max Amount Per Minute", "description": "Max transaction amount per minute" },
+          "max-amount-per-minute": { "label": "Max Amount Per Minute", "description": "Max transaction amount per minute" }
+        },
+        "anomalyDetection": {
+          "warningWindowSeconds": { "label": "Warning Window", "description": "Warning time window (seconds)" },
+          "warning-window-seconds": { "label": "Warning Window", "description": "Warning time window (seconds)" },
+          "warningThreshold": { "label": "Warning Threshold", "description": "Transaction count to trigger warning" },
+          "warning-threshold": { "label": "Warning Threshold", "description": "Transaction count to trigger warning" },
+          "balanceChangeThreshold": { "label": "Balance Change Threshold", "description": "Balance change multiplier threshold" },
+          "balance-change-threshold": { "label": "Balance Change Threshold", "description": "Balance change multiplier threshold" }
+        },
+        "autoUnlock": {
+          "lockDurationMinutes": { "label": "Lock Duration", "description": "Auto unlock wait time (minutes)" },
+          "lock-duration-minutes": { "label": "Lock Duration", "description": "Auto unlock wait time (minutes)" },
+          "maxLockExtensions": { "label": "Max Extensions", "description": "Max lock extension times" },
+          "max-lock-extensions": { "label": "Max Extensions", "description": "Max lock extension times" },
+          "unlockTestTransactions": { "label": "Test Transactions", "description": "Success transactions to confirm unlock" },
+          "unlock-test-transactions": { "label": "Test Transactions", "description": "Success transactions to confirm unlock" }
+        },
+        "globalLock": {
+          "enabled": { "label": "Enable Global Lock", "description": "Lock when overall economy is abnormal" },
+          "totalInflationThreshold": { "label": "Total Inflation Threshold", "description": "Trigger global lock if total increase exceeds this" },
+          "total-inflation-threshold": { "label": "Total Inflation Threshold", "description": "Trigger global lock if total increase exceeds this" }
+        },
+        "transferProtection": {
+          "lockReceiver": { "label": "Lock Receiver", "description": "Lock receiver during transfer" },
+          "lock-receiver": { "label": "Lock Receiver", "description": "Lock receiver during transfer" },
+          "receiverLockThreshold": { "label": "Receiver Lock Threshold", "description": "Lock receiver if amount exceeds this" },
+          "receiver-lock-threshold": { "label": "Receiver Lock Threshold", "description": "Lock receiver if amount exceeds this" }
+        }
+      },
+      "discordWebhook": {
+        "enabled": { "label": "Enable Discord Notifications", "description": "Enable Discord webhook notifications" },
+        "webhooks": { "label": "Webhooks", "description": "Webhook configuration list" },
+        "embed": {
+          "color": { "label": "Color", "description": "Embed message color (HEX)" },
+          "showPlayerName": { "label": "Show Player Name", "description": "Show player name in embed" },
+          "show-player-name": { "label": "Show Player Name", "description": "Show player name in embed" },
+          "showTimestamp": { "label": "Show Timestamp", "description": "Show timestamp in embed" },
+          "show-timestamp": { "label": "Show Timestamp", "description": "Show timestamp in embed" },
+          "username": { "label": "Username", "description": "Discord bot display name" }
+        }
+      },
+      "audit": {
+        "enabled": { "label": "Enable Audit Log", "description": "Enable transaction audit logging" },
+        "batchSize": { "label": "Batch Size", "description": "Database batch write size" },
+        "batch-size": { "label": "Batch Size", "description": "Database batch write size" },
+        "flushIntervalMs": { "label": "Flush Interval", "description": "Flush interval (ms)" },
+        "flush-interval-ms": { "label": "Flush Interval", "description": "Flush interval (ms)" },
+        "retentionDays": { "label": "Retention Days", "description": "Log retention days (0 = forever)" },
+        "retention-days": { "label": "Retention Days", "description": "Log retention days (0 = forever)" },
+        "cleanup": {
+          "enabled": { "label": "Enable Cleanup", "description": "Auto cleanup expired logs" },
+          "intervalHours": { "label": "Cleanup Interval", "description": "Cleanup execution interval (hours)" },
+          "interval-hours": { "label": "Cleanup Interval", "description": "Cleanup execution interval (hours)" }
+        },
+        "export": {
+          "enabled": { "label": "Enable Export", "description": "Enable log export feature" },
+          "exportFolder": { "label": "Export Folder", "description": "Log export storage location" },
+          "export-folder": { "label": "Export Folder", "description": "Log export storage location" },
+          "deleteAfterExport": { "label": "Delete After Export", "description": "Delete database records after export" },
+          "delete-after-export": { "label": "Delete After Export", "description": "Delete database records after export" }
+        },
+        "redis": {
+          "enabled": { "label": "Enable Redis Cache", "description": "Use Redis to cache audit logs" },
+          "windowSize": { "label": "Cache Window Size", "description": "Redis cache window size" },
+          "window-size": { "label": "Cache Window Size", "description": "Redis cache window size" },
+          "migrationThreshold": { "label": "Migration Threshold", "description": "Pending count to trigger migration" },
+          "migration-threshold": { "label": "Migration Threshold", "description": "Pending count to trigger migration" },
+          "migrationBatchSize": { "label": "Migration Batch Size", "description": "Amount per migration" },
+          "migration-batch-size": { "label": "Migration Batch Size", "description": "Amount per migration" },
+          "migrationIntervalMs": { "label": "Migration Interval", "description": "Migration interval (ms)" },
+          "migration-interval-ms": { "label": "Migration Interval", "description": "Migration interval (ms)" }
+        },
+        "deduplication": {
+          "enabled": { "label": "Enable Deduplication", "description": "Enable server-side deduplication" },
+          "serverWindowSeconds": { "label": "Deduplication Window", "description": "Deduplication time window (seconds)" },
+          "server-window-seconds": { "label": "Deduplication Window", "description": "Deduplication time window (seconds)" }
+        }
+      },
+      "adminPermissions": {
+        "enforceDailyLimit": { "label": "Enforce Daily Limit", "description": "Enforce admin daily operation limits" },
+        "enforce-daily-limit": { "label": "Enforce Daily Limit", "description": "Enforce admin daily operation limits" },
+        "confirmThreshold": { "label": "Confirmation Threshold", "description": "Amount requiring admin confirmation" },
+        "confirm-threshold": { "label": "Confirmation Threshold", "description": "Amount requiring admin confirmation" },
+        "levels": { "label": "Permission Levels", "description": "Admin permission level settings" },
+        "observe": { "label": "Observe", "description": "View only" },
+        "reward": { "label": "Reward", "description": "Can grant rewards" },
+        "general": { "label": "General", "description": "General admin permissions" },
+        "full": { "label": "Full", "description": "Full admin permissions" },
+        "permission": { "label": "Permission Node", "description": "Permission node name" },
+        "dailyGiveLimit": { "label": "Daily Give Limit", "description": "Daily currency give limit" },
+        "daily-give-limit": { "label": "Daily Give Limit", "description": "Daily currency give limit" },
+        "dailyTakeLimit": { "label": "Daily Take Limit", "description": "Daily currency take limit" },
+        "daily-take-limit": { "label": "Daily Take Limit", "description": "Daily currency take limit" }
+      },
+      "messages": {
+        "legacyColorSupport": { "label": "Legacy Color Support", "description": "Support & color codes" },
+        "legacy-color-support": { "label": "Legacy Color Support", "description": "Support & color codes" },
+        "legacyCharacter": { "label": "Legacy Character", "description": "Legacy color prefix character" },
+        "legacy-character": { "label": "Legacy Character", "description": "Legacy color prefix character" },
+        "minimessageSupport": { "label": "MiniMessage Support", "description": "Support MiniMessage format" },
+        "minimessage-support": { "label": "MiniMessage Support", "description": "Support MiniMessage format" },
+        "hexColors": { "label": "HEX Colors", "description": "Support HEX color codes" },
+        "hex-colors": { "label": "HEX Colors", "description": "Support HEX color codes" }
+      },
+      "crossServerNotifications": {
+        "enabled": { "label": "Enable Cross-Server Notifications", "description": "Enable cross-server message notifications" },
+        "notifyType": { "label": "Notification Type", "description": "Notification type (all/deposit-only/withdraw-only/none)" },
+        "notify-type": { "label": "Notification Type", "description": "Notification type (all/deposit-only/withdraw-only/none)" },
+        "showActionbar": { "label": "Show ActionBar", "description": "Show notifications in ActionBar" },
+        "show-actionbar": { "label": "Show ActionBar", "description": "Show notifications in ActionBar" },
+        "actionbarDuration": { "label": "ActionBar Duration", "description": "ActionBar display duration (ticks)" },
+        "actionbar-duration": { "label": "ActionBar Duration", "description": "ActionBar display duration (ticks)" }
+      },
+      "shadowSync": {
+        "enabled": { "label": "Enable Shadow Sync", "description": "Enable balance backup sync" },
+        "target": { "label": "Sync Target", "description": "Write target (local/cmi/all)" },
+        "trigger": {
+          "batchSize": { "label": "Trigger Batch Size", "description": "Number of changes to trigger sync" },
+          "batch-size": { "label": "Trigger Batch Size", "description": "Number of changes to trigger sync" },
+          "maxDelayMs": { "label": "Max Delay", "description": "Max delay time (ms)" },
+          "max-delay-ms": { "label": "Max Delay", "description": "Max delay time (ms)" }
+        },
+        "storage": {
+          "type": { "label": "Storage Type", "description": "Storage type (jsonl/sqlite/mysql/postgresql)" }
+        },
+        "features": {
+          "historyEnabled": { "label": "Enable History", "description": "Record balance change history" },
+          "history-enabled": { "label": "Enable History", "description": "Record balance change history" },
+          "historyRetentionDays": { "label": "History Retention Days", "description": "History retention days" },
+          "history-retention-days": { "label": "History Retention Days", "description": "History retention days" }
+        }
+      },
+      "shadow-sync": {
+        "enabled": { "label": "Enable Shadow Sync", "description": "Enable balance backup sync" },
+        "target": { "label": "Sync Target", "description": "Write target (local/cmi/all)" },
+        "trigger": {
+          "batchSize": { "label": "Trigger Batch Size", "description": "Number of changes to trigger sync" },
+          "batch-size": { "label": "Trigger Batch Size", "description": "Number of changes to trigger sync" },
+          "maxDelayMs": { "label": "Max Delay", "description": "Max delay time (ms)" },
+          "max-delay-ms": { "label": "Max Delay", "description": "Max delay time (ms)" }
+        },
+        "storage": {
+          "type": { "label": "Storage Type", "description": "Storage type (jsonl/sqlite/mysql/postgresql)" }
+        },
+        "features": {
+          "historyEnabled": { "label": "Enable History", "description": "Record balance change history" },
+          "history-enabled": { "label": "Enable History", "description": "Record balance change history" },
+          "historyRetentionDays": { "label": "History Retention Days", "description": "History retention days" },
+          "history-retention-days": { "label": "History Retention Days", "description": "History retention days" }
+        }
+      },
+      "webAdminUi": {
+        "theme": { "label": "UI Theme", "description": "Web admin interface display theme (dark/light)" },
+        "language": { "label": "UI Language", "description": "Web admin interface language" },
+        "timezone": { "label": "Timezone", "description": "Timezone used for time display" }
+      }
+    }
+  },
+  "app": {
+    "disconnected": "SSE connection lost",
+    "reconnect": "Reconnect"
+  },
+  "nodes": {
+    "selectServer": "Select a server...",
+    "addNode": "Add Node",
+    "editNode": "Edit Node",
+    "deleteNode": "Delete Node",
+    "nodeName": "Node Name",
+    "nodeNamePlaceholder": "Enter node name",
+    "nodeUrl": "Node URL",
+    "nodeUrlPlaceholder": "https://example.com:8080",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Enter API Key",
+    "enabled": "Enabled",
+    "status": "Status",
+    "online": "Online",
+    "offline": "Offline",
+    "unknown": "Unknown",
+    "actions": "Actions",
+    "ping": "Ping",
+    "confirmDelete": "Are you sure you want to delete this node?",
+    "addSuccess": "Node added successfully",
+    "updateSuccess": "Node updated successfully",
+    "deleteSuccess": "Node deleted successfully",
+    "addFailed": "Failed to add node",
+    "updateFailed": "Failed to update node",
+    "deleteFailed": "Failed to delete node",
+    "saveFailed": "Failed to save",
+    "pingSuccess": "Ping successful",
+    "pingFailed": "Ping failed",
+    "invalidUrl": "Invalid URL",
+    "ssrfBlocked": "URL blocked by SSRF protection",
+    "noNodes": {
+      "title": "No Nodes Yet",
+      "description": "Click the button above to add your first node"
+    },
+    "addFirstNode": "Add First Node",
+    "managementDescription": "Manage all connected server nodes",
+    "rank": "Rank",
+    "deleteConfirm": {
+      "title": "Confirm Delete",
+      "description": "This action cannot be undone. Are you sure you want to delete this node?"
+    },
+    "errors": {
+      "nameRequired": "Please enter a node name",
+      "urlRequired": "Please enter a node URL",
+      "urlInvalid": "Please enter a valid URL",
+      "apiKeyRequired": "Please enter an API Key"
+    }
+  },
+  "central": {
+    "title": "Central Management",
+    "totalSupply": "Total Supply",
+    "totalPlayers": "Total Players",
+    "onlinePlayers": "Online Players",
+    "todayTransactions": "Today's Transactions",
+    "allNodes": "All Nodes",
+    "nodes": "Nodes Status",
+    "server": "Server",
+    "statsError": "Failed to load cross-server statistics",
+    "nodesError": "Failed to load node statuses",
+    "noNodes": {
+      "title": "No Nodes",
+      "description": "Add server nodes in the Nodes Management page"
+    },
+    "crossServerRank": "Cross-Server Ranking",
+    "noRankData": {
+      "title": "No Ranking Data",
+      "description": "Not enough data to display rankings yet"
+    },
+    "rank": "Rank"
+  },
+  "notification": {
+    "playerJoined": "Player Joined",
+    "playerLeft": "Player Left",
+    "playerJoinedMessage": "{player} joined the server",
+    "playerLeftMessage": "{player} left the server",
+    "newTransaction": "New Transaction",
+    "newAudit": "New Audit Record",
+    "newAuditDesc": "View new transaction record",
+    "transactionReceived": "New transaction record received",
+    "circuitBreaker": "Circuit Breaker",
+    "circuitBreakerAlert": "Circuit Breaker Alert",
+    "circuitBreakerWarning": "Circuit breaker triggered, system locked",
+    "systemAlert": "System Alert",
+    "systemError": "System error occurred",
+    "newTransactionDesc": "{player}: {amount}",
+    "newVersionAvailable": "New Version Available",
+    "securityAlert": "Security Alert",
+    "playerLocked": "Player Locked",
+    "playerWarning": "Player Warning",
+    "playerUnlocked": "Player Unlocked",
+    "systemLocked": "System Locked",
+    "highMemory": "High Memory",
+    "redisPoolCritical": "Redis Pool Critical"
+  }
+}

@@ -18,7 +18,6 @@ public final class RollbackProtection {
     private final EconomyFacade economyFacade;
     private final double threshold;
 
-
     private final java.util.concurrent.ConcurrentMap<UUID, BigDecimal> previousCMIBalances;
 
     public RollbackProtection(Plugin plugin, EconomyFacade economyFacade, double threshold) {

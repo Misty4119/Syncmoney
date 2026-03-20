@@ -158,6 +158,11 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        if (playerName == null || playerName.isBlank()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("admin.usage.set"));
+            return;
+        }
+
         BigDecimal amount = parseAmount(amountStr);
         if (amount == null || amount.compareTo(BigDecimal.ZERO) < 0) {
             MessageHelper.sendMessage(sender, plugin.getMessage("admin.invalid-amount"));
@@ -196,6 +201,8 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        publishBalanceChange(uuid, newBalance);
+
         String message = plugin.getMessage("admin.set-success")
                 .replace("{player}", playerName)
                 .replace("{balance}", FormatUtil.formatCurrency(newBalance));
@@ -203,10 +210,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (baltopManager != null) {
             baltopManager.updatePlayerRank(uuid, newBalance.doubleValue());
-        }
-
-        if (auditLogger != null) {
-            auditLogger.flush();
         }
 
         notifyPlayerIfOnline(uuid, plugin.getMessage("admin.balance-set-by-admin")
@@ -227,10 +230,11 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
 
         MessageHelper.sendMessage(sender, plugin.getMessage("admin.confirm-hint"));
 
-        pendingConfirmations.put(key, new ConfirmInfo(subCommand, playerName, amount, System.currentTimeMillis()));
+        ConfirmInfo confirmInfo = new ConfirmInfo(subCommand, playerName, amount, System.currentTimeMillis());
+        pendingConfirmations.put(key, confirmInfo);
 
-        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            pendingConfirmations.remove(key);
+        plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, task -> {
+            pendingConfirmations.remove(key, confirmInfo);
         }, Constants.CONFIRM_TIMEOUT_TICKS);
     }
 
@@ -240,6 +244,11 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     private void handleGive(CommandSender sender, String playerName, String amountStr) {
         if (!plugin.getPermissionService().canExecute(sender, "give")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return;
+        }
+
+        if (playerName == null || playerName.isBlank()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("admin.usage.give"));
             return;
         }
 
@@ -294,6 +303,13 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
 
         BigDecimal newBalance = economyFacade.deposit(uuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
 
+        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
+            BigDecimal oldBalance = newBalance.subtract(amount);
+            circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
+        }
+
+        publishBalanceChange(uuid, newBalance);
+
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.error"));
             return;
@@ -311,10 +327,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             baltopManager.updatePlayerRank(uuid, newBalance.doubleValue());
         }
 
-        if (auditLogger != null) {
-            auditLogger.flush();
-        }
-
         notifyPlayerIfOnline(uuid, plugin.getMessage("admin.money-received")
                 .replace("{amount}", FormatUtil.formatCurrency(amount))
                 .replace("{balance}", FormatUtil.formatCurrency(newBalance)));
@@ -326,6 +338,11 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     private void handleTake(CommandSender sender, String playerName, String amountStr) {
         if (!plugin.getPermissionService().canExecute(sender, "take")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return;
+        }
+
+        if (playerName == null || playerName.isBlank()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("admin.usage.take"));
             return;
         }
 
@@ -391,6 +408,8 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
         }
 
+        publishBalanceChange(uuid, newBalance);
+
         String message = plugin.getMessage("admin.take-success")
                 .replace("{player}", playerName)
                 .replace("{amount}", FormatUtil.formatCurrency(amount))
@@ -403,10 +422,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             baltopManager.updatePlayerRank(uuid, newBalance.doubleValue());
         }
 
-        if (auditLogger != null) {
-            auditLogger.flush();
-        }
-
         notifyPlayerIfOnline(uuid, plugin.getMessage("admin.money-taken")
                 .replace("{amount}", FormatUtil.formatCurrency(amount))
                 .replace("{balance}", FormatUtil.formatCurrency(newBalance)));
@@ -416,8 +431,13 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
      * Handle reset balance command.
      */
     private void handleReset(CommandSender sender, String playerName) {
-        if (!sender.hasPermission("syncmoney.admin.set")) {
+        if (!plugin.getPermissionService().canExecute(sender, "set")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return;
+        }
+
+        if (playerName == null || playerName.isBlank()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("admin.usage.reset"));
             return;
         }
 
@@ -439,7 +459,12 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
      */
     private void handleView(CommandSender sender, String playerName) {
         if (!sender.hasPermission("syncmoney.money.others")) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("money.no-permission"));
+            MessageHelper.sendMessage(sender, plugin.getMessage("money.no-permission-others"));
+            return;
+        }
+
+        if (playerName == null || playerName.isBlank()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("money.usage.view"));
             return;
         }
 
@@ -473,6 +498,10 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
      * Resolve player name to UUID.
      */
     private UUID resolvePlayerUUID(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return null;
+        }
+
         Optional<UUID> resolved = nameResolver.resolve(playerName);
         if (resolved.isPresent()) return resolved.get();
 
@@ -526,19 +555,18 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return Collections.emptyList();
         }
 
-        // args[0] is now subcommand name (set/give/take/reset/view)
         if (args.length == 1) {
             return Arrays.asList("set", "give", "take", "reset", "view")
                     .stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
-                    .collect(Collectors.toList());
+                    .toList();
         }
 
         if (args.length == 2) {
             return plugin.getServer().getOnlinePlayers().stream()
                     .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
+                    .toList();
         }
 
         if (args.length == 3 && (args[0].equalsIgnoreCase("set") ||
@@ -547,7 +575,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return Arrays.asList("100", "1000", "10000", "100000", "1000000")
                     .stream()
                     .filter(s -> s.startsWith(args[2]))
-                    .collect(Collectors.toList());
+                    .toList();
         }
 
         return Collections.emptyList();

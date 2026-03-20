@@ -3,10 +3,12 @@ package noietime.syncmoney.breaker;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
+import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -15,15 +17,17 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 
 /**
  * PlayerTransactionGuard - Per-player protection system.
- * 
+ *
  * Protection layers:
  * - L1: Rate Limiting (per second/minute transaction limits)
  * - L2: Anomaly Detection (WARNING state for suspicious behavior)
  * - L3: Player Lock + Auto Unlock (LOCKED state with automatic recovery)
- * 
+ * - L4: Global Lock (locks entire server economy when inflation threshold exceeded)
+ *
  * [ThreadSafe] This class is thread-safe for concurrent operations.
  */
 public final class PlayerTransactionGuard {
@@ -31,15 +35,30 @@ public final class PlayerTransactionGuard {
     private final Plugin plugin;
     private final SyncmoneyConfig config;
     private final NotificationService notificationService;
+    private final RedisManager redisManager;
 
     private final ConcurrentMap<UUID, PlayerProtectionState> playerStates;
 
     private final ScheduledExecutorService scheduler;
 
-    public PlayerTransactionGuard(Plugin plugin, SyncmoneyConfig config, NotificationService notificationService) {
+    private volatile boolean testModeBypass = false;
+
+    private volatile boolean globalLocked = false;
+    private volatile String globalLockReason = null;
+    private volatile long globalLockTime = 0;
+
+    private volatile BigDecimal lastKnownTotalSupply = null;
+    private volatile long lastSupplyCheckTime = 0;
+    private static final long SUPPLY_CHECK_INTERVAL_MS = 60000;
+
+    private static final Logger logger = Logger.getLogger(PlayerTransactionGuard.class.getName());
+
+    public PlayerTransactionGuard(Plugin plugin, SyncmoneyConfig config,
+                                 NotificationService notificationService, RedisManager redisManager) {
         this.plugin = plugin;
         this.config = config;
         this.notificationService = notificationService;
+        this.redisManager = redisManager;
         this.playerStates = new ConcurrentHashMap<>();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "Syncmoney-PlayerTransactionGuard");
@@ -49,28 +68,45 @@ public final class PlayerTransactionGuard {
 
         startAutoUnlockTask();
         startCleanupTask();
+        if (config.isPlayerProtectionGlobalLockEnabled()) {
+            startGlobalInflationMonitor();
+        }
     }
 
     /**
      * Check transaction against protection rules.
      * This is the main entry point for per-player transaction validation.
-     * 
+     *
      * @param uuid Player UUID
+     * @param currentBalance Current player balance (before transaction)
      * @param amount Transaction amount
      * @param eventType Event type (DEPOSIT/WITHDRAW)
      * @return CheckResult indicating if transaction is allowed
      */
-    public CheckResult checkTransaction(UUID uuid, BigDecimal amount, EconomyEvent.EventType eventType) {
+    public CheckResult checkTransaction(UUID uuid, BigDecimal currentBalance, BigDecimal amount, EconomyEvent.EventType eventType) {
+
+        if (testModeBypass) {
+            return CheckResult.ALLOWED;
+        }
+
+        if (globalLocked) {
+            return new CheckResult(false, "Global economy locked: " + globalLockReason, ProtectionState.GLOBAL_LOCKED);
+        }
+
         if (!config.isPlayerProtectionEnabled()) {
             return CheckResult.ALLOWED;
         }
 
         PlayerProtectionState state = playerStates.computeIfAbsent(uuid, k -> new PlayerProtectionState());
 
+        if (eventType == EconomyEvent.EventType.WITHDRAW && state.isTransferLocked()) {
+            return new CheckResult(false, "Transfer temporarily locked: " + state.getTransferLockReason(), ProtectionState.LOCKED);
+        }
+
         if (state.getState() == ProtectionState.LOCKED) {
             if (shouldAutoUnlock(state)) {
                 if (tryAutoUnlock(state, uuid)) {
-                    plugin.getLogger().info("PlayerTransactionGuard: Auto-unlocked player " + uuid);
+                    plugin.getLogger().fine("PlayerTransactionGuard: Auto-unlocked player " + uuid);
                 } else {
                     return new CheckResult(false, "Account temporarily locked", ProtectionState.LOCKED);
                 }
@@ -117,11 +153,11 @@ public final class PlayerTransactionGuard {
             }
         }
 
-        state.updateBalance(amount);
+        state.updateBalance(currentBalance);
 
         if (state.getState() == ProtectionState.WARNING) {
             int warningCount = state.incrementWarningCount();
-            if (warningCount >= 3) { // 3 warnings within window triggers lock
+            if (warningCount >= 3) {
                 state.setState(ProtectionState.LOCKED);
                 state.setLockExtensionCount(state.getLockExtensionCount() + 1);
                 state.setUnlockTime(System.currentTimeMillis() + (config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
@@ -132,6 +168,63 @@ public final class PlayerTransactionGuard {
         }
 
         return CheckResult.ALLOWED;
+    }
+
+    /**
+     * Check and apply transfer lock on receiver when receiving large transfers.
+     * This is called after a successful deposit to lock the receiver temporarily.
+     *
+     * @param receiverUuid Receiver player UUID
+     * @param amount Amount received
+     */
+    public void checkAndLockReceiverForTransfer(UUID receiverUuid, BigDecimal amount) {
+        if (testModeBypass) {
+            return;
+        }
+
+        if (!config.isPlayerProtectionEnabled()) {
+            return;
+        }
+
+        if (!config.isPlayerProtectionLockReceiver()) {
+            return;
+        }
+
+        long threshold = config.getPlayerProtectionReceiverLockThreshold();
+        if (threshold <= 0) {
+            return;
+        }
+
+        BigDecimal thresholdDecimal = BigDecimal.valueOf(threshold);
+        if (amount.compareTo(thresholdDecimal) > 0) {
+            PlayerProtectionState state = playerStates.computeIfAbsent(receiverUuid, k -> new PlayerProtectionState());
+            int lockDurationSeconds = 30;
+            String reason = "Large transfer received (" + FormatUtil.formatCurrency(amount) + ")";
+            state.lockForTransfer(lockDurationSeconds, reason);
+            plugin.getLogger().info("PlayerTransactionGuard: Player " + receiverUuid + " transfer-locked for " + lockDurationSeconds + "s due to receiving " + FormatUtil.formatCurrency(amount));
+        }
+    }
+
+    /**
+     * Check if player is currently transfer-locked.
+     *
+     * @param uuid Player UUID
+     * @return true if player is transfer-locked
+     */
+    public boolean isTransferLocked(UUID uuid) {
+        PlayerProtectionState state = playerStates.get(uuid);
+        return state != null && state.isTransferLocked();
+    }
+
+    /**
+     * Get transfer lock reason for a player.
+     *
+     * @param uuid Player UUID
+     * @return Transfer lock reason or null if not locked
+     */
+    public String getTransferLockReason(UUID uuid) {
+        PlayerProtectionState state = playerStates.get(uuid);
+        return state != null ? state.getTransferLockReason() : null;
     }
 
     /**
@@ -147,7 +240,7 @@ public final class PlayerTransactionGuard {
                 state.setSuccessfulTransactions(0);
                 state.setUnlockTime(0);
                 notificationService.sendUnlockedNotification(uuid, "auto");
-                plugin.getLogger().info("PlayerTransactionGuard: Player " + uuid + " unlocked after successful transactions");
+                plugin.getLogger().fine("PlayerTransactionGuard: Player " + uuid + " unlocked after successful transactions");
             }
         }
     }
@@ -163,6 +256,9 @@ public final class PlayerTransactionGuard {
             state.setSuccessfulTransactions(0);
             state.setUnlockTime(0);
             state.setLockExtensionCount(0);
+            state.setPreviousBalance(null);
+            state.setWindowStartTime(System.currentTimeMillis());
+            state.setWindowTransactionCount(0);
             notificationService.sendUnlockedNotification(uuid, "admin");
             return true;
         }
@@ -182,6 +278,28 @@ public final class PlayerTransactionGuard {
      */
     public PlayerProtectionState getProtectionState(UUID uuid) {
         return playerStates.get(uuid);
+    }
+
+    /**
+     * Set test mode bypass.
+     * When enabled, all rate limiting is disabled for stress testing.
+     *
+     * @param bypass true to enable bypass (disable rate limiting), false to disable
+     */
+    public void setTestModeBypass(boolean bypass) {
+        this.testModeBypass = bypass;
+        if (bypass) {
+            plugin.getLogger().info("PlayerTransactionGuard: Test mode bypass ENABLED - rate limiting disabled");
+        } else {
+            plugin.getLogger().info("PlayerTransactionGuard: Test mode bypass DISABLED - rate limiting enabled");
+        }
+    }
+
+    /**
+     * Check if test mode bypass is enabled.
+     */
+    public boolean isTestModeBypass() {
+        return testModeBypass;
     }
 
     /**
@@ -211,8 +329,15 @@ public final class PlayerTransactionGuard {
     private boolean tryAutoUnlock(PlayerProtectionState state, UUID uuid) {
         state.setSuccessfulTransactions(0);
         state.setUnlockTime(0);
-        state.setState(ProtectionState.WARNING);
-        plugin.getLogger().info("PlayerTransactionGuard: Player " + uuid + " entering test mode for auto-unlock");
+        state.setState(ProtectionState.NORMAL);
+        state.setWarningCount(0);
+        state.setPreviousBalance(null);
+        
+
+        state.setWindowStartTime(System.currentTimeMillis());
+        state.setWindowTransactionCount(0);
+        
+        plugin.getLogger().fine("PlayerTransactionGuard: Player " + uuid + " auto-unlocked successfully");
         return true;
     }
 
@@ -249,6 +374,128 @@ public final class PlayerTransactionGuard {
     }
 
     /**
+     * Start global inflation monitoring task.
+     * Periodically checks total supply and triggers global lock if threshold exceeded.
+     */
+    private void startGlobalInflationMonitor() {
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                performGlobalInflationCheck();
+            } catch (Exception e) {
+                logger.warning("Error during global inflation check: " + e.getMessage());
+            }
+        }, 1, 1, TimeUnit.MINUTES);
+        logger.info("PlayerTransactionGuard: Global inflation monitor started");
+    }
+
+    /**
+     * Perform global inflation check.
+     * Calculates total supply and checks growth rate against threshold.
+     */
+    private void performGlobalInflationCheck() {
+        if (!config.isPlayerProtectionGlobalLockEnabled()) {
+            return;
+        }
+
+        if (globalLocked) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - lastSupplyCheckTime < SUPPLY_CHECK_INTERVAL_MS) {
+            return;
+        }
+
+        BigDecimal currentTotal = calculateTotalSupply();
+        if (currentTotal == null || currentTotal.compareTo(BigDecimal.ZERO) == 0) {
+            lastSupplyCheckTime = now;
+            return;
+        }
+
+        if (lastKnownTotalSupply != null && lastKnownTotalSupply.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal increase = currentTotal.subtract(lastKnownTotalSupply);
+            BigDecimal increaseRatio = increase.abs().divide(lastKnownTotalSupply, 4, RoundingMode.HALF_UP);
+
+            double threshold = config.getPlayerProtectionGlobalLockThreshold();
+            if (increaseRatio.doubleValue() > threshold) {
+                String reason = String.format("Global inflation detected: %.2f%% (threshold: %.2f%%)",
+                        increaseRatio.doubleValue() * 100, threshold * 100);
+                triggerGlobalLockdown(reason);
+                return;
+            }
+        }
+
+        lastKnownTotalSupply = currentTotal;
+        lastSupplyCheckTime = now;
+    }
+
+    /**
+     * Calculate total supply from Redis.
+     */
+    private BigDecimal calculateTotalSupply() {
+        if (redisManager == null) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return redisManager.getTotalBalance();
+        } catch (Exception e) {
+            logger.warning("Failed to calculate total supply: " + e.getMessage());
+            return BigDecimal.ZERO;
+        }
+    }
+
+    /**
+     * Trigger global economy lockdown.
+     * All non-admin transactions will be rejected.
+     *
+     * @param reason Reason for the lockdown
+     */
+    private void triggerGlobalLockdown(String reason) {
+        globalLocked = true;
+        globalLockReason = reason;
+        globalLockTime = System.currentTimeMillis();
+
+        logger.severe("PlayerTransactionGuard: GLOBAL LOCKDOWN triggered. Reason: " + reason);
+
+        if (notificationService != null) {
+            notificationService.sendGlobalLockNotification(reason);
+        }
+    }
+
+    /**
+     * Check if global lock is currently active.
+     */
+    public boolean isGlobalLocked() {
+        return globalLocked;
+    }
+
+    /**
+     * Get global lock reason.
+     */
+    public String getGlobalLockReason() {
+        return globalLockReason;
+    }
+
+    /**
+     * Get global lock timestamp.
+     */
+    public long getGlobalLockTime() {
+        return globalLockTime;
+    }
+
+    /**
+     * Reset global lockdown (admin action).
+     */
+    public void resetGlobalLockdown() {
+        globalLocked = false;
+        globalLockReason = null;
+        globalLockTime = 0;
+        lastKnownTotalSupply = null;
+        lastSupplyCheckTime = 0;
+        logger.info("PlayerTransactionGuard: Global lockdown reset by admin");
+    }
+
+    /**
      * Shutdown the guard.
      */
     public void shutdown() {
@@ -269,7 +516,8 @@ public final class PlayerTransactionGuard {
     public enum ProtectionState {
         NORMAL,
         WARNING,
-        LOCKED
+        LOCKED,
+        GLOBAL_LOCKED
     }
 
     /**
@@ -297,6 +545,8 @@ public final class PlayerTransactionGuard {
         private volatile int lockExtensionCount = 0;
         private volatile BigDecimal previousBalance = null;
         private volatile long lastAccessTime = System.currentTimeMillis();
+        private volatile long transferLockUntil = 0;
+        private volatile String transferLockReason = null;
 
         public synchronized boolean incrementTransactionsPerSecond() {
             long currentSecond = System.currentTimeMillis() / 1000;
@@ -327,11 +577,11 @@ public final class PlayerTransactionGuard {
                 windowTransactionCount = 1;
                 return 1;
             }
-            return windowTransactionCount++;
+            return ++windowTransactionCount;
         }
 
-        public void updateBalance(BigDecimal delta) {
-            this.previousBalance = delta;
+        public void updateBalance(BigDecimal currentBalance) {
+            this.previousBalance = currentBalance;
             this.lastAccessTime = System.currentTimeMillis();
         }
 
@@ -357,7 +607,30 @@ public final class PlayerTransactionGuard {
         public void setLockExtensionCount(int count) { this.lockExtensionCount = count; }
 
         public BigDecimal getPreviousBalance() { return previousBalance; }
+        public void setPreviousBalance(BigDecimal balance) { this.previousBalance = balance; }
+
+        public int getWindowTransactionCount() { return windowTransactionCount; }
+        public void setWindowTransactionCount(int count) { this.windowTransactionCount = count; }
+
+        public long getWindowStartTime() { return windowStartTime; }
+        public void setWindowStartTime(long time) { this.windowStartTime = time; }
 
         public long getLastAccessTime() { return lastAccessTime; }
+
+        public long getTransferLockUntil() { return transferLockUntil; }
+        public void setTransferLockUntil(long time) { this.transferLockUntil = time; }
+
+        public String getTransferLockReason() { return transferLockReason; }
+        public void setTransferLockReason(String reason) { this.transferLockReason = reason; }
+
+        public boolean isTransferLocked() {
+            return transferLockUntil > System.currentTimeMillis();
+        }
+
+        public void lockForTransfer(int durationSeconds, String reason) {
+            this.transferLockUntil = System.currentTimeMillis() + (durationSeconds * 1000L);
+            this.transferLockReason = reason;
+            this.lastAccessTime = System.currentTimeMillis();
+        }
     }
 }

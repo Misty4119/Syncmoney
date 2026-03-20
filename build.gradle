@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.0.0'
+version = '1.1.0'
 
 repositories {
     mavenCentral()
@@ -42,8 +42,19 @@ dependencies {
     implementation("org.xerial:sqlite-jdbc:3.44.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.16.1")
     implementation("net.kyori:adventure-text-minimessage:4.14.0")
-    implementation("net.kyori:adventure-text-serializer-ansi:4.14.0")    
+    implementation("net.kyori:adventure-text-serializer-ansi:4.14.0")
     implementation("org.bstats:bstats-bukkit:3.1.0")
+
+    implementation 'io.undertow:undertow-core:2.3.23.Final'
+    implementation 'io.undertow:undertow-websockets-jsr:2.3.23.Final'
+    implementation 'io.undertow:undertow-servlet:2.3.23.Final'
+
+    // YAML configuration
+    implementation 'org.yaml:snakeyaml:2.2'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testImplementation 'org.mockito:mockito-core:5.8.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 shadowJar {
@@ -61,6 +72,12 @@ shadowJar {
     relocate('org.bstats', 'noietime.libs.bstats')
     relocate('net.kyori.adventure.text.minimessage', 'noietime.libs.adventure.text.minimessage')
     relocate('net.kyori.adventure.text.serializer.ansi', 'noietime.libs.adventure.text.serializer.ansi')
+    relocate('io.undertow', 'noietime.libs.undertow')
+    relocate('io.undertow.websockets', 'noietime.libs.undertow.websockets')
+    relocate('org.xnio', 'noietime.libs.xnio')
+    relocate('org.jboss.threads', 'noietime.libs.jboss.threads')
+    relocate('org.jboss.logging', 'noietime.libs.jboss.logging')
+    relocate('org.yaml.snakeyaml', 'noietime.libs.snakeyaml')
 
     mergeServiceFiles()
 }
@@ -102,5 +119,10 @@ processResources {
     }
     filesMatching('lua/*.lua') {
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+
+    copy {
+        from 'src/main/resources/syncmoney-web'
+        into 'build/resources/main/syncmoney-web'
     }
 }

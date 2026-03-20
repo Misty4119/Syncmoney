@@ -39,6 +39,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
     private final MigrationTask migrationTask;
     private final MigrationCheckpoint checkpoint;
     private final LocalToSyncMigrationTask localToSyncMigrationTask;
+    private final noietime.syncmoney.breaker.DiscordWebhookNotifier discordNotifier;
 
     private CMIDatabaseReader cmiReader;
     private CMIMultiServerReader cmiMultiServerReader;
@@ -50,8 +51,9 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                             NameResolver nameResolver) {
         this.plugin = plugin;
         this.config = config;
+        this.discordNotifier = new noietime.syncmoney.breaker.DiscordWebhookNotifier(plugin, config);
         this.checkpoint = new MigrationCheckpoint(plugin);
-        MigrationBackup backup = new MigrationBackup(plugin);
+        MigrationBackup backup = new MigrationBackup(plugin, plugin);
         CMIEconomyDisabler economyDisabler = new CMIEconomyDisabler((JavaPlugin) plugin);
 
         this.migrationTask = new MigrationTask(
@@ -79,6 +81,11 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                         .replace("{count}", String.valueOf(successCount))
                         .replace("{total}", FormatUtil.formatCurrency(checkpoint.getTotalBackupAmount()));
                 plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+
+
+                if (discordNotifier != null) {
+                    discordNotifier.sendMigrationCompleteEvent(successCount, failedCount);
+                }
             }
 
             @Override
@@ -86,6 +93,11 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                 String message = plugin.getMessage("migration.error")
                         .replace("{error}", error);
                 plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+
+
+                if (discordNotifier != null) {
+                    discordNotifier.sendMigrationFailedEvent(error);
+                }
             }
         });
 
@@ -105,6 +117,11 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                         .replace("{count}", String.valueOf(successCount))
                         .replace("{failed}", String.valueOf(failedCount));
                 plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+
+
+                if (discordNotifier != null) {
+                    discordNotifier.sendMigrationCompleteEvent(successCount, failedCount);
+                }
             }
 
             @Override
@@ -112,6 +129,11 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                 String message = plugin.getMessage("migration.error")
                         .replace("{error}", error);
                 plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+
+
+                if (discordNotifier != null) {
+                    discordNotifier.sendMigrationFailedEvent(error);
+                }
             }
         });
     }
@@ -159,7 +181,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             CMIDatabaseReader.StorageType detectedType = cmiReader.getDetectedStorageType();
             if (detectedType == CMIDatabaseReader.StorageType.MySQL) {
                 if (useMultiServer) {
-                    plugin.getLogger().info("CMI auto-detect: MySQL detected, ignoring multi-server setting");
+                    plugin.getLogger().fine("CMI auto-detect: MySQL detected, ignoring multi-server setting");
                 }
                 useMultiServer = false;
             }

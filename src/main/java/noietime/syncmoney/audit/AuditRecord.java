@@ -18,6 +18,8 @@ public record AuditRecord(
 
         long timestamp,
 
+        int sequence,
+
         AuditType type,
 
         UUID playerUuid,
@@ -41,6 +43,30 @@ public record AuditRecord(
         int mergedCount
 ) {
     /**
+     * Creates a copy of this record with a new sequence number.
+     * @param newSequence the new sequence number
+     * @return a new AuditRecord with the updated sequence
+     */
+    public AuditRecord withSequence(int newSequence) {
+        return new AuditRecord(
+                this.id,
+                this.timestamp,
+                newSequence,
+                this.type,
+                this.playerUuid,
+                this.playerName,
+                this.amount,
+                this.balanceAfter,
+                this.source,
+                this.server,
+                this.targetUuid,
+                this.targetName,
+                this.reason,
+                this.mergedCount
+        );
+    }
+
+    /**
      * Audit type enumeration.
      */
     public enum AuditType {
@@ -60,21 +86,15 @@ public record AuditRecord(
      * Creates audit record from EconomyEvent.
      */
     public static AuditRecord fromEconomyEvent(EconomyEvent event, String playerName, String server) {
-        return new AuditRecord(
-                event.requestId(),
-                event.timestamp(),
-                convertEventType(event.type()),
-                event.playerUuid(),
-                playerName,
-                event.delta(),
-                event.balanceAfter(),
-                event.source(),
-                server,
-                null,
-                null,
-                null,
-                1
-        );
+        return fromEconomyEvent(event, playerName, server, event.balanceAfter(), 1, 0);
+    }
+
+    /**
+     * Creates audit record from EconomyEvent with explicit balanceAfter.
+     * @param balanceAfter the actual balance after the transaction (not from event, but from actual write result)
+     */
+    public static AuditRecord fromEconomyEvent(EconomyEvent event, String playerName, String server, BigDecimal balanceAfter) {
+        return fromEconomyEvent(event, playerName, server, balanceAfter, 1, 0);
     }
 
     /**
@@ -82,14 +102,23 @@ public record AuditRecord(
      * @param mergedCount number of merged transactions
      */
     public static AuditRecord fromEconomyEvent(EconomyEvent event, String playerName, String server, int mergedCount) {
+        return fromEconomyEvent(event, playerName, server, event.balanceAfter(), mergedCount, 0);
+    }
+
+    /**
+     * Creates audit record from EconomyEvent with explicit sequence for ordering.
+     * @param sequence the sequence number for ordering concurrent transactions at the same millisecond
+     */
+    public static AuditRecord fromEconomyEvent(EconomyEvent event, String playerName, String server, BigDecimal balanceAfter, int mergedCount, int sequence) {
         return new AuditRecord(
                 event.requestId(),
                 event.timestamp(),
+                sequence,
                 convertEventType(event.type()),
                 event.playerUuid(),
                 playerName,
                 event.delta(),
-                event.balanceAfter(),
+                balanceAfter,
                 event.source(),
                 server,
                 null,
@@ -109,21 +138,7 @@ public record AuditRecord(
             UUID targetUuid,
             String targetName
     ) {
-        return new AuditRecord(
-                event.requestId(),
-                event.timestamp(),
-                AuditType.TRANSFER,
-                event.playerUuid(),
-                playerName,
-                event.delta(),
-                event.balanceAfter(),
-                event.source(),
-                server,
-                targetUuid,
-                targetName,
-                null,
-                1
-        );
+        return fromTransferEvent(event, playerName, server, targetUuid, targetName, 1, 0);
     }
 
     /**
@@ -138,9 +153,26 @@ public record AuditRecord(
             String targetName,
             int mergedCount
     ) {
+        return fromTransferEvent(event, playerName, server, targetUuid, targetName, mergedCount, 0);
+    }
+
+    /**
+     * Creates transfer audit record with explicit sequence for ordering.
+     * @param sequence the sequence number for ordering concurrent transactions at the same millisecond
+     */
+    public static AuditRecord fromTransferEvent(
+            EconomyEvent event,
+            String playerName,
+            String server,
+            UUID targetUuid,
+            String targetName,
+            int mergedCount,
+            int sequence
+    ) {
         return new AuditRecord(
                 event.requestId(),
                 event.timestamp(),
+                sequence,
                 AuditType.TRANSFER,
                 event.playerUuid(),
                 playerName,

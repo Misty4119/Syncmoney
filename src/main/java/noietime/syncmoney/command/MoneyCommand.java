@@ -1,6 +1,7 @@
 package noietime.syncmoney.command;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.uuid.NameResolver;
@@ -30,8 +31,8 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
     private final NameResolver nameResolver;
     private final FallbackEconomyWrapper fallbackWrapper;
 
-    private final String currencyName;
-    private final int decimalPlaces;
+    private String currencyName;
+    private int decimalPlaces;
 
     public MoneyCommand(Syncmoney plugin, EconomyFacade economyFacade,
                        NameResolver nameResolver, FallbackEconomyWrapper fallbackWrapper,
@@ -48,6 +49,12 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd,
                            @NotNull String label, String[] args) {
 
+
+        if (!sender.hasPermission("syncmoney.money")) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return true;
+        }
+
         if (!(sender instanceof Player player)) {
             if (args.length == 0) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("money.console-usage"));
@@ -60,11 +67,8 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
             return showSelfBalance(player);
         }
 
-        if (args.length >= 1) {
-            return showOtherBalance(player, args[0]);
-        }
 
-        return false;
+        return showOtherBalance(player, args[0]);
     }
 
     @Override
@@ -112,29 +116,32 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
 
     private boolean showSelfBalance(Player player) {
         UUID uuid = player.getUniqueId();
-        var balance = economyFacade.getBalance(uuid);
 
-        player.getScheduler().run(plugin, (task) -> {
-            String balanceStr = FormatUtil.formatCurrency(balance);
+        plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
+            var balance = economyFacade.getBalance(uuid);
 
-            String message = plugin.getMessage("money.self")
-                    .replace("{balance}", balanceStr);
+            player.getScheduler().run(plugin, (t) -> {
+                String balanceStr = FormatUtil.formatCurrency(balance);
 
-            MessageHelper.sendMessage(player, message);
+                String message = plugin.getMessage("money.self")
+                        .replace("{balance}", balanceStr);
 
-            String visualBalance = plugin.getMessage("money.balance-visual")
-                    .replace("{balance}", balanceStr)
-                    .replace("{currency}", currencyName);
-            MessageHelper.sendMessage(player, visualBalance);
+                MessageHelper.sendMessage(player, message);
 
-            if (player.hasPermission("syncmoney.money.others")) {
-                MessageHelper.sendMessage(player, plugin.getMessage("money.hint-check-others"));
-            }
+                String visualBalance = plugin.getMessage("money.balance-visual")
+                        .replace("{balance}", balanceStr)
+                        .replace("{currency}", currencyName);
+                MessageHelper.sendMessage(player, visualBalance);
 
-            if (fallbackWrapper.isDegraded()) {
-                MessageHelper.sendMessage(player, " " + plugin.getMessage("general.degraded-local"));
-            }
+                if (player.hasPermission("syncmoney.money.others")) {
+                    MessageHelper.sendMessage(player, plugin.getMessage("money.hint-check-others"));
+                }
+
+                if (fallbackWrapper.isDegraded()) {
+                    MessageHelper.sendMessage(player, " " + plugin.getMessage("general.degraded-local"));
+                }
             }, null);
+        });
 
         return true;
     }
@@ -176,5 +183,14 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
         });
 
         return true;
+    }
+
+    /**
+     * Hot-reloads display configuration values from a new config instance.
+     * Called by {@link CommandServiceManager#reload(SyncmoneyConfig)} after /syncmoney reload.
+     */
+    public void reload(SyncmoneyConfig newConfig) {
+        this.currencyName = newConfig.getCurrencyName();
+        this.decimalPlaces = newConfig.getDecimalPlaces();
     }
 }

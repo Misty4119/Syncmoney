@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,7 +28,6 @@ import java.util.UUID;
  */
 public final class DatabaseManager implements AutoCloseable {
 
-
     private final String databaseType;
 
     private final Plugin plugin;
@@ -40,10 +40,9 @@ public final class DatabaseManager implements AutoCloseable {
      */
     private void debug(String message) {
         if (debug) {
-            plugin.getLogger().info("[DEBUG] " + message);
+            plugin.getLogger().fine(message);
         }
     }
-
 
     private static final String CREATE_TABLE_SQL_MYSQL = """
             CREATE TABLE IF NOT EXISTS players (
@@ -57,7 +56,6 @@ public final class DatabaseManager implements AutoCloseable {
             )
             """;
 
-
     private static final String CREATE_TABLE_SQL_PGSQL = """
             CREATE TABLE IF NOT EXISTS players (
                 player_uuid VARCHAR(36) PRIMARY KEY,
@@ -69,11 +67,27 @@ public final class DatabaseManager implements AutoCloseable {
             )
             """;
 
-
     private static final String CREATE_INDEX_SQL_PGSQL = """
             CREATE INDEX IF NOT EXISTS idx_player_name ON players (player_name)
             """;
 
+    private static final String CREATE_SCHEMA_VERSION_SQL = """
+            CREATE TABLE IF NOT EXISTS syncmoney_schema_version (
+                id VARCHAR(50) PRIMARY KEY,
+                version INT NOT NULL DEFAULT 0,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                description VARCHAR(255)
+            )
+            """;
+
+    private static final String GET_SCHEMA_VERSION_SQL = """
+            SELECT version FROM syncmoney_schema_version WHERE id = 1
+            """;
+
+    private static final String UPSERT_SCHEMA_VERSION_SQL = """
+            INSERT INTO syncmoney_schema_version (id, version) VALUES (1, ?)
+            ON DUPLICATE KEY UPDATE version = VALUES(version)
+            """;
 
     private static final String INSERT_OR_UPDATE_SQL_MYSQL = """
             INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
@@ -86,7 +100,6 @@ public final class DatabaseManager implements AutoCloseable {
                 updated_at = VALUES(updated_at)
             """;
 
-
     private static final String INSERT_OR_UPDATE_SQL_PGSQL = """
             INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -97,7 +110,6 @@ public final class DatabaseManager implements AutoCloseable {
                 last_server = EXCLUDED.last_server,
                 updated_at = EXCLUDED.updated_at
             """;
-
 
     private static final String SELECT_PLAYER_SQL = """
             SELECT player_uuid, player_name, balance, version, last_server, updated_at
@@ -142,7 +154,7 @@ public final class DatabaseManager implements AutoCloseable {
         this.dataSource = new HikariDataSource(hikariConfig);
 
         initializeSchema();
-        plugin.getLogger().info("Database '" + config.getDatabaseName() + "' ready (type: " + databaseType + ").");
+        plugin.getLogger().fine("Database '" + config.getDatabaseName() + "' ready (type: " + databaseType + ").");
     }
 
     /**
@@ -175,8 +187,8 @@ public final class DatabaseManager implements AutoCloseable {
             tempConfig.setPoolName("Syncmoney-TempDB");
 
             try (HikariDataSource tempDs = new HikariDataSource(tempConfig);
-                 Connection conn = tempDs.getConnection();
-                 java.sql.Statement stmt = conn.createStatement()) {
+                    Connection conn = tempDs.getConnection();
+                    java.sql.Statement stmt = conn.createStatement()) {
 
                 String createDbSql = String.format(
                         "CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
@@ -207,11 +219,10 @@ public final class DatabaseManager implements AutoCloseable {
      */
     public void initializeSchema() {
         try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(getCreateTableSql())) {
+                PreparedStatement stmt = conn.prepareStatement(getCreateTableSql())) {
             stmt.executeUpdate();
             debug("Database schema initialized (" + databaseType + ").");
 
-            // PostgreSQL requires additional index creation (MySQL includes this in CREATE TABLE)
             if ("postgresql".equals(databaseType)) {
                 try {
                     stmt.executeUpdate(CREATE_INDEX_SQL_PGSQL);
@@ -220,9 +231,64 @@ public final class DatabaseManager implements AutoCloseable {
                     debug("Index creation skipped: " + e.getMessage());
                 }
             }
+
+            initializeSchemaVersion(conn);
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to initialize database schema: " + e.getMessage());
             throw new RuntimeException("Database initialization failed", e);
+        }
+    }
+
+    /**
+     * Initialize schema version tracking table and set default version.
+     */
+    private void initializeSchemaVersion(Connection conn) {
+        try (PreparedStatement stmt = conn.prepareStatement(CREATE_SCHEMA_VERSION_SQL)) {
+            stmt.executeUpdate();
+
+            try (PreparedStatement checkStmt = conn.prepareStatement(GET_SCHEMA_VERSION_SQL);
+                    ResultSet rs = checkStmt.executeQuery()) {
+                if (!rs.next()) {
+                    try (PreparedStatement insertStmt = conn.prepareStatement(UPSERT_SCHEMA_VERSION_SQL)) {
+                        insertStmt.setInt(1, 1);
+                        insertStmt.executeUpdate();
+                        debug("Schema version initialized to 1.");
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("Failed to initialize schema version: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get current schema version.
+     * Returns 0 if no version is found.
+     */
+    public int getSchemaVersion() {
+        try (Connection conn = getConnection();
+                PreparedStatement stmt = conn.prepareStatement(GET_SCHEMA_VERSION_SQL);
+                ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getInt("version");
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("Failed to get schema version: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    /**
+     * Set schema version.
+     */
+    public void setSchemaVersion(int version) {
+        try (Connection conn = getConnection();
+                PreparedStatement stmt = conn.prepareStatement(UPSERT_SCHEMA_VERSION_SQL)) {
+            stmt.setInt(1, version);
+            stmt.executeUpdate();
+            debug("Schema version updated to " + version + ".");
+        } catch (SQLException e) {
+            plugin.getLogger().warning("Failed to set schema version: " + e.getMessage());
         }
     }
 
@@ -238,7 +304,7 @@ public final class DatabaseManager implements AutoCloseable {
      */
     public void insertOrUpdatePlayer(UUID uuid, String name, BigDecimal balance, long version, String server) {
         try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
+                PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
             stmt.setString(1, uuid.toString());
             stmt.setString(2, name);
             stmt.setBigDecimal(3, NumericUtil.normalize(balance));
@@ -299,19 +365,21 @@ public final class DatabaseManager implements AutoCloseable {
      */
     public Optional<PlayerRecord> getPlayer(UUID uuid) {
         try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(SELECT_PLAYER_SQL)) {
+                PreparedStatement stmt = conn.prepareStatement(SELECT_PLAYER_SQL)) {
             stmt.setString(1, uuid.toString());
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
+                    Timestamp updatedAt = rs.getTimestamp("updated_at");
+                    Instant updatedAtInstant = updatedAt != null ? updatedAt.toInstant() : Instant.now();
+
                     return Optional.of(new PlayerRecord(
                             UUID.fromString(rs.getString("player_uuid")),
                             rs.getString("player_name"),
                             rs.getBigDecimal("balance"),
                             rs.getLong("version"),
                             rs.getString("last_server"),
-                            rs.getTimestamp("updated_at").toInstant()
-                    ));
+                            updatedAtInstant));
                 }
             }
         } catch (SQLException e) {
@@ -322,23 +390,26 @@ public final class DatabaseManager implements AutoCloseable {
 
     /**
      * Get player data by player name.
+     * 
      * @param nameLower Player name (lowercase)
      */
     public Optional<PlayerRecord> getPlayerByName(String nameLower) {
         try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(SELECT_PLAYER_BY_NAME_SQL)) {
+                PreparedStatement stmt = conn.prepareStatement(SELECT_PLAYER_BY_NAME_SQL)) {
             stmt.setString(1, nameLower.toLowerCase());
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
+                    Timestamp updatedAt = rs.getTimestamp("updated_at");
+                    Instant updatedAtInstant = updatedAt != null ? updatedAt.toInstant() : Instant.now();
+
                     return Optional.of(new PlayerRecord(
                             UUID.fromString(rs.getString("player_uuid")),
                             rs.getString("player_name"),
                             rs.getBigDecimal("balance"),
                             rs.getLong("version"),
                             rs.getString("last_server"),
-                            rs.getTimestamp("updated_at").toInstant()
-                    ));
+                            updatedAtInstant));
                 }
             }
         } catch (SQLException e) {
@@ -349,6 +420,7 @@ public final class DatabaseManager implements AutoCloseable {
 
     /**
      * Get all player data (for shadow sync).
+     * 
      * @return List of player records
      */
     public List<PlayerRecord> getAllPlayers() {
@@ -356,18 +428,20 @@ public final class DatabaseManager implements AutoCloseable {
         String sql = "SELECT player_uuid, player_name, balance, version, last_server, updated_at FROM players";
 
         try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql);
-             ResultSet rs = stmt.executeQuery()) {
+                PreparedStatement stmt = conn.prepareStatement(sql);
+                ResultSet rs = stmt.executeQuery()) {
 
             while (rs.next()) {
+                Timestamp updatedAt = rs.getTimestamp("updated_at");
+                Instant updatedAtInstant = updatedAt != null ? updatedAt.toInstant() : Instant.now();
+
                 players.add(new PlayerRecord(
                         UUID.fromString(rs.getString("player_uuid")),
                         rs.getString("player_name"),
                         rs.getBigDecimal("balance"),
                         rs.getLong("version"),
                         rs.getString("last_server"),
-                        rs.getTimestamp("updated_at").toInstant()
-                ));
+                        updatedAtInstant));
             }
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to get all players: " + e.getMessage());
@@ -393,8 +467,8 @@ public final class DatabaseManager implements AutoCloseable {
             BigDecimal balance,
             long version,
             String lastServer,
-            Instant updatedAt
-    ) {}
+            Instant updatedAt) {
+    }
 
     /**
      * Get HikariDataSource (for audit log and other modules).

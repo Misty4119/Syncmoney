@@ -30,7 +30,6 @@ public final class MessageHelper {
 
     private static final Logger LOGGER = Logger.getLogger(MessageHelper.class.getName());
 
-
     private static final MiniMessage MINI_MESSAGE = MiniMessage.builder()
             .tags(StandardTags.defaults())
             .build();
@@ -45,9 +44,7 @@ public final class MessageHelper {
 
     private static final Pattern LEGACY_PATTERN = Pattern.compile("[&§][0-9a-fk-or]");
 
-
     private static final Pattern BARE_HEX_COLOR_PATTERN = Pattern.compile("(?<![:<])#([0-9A-Fa-f]{6})(?![a-zA-Z0-9])");
-
 
     private static final ConcurrentHashMap<String, Component> componentCache = new ConcurrentHashMap<>();
     private static final int MAX_CACHE_SIZE = 500;
@@ -141,7 +138,6 @@ public final class MessageHelper {
 
         if (variables != null && !variables.isEmpty()) {
             for (Map.Entry<String, String> entry : variables.entrySet()) {
-                // Parse variable value as Component to support MiniMessage tags
                 Component valueComponent = parseMessage(entry.getValue());
                 component = component.replaceText(text ->
                         text.matchLiteral("{" + entry.getKey() + "}")
@@ -181,7 +177,6 @@ public final class MessageHelper {
         if (sender instanceof Player) {
             ((Player) sender).sendMessage(component);
         } else {
-            // Use ANSI serializer for console to display colors properly
             sender.sendMessage(ANSI_SERIALIZER.serialize(component));
         }
     }

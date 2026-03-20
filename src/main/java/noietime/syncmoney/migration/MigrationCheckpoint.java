@@ -24,30 +24,21 @@ public final class MigrationCheckpoint {
     private final ObjectMapper objectMapper;
     private final File checkpointFile;
 
-
     private volatile MigrationState state = MigrationState.IDLE;
-
 
     private volatile int currentOffset = 0;
 
-
     private volatile int totalPlayers = 0;
-
 
     private volatile int migratedCount = 0;
 
-
     private volatile int failedCount = 0;
-
 
     private volatile BigDecimal totalBackupAmount = BigDecimal.ZERO;
 
-
     private volatile Instant startTime;
 
-
     private volatile Instant lastUpdateTime;
-
 
     private final ConcurrentMap<String, String> failures;
 
@@ -194,7 +185,6 @@ public final class MigrationCheckpoint {
             plugin.getLogger().severe("Failed to write checkpoint file: " + e.getMessage());
         }
     }
-
 
     public MigrationState getState() {
         return state;
