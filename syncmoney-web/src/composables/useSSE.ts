@@ -1,4 +1,4 @@
-import { ref, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import type { TransactionEvent, PlayerJoinEvent, PlayerQuitEvent, CircuitBreakEvent, AuditEvent, SystemAlertEvent } from '@/types/events'
 import { handleError } from '@/types/errors'
@@ -23,7 +23,6 @@ export interface SSEMessage {
 
 
 let sseInstance: ReturnType<typeof createSSEInstance> | null = null
-let useCount = 0
 
 /**
  * [SYNC-WEB-008]
@@ -34,18 +33,13 @@ let useCount = 0
  * The connection is only closed when all components that use it are unmounted.
  */
 export function useSSE() {
-
   if (sseInstance) {
-    useCount++
-    console.log(`[SSE] Reusing existing instance. useCount: ${useCount}`)
+    console.log('[SSE] Reusing existing singleton instance')
     return sseInstance
   }
-  
 
   sseInstance = createSSEInstance()
-  useCount = 1
-  console.log(`[SSE] Created new SSE instance. useCount: ${useCount}`)
-  
+  console.log('[SSE] Created new SSE singleton instance')
   return sseInstance
 }
 
@@ -405,8 +399,8 @@ function createSSEInstance() {
   }
 
   /**
-   * [SYNC-WEB-029] Disconnect with reference counting.
-   * Only closes the actual SSE connection when all components have disconnected.
+   * [SYNC-WEB-029] Disconnect - close EventSource and clear timers.
+   * The singleton persists so connect() can be called again after this.
    */
   function disconnect() {
     if (reconnectTimeout) {
@@ -419,30 +413,7 @@ function createSSEInstance() {
       eventSource = null
     }
     connected.value = false
-    
-
-
-  }
-  
-  /**
-   * [SYNC-WEB-030] Actually close the SSE connection and reset the singleton.
-   * Call this when the component using SSE is unmounted.
-   */
-  function dispose() {
-
-    if (useCount > 0) {
-      useCount--
-    }
-    
-    console.log(`[SSE] Disposed. useCount: ${useCount}`)
-    
-
-    if (useCount <= 0) {
-      disconnect()
-
-      sseInstance = null
-      useCount = 0
-    }
+    connectionStatus.value = 'disconnected'
   }
 
   function on(type: SSEEventType, handler: (data: SSEMessageData) => void) {
@@ -462,9 +433,11 @@ function createSSEInstance() {
   }
 
 
-  onUnmounted(() => {
-    dispose()
-  })
+  
+  
+  
+  
+  
 
   return {
     connected,
@@ -472,7 +445,7 @@ function createSSEInstance() {
     lastMessage,
     error: errorMessage,
     connect,
-    disconnect: dispose,
+    disconnect: () => { /* no-op: SSE persists across page navigations */ },
     on,
     off
   }

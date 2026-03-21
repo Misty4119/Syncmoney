@@ -101,7 +101,11 @@ public final class EconomicCircuitBreaker {
             return CheckResult.ALLOWED;
         }
 
-        if (!config.isCircuitBreakerEnabled()) {
+        if (!config.circuitBreaker().isCircuitBreakerEnabled()) {
+            return CheckResult.ALLOWED;
+        }
+
+        if (isSystemOperation(source)) {
             return CheckResult.ALLOWED;
         }
 
@@ -110,7 +114,7 @@ public final class EconomicCircuitBreaker {
         }
 
         BigDecimal absAmount = amount.abs();
-        if (absAmount.compareTo(BigDecimal.valueOf(config.getCircuitBreakerMaxSingleTransaction())) > 0) {
+        if (absAmount.compareTo(BigDecimal.valueOf(config.circuitBreaker().getCircuitBreakerMaxSingleTransaction())) > 0) {
             plugin.getLogger().warning("CircuitBreaker: Single transaction limit exceeded. Amount: " + amount);
             return new CheckResult(false, "Single transaction amount exceeds limit");
         }
@@ -119,7 +123,7 @@ public final class EconomicCircuitBreaker {
         AtomicInteger counter = transactionsPerSecond.computeIfAbsent(currentSecond, k -> new AtomicInteger(0));
         int currentCount = counter.incrementAndGet();
 
-        if (currentCount > config.getCircuitBreakerMaxTransactionsPerSecond()) {
+        if (currentCount > config.circuitBreaker().getCircuitBreakerMaxTransactionsPerSecond()) {
             plugin.getLogger().warning("CircuitBreaker: Transaction rate limit exceeded, blocking transaction to prevent desync (Count: " + currentCount + ", Source: " + source + ")");
             return new CheckResult(false, "Transaction frequency too high, please try again later");
         }
@@ -132,7 +136,7 @@ public final class EconomicCircuitBreaker {
                 BigDecimal previousBalance = record.previousBalance();
                 if (previousBalance.compareTo(BigDecimal.ZERO) > 0) {
                     double ratio = absAmount.divide(previousBalance, 4, RoundingMode.HALF_UP).doubleValue();
-                    if (ratio > config.getCircuitBreakerSuddenChangeThreshold()) {
+                    if (ratio > config.circuitBreaker().getCircuitBreakerSuddenChangeThreshold()) {
                         plugin.getLogger().severe("CircuitBreaker: Sudden change detected for " + uuid +
                                 ". Ratio: " + ratio + ", Amount: " + amount);
                         notification.notifySuddenChange(uuid, ratio, amount);
@@ -158,12 +162,12 @@ public final class EconomicCircuitBreaker {
      * Should be called by scheduled task.
      */
     public void performPeriodicCheck() {
-        if (!config.isCircuitBreakerEnabled()) {
+        if (!config.circuitBreaker().isCircuitBreakerEnabled()) {
             return;
         }
 
         long now = System.currentTimeMillis();
-        long intervalMs = config.getCircuitBreakerInflationCheckIntervalMinutes() * 60 * 1000L;
+        long intervalMs = config.circuitBreaker().getCircuitBreakerInflationCheckIntervalMinutes() * 60 * 1000L;
 
         if (now - lastInflationCheckTime < intervalMs) {
             return;
@@ -180,12 +184,12 @@ public final class EconomicCircuitBreaker {
             BigDecimal increase = currentTotal.subtract(lastTotalBalance);
             BigDecimal increaseRatio = increase.divide(lastTotalBalance, 4, RoundingMode.HALF_UP);
 
-            if (increaseRatio.doubleValue() > config.getCircuitBreakerRapidInflationThreshold()) {
+            if (increaseRatio.doubleValue() > config.circuitBreaker().getCircuitBreakerRapidInflationThreshold()) {
                 plugin.getLogger().severe("CircuitBreaker: Rapid inflation detected! " +
                         "Previous: " + lastTotalBalance + ", Current: " + currentTotal +
                         ", Ratio: " + increaseRatio);
                 triggerLockdown("Total increased by " + (increaseRatio.doubleValue() * 100) + "% in " +
-                        config.getCircuitBreakerInflationCheckIntervalMinutes() + " minutes");
+                        config.circuitBreaker().getCircuitBreakerInflationCheckIntervalMinutes() + " minutes");
                 notification.notifyRapidInflation(lastTotalBalance, currentTotal, increaseRatio);
             }
         }
@@ -217,6 +221,20 @@ public final class EconomicCircuitBreaker {
     }
 
     /**
+     * Checks if the event source is a system operation that should bypass circuit breaker.
+     * System operations include admin give/take/set, command admin, and migration operations.
+     * These are critical operations that must complete even under circuit breaker stress.
+     */
+    private boolean isSystemOperation(EconomyEvent.EventSource source) {
+        return source == EconomyEvent.EventSource.ADMIN_GIVE
+                || source == EconomyEvent.EventSource.ADMIN_TAKE
+                || source == EconomyEvent.EventSource.ADMIN_SET
+                || source == EconomyEvent.EventSource.COMMAND_ADMIN
+                || source == EconomyEvent.EventSource.MIGRATION
+                || source == EconomyEvent.EventSource.SHADOW_SYNC;
+    }
+
+    /**
      * Starts the cleanup task for balance change records.
      * [MEM-02 FIX] Runs every 60 minutes to remove records older than 60 minutes.
      */
@@ -235,7 +253,7 @@ public final class EconomicCircuitBreaker {
      * Runs at the interval configured in config (inflation-check-interval-minutes).
      */
     private void startPeriodicInflationCheck() {
-        long intervalMinutes = config.getCircuitBreakerInflationCheckIntervalMinutes();
+        long intervalMinutes = config.circuitBreaker().getCircuitBreakerInflationCheckIntervalMinutes();
         cleanupScheduler.scheduleAtFixedRate(() -> {
             try {
                 performPeriodicCheck();

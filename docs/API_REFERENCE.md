@@ -1,8 +1,8 @@
 # Syncmoney API Reference
 
-Complete API reference for Syncmoney v1.1.0
+Complete API reference for Syncmoney v1.1.1
 
-> **Last Updated**: 2026-03-19
+> **Last Updated**: 2026-03-21
 
 ---
 
@@ -84,7 +84,7 @@ All successful responses follow this format:
   "data": { ... },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -100,7 +100,7 @@ All error responses follow this format:
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -119,7 +119,7 @@ All error responses follow this format:
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -156,7 +156,7 @@ Health check endpoint (**no authentication required**).
   "success": true,
   "data": {
     "status": "ok",
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -176,7 +176,7 @@ Get overall system status including plugin info, uptime, player counts, and data
   "data": {
     "plugin": {
       "name": "Syncmoney",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "mode": "SYNC",
       "uptime": 3600000
     },
@@ -379,6 +379,7 @@ Get detailed status of all nodes (Central Mode only).
   "data": {
     "http://192.168.1.105:8080": {
       "serverName": "Survival-1",
+      "serverId": "survival-1",
       "onlinePlayers": 42,
       "maxPlayers": 100,
       "economyMode": "SYNC",
@@ -388,6 +389,16 @@ Get detailed status of all nodes (Central Mode only).
   }
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `serverName` | String | Display name of the server |
+| `serverId` | String | Unique server identifier |
+| `onlinePlayers` | Integer | Current online player count |
+| `maxPlayers` | Integer | Maximum player capacity |
+| `economyMode` | String | Economy mode (LOCAL, SYNC, CMI, etc.) |
+| `status` | String | Connection status (online/offline/unknown/disabled) |
+| `lastPing` | Long | Timestamp of last successful ping |
 
 **Requires permission:** `syncmoney.web.nodes.view`
 
@@ -472,7 +483,9 @@ Delete a node.
 {
   "success": true,
   "data": {
-    "message": "Node deleted successfully"
+    "deleted": true,
+    "index": 0,
+    "deletedUrl": "http://192.168.1.105:8080"
   }
 }
 ```
@@ -501,6 +514,127 @@ Manually ping a specific node.
 ```
 
 **Requires permission:** `syncmoney.web.nodes.view` or `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/{index}/proxy
+
+Proxy an HTTP request to a remote node (Central Mode only). This allows the central node to forward API requests to other game server nodes.
+
+**Parameters:**
+- `index` (path, required) — Node index to proxy the request to
+
+**Request Body:**
+```json
+{
+  "method": "GET",
+  "path": "/api/economy/stats",
+  "body": null
+}
+```
+
+**Supported methods:** `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
+
+**Response:**
+The response from the remote node is forwarded directly. HTTP status code and body are the same as returned by the target node.
+
+**Requires permission:** `syncmoney.web.nodes.view` or `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/sync
+
+Push configuration changes to all enabled nodes (Central Mode only). This endpoint is restricted to central mode.
+
+**Request Body:**
+```json
+{
+  "changes": [
+    { "section": "economy", "key": "pay.max-amount", "value": 100000 },
+    { "section": "messages", "key": "prefix", "value": "[Syncmoney]" }
+  ],
+  "reload": true
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `changes` | Array | Yes | List of configuration changes to apply |
+| `changes[].section` | String | Yes | Configuration section (e.g., `economy`, `messages`) |
+| `changes[].key` | String | Yes | Configuration key (dot notation supported) |
+| `changes[].value` | Any | Yes | New value |
+| `reload` | Boolean | No | Whether to reload config after applying (default: `true`) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "results": [
+      { "index": 0, "name": "Survival-1", "status": "synced" },
+      { "index": 1, "name": "Factions-1", "status": "failed", "error": "http_403" }
+    ]
+  }
+}
+```
+
+**Requires permission:** `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/{index}/sync
+
+Push configuration changes to a specific node (Central Mode only).
+
+**Parameters:**
+- `index` (path, required) — Node index to sync configuration to
+
+**Request Body:** Same as `POST /api/nodes/sync`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "applied": 1,
+    "reloaded": true,
+    "changes": ["economy.pay.max-amount=100000"]
+  }
+}
+```
+
+**Requires permission:** `syncmoney.web.central`
+
+---
+
+#### POST /api/config/sync
+
+Receive configuration sync from the central node (Node-side endpoint). This endpoint is used by nodes to receive configuration pushed from the central management server.
+
+**Request Body:**
+```json
+{
+  "changes": [
+    { "section": "economy", "key": "pay.max-amount", "value": 100000 }
+  ],
+  "reload": true
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "applied": 1,
+    "reloaded": true,
+    "changes": ["economy.pay.max-amount=100000"]
+  }
+}
+```
 
 ---
 
@@ -1041,7 +1175,7 @@ Authorization: Bearer <your-api-key>
 
 ### Server-Sent Events (SSE) — Recommended
 
-Connect to `http://<host>:<port>/sse` for server-push notifications. **This is the recommended method for real-time updates in v1.1.0.**
+Connect to `http://<host>:<port>/sse` for server-push notifications. **This is the recommended method for real-time updates in v1.1.1.**
 
 **Authentication:** Uses API key via query parameter or Authorization header.
 
@@ -1078,7 +1212,7 @@ eventSource.onerror = (error) => {
 
 ### WebSocket
 
-> **v1.1.0 Status:** WebSocket support is **experimental and incomplete**. The `/ws` endpoint accepts upgrade requests, but the underlying message dispatch is not fully implemented. **Use SSE (`/sse`) for reliable real-time updates in production.**
+> **v1.1.1 Status:** WebSocket support is **experimental and incomplete**. The `/ws` endpoint accepts upgrade requests, but the underlying message dispatch is not fully implemented. **Use SSE (`/sse`) for reliable real-time updates in production.**
 
 Connect to `ws://<host>:<port>/ws` for real-time updates.
 

@@ -102,19 +102,19 @@ public final class PubsubSubscriber {
             redis.clients.jedis.Jedis jedis = null;
             try {
 
-                jedis = new redis.clients.jedis.Jedis(
-                    config.getRedisHost(),
-                    config.getRedisPort(),
+            jedis = new redis.clients.jedis.Jedis(
+                    config.redis().getRedisHost(),
+                    config.redis().getRedisPort(),
                     5000,
                     5000
-                );
+            );
 
-                String redisPassword = config.getRedisPassword();
-                if (redisPassword != null && !redisPassword.isEmpty()) {
-                    jedis.auth(redisPassword);
-                }
+            String redisPassword = config.redis().getRedisPassword();
+            if (redisPassword != null && !redisPassword.isEmpty()) {
+                jedis.auth(redisPassword);
+            }
 
-                jedis.select(config.getRedisDatabase());
+            jedis.select(config.redis().getRedisDatabase());
 
                 JedisPubSub pubSub = new JedisPubSub() {
                     @Override
@@ -247,7 +247,7 @@ public final class PubsubSubscriber {
             cacheManager.updateMemoryCache(uuid, balance, msg.getVersion());
 
             if (msg.getSourceServer() != null && !msg.getSourceServer().equals(config.getServerName())) {
-                notifyPlayerIfOnline(uuid, balance, msg.getEventType(), msg.getAmount(), msg.getSourcePlayerName());
+                notifyPlayerIfOnline(uuid, balance, msg.getEventType(), msg.getAmount(), msg.getSourcePlayerName(), msg.getSourceServer());
             }
 
             plugin.getLogger().fine("Pub/Sub: processed update for " + uuid +
@@ -279,7 +279,7 @@ public final class PubsubSubscriber {
      *
      * [EntityScheduler] This method switches to player's EntityScheduler for execution.
      */
-    private void notifyPlayerIfOnline(UUID uuid, BigDecimal newBalance, String eventType, double amount, String sourcePlayerName) {
+    private void notifyPlayerIfOnline(UUID uuid, BigDecimal newBalance, String eventType, double amount, String sourcePlayerName, String sourceServer) {
         Player player = Bukkit.getServer().getPlayer(uuid);
         if (player == null || !player.isOnline()) {
             return;
@@ -290,9 +290,15 @@ public final class PubsubSubscriber {
                 noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
                 String messageKey = null;
 
-                if ("DEPOSIT".equals(eventType) || "VAULT_DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
+                
+                if ("VAULT_DEPOSIT".equals(eventType)) {
+                    messageKey = "cross-server.money-received";
+                } else if ("VAULT_WITHDRAW".equals(eventType)) {
+                    messageKey = "cross-server.money-spent";
+                } else if ("DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
+                    
                     messageKey = "admin.money-received";
-                } else if ("WITHDRAW".equals(eventType) || "VAULT_WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
+                } else if ("WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
                     messageKey = "admin.money-taken";
                 } else if ("SET_BALANCE".equals(eventType)) {
                     messageKey = "admin.balance-set-by-admin";
@@ -306,6 +312,9 @@ public final class PubsubSubscriber {
                         message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
                         if (amount != 0) {
                             message = message.replace("{amount}", FormatUtil.formatCurrency(Math.abs(amount)));
+                        }
+                        if (sourceServer != null) {
+                            message = message.replace("{server}", sourceServer);
                         }
                         if ("TRANSFER_IN".equals(eventType)) {
                             message = message.replace("{player}", sourcePlayerName != null ? sourcePlayerName : "Unknown");

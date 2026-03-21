@@ -91,13 +91,13 @@ public final class ResourceMonitor {
             currentMemoryUsagePercent = usagePercent;
             availableMemoryMb = availableMb;
 
-            if (usagePercent > config.getCircuitBreakerMemoryWarningThreshold()) {
+            if (usagePercent > config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold()) {
                 long now = System.currentTimeMillis();
                 if (now - lastWarningTime > WARNING_INTERVAL_MS) {
                     plugin.getLogger().warning("ResourceMonitor: Memory usage is " +
                             FormatUtil.formatPercent(usagePercent) +
                             " (" + usedMb + "/" + maxMb + " MB). " +
-                            "Threshold: " + config.getCircuitBreakerMemoryWarningThreshold() + "%");
+                            "Threshold: " + config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold() + "%");
                     lastWarningTime = now;
 
                     broadcastResourceAlert("memory_high",
@@ -125,13 +125,13 @@ public final class ResourceMonitor {
             int maxTotal = redisManager.getMaxConnections();
 
 
-            int poolWarningThreshold = maxTotal - config.getCircuitBreakerPoolExhaustedWarning();
+            int poolWarningThreshold = maxTotal - config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning();
             if (active >= poolWarningThreshold && active >= maxTotal * 8 / 10) {
                 long now = System.currentTimeMillis();
                 if (now - lastWarningTime > WARNING_INTERVAL_MS) {
                     plugin.getLogger().severe("ResourceMonitor: Redis connection pool critical! " +
                             "Active: " + active + ", Max: " + maxTotal +
-                            " (threshold: " + config.getCircuitBreakerPoolExhaustedWarning() + " available)");
+                            " (threshold: " + config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning() + " available)");
                     lastWarningTime = now;
 
                     broadcastResourceAlert("redis_pool_critical",
@@ -174,13 +174,13 @@ public final class ResourceMonitor {
      * Check if resources are healthy.
      */
     public boolean isHealthy() {
-        boolean memoryOk = currentMemoryUsagePercent < config.getCircuitBreakerMemoryWarningThreshold();
+        boolean memoryOk = currentMemoryUsagePercent < config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold();
 
         boolean redisOk = true;
         if (redisManager != null && !redisManager.isDegraded()) {
             int active = redisManager.getActiveConnections();
             int maxTotal = redisManager.getMaxConnections();
-            redisOk = (maxTotal - active) > config.getCircuitBreakerPoolExhaustedWarning();
+            redisOk = (maxTotal - active) > config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning();
         }
 
         return memoryOk && redisOk;

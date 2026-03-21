@@ -20,7 +20,7 @@ import java.util.Map;
  */
 public class ResponseBuilder {
 
-    private static final String VERSION = "1.1.0";
+    private static final String VERSION = "1.1.1";
     private final Map<String, Object> data = new LinkedHashMap<>();
     private boolean success = true;
     private String errorCode;

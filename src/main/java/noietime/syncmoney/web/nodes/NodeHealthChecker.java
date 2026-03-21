@@ -35,6 +35,7 @@ public class NodeHealthChecker implements Runnable {
     private final NodeApiKeyStore apiKeyStore;
     private final SseManager sseManager;
     private final Map<String, NodeStatus> nodeStatuses = new ConcurrentHashMap<>();
+    private final NodesApiHandler nodesApiHandler;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile long intervalMs = DEFAULT_INTERVAL_MS;
@@ -52,16 +53,21 @@ public class NodeHealthChecker implements Runnable {
     }
 
     public NodeHealthChecker(Syncmoney plugin, SyncmoneyConfig config,
-                           NodeApiKeyStore apiKeyStore, SseManager sseManager) {
+                           NodeApiKeyStore apiKeyStore, SseManager sseManager,
+                           NodesApiHandler nodesApiHandler) {
         this.plugin = plugin;
         this.config = config;
         this.apiKeyStore = apiKeyStore;
         this.sseManager = sseManager;
+        this.nodesApiHandler = nodesApiHandler;
     }
 
     /**
      * Initialize and start the health check scheduler.
      * Uses Folia's AsyncScheduler for background execution.
+     *
+     * Performs an immediate health check on startup to populate node status cache,
+     * then schedules periodic checks at the configured interval.
      */
     public void init() {
         if (initialized) {
@@ -74,6 +80,13 @@ public class NodeHealthChecker implements Runnable {
         }
 
         running.set(true);
+
+        
+        
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            performHealthCheck();
+        });
+
         scheduleNextCheck();
         initialized = true;
         plugin.getLogger().fine("NodeHealthChecker initialized with interval: " + intervalMs + "ms");
@@ -120,11 +133,30 @@ public class NodeHealthChecker implements Runnable {
 
             nodeStatuses.put(node.name, newStatus);
 
+            
+            
+            syncStatusToCache(node.url, newStatus);
+
             if (previousStatus != newStatus) {
                 plugin.getLogger().fine("NodeHealthChecker: " + node.name + " status changed from " +
                         previousStatus + " to " + newStatus);
                 broadcastStatusChange(node.name, node.url, newStatus);
             }
+        }
+    }
+
+    /**
+     * Sync node status to NodesApiHandler's cache for fast API responses.
+     */
+    private void syncStatusToCache(String nodeUrl, NodeStatus status) {
+        if (nodesApiHandler != null) {
+            String statusStr = switch (status) {
+                case ONLINE -> "online";
+                case OFFLINE -> "offline";
+                case DISABLED -> "disabled";
+                case UNKNOWN -> "unknown";
+            };
+            nodesApiHandler.updateNodeStatus(nodeUrl, statusStr);
         }
     }
 

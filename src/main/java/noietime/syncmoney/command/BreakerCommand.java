@@ -85,6 +85,13 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
      */
     private void handleReset(CommandSender sender) {
         circuitBreaker.reset();
+
+        var guard = plugin.getPlayerTransactionGuard();
+        if (guard != null && guard.isGlobalLocked()) {
+            guard.resetGlobalLockdown();
+            MessageHelper.sendMessage(sender, plugin.getMessage("breaker.reset-success-global-lock"));
+        }
+
         MessageHelper.sendMessage(sender, plugin.getMessage("breaker.reset-success-full"));
     }
 

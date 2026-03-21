@@ -85,12 +85,12 @@ public final class HybridAuditManager {
         this.logger = plugin.getLogger();
 
 
-        this.redisEnabled = config.isAuditRedisEnabled() && redisManager != null && !redisManager.isDegraded();
-        this.windowSize = config.getAuditRedisWindowSize();
-        this.migrationThreshold = config.getAuditMigrationThreshold();
-        this.migrationBatchSize = config.getAuditMigrationBatchSize();
-        this.migrationIntervalMs = config.getAuditMigrationIntervalMs();
-        this.flushIntervalMs = config.getAuditRedisFlushIntervalMs();
+        this.redisEnabled = config.audit().isAuditRedisEnabled() && redisManager != null && !redisManager.isDegraded();
+        this.windowSize = config.audit().getAuditRedisWindowSize();
+        this.migrationThreshold = config.audit().getAuditMigrationThreshold();
+        this.migrationBatchSize = config.audit().getAuditMigrationBatchSize();
+        this.migrationIntervalMs = config.audit().getAuditMigrationIntervalMs();
+        this.flushIntervalMs = config.audit().getAuditRedisFlushIntervalMs();
 
         if (!redisEnabled) {
             logger.fine("Hybrid audit manager initialized in DB-only mode (Redis disabled or degraded).");
@@ -198,7 +198,7 @@ public final class HybridAuditManager {
         }
 
 
-        if (!plugin.getSyncmoneyConfig().isAuditDeduplicationEnabled()) {
+        if (!plugin.getSyncmoneyConfig().audit().isAuditDeduplicationEnabled()) {
             return false;
         }
 
@@ -214,7 +214,7 @@ public final class HybridAuditManager {
             }
 
 
-            int windowSeconds = plugin.getSyncmoneyConfig().getAuditDeduplicationWindowSeconds();
+            int windowSeconds = plugin.getSyncmoneyConfig().audit().getAuditDeduplicationWindowSeconds();
             jedis.expire(dedupKey, windowSeconds);
 
             return false;

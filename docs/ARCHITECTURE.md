@@ -1,8 +1,8 @@
 # Syncmoney Architecture Overview
 
 > **Audience**: Developers contributing to or extending Syncmoney
-> **Version**: 1.1.0
-> **Last Updated**: 2026-03-19
+> **Version**: 1.1.1
+> **Last Updated**: 2026-03-21 (refactored)
 
 ---
 
@@ -94,15 +94,38 @@ The Java codebase (`noietime.syncmoney`) is organized into **27 packages** with 
 | Package | Files | Purpose |
 |---------|-------|---------|
 | `(root)` | 2 | `Syncmoney.java` (876 lines), `PluginContext.java` (356 lines) |
-| `config` | 4 | `SyncmoneyConfig` (1340 lines), `ConfigManager`, `ServerIdentityManager`, `ConfigFieldMetadata` |
+| `config` | 19 | `SyncmoneyConfig` (Facade), 18 sub-config classes, 4 manager classes |
 | `initialization` | 2 | `PluginInitializationManager`, `Initializable` |
+
+**Config Class Architecture:**
+```
+SyncmoneyConfig (Facade)
+├── RedisConfig
+├── DatabaseConfig
+├── MigrationConfig
+├── ShadowSyncConfig
+├── CircuitBreakerConfig
+├── PlayerProtectionConfig
+├── DiscordWebhookConfig
+├── AuditConfig
+├── CMIConfig
+├── BaltopConfig
+├── AdminPermissionConfig
+├── PayConfig
+├── DisplayConfig
+├── TransferGuardConfig
+├── VaultConfig
+├── LocalConfig
+├── CrossServerConfig
+└── WebAdminConfig
+```
 
 ### Economy Layer
 
 | Package | Files | Purpose |
 |---------|-------|---------|
 | `economy` | 15 | Core economic operations, mode routing, event processing |
-| `vault` | 1 | `SyncmoneyVaultProvider` (1276 lines) — Vault Economy API wrapper |
+| `vault` | 6 | VaultProviderCore, VaultPlayerHandler, VaultTransferHandler, VaultBankHandler, VaultLuaScriptManager, VaultPluginDetector |
 
 ### Storage Layer
 
@@ -201,6 +224,35 @@ VaultAPI.depositPlayer(player, amount)
           → EventBus: Fire PostTransactionEvent
 ```
 
+### Plugin API (Third-Party Integration)
+
+Third-party plugins (e.g., chest shops, auction houses) should use the `SyncmoneyVaultProvider` extended API instead of standard Vault methods to bypass the pairing mechanism.
+
+**Standard Vault flow (with pairing):**
+```
+Plugin withdrawPlayer() → SyncmoneyVaultProvider.withdrawPlayer()
+  → Records to recentWithdrawals (30s sliding window)
+Plugin depositPlayer() → SyncmoneyVaultProvider.depositPlayer()
+  → findCorrelatedTransfer() ← May fail in high-frequency scenarios
+```
+
+**Plugin API flow (bypasses pairing):**
+```
+Plugin depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
+  → EconomyEvent.EventSource = PLUGIN_DEPOSIT
+  → No pairing lookup, direct atomic operation
+  → Uses atomic_plugin_transfer.lua with plugin attribution metadata
+```
+
+**New EventSource values:**
+
+| Value | Purpose |
+|-------|---------|
+| `PLUGIN_DEPOSIT` | Third-party plugin deposit (bypasses Vault pairing) |
+| `PLUGIN_WITHDRAW` | Third-party plugin withdrawal (bypasses Vault pairing) |
+
+**Orphan VAULT_DEPOSIT handling:** When `findCorrelatedTransfer()` returns null (no matching withdrawal found), the deposit is now processed as `PLUGIN_DEPOSIT` instead of being rejected. This prevents money loss during high-frequency transactions while maintaining audit trail.
+
 ### Cross-Server Sync
 
 ```
@@ -256,7 +308,7 @@ Syncmoney is fully compatible with Folia's region-based threading. **`Bukkit.get
 | `players` | Player balances (UUID → DECIMAL(20,2)) |
 | `syncmoney_audit_log` | Transaction audit trail (with millisecond sequence ordering) |
 
-### Lua Scripts (7 scripts)
+### Lua Scripts (8 scripts)
 
 | Script | Purpose |
 |--------|---------|
@@ -267,6 +319,7 @@ Syncmoney is fully compatible with Folia's region-based threading. **`Bukkit.get
 | `atomic_bank_deposit.lua` | Atomic bank deposit |
 | `atomic_bank_withdraw.lua` | Atomic bank withdrawal |
 | `atomic_bank_transfer.lua` | Atomic bank-to-bank transfer |
+| `atomic_plugin_transfer.lua` | Atomic plugin-initiated transfer (with plugin attribution metadata) |
 
 ---
 
@@ -290,7 +343,7 @@ WebAdminServer (682 lines)
 │   ├── CrossServerStatsApiHandler → /api/economy/cross-server-*
 │   └── ApiExtensionManager      → /api/extensions/{name}/*
 ├── SSE Manager (/sse)
-├── WebSocket Manager (/ws) [partial in v1.1.0]
+├── WebSocket Manager (/ws) [partial in v1.1.1]
 └── Health Endpoint (/health)
 ```
 
@@ -304,9 +357,22 @@ WebAdminServer (682 lines)
 | `web.api.config` | `ConfigApiHandler` | `/api/config`, `/api/config/reload`, `/api/config/validate` |
 | `web.api.settings` | `SettingsApiHandler` | `/api/settings`, `/api/settings/theme`, `/api/settings/language`, `/api/settings/timezone` |
 | `web.api.auth` | `WsTokenHandler` | `/api/auth/ws-token` |
-| `web.api.nodes` | `NodesApiHandler` | `/api/nodes`, `/api/nodes/status`, `/api/nodes/{index}`, `/api/nodes/{index}/ping` |
+| `web.api.nodes` | `NodesApiHandler` + 4 sub-handlers | `/api/nodes`, `/api/nodes/status`, `/api/nodes/{index}`, `/api/nodes/{index}/ping`, `/api/nodes/{index}/proxy`, `/api/nodes/sync`, `/api/nodes/{index}/sync`, `/api/config/sync` |
 | `web.api.crossserver` | `CrossServerStatsApiHandler` | `/api/economy/cross-server-stats`, `/api/economy/cross-server-top` |
 | `web.api.extension` | `ApiExtensionManager` | `/api/extensions/{name}/*` (dynamic) |
+
+#### Nodes API Sub-Handlers Architecture
+
+The `NodesApiHandler` coordinates four specialized sub-handlers:
+
+| Handler | Responsibility |
+|---------|---------------|
+| `NodeOperationsHandler` | CRUD operations for nodes (create, read, update, delete, ping) |
+| `NodeStatusHandler` | Parallel fetching of detailed node status |
+| `NodeProxyHandler` | HTTP request proxying to remote nodes |
+| `ConfigSyncHandler` | Bidirectional configuration sync (push from central, receive on nodes) |
+
+All sub-handlers inherit from `NodesApiContext` which provides common utilities (JSON parsing, SSRF validation, API key masking, permission checking).
 ```
 
 ### Security Layers
@@ -334,9 +400,25 @@ WebAdminServer (682 lines)
 | Store | Purpose |
 |-------|---------|
 | `auth` | Authentication state (API key in localStorage) |
-| `notification` | Toast notifications queue |
+| `notification` | Dual-track notifications: Toast (temporary, 5s auto-dismiss) + Alert (persistent, localStorage-backed) |
 | `settings` | Theme, language, timezone preferences |
 | `sse` | SSE connection lifecycle management |
+
+#### Notification System Architecture
+
+The notification system implements a **dual-track** architecture:
+
+- **Toast**: Temporary notifications displayed in the top-right corner, auto-dismiss after 5 seconds
+- **Alert**: Persistent notifications stored in localStorage, displayed in a dropdown panel from the header bell icon
+
+Notifications are categorized as: `system`, `security`, `transaction`, `audit`, `general`.
+
+Key store methods:
+- `addToast(type, title, message, category)` — Add temporary notification
+- `addAlert(type, title, message, category)` — Add persistent alert
+- `addBreakerNotification(state)` — Circuit breaker alerts (both Toast + Alert)
+- `addSystemAlertNotification(message)` — System alerts (both Toast + Alert)
+- `success/error/info/warning(title, message)` — Convenience shortcut methods
 
 ### API Integration
 

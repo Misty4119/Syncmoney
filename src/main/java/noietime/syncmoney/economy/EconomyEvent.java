@@ -55,7 +55,12 @@ public record EconomyEvent(
 
         SHADOW_SYNC,
 
-        TEST
+        TEST,
+
+        // Third-party plugin source - bypasses Vault pairing logic, uses atomic_transfer.lua
+        PLUGIN_DEPOSIT,
+
+        PLUGIN_WITHDRAW
     }
 
     /**

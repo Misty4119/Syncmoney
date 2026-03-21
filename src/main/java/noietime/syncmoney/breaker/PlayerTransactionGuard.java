@@ -68,7 +68,7 @@ public final class PlayerTransactionGuard {
 
         startAutoUnlockTask();
         startCleanupTask();
-        if (config.isPlayerProtectionGlobalLockEnabled()) {
+        if (config.playerProtection().isPlayerProtectionGlobalLockEnabled()) {
             startGlobalInflationMonitor();
         }
     }
@@ -93,7 +93,7 @@ public final class PlayerTransactionGuard {
             return new CheckResult(false, "Global economy locked: " + globalLockReason, ProtectionState.GLOBAL_LOCKED);
         }
 
-        if (!config.isPlayerProtectionEnabled()) {
+        if (!config.playerProtection().isPlayerProtectionEnabled()) {
             return CheckResult.ALLOWED;
         }
 
@@ -125,15 +125,15 @@ public final class PlayerTransactionGuard {
             return new CheckResult(false, "Transaction limit reached", ProtectionState.NORMAL);
         }
 
-        if (config.getPlayerProtectionMaxAmountPerMinute() > 0) {
-            if (state.getAmountPerMinute().add(amount).compareTo(BigDecimal.valueOf(config.getPlayerProtectionMaxAmountPerMinute())) > 0) {
+        if (config.playerProtection().getPlayerProtectionMaxAmountPerMinute() > 0) {
+            if (state.getAmountPerMinute().add(amount).compareTo(BigDecimal.valueOf(config.playerProtection().getPlayerProtectionMaxAmountPerMinute())) > 0) {
                 notificationService.sendRateLimitNotification(uuid, "amount-limit");
                 return new CheckResult(false, "Transaction amount limit reached", ProtectionState.NORMAL);
             }
         }
 
         int transactionCount = state.getTransactionCountInWindow();
-        int warningThreshold = config.getPlayerProtectionWarningThreshold();
+        int warningThreshold = config.playerProtection().getPlayerProtectionWarningThreshold();
 
         if (transactionCount > warningThreshold && state.getState() == ProtectionState.NORMAL) {
             state.setState(ProtectionState.WARNING);
@@ -143,10 +143,10 @@ public final class PlayerTransactionGuard {
 
         if (state.getPreviousBalance() != null && state.getPreviousBalance().compareTo(BigDecimal.ZERO) > 0) {
             double ratio = amount.abs().divide(state.getPreviousBalance(), 4, java.math.RoundingMode.HALF_UP).doubleValue();
-            if (ratio > config.getPlayerProtectionBalanceChangeThreshold()) {
+            if (ratio > config.playerProtection().getPlayerProtectionBalanceChangeThreshold()) {
                 state.setState(ProtectionState.LOCKED);
                 state.setLockExtensionCount(state.getLockExtensionCount() + 1);
-                state.setUnlockTime(System.currentTimeMillis() + (config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
+                state.setUnlockTime(System.currentTimeMillis() + (config.playerProtection().getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
                 notificationService.sendLockedNotification(uuid, "Abnormal balance change detected (ratio: " + FormatUtil.formatPercentRaw(ratio) + ")");
                 plugin.getLogger().severe("PlayerTransactionGuard: Player " + uuid + " LOCKED due to abnormal balance change. Ratio: " + ratio);
                 return new CheckResult(false, "Account locked due to abnormal behavior", ProtectionState.LOCKED);
@@ -160,7 +160,7 @@ public final class PlayerTransactionGuard {
             if (warningCount >= 3) {
                 state.setState(ProtectionState.LOCKED);
                 state.setLockExtensionCount(state.getLockExtensionCount() + 1);
-                state.setUnlockTime(System.currentTimeMillis() + (config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
+                state.setUnlockTime(System.currentTimeMillis() + (config.playerProtection().getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
                 notificationService.sendLockedNotification(uuid, "Continued suspicious activity");
                 plugin.getLogger().severe("PlayerTransactionGuard: Player " + uuid + " LOCKED due to continued warnings");
                 return new CheckResult(false, "Account locked due to suspicious activity", ProtectionState.LOCKED);
@@ -182,15 +182,15 @@ public final class PlayerTransactionGuard {
             return;
         }
 
-        if (!config.isPlayerProtectionEnabled()) {
+        if (!config.playerProtection().isPlayerProtectionEnabled()) {
             return;
         }
 
-        if (!config.isPlayerProtectionLockReceiver()) {
+        if (!config.playerProtection().isPlayerProtectionLockReceiver()) {
             return;
         }
 
-        long threshold = config.getPlayerProtectionReceiverLockThreshold();
+        long threshold = config.playerProtection().getPlayerProtectionReceiverLockThreshold();
         if (threshold <= 0) {
             return;
         }
@@ -234,7 +234,7 @@ public final class PlayerTransactionGuard {
         PlayerProtectionState state = playerStates.get(uuid);
         if (state != null && state.getState() == ProtectionState.LOCKED) {
             int successCount = state.incrementSuccessfulTransactions();
-            if (successCount >= config.getPlayerProtectionUnlockTestTransactions()) {
+            if (successCount >= config.playerProtection().getPlayerProtectionUnlockTestTransactions()) {
                 state.setState(ProtectionState.NORMAL);
                 state.setWarningCount(0);
                 state.setSuccessfulTransactions(0);
@@ -311,9 +311,9 @@ public final class PlayerTransactionGuard {
         }
 
         if (System.currentTimeMillis() >= state.getUnlockTime()) {
-            int maxExtensions = config.getPlayerProtectionMaxLockExtensions();
+            int maxExtensions = config.playerProtection().getPlayerProtectionMaxLockExtensions();
             if (maxExtensions > 0 && state.getLockExtensionCount() >= maxExtensions) {
-                state.setUnlockTime(System.currentTimeMillis() + (config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
+                state.setUnlockTime(System.currentTimeMillis() + (config.playerProtection().getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
                 plugin.getLogger().warning("PlayerTransactionGuard: Player lock extended, max extensions reached");
                 return false;
             }
@@ -393,7 +393,7 @@ public final class PlayerTransactionGuard {
      * Calculates total supply and checks growth rate against threshold.
      */
     private void performGlobalInflationCheck() {
-        if (!config.isPlayerProtectionGlobalLockEnabled()) {
+        if (!config.playerProtection().isPlayerProtectionGlobalLockEnabled()) {
             return;
         }
 
@@ -416,7 +416,7 @@ public final class PlayerTransactionGuard {
             BigDecimal increase = currentTotal.subtract(lastKnownTotalSupply);
             BigDecimal increaseRatio = increase.abs().divide(lastKnownTotalSupply, 4, RoundingMode.HALF_UP);
 
-            double threshold = config.getPlayerProtectionGlobalLockThreshold();
+            double threshold = config.playerProtection().getPlayerProtectionGlobalLockThreshold();
             if (increaseRatio.doubleValue() > threshold) {
                 String reason = String.format("Global inflation detected: %.2f%% (threshold: %.2f%%)",
                         increaseRatio.doubleValue() * 100, threshold * 100);

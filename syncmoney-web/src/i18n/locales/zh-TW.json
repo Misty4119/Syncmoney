@@ -167,6 +167,11 @@
     "saveSuccessDesc": "設定已成功儲存並熱更新",
     "saveError": "儲存失敗",
     "saveErrorDesc": "無法儲存設定，請查看伺服器日誌",
+    "syncToNodes": "同步至節點",
+    "syncSuccess": "已同步至 {count} 個節點",
+    "syncPartialSuccess": "已同步至 {succeeded} 個節點，{failed} 個失敗",
+    "syncError": "同步至節點失敗",
+    "syncErrorDesc": "無法同步設定至遠端節點，請查看伺服器日誌",
     "unsavedChanges": "未儲存變更",
     "unsavedChangesDesc": "您有未儲存的變更，是否放棄？",
     "sections": {
@@ -547,15 +552,9 @@
   },
   "nodes": {
     "selectServer": "選擇伺服器...",
-    "addNode": "新增節點",
-    "editNode": "編輯節點",
     "deleteNode": "刪除節點",
     "nodeName": "節點名稱",
-    "nodeNamePlaceholder": "請輸入節點名稱",
     "nodeUrl": "節點網址",
-    "nodeUrlPlaceholder": "https://example.com:8080",
-    "apiKey": "API Key",
-    "apiKeyPlaceholder": "請輸入 API Key",
     "enabled": "啟用",
     "status": "狀態",
     "online": "在線",
@@ -563,34 +562,19 @@
     "unknown": "未知",
     "actions": "操作",
     "ping": "Ping",
-    "confirmDelete": "確定要刪除此節點嗎？",
-    "addSuccess": "節點新增成功",
-    "updateSuccess": "節點更新成功",
-    "deleteSuccess": "節點刪除成功",
-    "addFailed": "節點新增失敗",
-    "updateFailed": "節點更新失敗",
-    "deleteFailed": "節點刪除失敗",
-    "saveFailed": "儲存失敗",
     "pingSuccess": "Ping 成功",
     "pingFailed": "Ping 失敗",
-    "invalidUrl": "無效的 URL",
-    "ssrfBlocked": "URL 被 SSRF 防護阻止",
+    "deleteSuccess": "節點刪除成功",
+    "deleteFailed": "節點刪除失敗",
     "noNodes": {
       "title": "尚無節點",
-      "description": "點擊上方按鈕新增第一個節點"
+      "description": "請在 config.yml 中設定節點"
     },
-    "addFirstNode": "新增第一個節點",
     "managementDescription": "管理所有已連接的伺服器節點",
     "rank": "排名",
     "deleteConfirm": {
       "title": "確認刪除",
       "description": "此操作無法撤銷，確定要刪除此節點嗎？"
-    },
-    "errors": {
-      "nameRequired": "請輸入節點名稱",
-      "urlRequired": "請輸入節點網址",
-      "urlInvalid": "請輸入有效的 URL",
-      "apiKeyRequired": "請輸入 API Key"
     }
   },
   "central": {

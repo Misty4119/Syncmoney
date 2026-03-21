@@ -30,7 +30,6 @@ function reconnect() {
   sseStore.init()
 }
 
-
 watch(() => authStore.isAuthenticated, (isAuthed) => {
   if (isAuthed) {
     console.log('[App] Authenticated, initializing SSE...')
@@ -41,23 +40,12 @@ watch(() => authStore.isAuthenticated, (isAuthed) => {
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
+  await authStore.checkAuth()
 
-
-
-  authStore.checkAuth()
-
-
-  const checkAndInitSSE = () => {
-    if (authStore.isAuthenticated && !sseStore.connected) {
-      console.log('[App] Post-auth-check: initializing SSE...')
-      sseStore.init()
-    }
+  if (authStore.isAuthenticated && !sseStore.connected) {
+    sseStore.init()
   }
-
-
-  setTimeout(checkAndInitSSE, 100)
-
 
   setTimeout(() => {
     if (!sseStore.connected) {

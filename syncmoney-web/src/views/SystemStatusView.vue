@@ -156,6 +156,7 @@ import { apiClient, type SystemStatus, type SystemMetrics, type ApiResponse } fr
 import type { SystemAlertEvent } from '@/types/events'
 import { useSSEStore } from '@/stores/sse'
 import { useNotificationStore } from '@/stores/notification'
+import { useNodesStore } from '@/stores/nodes'
 import { Package, Wifi, Shield, HardDrive, Cpu, Zap } from 'lucide-vue-next'
 import Card from '@/components/common/Card.vue'
 import Badge from '@/components/common/Badge.vue'
@@ -164,6 +165,7 @@ import StatusDot from '@/components/common/StatusDot.vue'
 const { t } = useI18n()
 const ws = useSSEStore()
 const notificationStore = useNotificationStore()
+const nodesStore = useNodesStore()
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -258,7 +260,9 @@ async function loadSystemStatus() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  
+  await nodesStore.fetchNodes().catch(() => {})
   loadSystemStatus()
 
   refreshInterval = setInterval(loadSystemStatus, 10000)

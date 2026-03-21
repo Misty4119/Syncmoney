@@ -141,7 +141,7 @@ public final class PlaceholderHandler {
         }
 
         if (lower.equals("total_players")) {
-            Object totalObj = ReflectionHelper.invokeMethod(baltopManager, "getTotalPlayers");
+            Object totalObj = ReflectionHelper.invokeMethod(baltopManager, "getTotalRegisteredPlayers");
             if (totalObj instanceof Integer) {
                 return String.valueOf(totalObj);
             }

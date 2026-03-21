@@ -52,10 +52,10 @@ public final class RedisManager implements AutoCloseable {
         this.redisRequired = redisRequired;
 
         if (!redisRequired) {
-            this.redisHost = config.getRedisHost();
-            this.redisPort = config.getRedisPort();
-            this.redisPassword = config.getRedisPassword();
-            this.redisDatabase = config.getRedisDatabase();
+            this.redisHost = config.redis().getRedisHost();
+            this.redisPort = config.redis().getRedisPort();
+            this.redisPassword = config.redis().getRedisPassword();
+            this.redisDatabase = config.redis().getRedisDatabase();
             this.poolConfig = new JedisPoolConfig();
             this.jedisPool = null;
             this.degraded = true;
@@ -63,15 +63,15 @@ public final class RedisManager implements AutoCloseable {
             return;
         }
 
-        this.redisHost = config.getRedisHost();
-        this.redisPort = config.getRedisPort();
-        this.redisPassword = config.getRedisPassword();
-        this.redisDatabase = config.getRedisDatabase();
+        this.redisHost = config.redis().getRedisHost();
+        this.redisPort = config.redis().getRedisPort();
+        this.redisPassword = config.redis().getRedisPassword();
+        this.redisDatabase = config.redis().getRedisDatabase();
 
         this.poolConfig = new JedisPoolConfig();
-        poolConfig.setMaxTotal(config.getRedisPoolSize());
-        poolConfig.setMaxIdle(Math.min(10, config.getRedisPoolSize()));
-        poolConfig.setMinIdle(Math.min(5, config.getRedisPoolSize() / 2));
+        poolConfig.setMaxTotal(config.redis().getRedisPoolSize());
+        poolConfig.setMaxIdle(Math.min(10, config.redis().getRedisPoolSize()));
+        poolConfig.setMinIdle(Math.min(5, config.redis().getRedisPoolSize() / 2));
         poolConfig.setMaxWaitMillis(3000);
 
         poolConfig.setTestOnBorrow(true);
@@ -80,22 +80,22 @@ public final class RedisManager implements AutoCloseable {
         poolConfig.setTestOnCreate(true);
 
         int timeout = 5000;
-        if (config.getRedisPassword() != null && !config.getRedisPassword().isEmpty()) {
+        if (config.redis().getRedisPassword() != null && !config.redis().getRedisPassword().isEmpty()) {
             this.jedisPool = new JedisPool(
                     poolConfig,
-                    config.getRedisHost(),
-                    config.getRedisPort(),
+                    config.redis().getRedisHost(),
+                    config.redis().getRedisPort(),
                     timeout,
-                    config.getRedisPassword(),
-                    config.getRedisDatabase());
+                    config.redis().getRedisPassword(),
+                    config.redis().getRedisDatabase());
         } else {
             this.jedisPool = new JedisPool(
                     poolConfig,
-                    config.getRedisHost(),
-                    config.getRedisPort(),
+                    config.redis().getRedisHost(),
+                    config.redis().getRedisPort(),
                     timeout,
                     (String) null,
-                    config.getRedisDatabase());
+                    config.redis().getRedisDatabase());
         }
 
         if (!isConnected()) {

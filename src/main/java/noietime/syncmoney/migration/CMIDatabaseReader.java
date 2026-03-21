@@ -64,7 +64,7 @@ public final class CMIDatabaseReader {
      * Uses auto-detect from DataBaseInfo.yml if enabled.
      */
     public StorageType getDetectedStorageType() {
-        if (config.isCMIAutoDetect()) {
+        if (config.migration().isCMIAutoDetect()) {
             CMIDatabaseConfig cmiConfig = CMIDatabaseConfig.fromDataBaseInfo(plugin);
             return cmiConfig.getType();
         }

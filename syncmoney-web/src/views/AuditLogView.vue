@@ -269,6 +269,7 @@ import { exportAuditCSV } from '@/services/auditService'
 import { useSSEStore } from '@/stores/sse'
 import { useNotificationStore } from '@/stores/notification'
 import { useSettingsStore } from '@/stores/settings'
+import { useNodesStore } from '@/stores/nodes'
 import { formatInTimeZone } from 'date-fns-tz'
 import { normalizeTimezone } from '@/utils/timezone'
 import { Search, Download, FileText, X, ArrowUp, ArrowDown } from 'lucide-vue-next'
@@ -281,6 +282,7 @@ const { t } = useI18n()
 const ws = useSSEStore()
 const notificationStore = useNotificationStore()
 const settingsStore = useSettingsStore()
+const nodesStore = useNodesStore()
 
 
 const isRealtimeEnabled = ref(true)
@@ -851,9 +853,10 @@ function setupIntersectionObserver() {
 
 
 let auditSseHandler: ((data: unknown) => void) | null = null
-let transactionSseHandler: ((data: unknown) => void) | null = null
 
-onMounted(() => {
+onMounted(async () => {
+  
+  await nodesStore.fetchNodes().catch(() => {})
   applyDateRange()
   updateTableHeight()
   window.addEventListener('resize', updateTableHeight)
@@ -897,24 +900,9 @@ onMounted(() => {
           newRecordIds.value.delete(String(recordId))
         }, 3000)
 
-        const amount = newRecord.amount
-        const displayAmount = amount.startsWith('+') || amount.startsWith('-')
-          ? amount
-          : (newRecord.type === 'DEPOSIT' ? '+' : '-') + amount
-        notificationStore.addNotification('info',
-          `${newRecord.playerName}: ${displayAmount}`,
-          '')
-      }
-    }
-  }
-
-  transactionSseHandler = (data: unknown) => {
-    const rawData = data as Record<string, unknown>
-    const evt = rawData.data as Record<string, unknown>
-
-    if (!isRealtimeEnabled.value) {
-      if (!matchesCurrentFilter(evt as unknown as AuditEvent)) {
-        handleSearch()
+        
+        
+        
       }
     }
   }
@@ -927,7 +915,6 @@ onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
   if (observer) observer.disconnect()
   if (auditSseHandler) ws.off('audit', auditSseHandler)
-  if (transactionSseHandler) ws.off('transaction', transactionSseHandler)
 })
 </script>
 

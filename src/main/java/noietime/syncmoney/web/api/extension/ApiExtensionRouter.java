@@ -15,7 +15,7 @@ import java.util.function.Consumer;
  *
  * Example:
  * ```java
- * // Registers route: /api/extensions/my-extension/stats
+ * 
  * router.get("stats", exchange -> { ... });
  * ```
  */

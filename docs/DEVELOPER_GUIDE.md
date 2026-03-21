@@ -3,6 +3,8 @@
 A comprehensive guide for developers who want to integrate with Syncmoney or extend its functionality.
 
 > **See also:** [Architecture Overview](ARCHITECTURE.md) for system-level design and data flow diagrams.
+>
+> **Version**: v1.1.1
 
 ---
 
@@ -63,7 +65,7 @@ public class MyPluginListener implements Listener {
 
 #### AsyncPreTransactionEvent
 
-> **⚠️ v1.1.0 Known Limitation:** `AsyncPreTransactionEvent` is defined but **not yet fired** by `EconomyFacade` in v1.1.0. Calling `event.setCancelled(true)` has **no effect** on actual transactions. This event will be fully wired in a future release. Use `PostTransactionEvent` for reliable transaction monitoring.
+> **⚠️ v1.1.1 Known Limitation:** `AsyncPreTransactionEvent` is defined but **not yet fired** by `EconomyFacade` in v1.1.1. Calling `event.setCancelled(true)` has **no effect** on actual transactions. This event will be fully wired in a future release. Use `PostTransactionEvent` for reliable transaction monitoring.
 
 ```java
 // Fields
@@ -120,6 +122,8 @@ java.math.BigDecimal getBalanceChange(); // Net change (can be negative)
 | `MIGRATION` | Data migration process |
 | `SHADOW_SYNC` | Background shadow sync |
 | `TEST` | Stress test command |
+| `PLUGIN_DEPOSIT` | Third-party plugin deposit (bypasses Vault pairing) |
+| `PLUGIN_WITHDRAW` | Third-party plugin withdrawal (bypasses Vault pairing) |
 
 #### ShadowSyncEvent
 
@@ -200,7 +204,7 @@ GET /health
 
 Response:
 ```json
-{"success":true,"data":{"status":"ok","version":"1.1.0"}}
+{"success":true,"data":{"status":"ok","version":"1.1.1"}}
 ```
 
 #### System API
@@ -230,6 +234,28 @@ Response:
 
 Query parameters for search: `player`, `type`, `startTime`, `endTime`, `page`, `pageSize`
 
+#### Nodes API (Central Mode)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/nodes` | List all configured nodes |
+| POST | `/api/nodes` | Create a new node |
+| PUT | `/api/nodes/{index}` | Update a node |
+| DELETE | `/api/nodes/{index}` | Delete a node |
+| POST | `/api/nodes/{index}/ping` | Manually ping a node |
+| GET | `/api/nodes/status` | Get detailed status of all nodes |
+| POST | `/api/nodes/{index}/proxy` | Proxy HTTP request to remote node |
+| POST | `/api/nodes/sync` | Push config to all nodes (Central Mode) |
+| POST | `/api/nodes/{index}/sync` | Push config to single node (Central Mode) |
+| POST | `/api/config/sync` | Receive config from central (Node-side) |
+
+#### Cross-Server Statistics API (Central Mode)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/economy/cross-server-stats` | Aggregated stats from all nodes |
+| GET | `/api/economy/cross-server-top` | Aggregated leaderboard across nodes |
+
 #### Config API
 
 | Method | Endpoint | Description |
@@ -253,7 +279,7 @@ All responses include a `meta` field:
 {
   "success": true,
   "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.0" }
+  "meta": { "timestamp": 1709337000000, "version": "1.1.1" }
 }
 ```
 
@@ -364,7 +390,9 @@ audit:
 # ==========================================
 web-admin:
   enabled: false
-  bundled-version: "1.1.0"
+  central-mode: false
+  nodes: []
+  bundled-version: "1.1.1"
   server:
     host: "localhost"
     port: 8080
@@ -413,6 +441,41 @@ economy.depositPlayer(player, amount);
 // Withdraw money
 economy.withdrawPlayer(player, amount);
 ```
+
+#### Plugin API (Recommended for Third-Party Plugins)
+
+For third-party plugins (e.g., chest shops, auction houses), use the `SyncmoneyVaultProvider` extended API directly to bypass the Vault pairing mechanism. This prevents "orphan VAULT_DEPOSIT" issues during high-frequency transactions.
+
+```java
+import net.milkbowl.vault.economy.Economy;
+import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import org.bukkit.plugin.RegisteredServiceProvider;
+
+// Get economy service
+Economy economy = VaultAPI.getEconomy();
+if (!(economy instanceof SyncmoneyVaultProvider)) {
+    // Not Syncmoney
+    return;
+}
+SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
+
+// Deposit for plugin (bypasses Vault pairing)
+EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
+
+// Withdraw for plugin (bypasses Vault pairing)
+EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
+
+// Atomic transfer between players (plugin-level attribution)
+EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "MyPlugin");
+```
+
+**When to use Plugin API vs Standard Vault API:**
+
+| Scenario | Recommended API | Reason |
+|----------|-----------------|--------|
+| Chest shop buy/sell | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | Avoids Vault pairing race conditions |
+| Auction house transfers | `pluginTransfer` | Atomic operation, no pairing needed |
+| Standard economy operations | Standard Vault API | Full compatibility |
 
 ### Vault Permissions
 
@@ -648,11 +711,11 @@ cd Syncmoney
 
 # Build plugin JAR (includes shadow relocation)
 ./gradlew shadowJar
-# Output: build/libs/Syncmoney-1.1.0.jar
+# Output: build/libs/Syncmoney-1.1.1.jar
 
 # Build PAPI expansion
 cd syncmoney-papi-expansion && ../gradlew jar
-# Output: build/libs/SyncmoneyExpansion-1.1.0.jar
+# Output: build/libs/SyncmoneyExpansion-1.1.1.jar
 
 # Build web frontend
 cd syncmoney-web
@@ -690,9 +753,9 @@ To maintain a high-quality, professional, and globally accessible codebase, Sync
 
 | Limitation | Status | Workaround |
 |------------|--------|------------|
-| `AsyncPreTransactionEvent` not fired | v1.1.0 | Event defined but not yet wired in `EconomyFacade`. Use `PostTransactionEvent` instead. |
-| WebSocket not fully implemented | v1.1.0 | `/ws` accepts connections but dispatch is incomplete. Use SSE (`/sse`) for production. |
-| `event.setCancelled(true)` no-op | v1.1.0 | Pre-transaction cancellation has no effect. Will be wired in future release. |
+| `AsyncPreTransactionEvent` not fired | v1.1.1 | Event defined but not yet wired in `EconomyFacade`. Use `PostTransactionEvent` instead. |
+| WebSocket not fully implemented | v1.1.1 | `/ws` accepts connections but dispatch is incomplete. Use SSE (`/sse`) for production. |
+| `event.setCancelled(true)` no-op | v1.1.1 | Pre-transaction cancellation has no effect. Will be wired in future release. |
 
 ---
 

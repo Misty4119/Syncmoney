@@ -81,7 +81,7 @@ public final class LocalToSyncMigrationTask {
             return;
         }
 
-        if (config.isMigrationLockEconomy()) {
+        if (config.migration().isMigrationLockEconomy()) {
             MigrationLock.enable();
             MigrationLock.lock();
             plugin.getLogger().fine("Economy operations locked for migration");
@@ -91,7 +91,7 @@ public final class LocalToSyncMigrationTask {
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
             try {
-                String localDbPath = config.getLocalSQLitePath();
+                String localDbPath = config.local().getLocalSQLitePath();
                 if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
                     localDbPath = LOCAL_DB_PREFIX + localDbPath;
                 }
@@ -128,7 +128,7 @@ public final class LocalToSyncMigrationTask {
                                 config.getServerName()
                         );
 
-                        if (config.isMigrationPopulateRedis()) {
+                        if (config.migration().isMigrationPopulateRedis()) {
                             populateRedis(player.uuid(), player.balance(), player.version());
                         }
 
@@ -163,7 +163,7 @@ public final class LocalToSyncMigrationTask {
                 reportError(e.getMessage());
             } finally {
                 running = false;
-                if (config.isMigrationLockEconomy()) {
+                if (config.migration().isMigrationLockEconomy()) {
                     MigrationLock.unlock();
                     MigrationLock.disable();
                     plugin.getLogger().fine("Economy operations unlocked after migration");
@@ -476,7 +476,7 @@ public final class LocalToSyncMigrationTask {
      * Calculates total balance from local SQLite database.
      */
     private BigDecimal calculateSQLiteTotalBalance() throws SQLException {
-        String localDbPath = config.getLocalSQLitePath();
+        String localDbPath = config.local().getLocalSQLitePath();
         if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
             localDbPath = LOCAL_DB_PREFIX + localDbPath;
         }

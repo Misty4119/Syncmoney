@@ -15,7 +15,7 @@ import org.jetbrains.annotations.NotNull;
  * - %syncmoney_rank% - Get player's own rank
  * - %syncmoney_my_rank% - Get player's own rank (alias)
  * - %syncmoney_total_supply% - Get total currency supply
- * - %syncmoney_total_players% - Get total players in leaderboard
+ * - %syncmoney_total_players% - Get total registered players from database
  * - %syncmoney_version% - Get plugin version
  * - %syncmoney_online_players% - Get online player count
  * - %syncmoney_top_<n>% - Get balance of rank n in leaderboard
@@ -56,7 +56,7 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getVersion() {
-        return "1.1.0";
+        return "1.1.1";
     }
 
     @Override

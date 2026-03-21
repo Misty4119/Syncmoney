@@ -3,6 +3,8 @@
 為想要與 Syncmoney 整合或擴展其功能的開發者提供的綜合指南。
 
 > **另請參閱：**[架構概覽](ARCHITECTURE.zh_tw.md) 以了解系統層級設計和資料流程圖。
+>
+> **版本**：v1.1.1
 
 ---
 
@@ -63,7 +65,7 @@ public class MyPluginListener implements Listener {
 
 #### AsyncPreTransactionEvent
 
-> **⚠️ v1.1.0 已知限制：** `AsyncPreTransactionEvent` 已定義但**尚未由 `EconomyFacade` 觸發**。呼叫 `event.setCancelled(true)` **對實際交易沒有影響**。此事件將在未來版本中完全連接。使用 `PostTransactionEvent` 進行可靠的交易監控。
+> **⚠️ v1.1.1 已知限制：** `AsyncPreTransactionEvent` 已定義但**尚未由 `EconomyFacade` 觸發**。呼叫 `event.setCancelled(true)` **對實際交易沒有影響**。此事件將在未來版本中完全連接。使用 `PostTransactionEvent` 進行可靠的交易監控。
 
 ```java
 // 欄位
@@ -120,6 +122,8 @@ java.math.BigDecimal getBalanceChange(); // 淨變化（可為負）
 | `MIGRATION` | 資料遷移過程 |
 | `SHADOW_SYNC` | 背景影子同步 |
 | `TEST` | 壓力測試指令 |
+| `PLUGIN_DEPOSIT` | 第三方插件存款（繞過 Vault 配對） |
+| `PLUGIN_WITHDRAW` | 第三方插件取款（繞過 Vault 配對） |
 
 #### ShadowSyncEvent
 
@@ -200,7 +204,7 @@ GET /health
 
 回應：
 ```json
-{"success":true,"data":{"status":"ok","version":"1.1.0"}}
+{"success":true,"data":{"status":"ok","version":"1.1.1"}}
 ```
 
 #### 系統 API
@@ -230,6 +234,28 @@ GET /health
 
 搜尋的查詢參數：`player`、`type`、`startTime`、`endTime`、`page`、`pageSize`
 
+#### 節點 API（中央模式）
+
+| 方法 | 端點 | 說明 |
+|--------|----------|-------------|
+| GET | `/api/nodes` | 列出所有已設定的節點 |
+| POST | `/api/nodes` | 建立新節點 |
+| PUT | `/api/nodes/{index}` | 更新節點 |
+| DELETE | `/api/nodes/{index}` | 刪除節點 |
+| POST | `/api/nodes/{index}/ping` | 手動 ping 節點 |
+| GET | `/api/nodes/status` | 取得所有節點的詳細狀態 |
+| POST | `/api/nodes/{index}/proxy` | 向遠端節點代理 HTTP 請求 |
+| POST | `/api/nodes/sync` | 推送設定至所有節點（中央模式） |
+| POST | `/api/nodes/{index}/sync` | 推送設定至單一節點（中央模式） |
+| POST | `/api/config/sync` | 接收來自中央的設定（節點端） |
+
+#### 跨伺服器統計 API（中央模式）
+
+| 方法 | 端點 | 說明 |
+|--------|----------|-------------|
+| GET | `/api/economy/cross-server-stats` | 來自所有節點的聚合統計 |
+| GET | `/api/economy/cross-server-top` | 跨節點的聚合排行榜 |
+
 #### 設定 API
 
 | 方法 | 端點 | 說明 |
@@ -253,7 +279,7 @@ GET /health
 {
   "success": true,
   "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.0" }
+  "meta": { "timestamp": 1709337000000, "version": "1.1.1" }
 }
 ```
 
@@ -364,7 +390,9 @@ audit:
 # ==========================================
 web-admin:
   enabled: false
-  bundled-version: "1.1.0"
+  central-mode: false
+  nodes: []
+  bundled-version: "1.1.1"
   server:
     host: "localhost"
     port: 8080
@@ -413,6 +441,41 @@ economy.depositPlayer(player, amount);
 // 提款
 economy.withdrawPlayer(player, amount);
 ```
+
+#### 插件 API（推薦給第三方插件）
+
+對於第三方插件（如箱子商店、拍賣行），建議直接使用 `SyncmoneyVaultProvider` 的擴展 API，繞過 Vault 配對機制。這可以避免高頻交易時出現「orphan VAULT_DEPOSIT」問題。
+
+```java
+import net.milkbowl.vault.economy.Economy;
+import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import org.bukkit.plugin.RegisteredServiceProvider;
+
+// 取得經濟服務
+Economy economy = VaultAPI.getEconomy();
+if (!(economy instanceof SyncmoneyVaultProvider)) {
+    // 不是 Syncmoney
+    return;
+}
+SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
+
+// 插件存款（繞過 Vault 配對）
+EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
+
+// 插件取款（繞過 Vault 配對）
+EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
+
+// 玩家之間原子轉帳（插件級歸因）
+EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "MyPlugin");
+```
+
+**何時使用插件 API vs 標準 Vault API：**
+
+| 情境 | 推薦 API | 原因 |
+|------|----------|------|
+| 箱子商店買賣 | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | 避免 Vault 配對的競爭條件 |
+| 拍賣行轉帳 | `pluginTransfer` | 原子操作，無需配對 |
+| 標準經濟操作 | 標準 Vault API | 完整相容性 |
 
 ### Vault 權限
 
@@ -648,11 +711,11 @@ cd Syncmoney
 
 # 建構插件 JAR（包含陰影重定位）
 ./gradlew shadowJar
-# 輸出：build/libs/Syncmoney-1.1.0.jar
+# 輸出：build/libs/Syncmoney-1.1.1.jar
 
 # 建構 PAPI 擴展
 cd syncmoney-papi-expansion && ../gradlew jar
-# 輸出：build/libs/SyncmoneyExpansion-1.1.0.jar
+# 輸出：build/libs/SyncmoneyExpansion-1.1.1.jar
 
 # 建構網頁前端
 cd syncmoney-web
@@ -691,9 +754,9 @@ cd syncmoney-web && npm run test:e2e    # 前端 E2E 測試
 
 | 限制 | 狀態 | 解決方法 |
 |------------|--------|------------|
-| `AsyncPreTransactionEvent` 未觸發 | v1.1.0 | 事件已定義但尚未在 `EconomyFacade` 中連接。改用 `PostTransactionEvent`。 |
-| WebSocket 未完全實作 | v1.1.0 | `/ws` 接受連線但分派不完整。生產環境使用 SSE（`/sse`）。 |
-| `event.setCancelled(true)` 無操作 | v1.1.0 | 交易前取消沒有效果，將在未來版本中連接。 |
+| `AsyncPreTransactionEvent` 未觸發 | v1.1.1 | 事件已定義但尚未在 `EconomyFacade` 中連接。改用 `PostTransactionEvent`。 |
+| WebSocket 未完全實作 | v1.1.1 | `/ws` 接受連線但分派不完整。生產環境使用 SSE（`/sse`）。 |
+| `event.setCancelled(true)` 無操作 | v1.1.1 | 交易前取消沒有效果，將在未來版本中連接。 |
 
 ---
 

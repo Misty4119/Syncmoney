@@ -39,7 +39,7 @@ public class AuditServiceManager {
         var sseManager = webAdminServer != null ? webAdminServer.getSseManager() : null;
 
 
-        if (config.isAuditRedisEnabled() && redisManager != null && !redisManager.isDegraded()) {
+        if (config.audit().isAuditRedisEnabled() && redisManager != null && !redisManager.isDegraded()) {
             this.hybridAuditManager = new HybridAuditManager(plugin, config, redisManager, dataSource, sseManager);
             plugin.getLogger().info("HybridAuditManager initialized (Redis sliding window mode)");
         }

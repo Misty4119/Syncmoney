@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { apiClient } from '@/api/client'
 import type { NodesResponse, ApiResponse } from '@/api/types'
+import type { ConfigChange } from '@/services/configService'
 
 export type NodeHealthStatus = 'online' | 'offline' | 'unknown'
 
@@ -13,47 +14,40 @@ export interface NodeInfo {
   status?: NodeHealthStatus
 }
 
-const SSRF_BLOCKED_HOSTNAMES = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
-
-function isUrlBlocked(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    const hostname = parsed.hostname.toLowerCase()
-    return SSRF_BLOCKED_HOSTNAMES.includes(hostname)
-  } catch {
-    return true
-  }
+export interface SyncResult {
+  total: number
+  succeeded: number
+  failed: number
+  results: Array<{
+    index: number
+    name: string
+    status: string
+    error?: string
+  }>
 }
 
 export const useNodesStore = defineStore('nodes', () => {
   const nodes = ref<NodeInfo[]>([])
   const nodeStatuses = ref<Map<string, NodeHealthStatus>>(new Map())
-  const currentNodeIndex = ref<number>(0)
   const isLoading = ref<boolean>(false)
   const error = ref<string>('')
   const centralMode = ref<boolean>(false)
-  const selfUrl = ref<string | null>(null)
 
   let healthCheckInterval: ReturnType<typeof setInterval> | null = null
 
-  const currentNode = computed(() => nodes.value[currentNodeIndex.value] || null)
   const enabledNodes = computed(() => nodes.value.filter(n => n.enabled))
 
   function setNodes(nodeList: NodeInfo[]) {
     nodes.value = nodeList
-    const savedIndex = localStorage.getItem('selectedNodeIndex')
-    if (savedIndex !== null && savedIndex !== undefined) {
-      const idx = parseInt(savedIndex, 10)
-      if (idx >= 0 && idx < nodeList.length) {
-        currentNodeIndex.value = idx
-      }
-    }
-  }
 
-  function selectNode(index: number) {
-    if (index >= 0 && index < nodes.value.length) {
-      currentNodeIndex.value = index
-      localStorage.setItem('selectedNodeIndex', String(index))
+    
+    for (const node of nodeList) {
+      if (node.status) {
+        const status: NodeHealthStatus =
+          node.status === 'online' ? 'online' :
+          node.status === 'offline' ? 'offline' : 'unknown'
+        nodeStatuses.value.set(node.url, status)
+      }
     }
   }
 
@@ -79,12 +73,10 @@ export const useNodesStore = defineStore('nodes', () => {
       const data = res.data?.data
       if (data) {
         centralMode.value = data.centralMode
-        selfUrl.value = data.selfUrl
         setNodes(data.nodes)
-        for (const node of data.nodes) {
-          const status = await checkNodeHealth(node)
-          setNodeStatus(node.url, status)
-        }
+        
+        
+        
       }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch nodes'
@@ -95,63 +87,54 @@ export const useNodesStore = defineStore('nodes', () => {
   }
 
   async function checkNodeHealth(node: NodeInfo): Promise<NodeHealthStatus> {
+    
+    
+    const nodeIndex = nodes.value.findIndex(n => n.url === node.url)
+    if (nodeIndex === -1) return 'unknown'
     if (!node.enabled) return 'unknown'
-    if (isUrlBlocked(node.url)) return 'offline'
 
     try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000)
-
-      const res = await apiClient.get('/api/system/status', {
-        baseURL: node.url,
-        headers: { Authorization: `Bearer ${node.apiKey}` },
-        signal: controller.signal,
-        validateStatus: () => true
-      })
-
-      clearTimeout(timeoutId)
-      const isOnline = res.status >= 200 && res.status < 300
-      const status: NodeHealthStatus = isOnline ? 'online' : 'offline'
-      setNodeStatus(node.url, status)
-      return status
+      const res = await apiClient.post<ApiResponse<{ status: string }>>(`/api/nodes/${nodeIndex}/ping`)
+      if (res.status >= 200 && res.status < 300 && res.data?.success && res.data?.data) {
+        
+        const status: NodeHealthStatus =
+          res.data.data.status === 'online' ? 'online' :
+          res.data.data.status === 'offline' ? 'offline' : 'unknown'
+        setNodeStatus(node.url, status)
+        return status
+      }
+      setNodeStatus(node.url, 'offline')
+      return 'offline'
     } catch {
       setNodeStatus(node.url, 'offline')
       return 'offline'
     }
   }
 
-  async function addNode(node: NodeInfo): Promise<void> {
-    if (isUrlBlocked(node.url)) {
-      throw new Error('SSRF_BLOCKED')
-    }
-    const currentNodes = [...nodes.value, node]
-    setNodes(currentNodes)
-    const status = await checkNodeHealth(node)
-    setNodeStatus(node.url, status)
-  }
-
-  async function updateNode(index: number, node: NodeInfo): Promise<void> {
-    if (index < 0 || index >= nodes.value.length) {
-      throw new Error('Invalid node index')
-    }
-    if (isUrlBlocked(node.url)) {
-      throw new Error('SSRF_BLOCKED')
-    }
-    nodes.value[index] = { ...node }
-    const status = await checkNodeHealth(node)
-    setNodeStatus(node.url, status)
-  }
-
   async function deleteNode(index: number): Promise<void> {
     if (index < 0 || index >= nodes.value.length) {
       throw new Error('Invalid node index')
     }
-    const deletedNode = nodes.value[index]
-    nodes.value.splice(index, 1)
-    nodeStatuses.value.delete(deletedNode.url)
-    if (currentNodeIndex.value >= nodes.value.length) {
-      currentNodeIndex.value = Math.max(0, nodes.value.length - 1)
+    await apiClient.delete(`/api/nodes/${index}`)
+    await fetchNodes()
+  }
+
+  async function syncConfigToNodes(changes: ConfigChange[], reload = true): Promise<SyncResult> {
+    const response = await apiClient.post<ApiResponse<SyncResult>>('/api/nodes/sync', {
+      changes,
+      reload
+    })
+    if (!response.data?.success || !response.data?.data) {
+      throw new Error('Failed to sync config to nodes')
     }
+    return response.data.data
+  }
+
+  async function syncConfigToNode(index: number, changes: ConfigChange[], reload = true): Promise<void> {
+    await apiClient.post(`/api/nodes/${index}/sync`, {
+      changes,
+      reload
+    })
   }
 
   function startHealthCheck(intervalMs: number = 30000): void {
@@ -176,23 +159,19 @@ export const useNodesStore = defineStore('nodes', () => {
   return {
     nodes,
     nodeStatuses,
-    currentNodeIndex,
-    currentNode,
     enabledNodes,
     isLoading,
     error,
     centralMode,
-    selfUrl,
     setNodes,
-    selectNode,
     updateNodeStatus,
     setNodeStatus,
     getNodeStatus,
     fetchNodes,
     checkNodeHealth,
-    addNode,
-    updateNode,
     deleteNode,
+    syncConfigToNodes,
+    syncConfigToNode,
     startHealthCheck,
     stopHealthCheck
   }

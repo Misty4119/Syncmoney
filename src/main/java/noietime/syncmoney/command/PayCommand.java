@@ -79,7 +79,7 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
                 lockManager, dbWriteQueue, writeQueue, pubsubSubscriber, baltopManager,
                 luaScriptManager, localMode);
 
-        BigDecimal confirmThreshold = NumericUtil.normalize(config.getPayConfirmThreshold());
+        BigDecimal confirmThreshold = NumericUtil.normalize(config.pay().getPayConfirmThreshold());
         this.confirmationManager = new PayConfirmationManager(
                 plugin, cooldownManager, transferExecutor, confirmThreshold);
     }
@@ -223,8 +223,8 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
      */
     public void reload(SyncmoneyConfig newConfig) {
         this.config = newConfig;
-        this.minAmount = NumericUtil.normalize(newConfig.getPayMinAmount());
-        this.maxAmount = NumericUtil.normalize(newConfig.getPayMaxAmount());
+        this.minAmount = NumericUtil.normalize(newConfig.pay().getPayMinAmount());
+        this.maxAmount = NumericUtil.normalize(newConfig.pay().getPayMaxAmount());
         this.allowInDegraded = newConfig.isPayAllowedInDegraded();
     }
 }

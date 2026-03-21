@@ -80,7 +80,7 @@ public final class MigrationTask {
         this.checkpoint = checkpoint;
         this.backup = backup;
         this.economyDisabler = economyDisabler;
-        this.batchSize = config.getMigrationBatchSize();
+        this.batchSize = config.migration().getMigrationBatchSize();
     }
 
     /**
@@ -147,7 +147,7 @@ public final class MigrationTask {
             return;
         }
 
-        if (config.isMigrationLockEconomy()) {
+        if (config.migration().isMigrationLockEconomy()) {
             MigrationLock.enable();
             MigrationLock.lock();
             plugin.getLogger().fine("Economy operations locked for CMI migration");
@@ -370,7 +370,7 @@ public final class MigrationTask {
             );
         }
 
-        if (config.isMigrationPopulateRedis()) {
+        if (config.migration().isMigrationPopulateRedis()) {
             populateRedis(uuid, balance, 1L);
         }
 
@@ -676,7 +676,7 @@ public final class MigrationTask {
     private void scheduleCMIEconomyDisable() {
         plugin.getServer().getGlobalRegionScheduler().execute(plugin, () -> {
             try {
-                if (config.isCMIAutoDisableCommands()) {
+                if (config.migration().isCMIAutoDisableCommands()) {
                     boolean commandsDisabled = economyDisabler.disableEconomyCommands();
                     if (commandsDisabled) {
                         plugin.getLogger().fine("CMI economy commands disabled successfully");
@@ -685,7 +685,7 @@ public final class MigrationTask {
                     }
                 }
 
-                if (config.isCMIAutoDisableEconomy()) {
+                if (config.migration().isCMIAutoDisableEconomy()) {
                     boolean economyDisabled = economyDisabler.disableEconomyModule();
                     if (economyDisabled) {
                         plugin.getLogger().fine("CMI economy module disabled successfully");

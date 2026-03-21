@@ -190,7 +190,7 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
      * Called by {@link CommandServiceManager#reload(SyncmoneyConfig)} after /syncmoney reload.
      */
     public void reload(SyncmoneyConfig newConfig) {
-        this.currencyName = newConfig.getCurrencyName();
-        this.decimalPlaces = newConfig.getDecimalPlaces();
+        this.currencyName = newConfig.display().getCurrencyName();
+        this.decimalPlaces = newConfig.display().getDecimalPlaces();
     }
 }

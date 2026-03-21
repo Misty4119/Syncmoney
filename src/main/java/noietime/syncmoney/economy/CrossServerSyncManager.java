@@ -56,7 +56,7 @@ public class CrossServerSyncManager {
      * [SYNC-ECO-031] Publish balance update to Redis Pub/Sub channel and notify local player.
      */
     public void publishAndNotify(UUID uuid, BigDecimal newBalance,
-                                String eventType, double amount, String sourcePlugin) {
+                                String eventType, double amount, String sourcePlugin, String sourcePlayerName) {
         String currentServer = config.getServerName();
 
         String channel = eventType != null && eventType.startsWith("CMI_") ? CMI_CHANNEL : SYNC_CHANNEL;
@@ -71,7 +71,8 @@ public class CrossServerSyncManager {
             System.currentTimeMillis(),
             eventType,
             amount,
-            sourcePlugin
+            sourcePlugin,
+            sourcePlayerName
         );
 
         try (var jedis = redisManager.getResource()) {
@@ -80,7 +81,7 @@ public class CrossServerSyncManager {
             plugin.getLogger().warning("Failed to publish to Pub/Sub: " + e.getMessage());
         }
 
-        if (config.isCrossServerNotificationsEnabled()) {
+        if (config.crossServer().isCrossServerNotificationsEnabled()) {
             notifyLocalPlayer(uuid, currentServer, eventType, amount, sourcePlugin);
         }
     }
@@ -114,7 +115,7 @@ public class CrossServerSyncManager {
                 cacheManager.updateMemoryCache(uuid, msg.getBalanceAsBigDecimal(), msg.getVersion());
             }
 
-            if (config.isCrossServerNotificationsEnabled()) {
+            if (config.crossServer().isCrossServerNotificationsEnabled()) {
                 notifyLocalPlayer(uuid, msg.getSourceServer(),
                     msg.getEventType(), msg.getAmount(), msg.getSourcePlugin());
             }
@@ -126,6 +127,10 @@ public class CrossServerSyncManager {
 
     /**
      * [SYNC-ECO-033] Notify local player.
+     * 
+     * Fix: Now properly routes messages based on eventType, matching PubsubSubscriber logic.
+     * Previously only checked amount > 0, which caused VAULT_DEPOSIT from third-party plugins
+     * to be incorrectly routed to admin.money-received instead of cross-server.money-received.
      */
     private void notifyLocalPlayer(UUID uuid, String sourceServer,
                                 String eventType, double amount, String sourcePlugin) {
@@ -134,22 +139,22 @@ public class CrossServerSyncManager {
             return;
         }
 
-        String notifyType = config.getCrossServerNotifyType().toLowerCase();
+        String notifyType = config.crossServer().getCrossServerNotifyType().toLowerCase();
 
         player.getScheduler().run(plugin, task -> {
             switch (notifyType) {
                 case "sse":
-                    notifyPlayerViaSse(player, sourceServer, amount, sourcePlugin);
+                    notifyPlayerViaSse(player, sourceServer, eventType, amount, sourcePlugin);
                     break;
                 case "discord":
-                    notifyPlayerViaDiscord(uuid, sourceServer, amount, sourcePlugin);
+                    notifyPlayerViaDiscord(uuid, sourceServer, eventType, amount, sourcePlugin);
                     break;
                 case "both":
-                    notifyPlayerViaSse(player, sourceServer, amount, sourcePlugin);
-                    notifyPlayerViaDiscord(uuid, sourceServer, amount, sourcePlugin);
+                    notifyPlayerViaSse(player, sourceServer, eventType, amount, sourcePlugin);
+                    notifyPlayerViaDiscord(uuid, sourceServer, eventType, amount, sourcePlugin);
                     break;
                 default:
-                    notifyPlayerViaSse(player, sourceServer, amount, sourcePlugin);
+                    notifyPlayerViaSse(player, sourceServer, eventType, amount, sourcePlugin);
                     break;
             }
         }, null);
@@ -157,13 +162,33 @@ public class CrossServerSyncManager {
 
     /**
      * Notify player via in-game SSE (chat message + action bar).
+     * 
+     * Now uses eventType to determine message key, matching PubsubSubscriber.notifyPlayerIfOnline logic.
      */
-    private void notifyPlayerViaSse(Player player, String sourceServer, double amount, String sourcePlugin) {
+    private void notifyPlayerViaSse(Player player, String sourceServer, String eventType, double amount, String sourcePlugin) {
         String messageKey;
-        if (amount > 0) {
+        
+        
+        
+        if ("VAULT_DEPOSIT".equals(eventType)) {
             messageKey = "cross-server.money-received";
-        } else {
+        } else if ("VAULT_WITHDRAW".equals(eventType)) {
             messageKey = "cross-server.money-spent";
+        } else if ("DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
+            
+            
+            
+            messageKey = "admin.money-received";
+        } else if ("WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
+            messageKey = "admin.money-taken";
+        } else if ("SET_BALANCE".equals(eventType)) {
+            messageKey = "admin.balance-set-by-admin";
+        } else if ("TRANSFER_IN".equals(eventType)) {
+            messageKey = "pay.success-receiver";
+        } else {
+            
+            
+            messageKey = amount > 0 ? "cross-server.money-received" : "cross-server.money-spent";
         }
 
         String message = plugin.getMessage(messageKey);
@@ -182,26 +207,28 @@ public class CrossServerSyncManager {
             MessageHelper.sendMessage(player, message);
         }
 
-        if (config.showCrossServerActionbar()) {
+        if (config.crossServer().showCrossServerActionbar()) {
             String actionbar = plugin.getMessage("cross-server.balance-synced");
             if (actionbar != null) {
                 actionbar = actionbar.replace("{server}", sourceServer);
                 MessageHelper.sendActionBar(player, actionbar,
-                    config.getActionbarDuration());
+                    config.crossServer().getActionbarDuration());
             }
         }
     }
 
     /**
      * Notify player via Discord webhook.
+     * 
+     * Now uses eventType to determine direction, matching the SSE notification logic.
      */
-    private void notifyPlayerViaDiscord(UUID uuid, String sourceServer, double amount, String sourcePlugin) {
+    private void notifyPlayerViaDiscord(UUID uuid, String sourceServer, String eventType, double amount, String sourcePlugin) {
         if (discordWebhookNotifier == null) {
             return;
         }
 
         String playerName = getPlayerNameFromUuid(uuid);
-        String direction = amount > 0 ? "received" : "spent";
+        String direction = determineDirection(eventType, amount);
         String formattedAmount = FormatUtil.formatCurrency(Math.abs(amount));
 
         String description = String.format(
@@ -218,6 +245,23 @@ public class CrossServerSyncManager {
             java.math.BigDecimal.valueOf(Math.abs(amount)),
             direction + "_cross_server"
         );
+    }
+
+    /**
+     * Determines the direction (received/spent) based on eventType and amount.
+     * Matches the logic used in notifyPlayerViaSse.
+     */
+    private String determineDirection(String eventType, double amount) {
+        
+        if ("VAULT_DEPOSIT".equals(eventType) || "DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
+            return "received";
+        } else if ("VAULT_WITHDRAW".equals(eventType) || "WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
+            return "spent";
+        } else if ("TRANSFER_IN".equals(eventType)) {
+            return "received";
+        }
+        
+        return amount > 0 ? "received" : "spent";
     }
 
     /**

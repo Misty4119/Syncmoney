@@ -90,6 +90,7 @@ public final class Syncmoney extends JavaPlugin {
     private BreakerManager breakerManager;
     private PermissionManager permissionManager;
     private EventConsumerManager eventConsumerManager;
+    private SchemaManager schemaManager;
 
     private long startTime;
     private PluginContext pluginContext;
@@ -128,10 +129,10 @@ public final class Syncmoney extends JavaPlugin {
             return;
         }
 
-        if (syncmoneyConfig.isShadowSyncEnabled()) {
-            String target = syncmoneyConfig.getShadowSyncTarget();
+        if (syncmoneyConfig.shadowSync().isShadowSyncEnabled()) {
+            String target = syncmoneyConfig.shadowSync().getShadowSyncTarget();
             if (target.equals("cmi") || target.equals("all")) {
-                String cmiHost = syncmoneyConfig.getCMIDatabaseHost();
+                String cmiHost = syncmoneyConfig.migration().getCMIDatabaseHost();
                 if (cmiHost != null && cmiHost.equalsIgnoreCase("localhost")) {
                     debug("CMI database host is set to 'localhost'. If running in Docker, consider using host IP.");
                 }
@@ -248,11 +249,11 @@ public final class Syncmoney extends JavaPlugin {
         auditServiceManager.initialize();
 
         if (storageManager.getDatabaseManager() != null) {
-            SchemaManager schemaManager = new SchemaManager(
+            this.schemaManager = new SchemaManager(
                     this,
                     storageManager.getDatabaseManager().getDataSource(),
-                    syncmoneyConfig.getDatabaseType());
-            getLogger().fine("SchemaManager initialized (version " + schemaManager.getDatabaseVersion() + ")");
+                    syncmoneyConfig.database().getDatabaseType());
+            getLogger().fine("SchemaManager initialized (version " + this.schemaManager.getDatabaseVersion() + ")");
         }
 
         this.eventConsumerManager = new EventConsumerManager(
@@ -308,7 +309,8 @@ public final class Syncmoney extends JavaPlugin {
         webServiceManager.setDependencies(
                 storageManager.getRedisManager(),
                 storageManager.getDatabaseManager(),
-                breakerManager.getCircuitBreaker());
+                breakerManager.getCircuitBreaker(),
+                this.schemaManager);
         webServiceManager.setNameResolver(economyServiceManager.getNameResolver());
         webServiceManager.setLocalEconomyHandler(economyServiceManager.getLocalEconomyHandler());
         webServiceManager.initialize();
@@ -492,6 +494,10 @@ public final class Syncmoney extends JavaPlugin {
 
     public BaltopManager getBaltopManager() {
         return baltopManager;
+    }
+
+    public SchemaManager getSchemaManager() {
+        return schemaManager;
     }
 
     public AdminPermissionService getPermissionService() {

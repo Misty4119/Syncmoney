@@ -41,7 +41,7 @@ public class CMIEconomyHandler {
         this.config = config;
         this.redisManager = redisManager;
         this.syncManager = syncManager;
-        this.redisPrefix = config.getCMIRedisPrefix();
+        this.redisPrefix = config.cmi().getCMIRedisPrefix();
         this.balanceMode = config.getCMIBalanceMode();
 
         initCMIConnection();
@@ -67,14 +67,15 @@ public class CMIEconomyHandler {
 
             setRedisBalance(uuid, newBalance);
 
-            if (config.isCMICrossServerSync() && syncManager != null) {
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 String eventType = isDeposit ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
                 syncManager.publishAndNotify(
                     uuid,
                     newBalance,
                     eventType,
                     diff.doubleValue(),
-                    "CMI"
+                    "CMI",
+                    null
                 );
             }
 
@@ -116,17 +117,17 @@ public class CMIEconomyHandler {
      */
     private void initCMIConnection() {
         try {
-            String sqlitePath = config.getCMISqlitePath();
+            String sqlitePath = config.migration().getCMISqlitePath();
             if (sqlitePath != null && !sqlitePath.isEmpty()) {
                 String dbUrl = "jdbc:sqlite:" + sqlitePath;
                 cmiConnection = DriverManager.getConnection(dbUrl);
                 plugin.getLogger().fine("CMI SQLite database connected: " + sqlitePath);
             } else {
-                String host = config.getCMIDatabaseHost();
-                int port = config.getCMIDatabasePort();
-                String db = config.getCMIDatabaseName();
-                String user = config.getCMIDatabaseUsername();
-                String pass = config.getCMIDatabasePassword();
+                String host = config.migration().getCMIDatabaseHost();
+                int port = config.migration().getCMIDatabasePort();
+                String db = config.migration().getCMIDatabaseName();
+                String user = config.migration().getCMIDatabaseUsername();
+                String pass = config.migration().getCMIDatabasePassword();
 
                 String dbUrl = "jdbc:mysql://" + host + ":" + port + "/" + db;
                 cmiConnection = DriverManager.getConnection(dbUrl, user, pass);
@@ -149,13 +150,14 @@ public class CMIEconomyHandler {
             if (cmiBalance.subtract(redisBalance).abs().compareTo(BigDecimal.valueOf(0.01)) > 0) {
                 setRedisBalance(uuid, cmiBalance);
 
-                if (config.isCMICrossServerSync() && syncManager != null) {
+                if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                     syncManager.publishAndNotify(
                         uuid,
                         cmiBalance,
                         "CMI_DEPOSIT",
                         cmiBalance.subtract(redisBalance).doubleValue(),
-                        "CMI"
+                        "CMI",
+                        null
                     );
                 }
 
@@ -172,7 +174,7 @@ public class CMIEconomyHandler {
      * Reads balance from CMI database.
      */
     private BigDecimal getCMIBalance(UUID uuid) throws SQLException {
-        String tablePrefix = config.getCMITablePrefix();
+        String tablePrefix = config.migration().getCMITablePrefix();
         String sql = "SELECT * FROM " + tablePrefix + "users WHERE uuid = ?";
 
         try (PreparedStatement stmt = cmiConnection.prepareStatement(sql)) {
@@ -227,13 +229,14 @@ public class CMIEconomyHandler {
             jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
-            if (config.isCMICrossServerSync() && syncManager != null) {
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishAndNotify(
                     uuid,
                     newBalance,
                     "CMI_DEPOSIT",
                     amount.doubleValue(),
-                    "CMI"
+                    "CMI",
+                    null
                 );
             }
 
@@ -259,13 +262,14 @@ public class CMIEconomyHandler {
             jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
-            if (config.isCMICrossServerSync() && syncManager != null) {
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishAndNotify(
                     uuid,
                     newBalance,
                     "CMI_WITHDRAW",
                     -amount.doubleValue(),
-                    "CMI"
+                    "CMI",
+                    null
                 );
             }
 
@@ -291,13 +295,14 @@ public class CMIEconomyHandler {
             jedis.set(key, newBalance.toPlainString());
             jedis.incr(versionKey);
 
-            if (config.isCMICrossServerSync() && syncManager != null) {
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishAndNotify(
                     uuid,
                     newBalance,
                     "CMI_SET_BALANCE",
                     newBalance.doubleValue(),
-                    "CMI"
+                    "CMI",
+                    null
                 );
             }
 

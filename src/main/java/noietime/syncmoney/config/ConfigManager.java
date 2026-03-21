@@ -317,8 +317,8 @@ public class ConfigManager {
      */
     private Map<String, Object> getRedisInfo() {
         Map<String, Object> redis = new HashMap<>();
-        redis.put("enabled", config.getRedisHost() != null && !config.getRedisHost().isEmpty());
-        redis.put("host", maskHost(config.getRedisHost()));
+        redis.put("enabled", config.redis().getRedisHost() != null && !config.redis().getRedisHost().isEmpty());
+        redis.put("host", maskHost(config.redis().getRedisHost()));
         redis.put("port", "***");
         redis.put("password", "***HIDDEN***");
         redis.put("editable", false);
@@ -330,10 +330,10 @@ public class ConfigManager {
      */
     private Map<String, Object> getDatabaseInfo() {
         Map<String, Object> database = new HashMap<>();
-        database.put("type", config.getDatabaseType());
-        database.put("host", maskHost(config.getDatabaseHost()));
+        database.put("type", config.database().getDatabaseType());
+        database.put("host", maskHost(config.database().getDatabaseHost()));
         database.put("port", "***");
-        database.put("database", config.getDatabaseName());
+        database.put("database", config.database().getDatabaseName());
         database.put("editable", false);
         return database;
     }

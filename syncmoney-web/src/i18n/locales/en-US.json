@@ -167,6 +167,11 @@
     "saveSuccessDesc": "Settings saved and hot reloaded successfully",
     "saveError": "Save Failed",
     "saveErrorDesc": "Failed to save settings, check server logs",
+    "syncToNodes": "Sync to Nodes",
+    "syncSuccess": "Synced to {count} nodes",
+    "syncPartialSuccess": "Synced to {succeeded} nodes, {failed} failed",
+    "syncError": "Sync to Nodes Failed",
+    "syncErrorDesc": "Failed to sync settings to remote nodes, check server logs",
     "unsavedChanges": "Unsaved Changes",
     "unsavedChangesDesc": "You have unsaved changes, discard?",
     "sections": {
@@ -547,15 +552,9 @@
   },
   "nodes": {
     "selectServer": "Select a server...",
-    "addNode": "Add Node",
-    "editNode": "Edit Node",
     "deleteNode": "Delete Node",
     "nodeName": "Node Name",
-    "nodeNamePlaceholder": "Enter node name",
     "nodeUrl": "Node URL",
-    "nodeUrlPlaceholder": "https://example.com:8080",
-    "apiKey": "API Key",
-    "apiKeyPlaceholder": "Enter API Key",
     "enabled": "Enabled",
     "status": "Status",
     "online": "Online",
@@ -563,34 +562,19 @@
     "unknown": "Unknown",
     "actions": "Actions",
     "ping": "Ping",
-    "confirmDelete": "Are you sure you want to delete this node?",
-    "addSuccess": "Node added successfully",
-    "updateSuccess": "Node updated successfully",
-    "deleteSuccess": "Node deleted successfully",
-    "addFailed": "Failed to add node",
-    "updateFailed": "Failed to update node",
-    "deleteFailed": "Failed to delete node",
-    "saveFailed": "Failed to save",
     "pingSuccess": "Ping successful",
     "pingFailed": "Ping failed",
-    "invalidUrl": "Invalid URL",
-    "ssrfBlocked": "URL blocked by SSRF protection",
+    "deleteSuccess": "Node deleted successfully",
+    "deleteFailed": "Failed to delete node",
     "noNodes": {
       "title": "No Nodes Yet",
-      "description": "Click the button above to add your first node"
+      "description": "Configure nodes in config.yml"
     },
-    "addFirstNode": "Add First Node",
     "managementDescription": "Manage all connected server nodes",
     "rank": "Rank",
     "deleteConfirm": {
       "title": "Confirm Delete",
       "description": "This action cannot be undone. Are you sure you want to delete this node?"
-    },
-    "errors": {
-      "nameRequired": "Please enter a node name",
-      "urlRequired": "Please enter a node URL",
-      "urlInvalid": "Please enter a valid URL",
-      "apiKeyRequired": "Please enter an API Key"
     }
   },
   "central": {

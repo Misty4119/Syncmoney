@@ -27,16 +27,19 @@ public class SystemApiHandler {
     private final DatabaseManager databaseManager;
     private final EconomicCircuitBreaker circuitBreaker;
     private final long startTimeMs;
+    private final noietime.syncmoney.schema.SchemaManager schemaManager;
 
     public SystemApiHandler(Syncmoney plugin, SyncmoneyConfig config,
                             RedisManager redisManager,
                             DatabaseManager databaseManager,
-                            EconomicCircuitBreaker circuitBreaker) {
+                            EconomicCircuitBreaker circuitBreaker,
+                            noietime.syncmoney.schema.SchemaManager schemaManager) {
         this.plugin = plugin;
         this.config = config;
         this.redisManager = redisManager;
         this.databaseManager = databaseManager;
         this.circuitBreaker = circuitBreaker;
+        this.schemaManager = schemaManager;
         this.startTimeMs = System.currentTimeMillis();
     }
 
@@ -46,7 +49,7 @@ public class SystemApiHandler {
     public SystemApiHandler(Syncmoney plugin, RedisManager redisManager,
                             DatabaseManager databaseManager,
                             EconomicCircuitBreaker circuitBreaker) {
-        this(plugin, null, redisManager, databaseManager, circuitBreaker);
+        this(plugin, null, redisManager, databaseManager, circuitBreaker, null);
     }
 
     /**
@@ -58,6 +61,7 @@ public class SystemApiHandler {
         router.get("api/system/breaker", exchange -> handleGetBreakerStatus(exchange));
         router.get("api/system/metrics", exchange -> handleGetMetrics(exchange));
         router.get("api/nodes", exchange -> handleGetNodes(exchange));
+        router.get("api/nodes/status", exchange -> handleGetNodesStatus(exchange));
     }
 
     /**
@@ -73,7 +77,12 @@ public class SystemApiHandler {
 
 
 
-        int dbVersion = databaseManager != null ? databaseManager.getSchemaVersion() : 0;
+        int dbVersion = 0;
+        if (schemaManager != null) {
+            dbVersion = schemaManager.getDatabaseVersion();
+        } else if (databaseManager != null) {
+            dbVersion = databaseManager.getSchemaVersion();
+        }
         pluginInfo.put("dbVersion", dbVersion);
         String economyMode = config != null ? config.getEconomyMode().name() : "UNKNOWN";
         pluginInfo.put("mode", economyMode);
@@ -82,7 +91,7 @@ public class SystemApiHandler {
 
         Map<String, Object> economyInfo = new LinkedHashMap<>();
         economyInfo.put("mode", economyMode);
-        economyInfo.put("currencyName", config != null ? config.getCurrencyName() : "dollars");
+        economyInfo.put("currencyName", config != null ? config.display().getCurrencyName() : "dollars");
         data.put("economy", economyInfo);
 
         Map<String, Object> redisInfo = new LinkedHashMap<>();
@@ -95,7 +104,7 @@ public class SystemApiHandler {
         boolean dbConnected = databaseManager != null && databaseManager.isConnected();
         dbInfo.put("connected", dbConnected);
         dbInfo.put("enabled", databaseManager != null);
-        dbInfo.put("type", config != null ? config.getDatabaseType() : "none");
+        dbInfo.put("type", config != null ? config.database().getDatabaseType() : "none");
         data.put("database", dbInfo);
 
         Map<String, Object> cbInfo = new LinkedHashMap<>();
@@ -220,6 +229,134 @@ public class SystemApiHandler {
 
             sendJson(exchange, ApiResponse.success(data));
         }
+    }
+
+    /**
+     * GET /api/nodes/status
+     * Returns node status information (onlinePlayers, maxPlayers, etc.) for each configured node.
+     * When central-mode=true, returns aggregated status from all nodes.
+     * When central-mode=false, returns only this server's information.
+     */
+    private void handleGetNodesStatus(HttpServerExchange exchange) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        if (config != null && config.isCentralMode()) {
+            
+            for (SyncmoneyConfig.NodeConfig node : config.getNodes()) {
+                if (!node.enabled) {
+                    continue;
+                }
+                try {
+                    Map<String, Object> nodeStatus = fetchNodeStatus(node);
+                    result.put(node.url, nodeStatus);
+                } catch (Exception e) {
+                    plugin.getLogger().fine("Failed to fetch status from node " + node.name + ": " + e.getMessage());
+                    Map<String, Object> offlineStatus = new LinkedHashMap<>();
+                    offlineStatus.put("status", "offline");
+                    offlineStatus.put("onlinePlayers", 0);
+                    offlineStatus.put("maxPlayers", 0);
+                    offlineStatus.put("economyMode", "UNKNOWN");
+                    offlineStatus.put("serverName", node.name);
+                    result.put(node.url, offlineStatus);
+                }
+            }
+        } else {
+            
+            Map<String, Object> selfStatus = new LinkedHashMap<>();
+            selfStatus.put("serverName", config != null ? config.getServerName() : "unknown");
+            selfStatus.put("serverId", plugin.getServer().getName());
+            selfStatus.put("onlinePlayers", plugin.getServer().getOnlinePlayers().size());
+            selfStatus.put("maxPlayers", plugin.getServer().getMaxPlayers());
+            selfStatus.put("status", "online");
+            if (config != null) {
+                selfStatus.put("economyMode", config.getEconomyMode().name());
+            }
+            result.put("self", selfStatus);
+        }
+
+        sendJson(exchange, ApiResponse.success(result));
+    }
+
+    /**
+     * Fetch status from a remote node.
+     */
+    private Map<String, Object> fetchNodeStatus(SyncmoneyConfig.NodeConfig node) {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("serverName", node.name);
+        status.put("status", "online");
+        status.put("onlinePlayers", 0);
+        status.put("maxPlayers", 0);
+        status.put("economyMode", "UNKNOWN");
+
+        try {
+            String apiKey = decryptNodeApiKey(node.apiKey);
+            String statusUrl = node.url + "/api/system/status";
+
+            java.net.URI uri = java.net.URI.create(statusUrl);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofMillis(5000))
+                    .build();
+
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                    .uri(uri)
+                    .header("Authorization", "Bearer " + apiKey)
+                    .timeout(java.time.Duration.ofMillis(10000))
+                    .GET()
+                    .build();
+
+            java.net.http.HttpResponse<String> response = client.send(request,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                java.util.Map<String, Object> data = mapper.readValue(response.body(), java.util.Map.class);
+
+                
+                Object serverInfo = data.get("serverName");
+                if (data.containsKey("onlinePlayers")) {
+                    status.put("onlinePlayers", ((Number) data.get("onlinePlayers")).intValue());
+                }
+                if (data.containsKey("maxPlayers")) {
+                    status.put("maxPlayers", ((Number) data.get("maxPlayers")).intValue());
+                }
+                if (data.containsKey("economy")) {
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String, Object> economy = (java.util.Map<String, Object>) data.get("economy");
+                    if (economy != null && economy.containsKey("mode")) {
+                        status.put("economyMode", economy.get("mode"));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().fine("Failed to fetch status from node " + node.name + ": " + e.getMessage());
+            status.put("status", "offline");
+        }
+
+        return status;
+    }
+
+    /**
+     * Decrypt node API key if encrypted.
+     */
+    private String decryptNodeApiKey(String apiKey) {
+        if (apiKey == null) {
+            return "";
+        }
+        if (apiKey.startsWith("enc:")) {
+            
+            String masterKey = config != null ?
+                    config.getConfig().getString("web-admin.security.api-key", "default-master-key") :
+                    "default-master-key";
+            try {
+                java.lang.reflect.Method method = plugin.getClass().getClassLoader().loadClass("noietime.syncmoney.web.security.NodeApiKeyStore")
+                        .getMethod("decrypt", String.class, String.class);
+                return (String) method.invoke(null, apiKey.substring(4), masterKey);
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to decrypt node API key: " + e.getMessage());
+                return apiKey;
+            }
+        }
+        return apiKey;
     }
 
     /**

@@ -158,6 +158,17 @@ public final class NameResolver {
             }
         }
 
+        
+        var offlinePlayer = Bukkit.getServer().getOfflinePlayer(uuid);
+        if (offlinePlayer != null && offlinePlayer.hasPlayedBefore()) {
+            String name = offlinePlayer.getName();
+            if (name != null && !name.isBlank()) {
+                evictIfOverCapacity();
+                uuidToNameCache.put(uuid, name.toLowerCase());
+                return name;
+            }
+        }
+
         triggerAsyncNameLookup(uuid);
         return "Unknown-" + uuid.toString().substring(0, 8);
     }

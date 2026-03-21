@@ -45,12 +45,11 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated.value = false
   }
 
-  function checkAuth() {
+  async function checkAuth() {
     const storedKey = localStorage.getItem('apiKey')
     if (storedKey) {
       apiKey.value = storedKey
-
-      validateToken(storedKey)
+      await validateToken(storedKey)
     }
   }
 

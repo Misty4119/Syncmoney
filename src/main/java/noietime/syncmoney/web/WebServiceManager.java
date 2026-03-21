@@ -19,6 +19,7 @@ import noietime.syncmoney.web.api.extension.ApiExtensionManager;
 import noietime.syncmoney.web.nodes.NodeHealthChecker;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
+import noietime.syncmoney.schema.SchemaManager;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 
 import java.util.logging.Level;
@@ -39,6 +40,7 @@ public class WebServiceManager {
 
     private RedisManager redisManager;
     private DatabaseManager databaseManager;
+    private SchemaManager schemaManager;
     private EconomicCircuitBreaker circuitBreaker;
     private NameResolver nameResolver;
     private LocalEconomyHandler localEconomyHandler;
@@ -68,10 +70,11 @@ public class WebServiceManager {
      * Set additional dependencies for API handlers.
      */
     public void setDependencies(RedisManager redisManager, DatabaseManager databaseManager,
-                               EconomicCircuitBreaker circuitBreaker) {
+                               EconomicCircuitBreaker circuitBreaker, SchemaManager schemaManager) {
         this.redisManager = redisManager;
         this.databaseManager = databaseManager;
         this.circuitBreaker = circuitBreaker;
+        this.schemaManager = schemaManager;
     }
 
     /**
@@ -152,7 +155,7 @@ public class WebServiceManager {
 
         if (redisManager != null || databaseManager != null) {
             var systemHandler = new noietime.syncmoney.web.api.system.SystemApiHandler(
-                    plugin, config, redisManager, databaseManager, circuitBreaker);
+                    plugin, config, redisManager, databaseManager, circuitBreaker, schemaManager);
             systemHandler.registerRoutes(router);
         }
 
@@ -166,17 +169,20 @@ public class WebServiceManager {
         }
 
         var permissionChecker = new noietime.syncmoney.web.security.PermissionChecker(plugin);
+
+        
+        nodesApiHandler = new NodesApiHandler(plugin, config, permissionChecker, nodeApiKeyStore);
+        nodesApiHandler.setConfigManager(configManager);
+        nodesApiHandler.registerRoutes(router);
+
         if (config.isCentralMode()) {
             var sseManager = webAdminServer.getSseManager();
-
-            nodesApiHandler = new NodesApiHandler(plugin, config, permissionChecker, nodeApiKeyStore);
-            nodesApiHandler.registerRoutes(router);
 
             crossServerStatsApiHandler = new CrossServerStatsApiHandler(
                     plugin, config, economyFacade, nodeApiKeyStore);
             crossServerStatsApiHandler.registerRoutes(router);
 
-            nodeHealthChecker = new NodeHealthChecker(plugin, config, nodeApiKeyStore, sseManager);
+            nodeHealthChecker = new NodeHealthChecker(plugin, config, nodeApiKeyStore, sseManager, nodesApiHandler);
             nodeHealthChecker.init();
 
             nodesApiHandler.setNodeHealthChecker(nodeHealthChecker);

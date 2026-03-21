@@ -86,7 +86,7 @@ public final class ShadowSyncTask {
         this.databaseManager = databaseManager;
 
         this.rollbackProtection = new RollbackProtection(plugin, economyFacade,
-                config.getShadowSyncRollbackThreshold());
+                config.shadowSync().getShadowSyncRollbackThreshold());
         this.syncLog = new ShadowSyncLog(plugin);
     }
 
@@ -99,14 +99,14 @@ public final class ShadowSyncTask {
             return;
         }
 
-        if (!config.isShadowSyncEnabled()) {
+        if (!config.shadowSync().isShadowSyncEnabled()) {
             plugin.getLogger().fine("Shadow sync is disabled in config.");
             return;
         }
 
         initializeStorage();
 
-        String target = config.getShadowSyncTarget();
+        String target = config.shadowSync().getShadowSyncTarget();
         boolean writeToCMI = target.equals("cmi") || target.equals("all");
         boolean writeToLocal = target.equals("local") || target.equals("all");
 
@@ -140,8 +140,8 @@ public final class ShadowSyncTask {
         }
 
         this.syncQueue = new CMISyncQueue(
-                config.getShadowSyncTriggerBatchSize(),
-                config.getShadowSyncTriggerMaxDelayMs());
+                config.shadowSync().getShadowSyncTriggerBatchSize(),
+                config.shadowSync().getShadowSyncTriggerMaxDelayMs());
 
         this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "syncmoney-shadow-flush");
@@ -149,50 +149,50 @@ public final class ShadowSyncTask {
             return t;
         });
         flushScheduler.scheduleAtFixedRate(this::flush,
-                config.getShadowSyncTriggerMaxDelayMs(),
-                config.getShadowSyncTriggerMaxDelayMs(),
+                config.shadowSync().getShadowSyncTriggerMaxDelayMs(),
+                config.shadowSync().getShadowSyncTriggerMaxDelayMs(),
                 TimeUnit.MILLISECONDS);
 
         running = true;
         debug("Shadow sync task started (target: " + target +
-                ", batch: " + config.getShadowSyncTriggerBatchSize() +
-                ", max-delay: " + config.getShadowSyncTriggerMaxDelayMs() + "ms)");
+                ", batch: " + config.shadowSync().getShadowSyncTriggerBatchSize() +
+                ", max-delay: " + config.shadowSync().getShadowSyncTriggerMaxDelayMs() + "ms)");
     }
 
     /**
      * Initializes the storage based on configuration.
      */
     private void initializeStorage() {
-        String storageType = config.getShadowSyncStorageType();
-        String jsonlPath = resolvePath(config.getShadowSyncStorageJsonlPath());
+        String storageType = config.shadowSync().getShadowSyncStorageType();
+        String jsonlPath = resolvePath(config.shadowSync().getShadowSyncStorageJsonlPath());
 
         switch (storageType) {
             case "sqlite" -> {
-                String sqlitePath = resolvePath(config.getShadowSyncStorageSqlitePath());
+                String sqlitePath = resolvePath(config.shadowSync().getShadowSyncStorageSqlitePath());
                 this.storage = new SqliteShadowStorage(plugin, sqlitePath, jsonlPath);
                 plugin.getLogger().fine("Using SQLite for shadow sync history.");
             }
             case "mysql" -> {
                 this.storage = new MysqlShadowStorage(
                         plugin,
-                        config.getShadowSyncStorageMysqlHost(),
-                        config.getShadowSyncStorageMysqlPort(),
-                        config.getShadowSyncStorageMysqlUsername(),
-                        config.getShadowSyncStorageMysqlPassword(),
-                        config.getShadowSyncStorageMysqlDatabase(),
-                        config.getShadowSyncStorageMysqlPoolSize(),
+                        config.shadowSync().getShadowSyncStorageMysqlHost(),
+                        config.shadowSync().getShadowSyncStorageMysqlPort(),
+                        config.shadowSync().getShadowSyncStorageMysqlUsername(),
+                        config.shadowSync().getShadowSyncStorageMysqlPassword(),
+                        config.shadowSync().getShadowSyncStorageMysqlDatabase(),
+                        config.shadowSync().getShadowSyncStorageMysqlPoolSize(),
                         jsonlPath);
                 plugin.getLogger().fine("Using MySQL for shadow sync history.");
             }
             case "postgresql" -> {
                 this.storage = new PostgresShadowStorage(
                         plugin,
-                        config.getShadowSyncStoragePostgresHost(),
-                        config.getShadowSyncStoragePostgresPort(),
-                        config.getShadowSyncStoragePostgresUsername(),
-                        config.getShadowSyncStoragePostgresPassword(),
-                        config.getShadowSyncStoragePostgresDatabase(),
-                        config.getShadowSyncStoragePostgresPoolSize(),
+                        config.shadowSync().getShadowSyncStoragePostgresHost(),
+                        config.shadowSync().getShadowSyncStoragePostgresPort(),
+                        config.shadowSync().getShadowSyncStoragePostgresUsername(),
+                        config.shadowSync().getShadowSyncStoragePostgresPassword(),
+                        config.shadowSync().getShadowSyncStoragePostgresDatabase(),
+                        config.shadowSync().getShadowSyncStoragePostgresPoolSize(),
                         jsonlPath);
                 plugin.getLogger().fine("Using PostgreSQL for shadow sync history.");
             }
@@ -202,7 +202,7 @@ public final class ShadowSyncTask {
             }
             default -> {
                 plugin.getLogger().warning("Unknown storage type: " + storageType + ", defaulting to SQLite.");
-                String sqlitePath = resolvePath(config.getShadowSyncStorageSqlitePath());
+                String sqlitePath = resolvePath(config.shadowSync().getShadowSyncStorageSqlitePath());
                 this.storage = new SqliteShadowStorage(plugin, sqlitePath, jsonlPath);
             }
         }
@@ -216,8 +216,8 @@ public final class ShadowSyncTask {
             }
         }
 
-        if (config.isShadowSyncHistoryEnabled() && storage != null) {
-            int retentionDays = config.getShadowSyncHistoryRetentionDays();
+        if (config.shadowSync().isShadowSyncHistoryEnabled() && storage != null) {
+            int retentionDays = config.shadowSync().getShadowSyncHistoryRetentionDays();
             if (retentionDays > 0) {
                 int deleted = storage.cleanupOldRecords(retentionDays);
                 if (deleted > 0) {
@@ -283,7 +283,7 @@ public final class ShadowSyncTask {
             return;
         }
 
-        String target = config.getShadowSyncTarget();
+        String target = config.shadowSync().getShadowSyncTarget();
         boolean writeToCMI = target.equals("cmi") || target.equals("all");
         boolean writeToLocal = target.equals("local") || target.equals("all");
 
@@ -295,7 +295,7 @@ public final class ShadowSyncTask {
 
         syncQueue.offer(new CMISyncQueue.SyncEvent(uuid, playerName, balance, System.currentTimeMillis()));
 
-        if (syncQueue.size() >= config.getShadowSyncTriggerBatchSize()) {
+        if (syncQueue.size() >= config.shadowSync().getShadowSyncTriggerBatchSize()) {
             flush();
         }
     }
@@ -309,7 +309,7 @@ public final class ShadowSyncTask {
         if (syncQueue.size() == 0)
             return;
 
-        String target = config.getShadowSyncTarget();
+        String target = config.shadowSync().getShadowSyncTarget();
         boolean writeToCMI = target.equals("cmi") || target.equals("all");
         boolean writeToLocal = target.equals("local") || target.equals("all");
 
@@ -339,7 +339,7 @@ public final class ShadowSyncTask {
                     UUID uuid = pb.uuid();
                     BigDecimal newBalance = pb.balance();
 
-                    if (config.isShadowSyncRollbackProtection()) {
+                    if (config.shadowSync().isShadowSyncRollbackProtection()) {
                         if (!rollbackProtection.canWriteToCMI(uuid, newBalance)) {
                             skippedCount.incrementAndGet();
                             continue;
@@ -375,7 +375,7 @@ public final class ShadowSyncTask {
             for (CMISyncQueue.SyncEvent e : events) {
                 syncLog.logSuccess(e.playerName(), e.balance().toPlainString(), "N/A");
 
-                if (storage != null && config.isShadowSyncHistoryEnabled()) {
+                if (storage != null && config.shadowSync().isShadowSyncHistoryEnabled()) {
                     ShadowSyncRecord record = new ShadowSyncRecord(
                             e.uuid().toString(),
                             e.playerName(),
@@ -417,7 +417,7 @@ public final class ShadowSyncTask {
         int success = 0;
         int failed = 0;
 
-        if (storage != null && config.isShadowSyncHistoryEnabled()) {
+        if (storage != null && config.shadowSync().isShadowSyncHistoryEnabled()) {
             try {
                 var stats = storage.getTodayStats();
                 total = stats.getTotalSyncs();

@@ -116,6 +116,8 @@ const pageTitle = computed(() => {
     '/audit':     'nav.auditLog',
     '/config':    'nav.config',
     '/settings':  'nav.settings',
+    '/central':   'nav.centralDashboard',
+    '/nodes':     'nav.nodesManagement',
   }
   return titles[route.path] || ''
 })

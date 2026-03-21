@@ -45,13 +45,13 @@ public class ListenerServiceManager {
             }
         }
 
-        if (config.isTransferGuardEnabled()) {
+        if (config.transferGuard().isTransferGuardEnabled()) {
             this.playerTransferGuard = new PlayerTransferGuard(
                     plugin,
                     economyWriteQueue);
             registerListener(playerTransferGuard, "Player Transfer Guard");
             plugin.getLogger().fine("Transfer guard enabled (max wait: "
-                    + config.getTransferGuardMaxWaitMs() + "ms)");
+                    + config.transferGuard().getTransferGuardMaxWaitMs() + "ms)");
         }
 
         NameResolver nameResolver = economyServiceManager.getNameResolver();

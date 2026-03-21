@@ -142,7 +142,7 @@ public class SettingsApiHandler {
         settings.put("timezone", config.getTimezone());
 
 
-        settings.put("dedupServerWindowSeconds", syncmoneyConfig.getAuditDeduplicationWindowSeconds());
+        settings.put("dedupServerWindowSeconds", syncmoneyConfig.audit().getAuditDeduplicationWindowSeconds());
         settings.put("dedupClientCacheSize", 1000);
 
         sendJson(exchange, ApiResponse.success(settings));

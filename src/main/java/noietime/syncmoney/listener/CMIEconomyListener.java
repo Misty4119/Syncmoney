@@ -50,7 +50,7 @@ public final class CMIEconomyListener implements Listener {
         this.plugin = plugin;
         this.cmiHandler = cmiHandler;
         this.config = config;
-        this.debounceManager = new CMIDebounceManager(plugin, config.getCMIDebounceTicks());
+        this.debounceManager = new CMIDebounceManager(plugin, config.cmi().getCMIDebounceTicks());
         this.cmiAvailable = initCMIReflection();
 
         if (cmiAvailable) {
@@ -201,7 +201,7 @@ public final class CMIEconomyListener implements Listener {
             }
 
             Player player = Bukkit.getServer().getPlayer(uuid);
-            if (player != null && player.isOnline() && config.isCrossServerNotificationsEnabled()) {
+            if (player != null && player.isOnline() && config.crossServer().isCrossServerNotificationsEnabled()) {
                 sendNotification(player, Math.abs(diff), isDeposit);
             }
 

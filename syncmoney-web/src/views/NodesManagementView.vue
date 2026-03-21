@@ -10,9 +10,6 @@
           {{ t('nodes.managementDescription') }}
         </p>
       </div>
-      <Button @click="openAddDialog">
-        {{ t('nodes.addNode') }}
-      </Button>
     </div>
 
     <!-- Nodes Table -->
@@ -21,38 +18,38 @@
         <Skeleton v-for="i in 3" :key="i" height="60px" />
       </div>
 
-      <Table
-        v-else-if="nodesStore.nodes.length > 0"
-        :columns="columns"
-        :data="tableData"
-        :loading="loading"
-      >
-        <template #cell-status="{ row }">
-          <StatusDot :status="getNodeStatus(String(row.url))" />
-        </template>
-        <template #cell-enabled="{ row }">
-          <span
-            :class="row.enabled ? 'text-success' : 'text-surface-400'"
-            class="text-sm font-medium"
-          >
-            {{ row.enabled ? t('common.enabled') : t('common.disabled') }}
-          </span>
-        </template>
-      </Table>
-
-      <!-- Actions row outside Table for index tracking -->
-      <div v-if="!loading && nodesStore.nodes.length > 0" class="border-t border-surface-200 dark:border-surface-700">
+      <!-- Custom Table with aligned columns when nodes exist -->
+      <div v-else-if="nodesStore.nodes.length > 0" class="border-t border-surface-200 dark:border-surface-700">
+        <!-- Table Header -->
+        <div class="flex items-center px-4 py-3 bg-surface-100/50 dark:bg-surface-800/50 text-xs font-semibold text-surface-500 uppercase tracking-wider border-b border-surface-200 dark:border-surface-700">
+          <div class="w-1/4">{{ t('nodes.nodeName') }}</div>
+          <div class="w-1/3">{{ t('nodes.nodeUrl') }}</div>
+          <div class="w-24">{{ t('nodes.status') }}</div>
+          <div class="w-20">{{ t('nodes.enabled') }}</div>
+          <div class="flex-1 text-right">{{ t('common.actions') }}</div>
+        </div>
+        <!-- Table Rows -->
         <div
           v-for="(node, index) in nodesStore.nodes"
           :key="node.url"
-          class="flex items-center justify-between px-4 py-3 hover:bg-surface-100 dark:hover:bg-surface-800/50 transition-colors border-b border-surface-200 dark:border-surface-700 last:border-b-0"
+          class="flex items-center px-4 py-3 hover:bg-surface-50 dark:hover:bg-surface-800/30 border-b border-surface-200/50 dark:border-surface-700/50 last:border-b-0"
         >
-          <div class="flex items-center gap-4">
-            <StatusDot :status="getNodeStatus(node.url)" />
-            <span class="text-sm font-medium text-surface-900 dark:text-surface-100">{{ node.name }}</span>
-            <span class="text-xs text-surface-500 truncate max-w-[200px]">{{ node.url }}</span>
+          <div class="w-1/4 flex items-center gap-3">
+            <span class="text-sm font-medium text-surface-900 dark:text-surface-100 truncate">{{ node.name }}</span>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="w-1/3 text-xs text-surface-500 truncate">{{ node.url }}</div>
+          <div class="w-24">
+            <StatusDot :status="getNodeStatus(node.url)" />
+          </div>
+          <div class="w-20">
+            <span
+              :class="node.enabled ? 'text-success' : 'text-surface-400'"
+              class="text-sm font-medium"
+            >
+              {{ node.enabled ? t('common.enabled') : t('common.disabled') }}
+            </span>
+          </div>
+          <div class="flex-1 flex items-center justify-end gap-2">
             <Button
               size="sm"
               variant="ghost"
@@ -60,13 +57,6 @@
               @click="pingNode(index)"
             >
               {{ t('nodes.ping') }}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              @click="openEditDialog(index)"
-            >
-              {{ t('common.edit') }}
             </Button>
             <Button
               size="sm"
@@ -84,13 +74,7 @@
           :icon="Server"
           :title="t('nodes.noNodes.title')"
           :description="t('nodes.noNodes.description')"
-        >
-          <template #action>
-            <Button @click="openAddDialog">
-              {{ t('nodes.addFirstNode') }}
-            </Button>
-          </template>
-        </EmptyState>
+        />
       </div>
     </Card>
 
@@ -103,91 +87,6 @@
         </span>
       </div>
     </Card>
-
-    <!-- Add/Edit Dialog -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="dialogOpen"
-          class="fixed inset-0 z-50 flex items-center justify-center"
-        >
-          <!-- Backdrop -->
-          <div
-            class="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            @click="closeDialog"
-          />
-
-          <!-- Dialog Content -->
-          <div
-            class="relative w-full max-w-md mx-4 bg-surface-50 dark:bg-surface-900 rounded-2xl shadow-2xl border border-surface-200 dark:border-surface-700 overflow-hidden"
-          >
-            <!-- Header -->
-            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-200 dark:border-surface-700">
-              <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-100">
-                {{ editingIndex === null ? t('nodes.addNode') : t('nodes.editNode') }}
-              </h2>
-              <button
-                class="p-2 rounded-lg hover:bg-surface-200 dark:hover:bg-surface-800 text-surface-500 transition-colors"
-                @click="closeDialog"
-              >
-                <X class="w-5 h-5" />
-              </button>
-            </div>
-
-            <!-- Form -->
-            <form @submit.prevent="saveNode" class="p-6 space-y-4">
-              <Input
-                v-model="formData.name"
-                :label="t('nodes.nodeName')"
-                :placeholder="t('nodes.nodeNamePlaceholder')"
-                :error="errors.name"
-                required
-              />
-
-              <Input
-                v-model="formData.url"
-                type="url"
-                :label="t('nodes.nodeUrl')"
-                :placeholder="t('nodes.nodeUrlPlaceholder')"
-                :error="errors.url"
-                required
-              />
-
-              <Input
-                v-model="formData.apiKey"
-                type="password"
-                :label="t('nodes.apiKey')"
-                :placeholder="t('nodes.apiKeyPlaceholder')"
-                :error="errors.apiKey"
-                required
-              />
-
-              <div class="flex items-center gap-3">
-                <input
-                  id="node-enabled"
-                  v-model="formData.enabled"
-                  type="checkbox"
-                  class="w-4 h-4 rounded border-surface-300 text-primary focus:ring-primary"
-                />
-                <label for="node-enabled" class="text-sm text-surface-700 dark:text-surface-300">
-                  {{ t('nodes.enabled') }}
-                </label>
-              </div>
-
-              <!-- Actions -->
-              <div class="flex justify-end gap-3 pt-4">
-                <Button variant="ghost" type="button" @click="closeDialog">
-                  {{ t('common.cancel') }}
-                </Button>
-                <Button type="submit" :loading="saving">
-                  {{ t('common.save') }}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
 
     <!-- Delete Confirmation -->
     <Teleport to="body">
@@ -225,16 +124,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, X } from 'lucide-vue-next'
-import { useNodesStore, type NodeInfo } from '@/stores/nodes'
+import { Server } from 'lucide-vue-next'
+import { useNodesStore } from '@/stores/nodes'
+import { apiClient } from '@/api/client'
 import Card from '@/components/common/Card.vue'
 import Button from '@/components/common/Button.vue'
-import Table from '@/components/common/Table.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import Input from '@/components/common/Input.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 import { useNotificationStore } from '@/stores/notification'
 
@@ -243,41 +141,10 @@ const nodesStore = useNodesStore()
 const notificationStore = useNotificationStore()
 
 const loading = ref(false)
-const dialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
-const editingIndex = ref<number | null>(null)
 const deletingIndex = ref<number | null>(null)
 const pingingIndex = ref<number | null>(null)
 const pingResult = ref<boolean | null>(null)
-const saving = ref(false)
-
-const formData = reactive({
-  name: '',
-  url: '',
-  apiKey: '',
-  enabled: true,
-})
-
-const errors = reactive({
-  name: '',
-  url: '',
-  apiKey: '',
-})
-
-const columns = [
-  { key: 'name', label: 'nodes.nodeName', sortable: true },
-  { key: 'url', label: 'nodes.nodeUrl' },
-  { key: 'status', label: 'system.status' },
-  { key: 'enabled', label: 'common.status' },
-  { key: 'actions', label: 'common.actions', class: 'text-right' },
-]
-
-const tableData = computed(() =>
-  nodesStore.nodes.map((node) => ({
-    ...node,
-    status: nodesStore.nodeStatuses.get(node.url) || 'unknown',
-  }))
-)
 
 function getNodeStatus(url: string): 'connected' | 'disconnected' | 'warning' | 'loading' {
   const status = nodesStore.nodeStatuses.get(url) || 'unknown'
@@ -285,102 +152,6 @@ function getNodeStatus(url: string): 'connected' | 'disconnected' | 'warning' | 
     case 'online': return 'connected'
     case 'offline': return 'disconnected'
     default: return 'loading'
-  }
-}
-
-function resetForm() {
-  formData.name = ''
-  formData.url = ''
-  formData.apiKey = ''
-  formData.enabled = true
-  errors.name = ''
-  errors.url = ''
-  errors.apiKey = ''
-}
-
-function openAddDialog() {
-  resetForm()
-  editingIndex.value = null
-  dialogOpen.value = true
-}
-
-function openEditDialog(index: number) {
-  const node = nodesStore.nodes[index]
-  if (node) {
-    formData.name = node.name
-    formData.url = node.url
-    formData.apiKey = node.apiKey
-    formData.enabled = node.enabled
-    editingIndex.value = index
-    dialogOpen.value = true
-  }
-}
-
-function closeDialog() {
-  dialogOpen.value = false
-  editingIndex.value = null
-}
-
-function validateForm(): boolean {
-  let valid = true
-  errors.name = ''
-  errors.url = ''
-  errors.apiKey = ''
-
-  if (!formData.name.trim()) {
-    errors.name = t('nodes.errors.nameRequired')
-    valid = false
-  }
-
-  if (!formData.url.trim()) {
-    errors.url = t('nodes.errors.urlRequired')
-    valid = false
-  } else {
-    try {
-      new URL(formData.url)
-    } catch {
-      errors.url = t('nodes.errors.urlInvalid')
-      valid = false
-    }
-  }
-
-  if (!formData.apiKey.trim()) {
-    errors.apiKey = t('nodes.errors.apiKeyRequired')
-    valid = false
-  }
-
-  return valid
-}
-
-async function saveNode() {
-  if (!validateForm()) return
-
-  saving.value = true
-  try {
-    const nodeData: NodeInfo = {
-      name: formData.name.trim(),
-      url: formData.url.trim(),
-      apiKey: formData.apiKey.trim(),
-      enabled: formData.enabled,
-    }
-
-    if (editingIndex.value !== null) {
-      await nodesStore.updateNode(editingIndex.value, nodeData)
-      notificationStore.addNotification('success', t('nodes.updateSuccess'), '')
-    } else {
-      await nodesStore.addNode(nodeData)
-      notificationStore.addNotification('success', t('nodes.addSuccess'), '')
-    }
-
-    closeDialog()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'SSRF_BLOCKED') {
-      errors.url = t('nodes.errors.ssrfBlocked')
-    } else {
-      notificationStore.addNotification('error', t('nodes.saveFailed'), '')
-    }
-  } finally {
-    saving.value = false
   }
 }
 
@@ -410,9 +181,33 @@ async function pingNode(index: number) {
   try {
     const node = nodesStore.nodes[index]
     if (node) {
-      const status = await nodesStore.checkNodeHealth(node)
-      pingResult.value = status === 'online'
+      
+      const res = await apiClient.post<{ success: boolean; data?: { status: string } }>(`/api/nodes/${index}/ping`)
+      const success = res.status >= 200 && res.status < 300 && res.data?.success
+
+      
+      if (success && res.data?.data) {
+        const status = res.data.data.status === 'online' ? 'online' :
+                       res.data.data.status === 'offline' ? 'offline' : 'unknown'
+        nodesStore.setNodeStatus(node.url, status)
+        nodesStore.updateNodeStatus(index, status)
+        pingResult.value = res.data.data.status === 'online'
+      } else {
+        nodesStore.setNodeStatus(node.url, 'offline')
+        nodesStore.updateNodeStatus(index, 'offline')
+        pingResult.value = false
+      }
+
+      if (pingResult.value) {
+        notificationStore.addNotification('success', t('nodes.pingSuccess'), node.name)
+      } else {
+        notificationStore.addNotification('error', t('nodes.pingFailed'), node.name)
+      }
     }
+  } catch {
+    pingResult.value = false
+    const node = nodesStore.nodes[index]
+    notificationStore.addNotification('error', t('nodes.pingFailed'), node?.name || '')
   } finally {
     pingingIndex.value = null
   }

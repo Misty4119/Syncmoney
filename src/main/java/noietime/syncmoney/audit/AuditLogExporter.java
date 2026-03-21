@@ -43,7 +43,7 @@ public final class AuditLogExporter {
         this.dataSource = dataSource;
         this.logger = plugin.getLogger();
 
-        String folderPath = config.getAuditExportFolder();
+        String folderPath = config.audit().getAuditExportFolder();
         this.exportFolder = Paths.get(folderPath);
 
         try {
@@ -57,7 +57,7 @@ public final class AuditLogExporter {
      * Starts export task (scheduled execution)
      */
     public void start() {
-        if (!config.isAuditExportEnabled()) {
+        if (!config.audit().isAuditExportEnabled()) {
             logger.fine("Audit log export is disabled in config.");
             return;
         }
@@ -68,7 +68,7 @@ public final class AuditLogExporter {
                 plugin,
                 task -> {
                     try {
-                        exportToLogFile(config.getAuditRetentionDays());
+                        exportToLogFile(config.audit().getAuditRetentionDays());
                     } catch (Exception e) {
                         logger.warning("Failed to export audit logs: " + e.getMessage());
                     }
@@ -86,7 +86,7 @@ public final class AuditLogExporter {
      * @return Number of records exported, -1 if failed
      */
     public int exportToLogFile(int daysOld) {
-        if (!config.isAuditExportEnabled()) {
+        if (!config.audit().isAuditExportEnabled()) {
             logger.fine("Audit log export is disabled.");
             return -1;
         }
@@ -116,7 +116,7 @@ public final class AuditLogExporter {
 
             logger.fine("Exported " + records.size() + " audit records to " + filename);
 
-            if (config.isAuditDeleteAfterExport()) {
+            if (config.audit().isAuditDeleteAfterExport()) {
                 deleteExportedRecords(cutoffTime);
             }
 

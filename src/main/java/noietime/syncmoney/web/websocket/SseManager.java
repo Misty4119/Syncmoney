@@ -119,10 +119,6 @@ public class SseManager {
         bus.register(PostTransactionEvent.class, event -> {
             String jsonMessage = buildTransactionMessage(event);
             broadcastToChannel(CHANNEL_TRANSACTION, jsonMessage);
-
-
-
-
         }, noietime.syncmoney.event.EventPriority.LOW);
 
         plugin.getLogger().fine("SSE event listeners registered (transaction channel)");

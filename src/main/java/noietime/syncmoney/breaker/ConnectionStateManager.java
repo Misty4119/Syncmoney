@@ -107,7 +107,7 @@ public final class ConnectionStateManager {
                 long failureCount = consecutiveFailures.incrementAndGet();
                 long disconnectDuration = (System.currentTimeMillis() - lastSuccessfulConnection) / 1000;
 
-                    if (disconnectDuration >= config.getCircuitBreakerRedisDisconnectLockSeconds()) {
+                    if (disconnectDuration >= config.circuitBreaker().getCircuitBreakerRedisDisconnectLockSeconds()) {
                         if (redisAvailable) {
                             redisAvailable = false;
                             if (redisRequired) {

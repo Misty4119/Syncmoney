@@ -50,7 +50,7 @@ public final class CMIMultiServerReader {
     public CMIMultiServerReader(Plugin plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
         this.config = config;
-        this.mergeStrategy = parseStrategy(config.getCMIMergeStrategy());
+        this.mergeStrategy = parseStrategy(config.migration().getCMIMergeStrategy());
 
         initDbPaths();
     }
@@ -73,10 +73,10 @@ public final class CMIMultiServerReader {
      * Initializes database path list
      */
     private void initDbPaths() {
-        List<String> paths = config.getCMISqlitePaths();
+        List<String> paths = config.migration().getCMISqlitePaths();
 
         if (paths == null || paths.isEmpty()) {
-            String singlePath = config.getCMISqlitePath();
+            String singlePath = config.migration().getCMISqlitePath();
             if (singlePath != null && !singlePath.isEmpty()) {
                 dbPaths.add(normalizePath(singlePath));
             }

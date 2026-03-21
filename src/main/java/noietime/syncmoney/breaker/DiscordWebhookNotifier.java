@@ -74,17 +74,17 @@ public final class DiscordWebhookNotifier {
      * Send rate limit event to Discord.
      */
     public void sendRateLimitEvent(java.util.UUID playerId, String limitType) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
 
         String playerName = getPlayerName(playerId);
-        String embedColor = config.getDiscordWebhookEmbedColor();
+        String embedColor = config.discordWebhook().getDiscordWebhookEmbedColor();
         String eventName = "rate_limit";
 
         for (Map<String, Object> webhook : webhooks) {
@@ -101,9 +101,9 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Rate Limit Triggered",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Player: " + (config.discordWebhook().isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Limit Type: " + limitType,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -111,17 +111,17 @@ public final class DiscordWebhookNotifier {
      * Send warning event to Discord.
      */
     public void sendWarningEvent(java.util.UUID playerId, int transactionCount, int threshold, java.math.BigDecimal totalAmount) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
 
         String playerName = getPlayerName(playerId);
-        String embedColor = config.getDiscordWebhookEmbedColor();
+        String embedColor = config.discordWebhook().getDiscordWebhookEmbedColor();
         String eventName = "player_warning";
 
         for (Map<String, Object> webhook : webhooks) {
@@ -138,10 +138,10 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Warning",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Player: " + (config.discordWebhook().isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Transactions: " + transactionCount + " / " + threshold + "\n" +
                     "Total Amount: " + noietime.syncmoney.util.FormatUtil.formatCurrency(totalAmount),
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -149,11 +149,11 @@ public final class DiscordWebhookNotifier {
      * Send locked event to Discord.
      */
     public void sendLockedEvent(java.util.UUID playerId, String reason, int durationMinutes) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -176,10 +176,10 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Locked",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Player: " + (config.discordWebhook().isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Reason: " + reason + "\n" +
                     "Duration: " + durationMinutes + " minutes",
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -187,11 +187,11 @@ public final class DiscordWebhookNotifier {
      * Send unlocked event to Discord.
      */
     public void sendUnlockedEvent(java.util.UUID playerId, String reason) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -214,9 +214,9 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "Player Unlocked",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Player: " + (config.discordWebhook().isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Unlocked by: " + reason,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -224,11 +224,11 @@ public final class DiscordWebhookNotifier {
      * Send global lock event to Discord.
      */
     public void sendGlobalLockEvent(String reason) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -252,7 +252,7 @@ public final class DiscordWebhookNotifier {
                     "GLOBAL ECONOMY LOCK",
                     "Server: " + config.getServerName(),
                     "Reason: " + reason,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -260,11 +260,11 @@ public final class DiscordWebhookNotifier {
      * Send schema upgrade event to Discord.
      */
     public void sendSchemaUpgradeEvent(int fromVersion, int toVersion) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -288,7 +288,7 @@ public final class DiscordWebhookNotifier {
                     "Database Schema Upgraded",
                     "Server: " + config.getServerName(),
                     "Version: " + fromVersion + " → " + toVersion,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -296,11 +296,11 @@ public final class DiscordWebhookNotifier {
      * Send circuit breaker trigger event to Discord.
      */
     public void sendCircuitBreakerEvent(String state, String reason) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -324,7 +324,7 @@ public final class DiscordWebhookNotifier {
                     "Circuit Breaker Triggered",
                     "Server: " + config.getServerName(),
                     "State: " + state + "\nReason: " + reason,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -332,11 +332,11 @@ public final class DiscordWebhookNotifier {
      * Send high memory event to Discord.
      */
     public void sendMemoryHighEvent(double usagePercent, long usedMb, long maxMb) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -360,7 +360,7 @@ public final class DiscordWebhookNotifier {
                     "High Memory Usage Warning",
                     "Server: " + config.getServerName(),
                     String.format("Memory: %.1f%% (%d/%d MB)", usagePercent, usedMb, maxMb),
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -368,11 +368,11 @@ public final class DiscordWebhookNotifier {
      * Send Redis connection pool critical event to Discord.
      */
     public void sendRedisPoolCriticalEvent(int activeConnections, int maxConnections) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -397,7 +397,7 @@ public final class DiscordWebhookNotifier {
                     "Redis Connection Pool Critical",
                     "Server: " + config.getServerName(),
                     String.format("Active: %d/%d (%.1f%%)", activeConnections, maxConnections, usagePercent),
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -405,11 +405,11 @@ public final class DiscordWebhookNotifier {
      * Send high value transaction event to Discord.
      */
     public void sendHighValueTransactionEvent(java.util.UUID playerId, java.math.BigDecimal amount, String transactionType) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -432,9 +432,9 @@ public final class DiscordWebhookNotifier {
 
             sendEmbedAsync(url, embedColor,
                     "High Value Transaction",
-                    "Player: " + (config.isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
+                    "Player: " + (config.discordWebhook().isDiscordWebhookShowPlayerName() ? playerName : "Hidden"),
                     "Amount: " + noietime.syncmoney.util.FormatUtil.formatCurrency(amount) + "\nType: " + transactionType,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -442,11 +442,11 @@ public final class DiscordWebhookNotifier {
      * Send migration complete event to Discord.
      */
     public void sendMigrationCompleteEvent(int successCount, int failedCount) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -470,7 +470,7 @@ public final class DiscordWebhookNotifier {
                     "Migration Completed",
                     "Server: " + config.getServerName(),
                     "Success: " + successCount + "\nFailed: " + failedCount,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -478,11 +478,11 @@ public final class DiscordWebhookNotifier {
      * Send migration failed event to Discord.
      */
     public void sendMigrationFailedEvent(String errorMessage) {
-        if (!config.isDiscordWebhookEnabled()) {
+        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
-        List<Map<String, Object>> webhooks = config.getDiscordWebhooks();
+        List<Map<String, Object>> webhooks = config.discordWebhook().getDiscordWebhooks();
         if (webhooks.isEmpty()) {
             return;
         }
@@ -506,7 +506,7 @@ public final class DiscordWebhookNotifier {
                     "Migration Failed",
                     "Server: " + config.getServerName(),
                     "Error: " + errorMessage,
-                    config.isDiscordWebhookShowTimestamp());
+                    config.discordWebhook().isDiscordWebhookShowTimestamp());
         }
     }
 
@@ -534,7 +534,7 @@ public final class DiscordWebhookNotifier {
         connection.setDoOutput(true);
 
         String timestamp = showTimestamp ? "\"timestamp\":\"" + java.time.Instant.now().toString() + "\"," : "";
-        String username = config.getDiscordWebhookUsername();
+        String username = config.discordWebhook().getDiscordWebhookUsername();
 
         String json = String.format(
                 "{\"username\":\"%s\",\"embeds\":[{" +

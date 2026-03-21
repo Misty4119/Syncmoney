@@ -171,6 +171,7 @@ breaker:
   state: ' <#38BDF8>▪ <#94A3B8>Operation State: <white>{state}'
   locked-warning: ' <b><#F43F5E>[ Critical Warning ] System is in deep lockdown, rejecting all financial operations!</b>'
   warning-state: ' <b><#FBBF24>[ ALERT STATE ]</b> <#94A3B8>System is under abnormal observation period, high-risk functions are restricted.'
+  reset-success-global-lock: '{prefix}<#F59E0B>Global economy lock released, inflation monitor reset.'
   reset-success-full: '{prefix}<#4ADE80>System security lock released, economic activities reopened.'
   info-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>GRID DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
   resources-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>RESOURCE ALLOCATION</bold></gradient> <#475569>▰▰▰▰'

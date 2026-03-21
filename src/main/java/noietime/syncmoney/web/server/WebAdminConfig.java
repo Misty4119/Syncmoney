@@ -31,7 +31,7 @@ public class WebAdminConfig {
      */
     public void load(FileConfiguration fc) {
         this.enabled = fc.getBoolean("web-admin.enabled", false);
-        this.bundledVersion = fc.getString("web-admin.bundled-version", "1.1.0");
+        this.bundledVersion = fc.getString("web-admin.bundled-version", "1.1.1");
         this.host = fc.getString("web-admin.server.host", "localhost");
         this.port = fc.getInt("web-admin.server.port", 8080);
         this.webPath = fc.getString("web-admin.web.path", "syncmoney-web");

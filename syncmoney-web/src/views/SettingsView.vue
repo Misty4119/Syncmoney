@@ -89,6 +89,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useNotificationStore } from '@/stores/notification'
+import { useNodesStore } from '@/stores/nodes'
 import { Palette, Globe, Moon, Sun, Clock, CheckCircle, Save } from 'lucide-vue-next'
 import Card from '@/components/common/Card.vue'
 import Button from '@/components/common/Button.vue'
@@ -96,6 +97,7 @@ import Button from '@/components/common/Button.vue'
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const notificationStore = useNotificationStore()
+const nodesStore = useNodesStore()
 
 const theme = ref(settingsStore.theme)
 const language = ref(settingsStore.locale)
@@ -157,7 +159,9 @@ async function saveSettings() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  
+  await nodesStore.fetchNodes().catch(() => {})
   theme.value = settingsStore.theme
   language.value = settingsStore.locale
   timezone.value = settingsStore.timezone

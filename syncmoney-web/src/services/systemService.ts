@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/client'
+import { apiClient, rawAxios } from '@/api/client'
 import type { SystemStatus, MetricsResponse, ApiResponse, NodeStatus, AggregatedStats } from '@/api/types'
 
 /** [SYNC-WEB-001] Fetch system status. */
@@ -25,8 +25,8 @@ export async function pingNode(url: string, apiKey: string): Promise<boolean> {
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), 5000)
 
-        const res = await apiClient.get('/api/system/status', {
-            baseURL: url,
+        
+        const res = await rawAxios.get(`${url}/api/system/status`, {
             headers: { Authorization: `Bearer ${apiKey}` },
             signal: controller.signal,
             validateStatus: () => true

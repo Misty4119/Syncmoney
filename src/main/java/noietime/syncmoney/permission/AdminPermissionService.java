@@ -100,7 +100,7 @@ public final class AdminPermissionService {
      * Check daily limit.
      */
     public boolean checkDailyLimit(CommandSender sender, String action, double amount) {
-        if (!config.isAdminDailyLimitEnabled()) {
+        if (!config.adminPermission().isAdminDailyLimitEnabled()) {
             return true;
         }
 
@@ -123,12 +123,12 @@ public final class AdminPermissionService {
 
         double maxDaily = switch (action.toLowerCase()) {
             case "give" -> switch (level) {
-                case REWARD -> config.getAdminRewardDailyGiveLimit();
-                case GENERAL -> config.getAdminGeneralDailyGiveLimit();
+                case REWARD -> config.adminPermission().getAdminRewardDailyGiveLimit();
+                case GENERAL -> config.adminPermission().getAdminGeneralDailyGiveLimit();
                 default -> 0;
             };
             case "take" -> switch (level) {
-                case GENERAL -> config.getAdminGeneralDailyTakeLimit();
+                case GENERAL -> config.adminPermission().getAdminGeneralDailyTakeLimit();
                 default -> 0;
             };
             default -> 0;
@@ -146,7 +146,7 @@ public final class AdminPermissionService {
      * Record daily usage.
      */
     public void recordUsage(CommandSender sender, String action, double amount) {
-        if (!config.isAdminDailyLimitEnabled()) {
+        if (!config.adminPermission().isAdminDailyLimitEnabled()) {
             return;
         }
 
@@ -194,12 +194,12 @@ public final class AdminPermissionService {
         if (limit == null || !limit.isToday()) {
             return switch (action.toLowerCase()) {
                 case "give" -> switch (level) {
-                    case REWARD -> config.getAdminRewardDailyGiveLimit();
-                    case GENERAL -> config.getAdminGeneralDailyGiveLimit();
+                    case REWARD -> config.adminPermission().getAdminRewardDailyGiveLimit();
+                    case GENERAL -> config.adminPermission().getAdminGeneralDailyGiveLimit();
                     default -> 0;
                 };
                 case "take" -> switch (level) {
-                    case GENERAL -> config.getAdminGeneralDailyTakeLimit();
+                    case GENERAL -> config.adminPermission().getAdminGeneralDailyTakeLimit();
                     default -> 0;
                 };
                 default -> 0;
@@ -208,12 +208,12 @@ public final class AdminPermissionService {
 
         double maxDaily = switch (action.toLowerCase()) {
             case "give" -> switch (level) {
-                case REWARD -> config.getAdminRewardDailyGiveLimit();
-                case GENERAL -> config.getAdminGeneralDailyGiveLimit();
+                case REWARD -> config.adminPermission().getAdminRewardDailyGiveLimit();
+                case GENERAL -> config.adminPermission().getAdminGeneralDailyGiveLimit();
                 default -> 0;
             };
             case "take" -> switch (level) {
-                case GENERAL -> config.getAdminGeneralDailyTakeLimit();
+                case GENERAL -> config.adminPermission().getAdminGeneralDailyTakeLimit();
                 default -> 0;
             };
             default -> 0;

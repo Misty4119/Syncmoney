@@ -8,7 +8,7 @@ export const systemHandlers = [
       data: {
         plugin: {
           name: 'Syncmoney',
-          version: '1.1.0',
+          version: '1.1.1',
           mode: 'Local',
           uptime: Date.now() - 3600000,
           onlinePlayers: 5,

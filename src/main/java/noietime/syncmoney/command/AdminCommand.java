@@ -74,7 +74,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         this.nameResolver = nameResolver;
         this.baltopManager = baltopManager;
         this.auditLogger = auditLogger;
-        this.confirmThreshold = NumericUtil.normalize(config.getAdminConfirmThreshold());
+        this.confirmThreshold = NumericUtil.normalize(config.adminPermission().getAdminConfirmThreshold());
     }
 
     @Override
@@ -290,7 +290,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled()) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
             var cbResult = circuitBreaker.checkTransaction(uuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
             if (!cbResult.allowed()) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("admin.breaker-blocked")
@@ -303,7 +303,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
 
         BigDecimal newBalance = economyFacade.deposit(uuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
             BigDecimal oldBalance = newBalance.subtract(amount);
             circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
         }
@@ -384,7 +384,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled()) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
             var cbResult = circuitBreaker.checkTransaction(uuid, amount.negate(), EconomyEvent.EventSource.ADMIN_TAKE);
             if (!cbResult.allowed()) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("admin.breaker-blocked")
@@ -403,7 +403,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled()) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
             BigDecimal oldBalance = newBalance.add(amount);
             circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
         }

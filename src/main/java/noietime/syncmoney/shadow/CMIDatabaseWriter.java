@@ -65,7 +65,7 @@ public final class CMIDatabaseWriter {
             return;
         }
 
-        String sqlitePath = config.getShadowSyncCMISQLitePath();
+        String sqlitePath = config.shadowSync().getShadowSyncCMISQLitePath();
         File sqliteFile = new File(sqlitePath);
 
         if (!sqliteFile.exists()) {
@@ -140,8 +140,8 @@ public final class CMIDatabaseWriter {
     private HikariDataSource createMySQLDataSource() {
         HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(buildJdbcUrl());
-        hikariConfig.setUsername(config.getShadowSyncCMIMySQLUsername());
-        hikariConfig.setPassword(config.getShadowSyncCMIMySQLPassword());
+        hikariConfig.setUsername(config.shadowSync().getShadowSyncCMIMySQLUsername());
+        hikariConfig.setPassword(config.shadowSync().getShadowSyncCMIMySQLPassword());
         hikariConfig.setMaximumPoolSize(5);
         hikariConfig.setConnectionTimeout(10000);
         hikariConfig.setPoolName("Syncmoney-CMI-Writer-MySQL");
@@ -150,9 +150,9 @@ public final class CMIDatabaseWriter {
 
     private String buildJdbcUrl() {
         return String.format("jdbc:mysql://%s:%d/%s",
-                config.getShadowSyncCMIMySQLHost(),
-                config.getShadowSyncCMIMySQLPort(),
-                config.getShadowSyncCMIMySQLDatabase());
+                config.shadowSync().getShadowSyncCMIMySQLHost(),
+                config.shadowSync().getShadowSyncCMIMySQLPort(),
+                config.shadowSync().getShadowSyncCMIMySQLDatabase());
     }
 
     /**

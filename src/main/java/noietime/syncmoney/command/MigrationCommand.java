@@ -176,8 +176,8 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             migrationTask.setCMIReader(cmiReader);
         }
 
-        boolean useMultiServer = config.isCMIMultiServerEnabled();
-        if (config.isCMIAutoDetect()) {
+        boolean useMultiServer = config.migration().isCMIMultiServerEnabled();
+        if (config.migration().isCMIAutoDetect()) {
             CMIDatabaseReader.StorageType detectedType = cmiReader.getDetectedStorageType();
             if (detectedType == CMIDatabaseReader.StorageType.MySQL) {
                 if (useMultiServer) {
@@ -278,7 +278,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         }
 
         boolean force = Arrays.asList(args).contains("-force");
-        boolean backup = !Arrays.asList(args).contains("-no-backup") && config.isMigrationAutoBackup();
+        boolean backup = !Arrays.asList(args).contains("-no-backup") && config.migration().isMigrationAutoBackup();
 
         if (migrationTask.isRunning()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
@@ -294,7 +294,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
      */
     private void handleLocalToSyncMigration(CommandSender sender, String[] args) {
         boolean force = Arrays.asList(args).contains("-force");
-        boolean backup = !Arrays.asList(args).contains("-no-backup") && config.isMigrationAutoBackup();
+        boolean backup = !Arrays.asList(args).contains("-no-backup") && config.migration().isMigrationAutoBackup();
 
         if (localToSyncMigrationTask.isRunning()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));

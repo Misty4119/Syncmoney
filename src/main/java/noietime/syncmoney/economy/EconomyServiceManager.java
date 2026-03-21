@@ -54,7 +54,7 @@ public class EconomyServiceManager {
         );
 
         if (mode == EconomyMode.LOCAL) {
-            this.localHandler = new LocalEconomyHandler(plugin, config.getLocalSQLitePath());
+            this.localHandler = new LocalEconomyHandler(plugin, config.local().getLocalSQLitePath());
             plugin.getLogger().fine("Local Economy Handler initialized (SQLite mode)");
         }
 

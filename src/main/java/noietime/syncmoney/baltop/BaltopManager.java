@@ -66,7 +66,7 @@ public final class BaltopManager {
         this.localEconomyHandler = localEconomyHandler;
         this.logger = plugin.getLogger();
         this.topCache = new ConcurrentHashMap<>();
-        this.cacheExpirationMs = config.getBaltopCacheSeconds() * 1000L;
+        this.cacheExpirationMs = config.baltop().getBaltopCacheSeconds() * 1000L;
         this.numberFormatList = loadNumberFormatConfig();
 
         this.isLocalMode = (dataSource == null && localEconomyHandler != null);
@@ -93,7 +93,7 @@ public final class BaltopManager {
      */
     private List<NumberFormatEntry> loadNumberFormatConfig() {
         List<NumberFormatEntry> result = new ArrayList<>();
-        List<Object> formatList = config.getBaltopNumberFormat();
+        List<Object> formatList = config.baltop().getBaltopNumberFormat();
 
         if (formatList != null) {
             for (Object entry : formatList) {
@@ -169,13 +169,14 @@ public final class BaltopManager {
 
     /**
      * Loads leaderboard data from database into Redis.
+     * Falls back to players table if syncmoney_baltop is empty.
      */
     private void loadFromDatabase() {
-        String sql = "SELECT player_uuid, player_name, balance FROM syncmoney_baltop ORDER BY balance DESC LIMIT 1000";
+        String baltopSql = "SELECT player_uuid, player_name, balance FROM syncmoney_baltop ORDER BY balance DESC LIMIT 1000";
 
         try (Connection conn = dataSource.getConnection();
-                PreparedStatement stmt = conn.prepareStatement(sql);
-                ResultSet rs = stmt.executeQuery()) {
+                PreparedStatement baltopStmt = conn.prepareStatement(baltopSql);
+                ResultSet rs = baltopStmt.executeQuery()) {
 
             try (Jedis jedis = redisManager.getResource()) {
                 jedis.del(BALTOP_KEY);
@@ -183,8 +184,10 @@ public final class BaltopManager {
 
                 double totalSupply = 0.0;
                 int rank = 1;
+                boolean hasBaltopData = false;
 
                 while (rs.next()) {
+                    hasBaltopData = true;
                     String uuid = rs.getString("player_uuid");
                     String name = rs.getString("player_name");
                     double balance = rs.getDouble("balance");
@@ -199,11 +202,56 @@ public final class BaltopManager {
                     rank++;
                 }
 
-                jedis.set(TOTAL_SUPPLY_KEY, String.valueOf(totalSupply));
-                logger.fine("Loaded " + (rank - 1) + " players from database to baltop.");
+                
+                if (!hasBaltopData) {
+                    logger.fine("Baltop table is empty, falling back to players table for initial load.");
+                    loadFromPlayersTable(jedis, conn);
+                } else {
+                    jedis.set(TOTAL_SUPPLY_KEY, String.valueOf(totalSupply));
+                    logger.fine("Loaded " + (rank - 1) + " players from database to baltop.");
+                }
             }
         } catch (Exception e) {
             logger.warning("Failed to load baltop from database: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Loads leaderboard data from players table as fallback.
+     */
+    private void loadFromPlayersTable(Jedis jedis, Connection conn) {
+        String playersSql = "SELECT player_uuid, player_name, balance FROM players ORDER BY balance DESC LIMIT 1000";
+
+        try (PreparedStatement stmt = conn.prepareStatement(playersSql);
+                ResultSet rs = stmt.executeQuery()) {
+
+            double totalSupply = 0.0;
+            int rank = 1;
+
+            while (rs.next()) {
+                String uuid = rs.getString("player_uuid");
+                String name = rs.getString("player_name");
+                double balance = rs.getDouble("balance");
+
+                if (uuid != null && balance > 0) {
+                    jedis.zadd(BALTOP_KEY, balance, uuid);
+                    totalSupply += balance;
+
+                    if (name != null) {
+                        try {
+                            nameResolver.cacheName(name, UUID.fromString(uuid));
+                        } catch (IllegalArgumentException ignored) {
+                            
+                        }
+                    }
+                }
+                rank++;
+            }
+
+            jedis.set(TOTAL_SUPPLY_KEY, String.valueOf(totalSupply));
+            logger.fine("Loaded " + (rank - 1) + " players from players table to baltop (fallback).");
+        } catch (Exception e) {
+            logger.warning("Failed to load baltop from players table: " + e.getMessage());
         }
     }
 
@@ -652,6 +700,39 @@ public final class BaltopManager {
             logger.warning("Failed to get local total players: " + e.getMessage());
             return 0;
         }
+    }
+
+    /**
+     * Gets total registered player count from database.
+     * This includes ALL players with balance > 0, not just top 1000.
+     * Supports all modes: LOCAL (SQLite), LOCAL_REDIS, and SYNC.
+     */
+    public int getTotalRegisteredPlayers() {
+        
+        if (isLocalMode) {
+            return getTotalPlayersLocal();
+        }
+
+        
+        if (dataSource == null) {
+            logger.fine("BaltopManager: No dataSource, falling back to getTotalPlayers()");
+            return getTotalPlayers();
+        }
+
+        String sql = "SELECT COUNT(*) FROM players WHERE balance > 0";
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                int count = rs.getInt(1);
+                logger.fine("BaltopManager: Total registered players from DB: " + count);
+                return count;
+            }
+        } catch (SQLException e) {
+            logger.warning("Failed to get total registered players from database: " + e.getMessage());
+        }
+        return 0;
     }
 
     /**

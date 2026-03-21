@@ -64,8 +64,8 @@ public final class AuditLogger {
         this.config = config;
         this.dataSource = dataSource;
         this.logger = plugin.getLogger();
-        this.batchSize = config.getAuditBatchSize();
-        this.flushIntervalMs = config.getAuditFlushIntervalMs();
+        this.batchSize = config.audit().getAuditBatchSize();
+        this.flushIntervalMs = config.audit().getAuditFlushIntervalMs();
         this.maxRetry = Constants.AUDIT_MAX_RETRY;
         this.buffer = new ConcurrentLinkedQueue<>();
 
@@ -77,7 +77,7 @@ public final class AuditLogger {
 
         initializeSchema();
 
-        if (!config.isAuditEnabled()) {
+        if (!config.audit().isAuditEnabled()) {
             enabled = false;
             logger.warning("Audit logging is disabled in config.");
             return;

@@ -127,7 +127,7 @@ public final class NotificationService {
                 .replace("{player}", playerName);
         String content = plugin.getMessage("player-protection.locked.content")
                 .replace("{reason}", reason)
-                .replace("{unlock_time}", FormatUtil.formatTimeAgo(config.getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
+                .replace("{unlock_time}", FormatUtil.formatTimeAgo(config.playerProtection().getPlayerProtectionLockDurationMinutes() * 60 * 1000L));
 
         String fullMessage = title + "\n" + content;
         broadcastToAdmins(fullMessage);
@@ -138,11 +138,11 @@ public final class NotificationService {
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
             String playerMessage = plugin.getMessage("player-protection.locked.player-message")
-                    .replace("{minutes}", String.valueOf(config.getPlayerProtectionLockDurationMinutes()));
+                    .replace("{minutes}", String.valueOf(config.playerProtection().getPlayerProtectionLockDurationMinutes()));
             MessageHelper.sendMessage(player, playerMessage);
         }
 
-        discordNotifier.sendLockedEvent(playerId, reason, config.getPlayerProtectionLockDurationMinutes());
+        discordNotifier.sendLockedEvent(playerId, reason, config.playerProtection().getPlayerProtectionLockDurationMinutes());
     }
 
     /**

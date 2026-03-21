@@ -69,7 +69,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
             }
         }
 
-        int entriesPerPage = config.getBaltopEntriesPerPage();
+        int entriesPerPage = config.baltop().getBaltopEntriesPerPage();
         List<RankEntry> top = baltopManager.getTopRank(page * entriesPerPage);
 
         if (top.isEmpty()) {
@@ -247,7 +247,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
      * [SYNC-BAL-007] Formats balance based on config.
      */
     private String formatBalance(double balance) {
-        String format = config.getBaltopFormat();
+        String format = config.baltop().getBaltopFormat();
         return switch (format.toLowerCase()) {
             case "smart" -> baltopManager.formatNumberSmart(balance);
             case "abbreviated" -> baltopManager.formatNumberAbbreviated(balance);
@@ -260,7 +260,7 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             List<String> pages = new ArrayList<>();
 
-            int entriesPerPage = config.getBaltopEntriesPerPage();
+            int entriesPerPage = config.baltop().getBaltopEntriesPerPage();
             int totalPages = Math.max(1, (baltopManager.getTotalPlayers() + entriesPerPage - 1) / entriesPerPage);
             for (int i = 1; i <= Math.min(totalPages, 10); i++) {
                 pages.add(String.valueOf(i));

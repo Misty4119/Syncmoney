@@ -124,29 +124,33 @@ public final class DatabaseManager implements AutoCloseable {
     public DatabaseManager(Plugin plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
         this.config = config;
-        this.databaseType = config.getDatabaseType();
+        this.databaseType = config.database().getDatabaseType();
         this.debug = config.isDebug();
 
         if ("mysql".equals(databaseType)) {
+            createDatabaseIfNotExists();
+        } else if ("postgresql".equals(databaseType)) {
             createDatabaseIfNotExists();
         }
 
         HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(buildJdbcUrl());
-        hikariConfig.setUsername(config.getDatabaseUsername());
-        hikariConfig.setPassword(config.getDatabasePassword());
-        hikariConfig.setMaximumPoolSize(config.getDatabasePoolSize());
-        hikariConfig.setMinimumIdle(config.getDatabaseMinimumIdle());
-        hikariConfig.setConnectionTimeout(config.getDatabaseConnectionTimeout());
-        hikariConfig.setMaxLifetime(config.getDatabaseMaxLifetime());
-        hikariConfig.setIdleTimeout(config.getDatabaseIdleTimeout());
+        hikariConfig.setUsername(config.database().getDatabaseUsername());
+        hikariConfig.setPassword(config.database().getDatabasePassword());
+        hikariConfig.setMaximumPoolSize(config.database().getDatabasePoolSize());
+        hikariConfig.setMinimumIdle(config.database().getDatabaseMinimumIdle());
+        hikariConfig.setConnectionTimeout(config.database().getDatabaseConnectionTimeout());
+        hikariConfig.setMaxLifetime(config.database().getDatabaseMaxLifetime());
+        hikariConfig.setIdleTimeout(config.database().getDatabaseIdleTimeout());
         hikariConfig.setPoolName("Syncmoney-HikariCP");
 
         if ("mysql".equals(databaseType)) {
+            hikariConfig.setDriverClassName("com.mysql.cj.jdbc.Driver");
             hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
             hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
             hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         } else if ("postgresql".equals(databaseType)) {
+            hikariConfig.setDriverClassName("org.postgresql.Driver");
             hikariConfig.addDataSourceProperty("prepareThreshold", "1");
             hikariConfig.addDataSourceProperty("cacheMode", "PREPARE");
         }
@@ -154,7 +158,7 @@ public final class DatabaseManager implements AutoCloseable {
         this.dataSource = new HikariDataSource(hikariConfig);
 
         initializeSchema();
-        plugin.getLogger().fine("Database '" + config.getDatabaseName() + "' ready (type: " + databaseType + ").");
+        plugin.getLogger().fine("Database '" + config.database().getDatabaseName() + "' ready (type: " + databaseType + ").");
     }
 
     /**
@@ -172,46 +176,95 @@ public final class DatabaseManager implements AutoCloseable {
     }
 
     /**
-     * Create database if it does not exist (MySQL only).
+     * Create database if it does not exist (MySQL and PostgreSQL).
+     * Database name is validated against a strict pattern to prevent SQL injection.
      */
     private void createDatabaseIfNotExists() {
-        String baseUrl = String.format("jdbc:mysql://%s:%d",
-                config.getDatabaseHost(),
-                config.getDatabasePort());
+        String host = config.database().getDatabaseHost();
+        int port = config.database().getDatabasePort();
+        String dbName = config.database().getDatabaseName();
+
+        if (!isValidDatabaseName(dbName)) {
+            plugin.getLogger().warning("Invalid database name '" + dbName + "'. "
+                    + "Database name must match pattern [a-zA-Z0-9_]{1,63} and is not empty.");
+            return;
+        }
 
         try {
             HikariConfig tempConfig = new HikariConfig();
-            tempConfig.setJdbcUrl(baseUrl);
-            tempConfig.setUsername(config.getDatabaseUsername());
-            tempConfig.setPassword(config.getDatabasePassword());
             tempConfig.setPoolName("Syncmoney-TempDB");
 
-            try (HikariDataSource tempDs = new HikariDataSource(tempConfig);
-                    Connection conn = tempDs.getConnection();
-                    java.sql.Statement stmt = conn.createStatement()) {
+            if ("mysql".equals(databaseType)) {
+                String baseUrl = String.format("jdbc:mysql://%s:%d", host, port);
+                tempConfig.setJdbcUrl(baseUrl);
+                tempConfig.setUsername(config.database().getDatabaseUsername());
+                tempConfig.setPassword(config.database().getDatabasePassword());
 
-                String createDbSql = String.format(
-                        "CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
-                        config.getDatabaseName());
-                stmt.executeUpdate(createDbSql);
-                debug("Database '" + config.getDatabaseName() + "' ensured to exist.");
+                try (HikariDataSource tempDs = new HikariDataSource(tempConfig);
+                        Connection conn = tempDs.getConnection();
+                        java.sql.Statement stmt = conn.createStatement()) {
+
+                    String escaped = dbName.replace("`", "``");
+                    String createDbSql = String.format(
+                            "CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+                            escaped);
+                    stmt.executeUpdate(createDbSql);
+                    debug("Database '" + dbName + "' ensured to exist (MySQL).");
+                }
+            } else if ("postgresql".equals(databaseType)) {
+                String baseUrl = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
+                tempConfig.setJdbcUrl(baseUrl);
+                tempConfig.setUsername(config.database().getDatabaseUsername());
+                tempConfig.setPassword(config.database().getDatabasePassword());
+                tempConfig.setDriverClassName("org.postgresql.Driver");
+
+                try (HikariDataSource tempDs = new HikariDataSource(tempConfig);
+                        Connection conn = tempDs.getConnection();
+                        java.sql.Statement stmt = conn.createStatement()) {
+
+                    String escaped = dbName.replace("\"", "\"\"");
+                    String checkDbSql = String.format(
+                            "SELECT 1 FROM pg_database WHERE datname = '%s'",
+                            escaped);
+                    try (ResultSet rs = stmt.executeQuery(checkDbSql)) {
+                        if (!rs.next()) {
+                            String createDbSql = String.format("CREATE DATABASE \"%s\"", escaped);
+                            stmt.executeUpdate(createDbSql);
+                            debug("Database '" + dbName + "' created (PostgreSQL).");
+                        } else {
+                            debug("Database '" + dbName + "' already exists (PostgreSQL).");
+                        }
+                    }
+                }
             }
         } catch (SQLException e) {
             plugin.getLogger().warning("Failed to create database: " + e.getMessage());
         }
     }
 
+    /**
+     * Validates database name against safe identifier rules.
+     * MySQL and PostgreSQL both support: letters, digits, underscore, max 63 chars.
+     * Prevents SQL injection via identifier quoting abuse.
+     */
+    private boolean isValidDatabaseName(String name) {
+        if (name == null || name.isEmpty() || name.length() > 63) {
+            return false;
+        }
+        return name.matches("^[a-zA-Z_][a-zA-Z0-9_]*$");
+    }
+
     private String buildJdbcUrl() {
         if ("postgresql".equals(databaseType)) {
             return String.format("jdbc:postgresql://%s:%d/%s",
-                    config.getDatabaseHost(),
-                    config.getDatabasePort(),
-                    config.getDatabaseName());
+                    config.database().getDatabaseHost(),
+                    config.database().getDatabasePort(),
+                    config.database().getDatabaseName());
         }
         return String.format("jdbc:mysql://%s:%d/%s",
-                config.getDatabaseHost(),
-                config.getDatabasePort(),
-                config.getDatabaseName());
+                config.database().getDatabaseHost(),
+                config.database().getDatabasePort(),
+                config.database().getDatabaseName());
     }
 
     /**

@@ -341,7 +341,7 @@ public final class EconomyFacade {
             }
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
             var cbResult = circuitBreaker.checkTransaction(uuid, amount, source);
             if (!cbResult.allowed()) {
                 plugin.getLogger().warning("Deposit rejected by CircuitBreaker: " + cbResult.reason() + " for " + uuid);
@@ -362,7 +362,7 @@ public final class EconomyFacade {
             BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
             long currentVersion = (existing != null) ? existing.version() : 0L;
 
-            boolean skipGuardForLocalMode = isLocalMode && !config.isPlayerProtectionEnabledInLocalMode();
+            boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
             boolean skipGuard = skipGuardForLocalMode
                     || source == EconomyEvent.EventSource.ADMIN_GIVE
                     || source == EconomyEvent.EventSource.ADMIN_SET
@@ -370,12 +370,12 @@ public final class EconomyFacade {
 
             boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
                     || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
-            if (isLocalMode && isVaultSource && config.isPlayerProtectionVaultRelaxedThreshold()) {
+            if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
                 skipGuard = true;
             }
 
             if (isLocalMode && !skipGuard) {
-                List<String> whitelist = config.getPlayerProtectionVaultBypassWhitelist();
+                List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
                 if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
                     skipGuard = true;
                 }
@@ -442,7 +442,7 @@ public final class EconomyFacade {
         }
 
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
             circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
         }
 
@@ -483,7 +483,7 @@ public final class EconomyFacade {
             }
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
             var cbResult = circuitBreaker.checkTransaction(uuid, amount.negate(), source);
             if (!cbResult.allowed()) {
                 plugin.getLogger().warning("Withdraw rejected by CircuitBreaker: " + cbResult.reason() + " for " + uuid);
@@ -507,7 +507,7 @@ public final class EconomyFacade {
             BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
             long currentVersion = (existing != null) ? existing.version() : 0L;
 
-            boolean skipGuardForLocalMode = isLocalMode && !config.isPlayerProtectionEnabledInLocalMode();
+            boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
             boolean skipGuard = skipGuardForLocalMode
                     || source == EconomyEvent.EventSource.ADMIN_GIVE
                     || source == EconomyEvent.EventSource.ADMIN_SET
@@ -515,12 +515,12 @@ public final class EconomyFacade {
 
             boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
                     || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
-            if (isLocalMode && isVaultSource && config.isPlayerProtectionVaultRelaxedThreshold()) {
+            if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
                 skipGuard = true;
             }
 
             if (isLocalMode && !skipGuard) {
-                List<String> whitelist = config.getPlayerProtectionVaultBypassWhitelist();
+                List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
                 if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
                     skipGuard = true;
                 }
@@ -597,7 +597,7 @@ public final class EconomyFacade {
                     + ". Total dropped: " + droppedEventCount.get());
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
             circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
         }
 
@@ -614,7 +614,7 @@ public final class EconomyFacade {
             return null;
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled()) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
             var cbFrom = circuitBreaker.checkTransaction(fromUuid, amount.negate(), EconomyEvent.EventSource.PLAYER_TRANSFER);
             if (!cbFrom.allowed()) {
                 plugin.getLogger().warning("Atomic transfer rejected by CircuitBreaker (from): " + cbFrom.reason());
@@ -630,7 +630,7 @@ public final class EconomyFacade {
         CacheManager.TransferResult result = cacheManager.atomicTransfer(fromUuid, toUuid, amount);
 
         if (result != null) {
-            if (circuitBreaker != null && config.isCircuitBreakerEnabled()) {
+            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
                 circuitBreaker.onTransactionComplete(fromUuid, result.fromNewBalance.add(amount), result.fromNewBalance);
                 circuitBreaker.onTransactionComplete(toUuid, result.toNewBalance.subtract(amount), result.toNewBalance);
             }
@@ -655,7 +655,7 @@ public final class EconomyFacade {
             return BigDecimal.valueOf(-1);
         }
 
-        if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
             var cbFrom = circuitBreaker.checkTransaction(fromUuid, amount.negate(), source);
             if (!cbFrom.allowed()) {
                 plugin.getLogger().warning("Atomic transfer rejected by CircuitBreaker (from): " + cbFrom.reason());
@@ -700,7 +700,7 @@ public final class EconomyFacade {
                 playerTransactionGuard.checkAndLockReceiverForTransfer(toUuid, amount);
             }
 
-            if (circuitBreaker != null && config.isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
                 BigDecimal fromBalance = getBalance(fromUuid);
                 BigDecimal toBalance = getBalance(toUuid);
                 circuitBreaker.onTransactionComplete(fromUuid, fromBalance.add(amount), fromBalance);
@@ -778,6 +778,160 @@ public final class EconomyFacade {
      */
     public double withdraw(UUID uuid, double amount, EconomyEvent.EventSource source) {
         return withdraw(uuid, NumericUtil.normalize(amount), source).doubleValue();
+    }
+
+    /**
+     * [SYNC-ECO-110] Plugin deposit - third-party plugins directly call this, bypassing Vault pairing.
+     * Uses atomic_transfer.lua for atomicity and skips PlayerTransactionGuard VAULT relaxation thresholds.
+     *
+     * [AsyncScheduler] Must be called from async thread.
+     *
+     * @param uuid Player UUID
+     * @param amount Deposit amount (positive)
+     * @param pluginName Calling plugin name (for audit log)
+     * @return New balance after transaction, -1 on failure
+     */
+    public BigDecimal pluginDeposit(UUID uuid, BigDecimal amount, String pluginName) {
+        if (uuid == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            plugin.getLogger().warning("Plugin deposit rejected: invalid parameters");
+            return BigDecimal.valueOf(-1);
+        }
+        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
+            plugin.getLogger().warning("Plugin deposit rejected: migration in progress");
+            return BigDecimal.valueOf(-1);
+        }
+
+        String playerName = resolvePlayerName(uuid);
+        if (SyncmoneyEventBus.isInitialized()) {
+            AsyncPreTransactionEvent preEvent = new AsyncPreTransactionEvent(
+                    uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
+                    amount, getBalance(uuid), EconomyEvent.EventSource.PLUGIN_DEPOSIT.name(),
+                    null, null, null);
+            SyncmoneyEventBus.getInstance().callEvent(preEvent);
+            if (preEvent.isCancelled()) {
+                plugin.getLogger().warning("Plugin deposit rejected by AsyncPreTransactionEvent: " + preEvent.getCancelReason());
+                return BigDecimal.valueOf(-1);
+            }
+        }
+
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+            var cbResult = circuitBreaker.checkTransaction(uuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT);
+            if (!cbResult.allowed()) {
+                plugin.getLogger().warning("Plugin deposit rejected by CircuitBreaker: " + cbResult.reason());
+                return BigDecimal.valueOf(-1);
+            }
+        }
+
+        BigDecimal newBalance = deposit(uuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT);
+
+        if (newBalance.compareTo(BigDecimal.ZERO) > 0 && circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+            circuitBreaker.onTransactionComplete(uuid, newBalance.subtract(amount), newBalance);
+        }
+
+        return newBalance;
+    }
+
+    /**
+     * [SYNC-ECO-111] Plugin withdraw - third-party plugins directly call this, bypassing Vault pairing.
+     * Uses atomic_transfer.lua for atomicity and skips PlayerTransactionGuard VAULT relaxation thresholds.
+     *
+     * [AsyncScheduler] Must be called from async thread.
+     *
+     * @param uuid Player UUID
+     * @param amount Withdrawal amount (positive)
+     * @param pluginName Calling plugin name (for audit log)
+     * @return New balance after transaction, -1 on failure
+     */
+    public BigDecimal pluginWithdraw(UUID uuid, BigDecimal amount, String pluginName) {
+        if (uuid == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            plugin.getLogger().warning("Plugin withdraw rejected: invalid parameters");
+            return BigDecimal.valueOf(-1);
+        }
+        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
+            plugin.getLogger().warning("Plugin withdraw rejected: migration in progress");
+            return BigDecimal.valueOf(-1);
+        }
+
+        String playerName = resolvePlayerName(uuid);
+        if (SyncmoneyEventBus.isInitialized()) {
+            AsyncPreTransactionEvent preEvent = new AsyncPreTransactionEvent(
+                    uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
+                    amount, getBalance(uuid), EconomyEvent.EventSource.PLUGIN_WITHDRAW.name(),
+                    null, null, null);
+            SyncmoneyEventBus.getInstance().callEvent(preEvent);
+            if (preEvent.isCancelled()) {
+                plugin.getLogger().warning("Plugin withdraw rejected by AsyncPreTransactionEvent: " + preEvent.getCancelReason());
+                return BigDecimal.valueOf(-1);
+            }
+        }
+
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+            var cbResult = circuitBreaker.checkTransaction(uuid, amount.negate(), EconomyEvent.EventSource.PLUGIN_WITHDRAW);
+            if (!cbResult.allowed()) {
+                plugin.getLogger().warning("Plugin withdraw rejected by CircuitBreaker: " + cbResult.reason());
+                return BigDecimal.valueOf(-1);
+            }
+        }
+
+        BigDecimal newBalance = withdraw(uuid, amount, EconomyEvent.EventSource.PLUGIN_WITHDRAW);
+
+        if (newBalance.compareTo(BigDecimal.ZERO) >= 0 && circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+            circuitBreaker.onTransactionComplete(uuid, newBalance.add(amount), newBalance);
+        }
+
+        return newBalance;
+    }
+
+    /**
+     * [SYNC-ECO-112] Plugin atomic transfer - direct transfer between two players for third-party plugins.
+     * Calls CacheManager.atomicTransfer directly, does not report PLAYER_TRANSFER event to circuitBreaker limits.
+     *
+     * [AsyncScheduler] Must be called from async thread.
+     *
+     * @param fromUuid Sender UUID
+     * @param toUuid Receiver UUID
+     * @param amount Transfer amount
+     * @param pluginName Calling plugin name
+     * @return TransferResult (with both new balances and versions), null on failure
+     */
+    public CacheManager.TransferResult pluginAtomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount, String pluginName) {
+        if (fromUuid == null || toUuid == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: invalid parameters");
+            return null;
+        }
+        if (isPlayerLocked(fromUuid) || isPlayerLocked(toUuid)) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: one or both players are locked");
+            return null;
+        }
+        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: migration in progress");
+            return null;
+        }
+
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+            var cbFrom = circuitBreaker.checkTransaction(fromUuid, amount.negate(), EconomyEvent.EventSource.PLUGIN_WITHDRAW);
+            if (!cbFrom.allowed()) {
+                plugin.getLogger().warning("Plugin atomic transfer rejected by CircuitBreaker (from): " + cbFrom.reason());
+                return null;
+            }
+            var cbTo = circuitBreaker.checkTransaction(toUuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT);
+            if (!cbTo.allowed()) {
+                plugin.getLogger().warning("Plugin atomic transfer rejected by CircuitBreaker (to): " + cbTo.reason());
+                return null;
+            }
+        }
+
+        CacheManager.TransferResult result = cacheManager.atomicTransfer(fromUuid, toUuid, amount);
+
+        if (result != null) {
+            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
+                circuitBreaker.onTransactionComplete(fromUuid, result.fromNewBalance.add(amount), result.fromNewBalance);
+                circuitBreaker.onTransactionComplete(toUuid, result.toNewBalance.subtract(amount), result.toNewBalance);
+            }
+            plugin.getLogger().info("Plugin atomic transfer completed: " + fromUuid + " -> " + toUuid + " : " + amount + " by " + pluginName);
+        }
+
+        return result;
     }
 
     /**

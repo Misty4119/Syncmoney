@@ -80,7 +80,7 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
                 plugin.getMessage("shadow.enabled.running") : plugin.getMessage("shadow.enabled.stopped"));
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.status-running"), runningVars);
 
-        String target = plugin.getSyncmoneyConfig().getShadowSyncTarget();
+        String target = plugin.getSyncmoneyConfig().shadowSync().getShadowSyncTarget();
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.sync-target")
                 .replace("{target}", target));
 
@@ -278,7 +278,7 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
         int exported = shadowSyncTask.exportHistory(playerUuid, startDate, endDate);
 
         if (exported > 0) {
-            String jsonlPath = plugin.getSyncmoneyConfig().getShadowSyncStorageJsonlPath();
+            String jsonlPath = plugin.getSyncmoneyConfig().shadowSync().getShadowSyncStorageJsonlPath();
             Map<String, String> vars = new HashMap<>();
             vars.put("count", String.valueOf(exported));
             vars.put("path", jsonlPath);

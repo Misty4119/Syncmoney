@@ -68,10 +68,10 @@ public class CrossServerStatsApiHandler {
      * GET /api/economy/cross-server-stats
      *
      * Returns aggregated statistics from all configured nodes:
-     * - totalSupply: Sum of all nodes' total supply
-     * - totalPlayers: Sum of all nodes' total players
+     * - totalSupply: Global total supply (from first online node)
+     * - totalPlayers: Total registered players from database (from first online node)
      * - totalOnlinePlayers: Sum of all nodes' online players
-     * - todayTransactions: Sum of all nodes' today's transactions
+     * - todayTransactions: Global transaction count (from first online node)
      * - nodesStatus: Map of node URL to online player count
      * - topPlayers: Aggregated leaderboard across all nodes
      */
@@ -93,12 +93,29 @@ public class CrossServerStatsApiHandler {
 
             AggregatedStats aggregated = aggregateStats(allNodeStats);
 
+            
+            List<Map<String, Object>> topPlayers = fetchAndAggregateTopPlayers(nodes);
+
             cacheStats(allNodeStats);
 
-            sendJson(exchange, ApiResponse.success(aggregated.toMap()));
+            
+            Map<String, Object> response = aggregated.toMap();
+            response.put("topPlayers", topPlayers);
+
+            sendJson(exchange, ApiResponse.success(response));
 
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to fetch cross-server stats: " + e.getMessage());
+
+            
+            Map<String, Object> cachedResponse = tryGetCachedStats();
+            if (cachedResponse != null) {
+                cachedResponse.put("stale", true);
+                cachedResponse.put("error", "Using cached data due to refresh failure: " + e.getMessage());
+                sendJson(exchange, ApiResponse.success(cachedResponse));
+                return;
+            }
+
             sendError(exchange, 500, "CROSS_SERVER_STATS_ERROR",
                     "Failed to fetch cross-server statistics: " + e.getMessage());
         }
@@ -298,7 +315,13 @@ public class CrossServerStatsApiHandler {
                 todayTransactions = ((Number) todayTxObj).intValue();
             }
 
-            return new NodeStats(nodeName, nodeUrl, totalSupply, totalPlayers, 0, todayTransactions, true);
+            Object onlinePlayersObj = responseData.get("onlinePlayers");
+            int onlinePlayers = 0;
+            if (onlinePlayersObj instanceof Number) {
+                onlinePlayers = ((Number) onlinePlayersObj).intValue();
+            }
+
+            return new NodeStats(nodeName, nodeUrl, totalSupply, totalPlayers, onlinePlayers, todayTransactions, true);
 
         } catch (Exception e) {
             plugin.getLogger().fine("Failed to parse stats from " + nodeName + ": " + e.getMessage());
@@ -347,6 +370,15 @@ public class CrossServerStatsApiHandler {
 
     /**
      * Aggregate statistics from all nodes.
+     *
+     * IMPORTANT: These fields are GLOBAL (shared across all nodes via same database)
+     * and should NOT be summed - only the first online node's value is used:
+     * - totalSupply: Global money supply (all nodes share same DB)
+     * - totalPlayers: Total registered players from database (all players with balance > 0)
+     * - todayTransactions: Global transaction count
+     *
+     * This field IS summed across nodes:
+     * - totalOnlinePlayers: Sum of online players on each node (this is the only correct sum)
      */
     private AggregatedStats aggregateStats(Map<String, NodeStats> allNodeStats) {
         double totalSupply = 0;
@@ -355,19 +387,31 @@ public class CrossServerStatsApiHandler {
         int todayTransactions = 0;
         Map<String, Integer> nodesStatus = new LinkedHashMap<>();
 
+        
+        
+        boolean gotGlobalStats = false;
+
         for (NodeStats stats : allNodeStats.values()) {
-            totalSupply += stats.totalSupply();
-            totalPlayers += stats.totalPlayers();
+            
             totalOnlinePlayers += stats.onlinePlayers();
-            todayTransactions += stats.todayTransactions();
             nodesStatus.put(stats.nodeName(), stats.onlinePlayers());
+
+            
+            
+            if (!gotGlobalStats && stats.online()) {
+                totalSupply = stats.totalSupply();
+                totalPlayers = stats.totalPlayers();
+                todayTransactions = stats.todayTransactions();
+                gotGlobalStats = true;
+            }
         }
 
-        if (totalOnlinePlayers == 0 && !allNodeStats.isEmpty()) {
-            totalOnlinePlayers = allNodeStats.values().stream()
-                    .filter(NodeStats::online)
-                    .mapToInt(s -> s.onlinePlayers())
-                    .sum();
+        
+        if (!gotGlobalStats && !allNodeStats.isEmpty()) {
+            NodeStats anyStats = allNodeStats.values().iterator().next();
+            totalSupply = anyStats.totalSupply();
+            totalPlayers = anyStats.totalPlayers();
+            todayTransactions = anyStats.todayTransactions();
         }
 
         return new AggregatedStats(totalSupply, totalPlayers, totalOnlinePlayers, todayTransactions, nodesStatus);
@@ -390,6 +434,28 @@ public class CrossServerStatsApiHandler {
     }
 
     /**
+     * Fetch and aggregate top players from all nodes.
+     */
+    private List<Map<String, Object>> fetchAndAggregateTopPlayers(List<SyncmoneyConfig.NodeConfig> nodes) {
+        List<TopPlayerEntry> allPlayers = fetchAllNodeTopPlayers(nodes);
+        allPlayers.sort((a, b) -> Double.compare(b.balance(), a.balance()));
+
+        List<Map<String, Object>> rankedPlayers = new ArrayList<>();
+        int rank = 1;
+        for (TopPlayerEntry entry : allPlayers) {
+            if (rank > 100) break; 
+            Map<String, Object> player = new LinkedHashMap<>();
+            player.put("rank", rank);
+            player.put("uuid", entry.uuid());
+            player.put("balance", entry.balance());
+            player.put("serverName", entry.serverName());
+            rankedPlayers.add(player);
+            rank++;
+        }
+        return rankedPlayers;
+    }
+
+    /**
      * Cache node stats for later use (e.g., top players).
      */
     private void cacheStats(Map<String, NodeStats> allNodeStats) {
@@ -399,14 +465,130 @@ public class CrossServerStatsApiHandler {
     }
 
     /**
-     * Get cached top players.
+     * Try to get cached stats when live fetch fails.
+     * Returns a map with aggregated stats from cache, or null if cache is empty.
+     */
+    private Map<String, Object> tryGetCachedStats() {
+        if (statsCache.isEmpty()) {
+            return null;
+        }
+
+        
+        if (System.currentTimeMillis() - lastRefreshTime > 300_000L) {
+            return null;
+        }
+
+        try {
+            
+            AggregatedStats aggregated = aggregateStats(statsCache);
+
+            Map<String, Object> response = aggregated.toMap();
+
+            
+            List<TopPlayerEntry> cachedTop = getCachedTopPlayers();
+            if (cachedTop != null && !cachedTop.isEmpty()) {
+                List<Map<String, Object>> rankedPlayers = new ArrayList<>();
+                int rank = 1;
+                for (TopPlayerEntry entry : cachedTop) {
+                    if (rank > 100) break;
+                    Map<String, Object> player = new LinkedHashMap<>();
+                    player.put("rank", rank);
+                    player.put("uuid", entry.uuid());
+                    player.put("balance", entry.balance());
+                    player.put("serverName", entry.serverName());
+                    rankedPlayers.add(player);
+                    rank++;
+                }
+                response.put("topPlayers", rankedPlayers);
+            } else {
+                response.put("topPlayers", Collections.emptyList());
+            }
+
+            return response;
+        } catch (Exception e) {
+            plugin.getLogger().fine("Failed to build cached stats response: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Get cached top players from stats cache.
      */
     private List<TopPlayerEntry> getCachedTopPlayers() {
         if (System.currentTimeMillis() - lastRefreshTime > cacheTimeoutMs) {
             return null;
         }
 
-        return null;
+        
+        if (statsCache.isEmpty()) {
+            return null;
+        }
+
+        
+        List<TopPlayerEntry> cachedTop = new ArrayList<>();
+        for (NodeStats stats : statsCache.values()) {
+            if (stats.online()) {
+                
+                try {
+                    String nodeUrl = stats.nodeUrl();
+                    if (nodeUrl != null && !nodeUrl.isEmpty()) {
+                        List<TopPlayerEntry> nodeTop = fetchNodeTopPlayers(nodeUrl, stats.nodeName());
+                        cachedTop.addAll(nodeTop);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().fine("Failed to fetch cached top from node: " + e.getMessage());
+                }
+            }
+        }
+
+        return cachedTop.isEmpty() ? null : cachedTop;
+    }
+
+    /**
+     * Fetch top players from a specific node URL.
+     */
+    private List<TopPlayerEntry> fetchNodeTopPlayers(String nodeUrl, String nodeName) {
+        List<TopPlayerEntry> players = new ArrayList<>();
+
+        try {
+            
+            SyncmoneyConfig.NodeConfig nodeConfig = null;
+            for (SyncmoneyConfig.NodeConfig config : config.getNodes()) {
+                if (config.url.equals(nodeUrl)) {
+                    nodeConfig = config;
+                    break;
+                }
+            }
+
+            if (nodeConfig == null) {
+                return players;
+            }
+
+            String apiKey = decryptApiKey(nodeConfig.apiKey);
+            String topUrl = buildNodeUrl(nodeUrl, "/api/economy/top");
+
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofMillis(CONNECT_TIMEOUT_MS))
+                    .build();
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(topUrl))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == HTTP_OK) {
+                players = parseNodeTopPlayers(nodeName, response.body());
+            }
+
+        } catch (Exception e) {
+            plugin.getLogger().fine("Failed to fetch top from " + nodeName + ": " + e.getMessage());
+        }
+
+        return players;
     }
 
     /**

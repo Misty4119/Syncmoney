@@ -47,7 +47,7 @@ public class BreakerManager {
 
         this.discordNotifier = new DiscordWebhookNotifier(plugin, config);
 
-        if (config.isPlayerProtectionEnabled()) {
+        if (config.playerProtection().isPlayerProtectionEnabled()) {
             this.notificationService = new NotificationService(plugin, config);
             this.playerTransactionGuard = new PlayerTransactionGuard(plugin, config, notificationService, redisManager);
 

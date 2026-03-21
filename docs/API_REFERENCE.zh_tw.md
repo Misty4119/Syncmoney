@@ -1,8 +1,8 @@
 # Syncmoney API 參考文檔
 
-Syncmoney v1.1.0 完整 API 參考文檔
+Syncmoney v1.1.1 完整 API 參考文檔
 
-> **最後更新**：2026-03-19
+> **最後更新**：2026-03-21
 
 ---
 
@@ -84,7 +84,7 @@ API 使用基於權限的授權系統：
   "data": { ... },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -100,7 +100,7 @@ API 使用基於權限的授權系統：
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -119,7 +119,7 @@ API 使用基於權限的授權系統：
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -156,7 +156,7 @@ API 使用基於權限的授權系統：
   "success": true,
   "data": {
     "status": "ok",
-    "version": "1.1.0"
+    "version": "1.1.1"
   }
 }
 ```
@@ -176,7 +176,7 @@ API 使用基於權限的授權系統：
   "data": {
     "plugin": {
       "name": "Syncmoney",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "mode": "SYNC",
       "uptime": 3600000
     },
@@ -379,6 +379,7 @@ API 使用基於權限的授權系統：
   "data": {
     "http://192.168.1.105:8080": {
       "serverName": "Survival-1",
+      "serverId": "survival-1",
       "onlinePlayers": 42,
       "maxPlayers": 100,
       "economyMode": "SYNC",
@@ -388,6 +389,16 @@ API 使用基於權限的授權系統：
   }
 }
 ```
+
+| 欄位 | 類型 | 說明 |
+|-------|------|------|
+| `serverName` | String | 伺服器顯示名稱 |
+| `serverId` | String | 伺服器唯一識別碼 |
+| `onlinePlayers` | Integer | 目前線上玩家數 |
+| `maxPlayers` | Integer | 最大玩家容量 |
+| `economyMode` | String | 經濟模式（LOCAL、SYNC、CMI 等） |
+| `status` | String | 連線狀態（online/offline/unknown/disabled） |
+| `lastPing` | Long | 最後成功 ping 的時間戳 |
 
 **需要權限：** `syncmoney.web.nodes.view`
 
@@ -472,7 +483,9 @@ API 使用基於權限的授權系統：
 {
   "success": true,
   "data": {
-    "message": "Node deleted successfully"
+    "deleted": true,
+    "index": 0,
+    "deletedUrl": "http://192.168.1.105:8080"
   }
 }
 ```
@@ -501,6 +514,127 @@ API 使用基於權限的授權系統：
 ```
 
 **需要權限：** `syncmoney.web.nodes.view` 或 `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/{index}/proxy
+
+將 HTTP 請求代理至遠端節點（僅中央模式）。允許中央節點將 API 請求轉發到其他遊戲伺服器節點。
+
+**參數：**
+- `index`（路徑，必填）— 要代理請求的節點索引
+
+**請求 Body：**
+```json
+{
+  "method": "GET",
+  "path": "/api/economy/stats",
+  "body": null
+}
+```
+
+**支援的方法：** `GET`、`POST`、`PUT`、`PATCH`、`DELETE`
+
+**回應：**
+遠端節點的回應會被直接轉發。HTTP 狀態碼和 body 與目標節點的回應相同。
+
+**需要權限：** `syncmoney.web.nodes.view` 或 `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/sync
+
+將設定變更推送至所有已啟用的節點（僅中央模式）。此端點僅限中央模式使用。
+
+**請求 Body：**
+```json
+{
+  "changes": [
+    { "section": "economy", "key": "pay.max-amount", "value": 100000 },
+    { "section": "messages", "key": "prefix", "value": "[Syncmoney]" }
+  ],
+  "reload": true
+}
+```
+
+| 欄位 | 類型 | 必填 | 說明 |
+|-------|------|------|------|
+| `changes` | Array | 是 | 要套用的設定變更清單 |
+| `changes[].section` | String | 是 | 設定區段（例如 `economy`、`messages`） |
+| `changes[].key` | String | 是 | 設定鍵（支援點標記法） |
+| `changes[].value` | Any | 是 | 新值 |
+| `reload` | Boolean | 否 | 是否在套用後重新載入設定（預設：`true`） |
+
+**回應：**
+```json
+{
+  "success": true,
+  "data": {
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "results": [
+      { "index": 0, "name": "Survival-1", "status": "synced" },
+      { "index": 1, "name": "Factions-1", "status": "failed", "error": "http_403" }
+    ]
+  }
+}
+```
+
+**需要權限：** `syncmoney.web.central`
+
+---
+
+#### POST /api/nodes/{index}/sync
+
+將設定變更推送至指定節點（僅中央模式）。
+
+**參數：**
+- `index`（路徑，必填）— 要同步設定的節點索引
+
+**請求 Body：** 與 `POST /api/nodes/sync` 相同
+
+**回應：**
+```json
+{
+  "success": true,
+  "data": {
+    "applied": 1,
+    "reloaded": true,
+    "changes": ["economy.pay.max-amount=100000"]
+  }
+}
+```
+
+**需要權限：** `syncmoney.web.central`
+
+---
+
+#### POST /api/config/sync
+
+接收來自中央節點的設定同步（節點端點）。此端點用於節點接收來自中央管理伺服器的設定。
+
+**請求 Body：**
+```json
+{
+  "changes": [
+    { "section": "economy", "key": "pay.max-amount", "value": 100000 }
+  ],
+  "reload": true
+}
+```
+
+**回應：**
+```json
+{
+  "success": true,
+  "data": {
+    "applied": 1,
+    "reloaded": true,
+    "changes": ["economy.pay.max-amount=100000"]
+  }
+}
+```
 
 ---
 
@@ -1041,7 +1175,7 @@ Authorization: Bearer <your-api-key>
 
 ### Server-Sent Events (SSE) — 推薦
 
-連線至 `http://<host>:<port>/sse` 接收伺服器推送通知。**這是 v1.1.0 中推薦的即時更新方法。**
+連線至 `http://<host>:<port>/sse` 接收伺服器推送通知。**這是 v1.1.1 中推薦的即時更新方法。**
 
 **認證：** 透過查詢參數或 Authorization 請求頭使用 API 金鑰。
 
@@ -1078,7 +1212,7 @@ eventSource.onerror = (error) => {
 
 ### WebSocket
 
-> **v1.1.0 狀態：** WebSocket 支援**實驗性且不完整**。`/ws` 端點接受升級請求，但底層訊息分派尚未完全實作。**在生產環境中使用 SSE（`/sse`）以獲得可靠的即時更新。**
+> **v1.1.1 狀態：** WebSocket 支援**實驗性且不完整**。`/ws` 端點接受升級請求，但底層訊息分派尚未完全實作。**在生產環境中使用 SSE（`/sse`）以獲得可靠的即時更新。**
 
 連線至 `ws://<host>:<port>/ws` 接收即時更新。
 

@@ -82,7 +82,7 @@ public class CommandServiceManager {
      * Initialize all commands and register them.
      */
     public void initialize() {
-        this.cooldownManager = new CooldownManager(plugin, config.getPayCooldownSeconds());
+        this.cooldownManager = new CooldownManager(plugin, config.pay().getPayCooldownSeconds());
 
         this.transferLockManager = new TransferLockManager(
                 plugin,
@@ -107,7 +107,7 @@ public class CommandServiceManager {
         this.config = newConfig;
 
         if (cooldownManager != null) {
-            cooldownManager.reload(newConfig.getPayCooldownSeconds());
+            cooldownManager.reload(newConfig.pay().getPayCooldownSeconds());
         }
 
         if (payCommand != null) {
@@ -118,9 +118,9 @@ public class CommandServiceManager {
             moneyCommand.reload(newConfig);
         }
 
-        plugin.getLogger().fine("Command layer reloaded (cooldown=" + newConfig.getPayCooldownSeconds()
-                + "s, minPay=" + newConfig.getPayMinAmount()
-                + ", maxPay=" + newConfig.getPayMaxAmount() + ")");
+        plugin.getLogger().fine("Command layer reloaded (cooldown=" + newConfig.pay().getPayCooldownSeconds()
+                + "s, minPay=" + newConfig.pay().getPayMinAmount()
+                + ", maxPay=" + newConfig.pay().getPayMaxAmount() + ")");
     }
 
     /**
@@ -142,8 +142,8 @@ public class CommandServiceManager {
                 economyFacade,
                 nameResolver,
                 fallbackWrapper,
-                config.getCurrencyName(),
-                config.getDecimalPlaces());
+                config.display().getCurrencyName(),
+                config.display().getDecimalPlaces());
         register("money", moneyCommand, moneyCommand);
 
         this.payCommand = new PayCommand(
@@ -160,8 +160,8 @@ public class CommandServiceManager {
                 economyWriteQueue,
                 pubsubSubscriber,
                 baltopManager,
-                config.getPayMinAmount(),
-                config.getPayMaxAmount(),
+                config.pay().getPayMinAmount(),
+                config.pay().getPayMaxAmount(),
                 config.isPayAllowedInDegraded(),
                 config.isLocalMode());
         register("pay", payCommand, payCommand);
@@ -181,7 +181,7 @@ public class CommandServiceManager {
         BaltopCommand baltopCommand = new BaltopCommand(plugin, config, baltopManager, economyFacade);
         register("baltop", baltopCommand);
 
-        if (config.isCircuitBreakerEnabled() && circuitBreaker != null) {
+        if (config.circuitBreaker().isCircuitBreakerEnabled() && circuitBreaker != null) {
             BreakerCommand breakerCommand = new BreakerCommand(plugin, circuitBreaker);
             syncmoneyRouter.register("breaker", breakerCommand);
         }
@@ -201,7 +201,7 @@ public class CommandServiceManager {
         WebCommand webCommand = new WebCommand(plugin);
         syncmoneyRouter.register("web", webCommand);
 
-        if (config.isShadowSyncEnabled() && shadowSyncTask != null) {
+        if (config.shadowSync().isShadowSyncEnabled() && shadowSyncTask != null) {
             ShadowCommand shadowCommand = new ShadowCommand(plugin, shadowSyncTask);
             syncmoneyRouter.register("shadow", shadowCommand);
         }
@@ -249,13 +249,13 @@ public class CommandServiceManager {
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.monitor"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.econstats"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.reload"));
-            if (config.isCircuitBreakerEnabled()) {
+            if (config.circuitBreaker().isCircuitBreakerEnabled()) {
                 noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.breaker"));
             }
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.admin"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.web"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.test"));
-            if (config.isShadowSyncEnabled()) {
+            if (config.shadowSync().isShadowSyncEnabled()) {
                 noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.shadow"));
             }
             return true;

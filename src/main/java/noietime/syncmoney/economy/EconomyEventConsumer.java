@@ -398,7 +398,7 @@ public final class EconomyEventConsumer implements Runnable {
             updateBaltop(event.playerUuid(), newBalance.doubleValue());
         }
 
-        if (shadowSyncTask != null && config.isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
+        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
             String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
             if (playerName != null) {
                 shadowSyncTask.enqueueSyncEvent(event.playerUuid(), playerName, newBalance);
@@ -428,7 +428,7 @@ public final class EconomyEventConsumer implements Runnable {
             updateBaltop(event.playerUuid(), newBalance.doubleValue());
         }
 
-        if (shadowSyncTask != null && config.isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
+        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
             String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
             if (playerName != null) {
                 shadowSyncTask.enqueueSyncEvent(event.playerUuid(), playerName, newBalance);

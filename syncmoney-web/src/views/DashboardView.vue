@@ -69,6 +69,7 @@ import { useI18n } from 'vue-i18n'
 import { apiClient, type DashboardStats } from '@/api/client'
 import { useSSEStore } from '@/stores/sse'
 import { useNotificationStore } from '@/stores/notification'
+import { useNodesStore } from '@/stores/nodes'
 import { Wallet, Users, ArrowUpDown, TrendingUp, Shield } from 'lucide-vue-next'
 import Card from '@/components/common/Card.vue'
 import StatCard from '@/components/common/StatCard.vue'
@@ -77,6 +78,7 @@ import StatusDot from '@/components/common/StatusDot.vue'
 const { t, locale } = useI18n()
 const ws = useSSEStore()
 const notificationStore = useNotificationStore()
+const nodesStore = useNodesStore()
 
 const loading = ref(true)
 const stats = ref<DashboardStats>({
@@ -88,7 +90,6 @@ const stats = ref<DashboardStats>({
 })
 const lastUpdated = ref<string>('')
 
-
 function debounce<T extends (...args: unknown[]) => unknown>(fn: T, delay: number) {
   let timeoutId: ReturnType<typeof setTimeout>
   return (...args: Parameters<T>) => {
@@ -96,7 +97,6 @@ function debounce<T extends (...args: unknown[]) => unknown>(fn: T, delay: numbe
     timeoutId = setTimeout(() => fn(...args), delay)
   }
 }
-
 
 const debouncedLoadData = debounce(() => {
   loadDashboardData()
@@ -150,12 +150,10 @@ let refreshInterval: ReturnType<typeof setInterval>
 
 async function loadDashboardData() {
   try {
-
     const [statusResponse, economyResponse] = await Promise.allSettled([
       apiClient.get('/api/system/status'),
       apiClient.get('/api/economy/stats')
     ])
-
 
     if (statusResponse.status === 'fulfilled') {
       if (statusResponse.value.data?.success && statusResponse.value.data?.data) {
@@ -169,7 +167,6 @@ async function loadDashboardData() {
       console.error('Failed to load system status:', statusResponse.reason)
     }
 
-
     if (economyResponse.status === 'fulfilled') {
       if (economyResponse.value.data?.success && economyResponse.value.data?.data) {
         const econData = economyResponse.value.data.data
@@ -179,7 +176,6 @@ async function loadDashboardData() {
       }
     } else {
       console.error('Failed to load economy stats:', economyResponse.reason)
-
       stats.value.totalSupply = 'N/A'
     }
 
@@ -197,72 +193,10 @@ function formatCurrency(value: number | string): string {
   return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 2 }).format(value)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await nodesStore.fetchNodes().catch(() => {})
   loadDashboardData()
   refreshInterval = setInterval(loadDashboardData, 5000)
-
-
-
-  ws.on('transaction', (data: unknown) => {
-    const playerName = (data as { playerName?: string; player?: string }).playerName || (data as { player?: string }).player || t('dashboard.unknownPlayer')
-    const amount = String((data as { amount?: number }).amount || 0)
-    const type = String((data as { type?: string }).type || 'UNKNOWN')
-    const amountPrefix = type === 'DEPOSIT' ? '+' : type === 'WITHDRAW' ? '-' : ''
-
-    const displayAmount = amount.startsWith('+') || amount.startsWith('-')
-      ? amount
-      : `${amountPrefix}${amount}`
-
-
-    notificationStore.addTransactionNotification(
-      playerName,
-      amount,
-      type,
-      `${playerName}: ${displayAmount}`
-    )
-    debouncedLoadData()
-  })
-  ws.on('circuit_break', (data: unknown) => {
-    const eventData = data as { state?: string; reason?: string }
-    notificationStore.addBreakerNotification(
-      eventData?.state || 'WARNING',
-      eventData?.reason ? `${t('notification.circuitBreakerAlert')}: ${eventData.reason}` : t('notification.circuitBreakerAlert')
-    )
-    debouncedLoadData()
-  })
-
-
-  ws.on('system', (data: unknown) => {
-    const eventData = data as { type?: string; title?: string; message?: string }
-    const eventType = eventData?.type || 'system_alert'
-
-    switch (eventType) {
-      case 'player_warning':
-        notificationStore.addAlert('warning', eventData?.title || 'Player Warning', eventData?.message || '')
-        break
-      case 'player_locked':
-        notificationStore.addAlert('error', eventData?.title || 'Player Locked', eventData?.message || '')
-        break
-      case 'player_unlocked':
-        notificationStore.addAlert('success', eventData?.title || 'Player Unlocked', eventData?.message || '')
-        break
-      case 'rate_limit':
-        notificationStore.addAlert('warning', eventData?.title || 'Rate Limit Exceeded', eventData?.message || '')
-        break
-      case 'global_lock':
-        notificationStore.addAlert('error', eventData?.title || 'System Locked', eventData?.message || '')
-        break
-      case 'memory_high':
-        notificationStore.addAlert('warning', eventData?.title || 'High Memory', eventData?.message || '')
-        break
-      case 'redis_pool_critical':
-        notificationStore.addAlert('warning', eventData?.title || 'Redis Pool Critical', eventData?.message || '')
-        break
-      default:
-        notificationStore.addAlert('info', eventData?.title || 'System Alert', eventData?.message || '')
-    }
-    debouncedLoadData()
-  })
 
   ws.on('player_join', (data: unknown) => {
     const playerData = data as { playerName?: string }
@@ -278,6 +212,5 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
-
 })
 </script>

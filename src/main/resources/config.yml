@@ -499,7 +499,7 @@ web-admin:
   central-mode: false
 
   # Bundled web version in JAR (update this when releasing new version)
-  bundled-version: "1.1.0"
+  bundled-version: "1.1.1"
 
   # HTTP server configuration
   server:
@@ -507,7 +507,7 @@ web-admin:
     port: 8080
 
   # Central mode: list of game server nodes to manage
-  nodes:
+  nodes: []
     # - name: "Survival Server 1"
     #   url: "http://192.168.1.105:8080"
     #   api-key: "your-api-key-here"

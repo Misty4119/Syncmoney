@@ -80,7 +80,7 @@ public class EconomyApiHandler {
                 Map<String, Object> data = new HashMap<>();
                 data.put("uuid", uuid.toString());
                 data.put("balance", balance);
-                data.put("currencyName", plugin.getSyncmoneyConfig().getCurrencyName());
+                data.put("currencyName", plugin.getSyncmoneyConfig().display().getCurrencyName());
                 sendJson(exchange, ApiResponse.success(data));
             } else {
                 exchange.setStatusCode(503);
@@ -109,7 +109,7 @@ public class EconomyApiHandler {
                 }
                 Map<String, Object> data = new HashMap<>();
                 data.put("topPlayers", topPlayers);
-                data.put("currencyName", plugin.getSyncmoneyConfig().getCurrencyName());
+                data.put("currencyName", plugin.getSyncmoneyConfig().display().getCurrencyName());
                 sendJson(exchange, ApiResponse.success(data));
             } catch (Exception e) {
                 plugin.getLogger().warning("Failed to get top players: " + e.getMessage());
@@ -149,7 +149,7 @@ public class EconomyApiHandler {
         }
 
         if (baltopManager != null) {
-            int totalPlayers = baltopManager.getTotalPlayers();
+            int totalPlayers = baltopManager.getTotalRegisteredPlayers();
             stats.put("totalPlayers", totalPlayers);
         } else {
             stats.put("totalPlayers", 0);
@@ -169,7 +169,9 @@ public class EconomyApiHandler {
             stats.put("cachedPlayers", 0);
         }
 
-        stats.put("currencyName", plugin.getSyncmoneyConfig().getCurrencyName());
+        stats.put("currencyName", plugin.getSyncmoneyConfig().display().getCurrencyName());
+
+        stats.put("onlinePlayers", plugin.getServer().getOnlinePlayers().size());
 
         sendJson(exchange, ApiResponse.success(stats));
     }

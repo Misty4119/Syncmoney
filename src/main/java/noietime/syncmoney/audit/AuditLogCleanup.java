@@ -33,12 +33,12 @@ public final class AuditLogCleanup {
      * Starts scheduled cleanup task.
      */
     public void start() {
-        if (!config.isAuditCleanupEnabled()) {
+        if (!config.audit().isAuditCleanupEnabled()) {
             logger.fine("Audit log cleanup is disabled.");
             return;
         }
 
-        long intervalHours = config.getAuditCleanupIntervalHours();
+        long intervalHours = config.audit().getAuditCleanupIntervalHours();
         long intervalTicks = intervalHours * 1200L;
         long initialDelay = intervalTicks;
 
@@ -56,7 +56,7 @@ public final class AuditLogCleanup {
      * Performs the cleanup operation.
      */
     public void performCleanup() {
-        int retentionDays = config.getAuditRetentionDays();
+        int retentionDays = config.audit().getAuditRetentionDays();
         if (retentionDays <= 0) {
             logger.fine("Audit log retention is set to infinite, skipping cleanup.");
             return;

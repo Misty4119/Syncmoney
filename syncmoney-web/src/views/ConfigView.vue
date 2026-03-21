@@ -95,6 +95,16 @@
             <Button variant="primary" :loading="saving" @click="saveSection(section.key)">
               {{ t('common.save') }}
             </Button>
+            <Button
+              v-if="canSyncToNodes"
+              variant="outline"
+              :icon="Globe"
+              :loading="syncing"
+              class="border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10"
+              @click="syncToNodes(section.key)"
+            >
+              {{ t('config.syncToNodes') }}
+            </Button>
           </div>
         </template>
       </Card>
@@ -114,7 +124,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { configService, groupConfigBySection, type PluginConfig, type ConfigField } from '@/services/configService'
 import { useNotificationStore } from '@/stores/notification'
-import { Server, Shield, FileText, Coins, ChevronDown, RefreshCw, Settings, Bell, Users, MessageCircle, Clock } from 'lucide-vue-next'
+import { useNodesStore } from '@/stores/nodes'
+import { Server, Shield, FileText, Coins, ChevronDown, RefreshCw, Settings, Bell, Users, MessageCircle, Clock, Globe } from 'lucide-vue-next'
 import Card from '@/components/common/Card.vue'
 import Badge from '@/components/common/Badge.vue'
 import Button from '@/components/common/Button.vue'
@@ -124,12 +135,14 @@ import Select from '@/components/common/Select.vue'
 
 const { t } = useI18n()
 const notificationStore = useNotificationStore()
+const nodesStore = useNodesStore()
 
 const config = ref<PluginConfig | null>(null)
 const originalConfig = ref<PluginConfig | null>(null)
 const changes = reactive<Record<string, Record<string, unknown>>>({})
 const reloading = ref(false)
 const saving = ref(false)
+const syncing = ref(false)
 
 const sectionIcons: Record<string, typeof Server> = {
   core: Settings,
@@ -387,6 +400,10 @@ const configSections = computed(() => {
   })
 })
 
+const canSyncToNodes = computed(() => {
+  return nodesStore.centralMode && nodesStore.enabledNodes.length > 0
+})
+
 async function loadConfig() {
   try {
     const data = await configService.getConfig()
@@ -442,7 +459,41 @@ async function reloadConfig() {
   }
 }
 
-onMounted(() => { loadConfig() })
+async function syncToNodes(section: string) {
+  if (!changes[section] || Object.keys(changes[section]).length === 0) return
+
+  syncing.value = true
+  try {
+    const sectionChanges = Object.entries(changes[section]).map(([key, value]) => ({
+      section,
+      key,
+      value
+    }))
+
+    const result = await nodesStore.syncConfigToNodes(sectionChanges, true)
+
+    const message = result.failed === 0
+      ? t('config.syncSuccess', { count: result.succeeded })
+      : t('config.syncPartialSuccess', { succeeded: result.succeeded, failed: result.failed })
+    const type = result.failed === 0 ? 'success' : 'warning'
+
+    notificationStore.addNotification(type, message, '')
+
+    delete changes[section]
+    await loadConfig()
+  } catch (error) {
+    console.error('Failed to sync config:', error)
+    notificationStore.addNotification('error', t('config.syncError'), t('config.syncErrorDesc'))
+  } finally {
+    syncing.value = false
+  }
+}
+
+onMounted(async () => {
+  
+  await nodesStore.fetchNodes().catch(() => {})
+  loadConfig()
+})
 </script>
 
 <style scoped>
