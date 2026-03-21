@@ -4,7 +4,7 @@
 
 > **另請參閱：**[架構概覽](ARCHITECTURE.zh_tw.md) 以了解系統層級設計和資料流程圖。
 >
-> **版本**：v1.1.1
+> **版本**：v1.1.2
 
 ---
 
@@ -65,7 +65,7 @@ public class MyPluginListener implements Listener {
 
 #### AsyncPreTransactionEvent
 
-> **⚠️ v1.1.1 已知限制：** `AsyncPreTransactionEvent` 已定義但**尚未由 `EconomyFacade` 觸發**。呼叫 `event.setCancelled(true)` **對實際交易沒有影響**。此事件將在未來版本中完全連接。使用 `PostTransactionEvent` 進行可靠的交易監控。
+> **⚠️ v1.1.2 已知限制：** `AsyncPreTransactionEvent` 已定義但**尚未由 `EconomyFacade` 觸發**。呼叫 `event.setCancelled(true)` **對實際交易沒有影響**。此事件將在未來版本中完全連接。使用 `PostTransactionEvent` 進行可靠的交易監控。
 
 ```java
 // 欄位
@@ -204,7 +204,7 @@ GET /health
 
 回應：
 ```json
-{"success":true,"data":{"status":"ok","version":"1.1.1"}}
+{"success":true,"data":{"status":"ok","version":"1.1.2"}}
 ```
 
 #### 系統 API
@@ -279,7 +279,7 @@ GET /health
 {
   "success": true,
   "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.1" }
+  "meta": { "timestamp": 1709337000000, "version": "1.1.2" }
 }
 ```
 
@@ -392,7 +392,7 @@ web-admin:
   enabled: false
   central-mode: false
   nodes: []
-  bundled-version: "1.1.1"
+  bundled-version: "1.1.2"
   server:
     host: "localhost"
     port: 8080
@@ -711,11 +711,11 @@ cd Syncmoney
 
 # 建構插件 JAR（包含陰影重定位）
 ./gradlew shadowJar
-# 輸出：build/libs/Syncmoney-1.1.1.jar
+# 輸出：build/libs/Syncmoney-1.1.2.jar
 
 # 建構 PAPI 擴展
 cd syncmoney-papi-expansion && ../gradlew jar
-# 輸出：build/libs/SyncmoneyExpansion-1.1.1.jar
+# 輸出：build/libs/SyncmoneyExpansion-1.1.2.jar
 
 # 建構網頁前端
 cd syncmoney-web
@@ -754,9 +754,9 @@ cd syncmoney-web && npm run test:e2e    # 前端 E2E 測試
 
 | 限制 | 狀態 | 解決方法 |
 |------------|--------|------------|
-| `AsyncPreTransactionEvent` 未觸發 | v1.1.1 | 事件已定義但尚未在 `EconomyFacade` 中連接。改用 `PostTransactionEvent`。 |
-| WebSocket 未完全實作 | v1.1.1 | `/ws` 接受連線但分派不完整。生產環境使用 SSE（`/sse`）。 |
-| `event.setCancelled(true)` 無操作 | v1.1.1 | 交易前取消沒有效果，將在未來版本中連接。 |
+| `AsyncPreTransactionEvent` 未觸發 | v1.1.2 | 事件已定義但尚未在 `EconomyFacade` 中連接。改用 `PostTransactionEvent`。 |
+| WebSocket 未完全實作 | v1.1.2 | `/ws` 接受連線但分派不完整。生產環境使用 SSE（`/sse`）。 |
+| `event.setCancelled(true)` 無操作 | v1.1.2 | 交易前取消沒有效果，將在未來版本中連接。 |
 
 ---
 

@@ -84,6 +84,22 @@ public final class PlayerTransactionGuard {
      * @return CheckResult indicating if transaction is allowed
      */
     public CheckResult checkTransaction(UUID uuid, BigDecimal currentBalance, BigDecimal amount, EconomyEvent.EventType eventType) {
+        return checkTransaction(uuid, currentBalance, amount, eventType, null);
+    }
+
+    /**
+     * Check transaction against protection rules with event source awareness.
+     * System operations (ADMIN_GIVE, ADMIN_TAKE, etc.) bypass rate limiting.
+     *
+     * @param uuid Player UUID
+     * @param currentBalance Current player balance (before transaction)
+     * @param amount Transaction amount
+     * @param eventType Event type (DEPOSIT/WITHDRAW)
+     * @param source Event source (for system operation bypass)
+     * @return CheckResult indicating if transaction is allowed
+     */
+    public CheckResult checkTransaction(UUID uuid, BigDecimal currentBalance, BigDecimal amount,
+            EconomyEvent.EventType eventType, EconomyEvent.EventSource source) {
 
         if (testModeBypass) {
             return CheckResult.ALLOWED;
@@ -96,6 +112,8 @@ public final class PlayerTransactionGuard {
         if (!config.playerProtection().isPlayerProtectionEnabled()) {
             return CheckResult.ALLOWED;
         }
+
+        boolean systemOp = isSystemOperation(source);
 
         PlayerProtectionState state = playerStates.computeIfAbsent(uuid, k -> new PlayerProtectionState());
 
@@ -115,33 +133,35 @@ public final class PlayerTransactionGuard {
             }
         }
 
-        if (!state.incrementTransactionsPerSecond()) {
-            notificationService.sendRateLimitNotification(uuid, "per-second");
-            return new CheckResult(false, "Transaction too fast, please wait", ProtectionState.NORMAL);
-        }
+        if (!systemOp) {
+            if (!state.incrementTransactionsPerSecond()) {
+                notificationService.sendRateLimitNotification(uuid, "per-second");
+                return new CheckResult(false, "Transaction too fast, please wait", ProtectionState.NORMAL);
+            }
 
-        if (!state.incrementTransactionsPerMinute(amount)) {
-            notificationService.sendRateLimitNotification(uuid, "per-minute");
-            return new CheckResult(false, "Transaction limit reached", ProtectionState.NORMAL);
-        }
+            if (!state.incrementTransactionsPerMinute(amount)) {
+                notificationService.sendRateLimitNotification(uuid, "per-minute");
+                return new CheckResult(false, "Transaction limit reached", ProtectionState.NORMAL);
+            }
 
-        if (config.playerProtection().getPlayerProtectionMaxAmountPerMinute() > 0) {
-            if (state.getAmountPerMinute().add(amount).compareTo(BigDecimal.valueOf(config.playerProtection().getPlayerProtectionMaxAmountPerMinute())) > 0) {
-                notificationService.sendRateLimitNotification(uuid, "amount-limit");
-                return new CheckResult(false, "Transaction amount limit reached", ProtectionState.NORMAL);
+            if (config.playerProtection().getPlayerProtectionMaxAmountPerMinute() > 0) {
+                if (state.getAmountPerMinute().add(amount).compareTo(BigDecimal.valueOf(config.playerProtection().getPlayerProtectionMaxAmountPerMinute())) > 0) {
+                    notificationService.sendRateLimitNotification(uuid, "amount-limit");
+                    return new CheckResult(false, "Transaction amount limit reached", ProtectionState.NORMAL);
+                }
             }
         }
 
         int transactionCount = state.getTransactionCountInWindow();
         int warningThreshold = config.playerProtection().getPlayerProtectionWarningThreshold();
 
-        if (transactionCount > warningThreshold && state.getState() == ProtectionState.NORMAL) {
+        if (!systemOp && transactionCount > warningThreshold && state.getState() == ProtectionState.NORMAL) {
             state.setState(ProtectionState.WARNING);
             notificationService.sendWarningNotification(uuid, transactionCount, warningThreshold, state.getAmountPerMinute());
             plugin.getLogger().warning("PlayerTransactionGuard: Player " + uuid + " entered WARNING state. Transactions: " + transactionCount);
         }
 
-        if (state.getPreviousBalance() != null && state.getPreviousBalance().compareTo(BigDecimal.ZERO) > 0) {
+        if (!systemOp && state.getPreviousBalance() != null && state.getPreviousBalance().compareTo(BigDecimal.ZERO) > 0) {
             double ratio = amount.abs().divide(state.getPreviousBalance(), 4, java.math.RoundingMode.HALF_UP).doubleValue();
             if (ratio > config.playerProtection().getPlayerProtectionBalanceChangeThreshold()) {
                 state.setState(ProtectionState.LOCKED);
@@ -153,9 +173,11 @@ public final class PlayerTransactionGuard {
             }
         }
 
-        state.updateBalance(currentBalance);
+        if (!systemOp) {
+            state.updateBalance(currentBalance);
+        }
 
-        if (state.getState() == ProtectionState.WARNING) {
+        if (!systemOp && state.getState() == ProtectionState.WARNING) {
             int warningCount = state.incrementWarningCount();
             if (warningCount >= 3) {
                 state.setState(ProtectionState.LOCKED);
@@ -493,6 +515,22 @@ public final class PlayerTransactionGuard {
         lastKnownTotalSupply = null;
         lastSupplyCheckTime = 0;
         logger.info("PlayerTransactionGuard: Global lockdown reset by admin");
+    }
+
+    /**
+     * Checks if the event source is a system operation that should bypass player protection.
+     * System operations include admin give/take/set, command admin, and migration operations.
+     */
+    private boolean isSystemOperation(EconomyEvent.EventSource source) {
+        if (source == null) {
+            return false;
+        }
+        return source == EconomyEvent.EventSource.ADMIN_GIVE
+                || source == EconomyEvent.EventSource.ADMIN_TAKE
+                || source == EconomyEvent.EventSource.ADMIN_SET
+                || source == EconomyEvent.EventSource.COMMAND_ADMIN
+                || source == EconomyEvent.EventSource.MIGRATION
+                || source == EconomyEvent.EventSource.SHADOW_SYNC;
     }
 
     /**

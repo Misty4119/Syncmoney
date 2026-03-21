@@ -1,8 +1,8 @@
 # Syncmoney API Reference
 
-Complete API reference for Syncmoney v1.1.1
+Complete API reference for Syncmoney v1.1.2
 
-> **Last Updated**: 2026-03-21
+> **Last Updated**: 2026-03-22
 
 ---
 
@@ -84,7 +84,7 @@ All successful responses follow this format:
   "data": { ... },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -100,7 +100,7 @@ All error responses follow this format:
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -119,7 +119,7 @@ All error responses follow this format:
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -156,7 +156,7 @@ Health check endpoint (**no authentication required**).
   "success": true,
   "data": {
     "status": "ok",
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -176,7 +176,7 @@ Get overall system status including plugin info, uptime, player counts, and data
   "data": {
     "plugin": {
       "name": "Syncmoney",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "mode": "SYNC",
       "uptime": 3600000
     },
@@ -1175,7 +1175,7 @@ Authorization: Bearer <your-api-key>
 
 ### Server-Sent Events (SSE) — Recommended
 
-Connect to `http://<host>:<port>/sse` for server-push notifications. **This is the recommended method for real-time updates in v1.1.1.**
+Connect to `http://<host>:<port>/sse` for server-push notifications. **This is the recommended method for real-time updates in v1.1.2.**
 
 **Authentication:** Uses API key via query parameter or Authorization header.
 
@@ -1212,7 +1212,7 @@ eventSource.onerror = (error) => {
 
 ### WebSocket
 
-> **v1.1.1 Status:** WebSocket support is **experimental and incomplete**. The `/ws` endpoint accepts upgrade requests, but the underlying message dispatch is not fully implemented. **Use SSE (`/sse`) for reliable real-time updates in production.**
+> **v1.1.2 Status:** WebSocket support is **experimental and incomplete**. The `/ws` endpoint accepts upgrade requests, but the underlying message dispatch is not fully implemented. **Use SSE (`/sse`) for reliable real-time updates in production.**
 
 Connect to `ws://<host>:<port>/ws` for real-time updates.
 

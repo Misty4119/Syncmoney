@@ -10,7 +10,7 @@ export const authHandlers = [
         data: {
           plugin: {
             name: 'Syncmoney',
-            version: '1.1.1',
+            version: '1.1.2',
             mode: 'Local',
             uptime: 3600000,
             onlinePlayers: 5,

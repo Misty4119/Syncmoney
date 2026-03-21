@@ -173,14 +173,8 @@ public final class NotificationService {
     public void sendGlobalLockNotification(String reason) {
         String message = plugin.getMessage("breaker.notification.locked-broadcast")
                 .replace("{reason}", reason);
-
         broadcastToAdmins(message);
-
-        Bukkit.broadcastMessage(message);
-
-
         broadcastSystemAlert("global_lock", "System Locked", reason);
-
         discordNotifier.sendGlobalLockEvent(reason);
     }
 

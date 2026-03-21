@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-22
+
+### Fixed
+
+#### Vault Economy Provider
+- **Null Check**: `VaultPluginDetector` adds config null check to prevent NPE when config is not loaded.
+- **Orphan Deposit Recovery**: `VaultProviderCore` adds orphan deposit recovery mechanism, automatically converting high-frequency transaction failures to PLUGIN_DEPOSIT to prevent money loss.
+
+#### Configuration
+- **Backward Compatibility**: `PlayerProtectionConfig` supports dual path reading (`circuit-breaker.player-protection.*` and `player-protection.*`) for backward compatibility during upgrades.
+
+---
+
 ## [1.1.1] - 2026-03-21
 
 ### Added

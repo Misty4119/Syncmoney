@@ -30,12 +30,15 @@ public final class NameResolver {
     private final ConcurrentMap<String, UUID> nameToUuidCache;
     private final ConcurrentMap<UUID, String> uuidToNameCache;
 
+    private final ConcurrentHashMap<UUID, Boolean> pendingLookups;
+
     public NameResolver(Plugin plugin, CacheManager cacheManager, DatabaseManager databaseManager) {
         this.plugin = plugin;
         this.cacheManager = cacheManager;
         this.databaseManager = databaseManager;
         this.nameToUuidCache = new ConcurrentHashMap<>();
         this.uuidToNameCache = new ConcurrentHashMap<>();
+        this.pendingLookups = new ConcurrentHashMap<>();
     }
 
     private void evictIfOverCapacity() {
@@ -175,19 +178,30 @@ public final class NameResolver {
 
     /**
      * Trigger async name lookup (when cache miss occurs).
+     * Uses putIfAbsent to prevent duplicate in-flight lookups for the same UUID.
      *
      * @param uuid Player UUID
      */
     public void triggerAsyncNameLookup(UUID uuid) {
+        if (uuid == null) {
+            return;
+        }
+
         if (uuidToNameCache.containsKey(uuid)) {
             return;
         }
 
+        if (pendingLookups.putIfAbsent(uuid, Boolean.TRUE) != null) {
+            return;
+        }
+
         if (databaseManager == null) {
+            pendingLookups.remove(uuid);
             return;
         }
 
         if (!plugin.isEnabled()) {
+            pendingLookups.remove(uuid);
             return;
         }
 
@@ -204,6 +218,8 @@ public final class NameResolver {
                 }
             } catch (Exception e) {
                 plugin.getLogger().warning("Async name lookup failed for " + uuid + ": " + e.getMessage());
+            } finally {
+                pendingLookups.remove(uuid);
             }
         });
     }

@@ -363,10 +363,7 @@ public final class EconomyFacade {
             long currentVersion = (existing != null) ? existing.version() : 0L;
 
             boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
-            boolean skipGuard = skipGuardForLocalMode
-                    || source == EconomyEvent.EventSource.ADMIN_GIVE
-                    || source == EconomyEvent.EventSource.ADMIN_SET
-                    || source == EconomyEvent.EventSource.ADMIN_TAKE;
+            boolean skipGuard = skipGuardForLocalMode;
 
             boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
                     || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
@@ -383,7 +380,7 @@ public final class EconomyFacade {
 
             if (!skipGuard && playerTransactionGuard != null) {
                 ensureLoaded(uuid);
-                var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount, EconomyEvent.EventType.DEPOSIT);
+                var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount, EconomyEvent.EventType.DEPOSIT, source);
                 guardResultRef.set(result);
                 if (!result.allowed()) {
                     plugin.getLogger().warning(
@@ -529,7 +526,7 @@ public final class EconomyFacade {
             if (!skipGuard && playerTransactionGuard != null) {
                 ensureLoaded(uuid);
                 var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount.negate(),
-                        EconomyEvent.EventType.WITHDRAW);
+                        EconomyEvent.EventType.WITHDRAW, source);
                 guardResultRef.set(result);
                 if (!result.allowed()) {
                     plugin.getLogger().warning(

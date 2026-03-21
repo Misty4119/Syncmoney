@@ -13,7 +13,7 @@ import java.util.Map;
 public class ApiResponse {
 
     private static final ObjectMapper mapper = new ObjectMapper();
-    private static final String VERSION = "1.1.1";
+    private static final String VERSION = "1.1.2";
 
     /**
      * Create a successful response with data.

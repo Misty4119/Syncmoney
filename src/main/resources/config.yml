@@ -192,6 +192,11 @@ circuit-breaker:
       lock-receiver: true
       # Amount threshold for locking receiver (0 = disabled)
       receiver-lock-threshold: 100000
+    global-lock:
+      # Whether to enable global lock
+      enabled: false
+      # Total inflation threshold for global lock
+      total-inflation-threshold: 0.2
 
 # ===== Discord Webhook Notification System =====
 discord-webhook:
@@ -499,7 +504,7 @@ web-admin:
   central-mode: false
 
   # Bundled web version in JAR (update this when releasing new version)
-  bundled-version: "1.1.1"
+  bundled-version: "1.1.2"
 
   # HTTP server configuration
   server:

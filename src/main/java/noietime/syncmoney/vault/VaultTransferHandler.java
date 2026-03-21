@@ -91,6 +91,11 @@ public class VaultTransferHandler {
         if (amount < 0) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot withdraw negative amount");
         }
+        if (amount == 0) {
+            BigDecimal currentBalance = economyFacade.getBalance(player.getUniqueId());
+            return new EconomyResponse(0, currentBalance.doubleValue(),
+                    EconomyResponse.ResponseType.SUCCESS, "Zero withdraw ignored");
+        }
 
         BigDecimal amountBd = NumericUtil.normalize(amount);
 

@@ -1,8 +1,8 @@
 # Syncmoney API 參考文檔
 
-Syncmoney v1.1.1 完整 API 參考文檔
+Syncmoney v1.1.2 完整 API 參考文檔
 
-> **最後更新**：2026-03-21
+> **最後更新**：2026-03-22
 
 ---
 
@@ -84,7 +84,7 @@ API 使用基於權限的授權系統：
   "data": { ... },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -100,7 +100,7 @@ API 使用基於權限的授權系統：
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -119,7 +119,7 @@ API 使用基於權限的授權系統：
   },
   "meta": {
     "timestamp": 1709337000000,
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -156,7 +156,7 @@ API 使用基於權限的授權系統：
   "success": true,
   "data": {
     "status": "ok",
-    "version": "1.1.1"
+    "version": "1.1.2"
   }
 }
 ```
@@ -176,7 +176,7 @@ API 使用基於權限的授權系統：
   "data": {
     "plugin": {
       "name": "Syncmoney",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "mode": "SYNC",
       "uptime": 3600000
     },
@@ -1175,7 +1175,7 @@ Authorization: Bearer <your-api-key>
 
 ### Server-Sent Events (SSE) — 推薦
 
-連線至 `http://<host>:<port>/sse` 接收伺服器推送通知。**這是 v1.1.1 中推薦的即時更新方法。**
+連線至 `http://<host>:<port>/sse` 接收伺服器推送通知。**這是 v1.1.2 中推薦的即時更新方法。**
 
 **認證：** 透過查詢參數或 Authorization 請求頭使用 API 金鑰。
 
@@ -1212,7 +1212,7 @@ eventSource.onerror = (error) => {
 
 ### WebSocket
 
-> **v1.1.1 狀態：** WebSocket 支援**實驗性且不完整**。`/ws` 端點接受升級請求，但底層訊息分派尚未完全實作。**在生產環境中使用 SSE（`/sse`）以獲得可靠的即時更新。**
+> **v1.1.2 狀態：** WebSocket 支援**實驗性且不完整**。`/ws` 端點接受升級請求，但底層訊息分派尚未完全實作。**在生產環境中使用 SSE（`/sse`）以獲得可靠的即時更新。**
 
 連線至 `ws://<host>:<port>/ws` 接收即時更新。
 

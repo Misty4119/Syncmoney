@@ -4,7 +4,7 @@ A comprehensive guide for developers who want to integrate with Syncmoney or ext
 
 > **See also:** [Architecture Overview](ARCHITECTURE.md) for system-level design and data flow diagrams.
 >
-> **Version**: v1.1.1
+> **Version**: v1.1.2
 
 ---
 
@@ -65,7 +65,7 @@ public class MyPluginListener implements Listener {
 
 #### AsyncPreTransactionEvent
 
-> **⚠️ v1.1.1 Known Limitation:** `AsyncPreTransactionEvent` is defined but **not yet fired** by `EconomyFacade` in v1.1.1. Calling `event.setCancelled(true)` has **no effect** on actual transactions. This event will be fully wired in a future release. Use `PostTransactionEvent` for reliable transaction monitoring.
+> **⚠️ v1.1.2 Known Limitation:** `AsyncPreTransactionEvent` is defined but **not yet fired** by `EconomyFacade` in v1.1.2. Calling `event.setCancelled(true)` has **no effect** on actual transactions. This event will be fully wired in a future release. Use `PostTransactionEvent` for reliable transaction monitoring.
 
 ```java
 // Fields
@@ -204,7 +204,7 @@ GET /health
 
 Response:
 ```json
-{"success":true,"data":{"status":"ok","version":"1.1.1"}}
+{"success":true,"data":{"status":"ok","version":"1.1.2"}}
 ```
 
 #### System API
@@ -279,7 +279,7 @@ All responses include a `meta` field:
 {
   "success": true,
   "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.1" }
+  "meta": { "timestamp": 1709337000000, "version": "1.1.2" }
 }
 ```
 
@@ -392,7 +392,7 @@ web-admin:
   enabled: false
   central-mode: false
   nodes: []
-  bundled-version: "1.1.1"
+  bundled-version: "1.1.2"
   server:
     host: "localhost"
     port: 8080
@@ -711,11 +711,11 @@ cd Syncmoney
 
 # Build plugin JAR (includes shadow relocation)
 ./gradlew shadowJar
-# Output: build/libs/Syncmoney-1.1.1.jar
+# Output: build/libs/Syncmoney-1.1.2.jar
 
 # Build PAPI expansion
 cd syncmoney-papi-expansion && ../gradlew jar
-# Output: build/libs/SyncmoneyExpansion-1.1.1.jar
+# Output: build/libs/SyncmoneyExpansion-1.1.2.jar
 
 # Build web frontend
 cd syncmoney-web
@@ -753,9 +753,9 @@ To maintain a high-quality, professional, and globally accessible codebase, Sync
 
 | Limitation | Status | Workaround |
 |------------|--------|------------|
-| `AsyncPreTransactionEvent` not fired | v1.1.1 | Event defined but not yet wired in `EconomyFacade`. Use `PostTransactionEvent` instead. |
-| WebSocket not fully implemented | v1.1.1 | `/ws` accepts connections but dispatch is incomplete. Use SSE (`/sse`) for production. |
-| `event.setCancelled(true)` no-op | v1.1.1 | Pre-transaction cancellation has no effect. Will be wired in future release. |
+| `AsyncPreTransactionEvent` not fired | v1.1.2 | Event defined but not yet wired in `EconomyFacade`. Use `PostTransactionEvent` instead. |
+| WebSocket not fully implemented | v1.1.2 | `/ws` accepts connections but dispatch is incomplete. Use SSE (`/sse`) for production. |
+| `event.setCancelled(true)` no-op | v1.1.2 | Pre-transaction cancellation has no effect. Will be wired in future release. |
 
 ---
 

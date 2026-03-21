@@ -1,8 +1,8 @@
 # Syncmoney 架構概覽
 
 > **目標受眾**：為 Syncmoney 貢獻或擴展的開發者
-> **版本**：1.1.1
-> **最後更新**：2026-03-21
+> **版本**：1.1.2
+> **最後更新**：2026-03-22
 
 ---
 
@@ -343,7 +343,7 @@ WebAdminServer (682 行)
 │   ├── CrossServerStatsApiHandler → /api/economy/cross-server-*
 │   └── ApiExtensionManager      → /api/extensions/{name}/*
 ├── SSE 管理器 (/sse)
-├── WebSocket 管理器 (/ws)（v1.1.1 部分實作）
+├── WebSocket 管理器 (/ws)（v1.1.2 部分實作）
 └── 健康端點 (/health)
 ```
 

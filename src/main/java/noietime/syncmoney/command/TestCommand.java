@@ -159,11 +159,6 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
             Thread.currentThread().interrupt();
         }
 
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException ignored) {
-        }
-
         BigDecimal finalA = economyFacade.getBalance(userA);
         BigDecimal finalB = economyFacade.getBalance(userB);
         BigDecimal finalTotal = finalA.add(finalB);

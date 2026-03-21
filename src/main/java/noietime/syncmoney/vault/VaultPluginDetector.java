@@ -34,7 +34,10 @@ public class VaultPluginDetector {
      * Uses config for plugin class list.
      */
     public boolean isKnownPluginClass(String className) {
-        List<String> knownClasses = config.vault().getKnownPluginClasses();
+        List<String> knownClasses = null;
+        if (config != null && config.vault() != null) {
+            knownClasses = config.vault().getKnownPluginClasses();
+        }
         if (knownClasses == null || knownClasses.isEmpty()) {
             knownClasses = List.of(
                     "QuickShop-Hikari", "PlayerPoints", "Jobs", "DailyShop",

@@ -44,6 +44,7 @@ public final class LocalToSyncMigrationTask {
     private static final String LOCAL_DB_PREFIX = "jdbc:sqlite:";
     private static final String KEY_PREFIX_BALANCE = "syncmoney:balance:";
     private static final String KEY_PREFIX_VERSION = "syncmoney:version:";
+    private static final String BALTOP_KEY = "syncmoney:baltop";
 
     public LocalToSyncMigrationTask(Plugin plugin, SyncmoneyConfig config,
                                     EconomyFacade economyFacade,
@@ -171,6 +172,42 @@ public final class LocalToSyncMigrationTask {
             }
         });
     }
+
+    /**
+     * Previews local-to-sync migration without executing.
+     * Shows player count, total balance, and sample data.
+     *
+     * @return PreviewResult containing migration data preview, or null if error
+     */
+    public PreviewResult preview() {
+        try {
+            String localDbPath = config.local().getLocalSQLitePath();
+            if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
+                localDbPath = LOCAL_DB_PREFIX + localDbPath;
+            }
+
+            List<LocalPlayerData> players = readLocalPlayers(localDbPath);
+
+            if (players.isEmpty()) {
+                return null;
+            }
+
+            BigDecimal totalBalance = BigDecimal.ZERO;
+            for (LocalPlayerData player : players) {
+                totalBalance = totalBalance.add(player.balance());
+            }
+
+            return new PreviewResult(players.size(), totalBalance, players);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Preview failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Preview result container.
+     */
+    public record PreviewResult(int playerCount, BigDecimal totalBalance, List<LocalPlayerData> samplePlayers) {}
 
     /**
      * Reads player data from local SQLite database.
@@ -397,8 +434,9 @@ public final class LocalToSyncMigrationTask {
     }
 
     /**
-     * Populates Redis with player balance and version data.
+     * Populates Redis with player balance, version, and baltop data.
      * This is critical for SYNC mode to function properly after migration.
+     * Also updates the in-memory state in EconomyFacade.
      */
     private void populateRedis(UUID uuid, BigDecimal balance, long version) {
         if (redisManager == null || !redisManager.isConnected()) {
@@ -412,6 +450,12 @@ public final class LocalToSyncMigrationTask {
 
             jedis.set(keyBalance, balance.toPlainString());
             jedis.set(keyVersion, String.valueOf(version));
+
+            // Update baltop ZSET for leaderboard
+            jedis.zadd(BALTOP_KEY, balance.doubleValue(), uuid.toString());
+
+            // Update in-memory state so EconomyFacade.memoryState is warm after migration
+            economyFacade.forceUpdateMemoryState(uuid, balance, version);
 
             plugin.getLogger().fine("Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
         } catch (Exception e) {
@@ -579,5 +623,5 @@ public final class LocalToSyncMigrationTask {
     /**
      * Local player data record.
      */
-    private record LocalPlayerData(UUID uuid, String name, BigDecimal balance, long version) {}
+    public record LocalPlayerData(UUID uuid, String name, BigDecimal balance, long version) {}
 }

@@ -49,6 +49,8 @@ public final class BaltopManager {
 
     private final List<NumberFormatEntry> numberFormatList;
 
+    private final boolean isPostgres;
+
     public BaltopManager(Plugin plugin, SyncmoneyConfig config,
             RedisManager redisManager, NameResolver nameResolver,
             HikariDataSource dataSource) {
@@ -70,6 +72,7 @@ public final class BaltopManager {
         this.numberFormatList = loadNumberFormatConfig();
 
         this.isLocalMode = (dataSource == null && localEconomyHandler != null);
+        this.isPostgres = config.database().getDatabaseType().toLowerCase().contains("postgres");
 
         topCache.clear();
         lastCacheTime = 0;
@@ -275,11 +278,20 @@ public final class BaltopManager {
             return;
         }
 
-        String sql = """
+        String sql;
+        if (isPostgres) {
+            sql = """
+                INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (player_uuid) DO UPDATE SET player_name = EXCLUDED.player_name, balance = EXCLUDED.balance, rank = EXCLUDED.rank, last_update = EXCLUDED.last_update
+                """;
+        } else {
+            sql = """
                 INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
                 VALUES (?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), balance = VALUES(balance), rank = VALUES(rank), last_update = VALUES(last_update)
                 """;
+        }
 
         try (Connection conn = dataSource.getConnection();
                 PreparedStatement stmt = conn.prepareStatement(sql)) {

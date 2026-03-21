@@ -1,8 +1,8 @@
 # Syncmoney Architecture Overview
 
 > **Audience**: Developers contributing to or extending Syncmoney
-> **Version**: 1.1.1
-> **Last Updated**: 2026-03-21 (refactored)
+> **Version**: 1.1.2
+> **Last Updated**: 2026-03-22 (refactored)
 
 ---
 
@@ -343,7 +343,7 @@ WebAdminServer (682 lines)
 │   ├── CrossServerStatsApiHandler → /api/economy/cross-server-*
 │   └── ApiExtensionManager      → /api/extensions/{name}/*
 ├── SSE Manager (/sse)
-├── WebSocket Manager (/ws) [partial in v1.1.1]
+├── WebSocket Manager (/ws) [partial in v1.1.2]
 └── Health Endpoint (/health)
 ```
 

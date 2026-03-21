@@ -293,11 +293,45 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
      * Handles local-to-sync migration.
      */
     private void handleLocalToSyncMigration(CommandSender sender, String[] args) {
+        boolean preview = Arrays.asList(args).contains("-preview");
         boolean force = Arrays.asList(args).contains("-force");
         boolean backup = !Arrays.asList(args).contains("-no-backup") && config.migration().isMigrationAutoBackup();
 
         if (localToSyncMigrationTask.isRunning()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
+            return;
+        }
+
+        if (preview) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-header"));
+            LocalToSyncMigrationTask.PreviewResult result = localToSyncMigrationTask.preview();
+
+            if (result == null) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-no-data"));
+                return;
+            }
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-count")
+                    .replace("{count}", String.valueOf(result.playerCount())));
+            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-total")
+                    .replace("{total}", result.totalBalance().toString()));
+
+            int count = 0;
+            for (LocalToSyncMigrationTask.LocalPlayerData player : result.samplePlayers()) {
+                if (count < 10) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-line")
+                            .replace("{player}", player.name() != null ? player.name() : player.uuid().toString())
+                            .replace("{balance}", player.balance().toString()));
+                }
+                count++;
+            }
+
+            if (result.playerCount() > 10) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-more-players")
+                        .replace("{count}", String.valueOf(result.playerCount() - 10)));
+            }
+
+            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-execute-hint"));
             return;
         }
 
@@ -426,7 +460,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("local-to-sync")) {
-            return Arrays.asList("-force", "-no-backup")
+            return Arrays.asList("-force", "-no-backup", "-preview")
                     .stream()
                     .filter(s -> s.startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());

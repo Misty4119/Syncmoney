@@ -120,50 +120,78 @@ public final class PlayerProtectionConfig {
 
     /**
      * [SYNC-CONFIG-080] Whether to enable global lock when total economy spikes.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public boolean isPlayerProtectionGlobalLockEnabled() {
+        if (config.isSet("circuit-breaker.player-protection.global-lock.enabled")) {
+            return config.getBoolean("circuit-breaker.player-protection.global-lock.enabled", true);
+        }
         return config.getBoolean("player-protection.global-lock.enabled", true);
     }
 
     /**
      * [SYNC-CONFIG-081] Gets total inflation threshold for global lock.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public double getPlayerProtectionGlobalLockThreshold() {
+        if (config.isSet("circuit-breaker.player-protection.global-lock.total-inflation-threshold")) {
+            return config.getDouble("circuit-breaker.player-protection.global-lock.total-inflation-threshold", 0.2);
+        }
         return config.getDouble("player-protection.global-lock.total-inflation-threshold", 0.2);
     }
 
     /**
      * [SYNC-CONFIG-082] Whether to enable player protection in LOCAL mode.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public boolean isPlayerProtectionEnabledInLocalMode() {
+        if (config.isSet("circuit-breaker.player-protection.local-mode.enabled-in-local-mode")) {
+            return config.getBoolean("circuit-breaker.player-protection.local-mode.enabled-in-local-mode", false);
+        }
         return config.getBoolean("player-protection.local-mode.enabled-in-local-mode", false);
     }
 
     /**
      * [SYNC-CONFIG-083] Whether to apply relaxed threshold for VAULT transactions.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public boolean isPlayerProtectionVaultRelaxedThreshold() {
+        if (config.isSet("circuit-breaker.player-protection.local-mode.vault-transaction-handling.relaxed-threshold")) {
+            return config.getBoolean("circuit-breaker.player-protection.local-mode.vault-transaction-handling.relaxed-threshold", false);
+        }
         return config.getBoolean("player-protection.local-mode.vault-transaction-handling.relaxed-threshold", false);
     }
 
     /**
      * [SYNC-CONFIG-084] Gets whitelist of Vault event sources to bypass guard.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public List<String> getPlayerProtectionVaultBypassWhitelist() {
+        if (config.isSet("circuit-breaker.player-protection.local-mode.vault-transaction-handling.bypass-whitelist")) {
+            return config.getStringList("circuit-breaker.player-protection.local-mode.vault-transaction-handling.bypass-whitelist");
+        }
         return config.getStringList("player-protection.local-mode.vault-transaction-handling.bypass-whitelist");
     }
 
     /**
      * [SYNC-CONFIG-085] Whether to lock receiver when a transfer occurs.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public boolean isPlayerProtectionLockReceiver() {
+        if (config.isSet("circuit-breaker.player-protection.transfer-protection.lock-receiver")) {
+            return config.getBoolean("circuit-breaker.player-protection.transfer-protection.lock-receiver", true);
+        }
         return config.getBoolean("player-protection.transfer-protection.lock-receiver", true);
     }
 
     /**
      * [SYNC-CONFIG-086] Gets amount threshold for locking receiver.
+     * Supports both new path and legacy path for backward compatibility.
      */
     public long getPlayerProtectionReceiverLockThreshold() {
+        if (config.isSet("circuit-breaker.player-protection.transfer-protection.receiver-lock-threshold")) {
+            return config.getLong("circuit-breaker.player-protection.transfer-protection.receiver-lock-threshold", 0);
+        }
         return config.getLong("player-protection.transfer-protection.receiver-lock-threshold", 0);
     }
 }
