@@ -23,46 +23,129 @@ import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.SyncManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.vault.SyncmoneyVaultProvider;
-import noietime.syncmoney.web.server.WebAdminConfig;
 import noietime.syncmoney.web.server.WebAdminServer;
 
 /**
  * Centralized service context for the plugin.
  * Provides a unified way to access all plugin services.
- * 
+ *
  * This class is primarily used internally to reduce getter delegation code
  * in the main Syncmoney class. External code should continue using the
  * existing getters from Syncmoney for backward compatibility.
- * 
+ *
+ * <p>Internally the 25 services are grouped into four immutable sub-contexts
+ * ({@link StorageContext}, {@link EconomyContext}, {@link SecurityContext},
+ * {@link AdminContext}). The public getters delegate to those sub-contexts so
+ * downstream callers see no change.
+ *
+ * <p>Note: the web admin configuration type is referenced with its fully
+ * qualified name ({@code noietime.syncmoney.web.server.WebAdminConfig}) to
+ * disambiguate it from {@code noietime.syncmoney.config.WebAdminConfig}, which
+ * shares the same simple name. Using the fully qualified name avoids any import
+ * ambiguity without renaming either class or touching their many call sites.
+ *
  * [ThreadSafe] This class is immutable after construction.
  */
 public class PluginContext {
 
-    private final SyncmoneyConfig config;
-    private final RedisManager redisManager;
-    private final CacheManager cacheManager;
-    private final DatabaseManager databaseManager;
-    private final DbWriteQueue dbWriteQueue;
-    private final EconomyFacade economyFacade;
-    private final NameResolver nameResolver;
-    private final FallbackEconomyWrapper fallbackWrapper;
-    private final SyncmoneyVaultProvider vaultProvider;
-    private final CrossServerSyncManager crossServerSyncManager;
-    private final EconomyModeRouter economyModeRouter;
-    private final SyncManager syncManager;
-    private final BreakerManager breakerManager;
-    private final PermissionManager permissionManager;
-    private final PlayerJoinListener playerJoinListener;
-    private final PlayerQuitListener playerQuitListener;
-    private final PlayerTransferGuard playerTransferGuard;
-    private final ShadowSyncTask shadowSyncTask;
-    private final AuditLogger auditLogger;
-    private final BaltopManager baltopManager;
-    private final AdminPermissionService permissionService;
-    private final EconomicCircuitBreaker circuitBreaker;
-    private final WebAdminServer webAdminServer;
-    private final WebAdminConfig webAdminConfig;
-    private final NotificationService notificationService;
+    private final StorageContext storage;
+    private final EconomyContext economy;
+    private final SecurityContext security;
+    private final AdminContext admin;
+
+    /**
+     * Storage-layer services: configuration and persistence/caching backends.
+     */
+    public static final class StorageContext {
+        private final SyncmoneyConfig config;
+        private final RedisManager redisManager;
+        private final CacheManager cacheManager;
+        private final DatabaseManager databaseManager;
+        private final DbWriteQueue dbWriteQueue;
+
+        StorageContext(SyncmoneyConfig config, RedisManager redisManager, CacheManager cacheManager,
+                       DatabaseManager databaseManager, DbWriteQueue dbWriteQueue) {
+            this.config = config;
+            this.redisManager = redisManager;
+            this.cacheManager = cacheManager;
+            this.databaseManager = databaseManager;
+            this.dbWriteQueue = dbWriteQueue;
+        }
+    }
+
+    /**
+     * Economy-layer services: balances, sync, routing, listeners and leaderboard.
+     */
+    public static final class EconomyContext {
+        private final EconomyFacade economyFacade;
+        private final NameResolver nameResolver;
+        private final FallbackEconomyWrapper fallbackWrapper;
+        private final SyncmoneyVaultProvider vaultProvider;
+        private final CrossServerSyncManager crossServerSyncManager;
+        private final EconomyModeRouter economyModeRouter;
+        private final SyncManager syncManager;
+        private final BaltopManager baltopManager;
+        private final ShadowSyncTask shadowSyncTask;
+        private final PlayerJoinListener playerJoinListener;
+        private final PlayerQuitListener playerQuitListener;
+
+        EconomyContext(EconomyFacade economyFacade, NameResolver nameResolver,
+                       FallbackEconomyWrapper fallbackWrapper, SyncmoneyVaultProvider vaultProvider,
+                       CrossServerSyncManager crossServerSyncManager, EconomyModeRouter economyModeRouter,
+                       SyncManager syncManager, BaltopManager baltopManager, ShadowSyncTask shadowSyncTask,
+                       PlayerJoinListener playerJoinListener, PlayerQuitListener playerQuitListener) {
+            this.economyFacade = economyFacade;
+            this.nameResolver = nameResolver;
+            this.fallbackWrapper = fallbackWrapper;
+            this.vaultProvider = vaultProvider;
+            this.crossServerSyncManager = crossServerSyncManager;
+            this.economyModeRouter = economyModeRouter;
+            this.syncManager = syncManager;
+            this.baltopManager = baltopManager;
+            this.shadowSyncTask = shadowSyncTask;
+            this.playerJoinListener = playerJoinListener;
+            this.playerQuitListener = playerQuitListener;
+        }
+    }
+
+    /**
+     * Security-layer services: circuit breaking, guards, auditing and notifications.
+     */
+    public static final class SecurityContext {
+        private final BreakerManager breakerManager;
+        private final EconomicCircuitBreaker circuitBreaker;
+        private final NotificationService notificationService;
+        private final PlayerTransferGuard playerTransferGuard;
+        private final AuditLogger auditLogger;
+
+        SecurityContext(BreakerManager breakerManager, EconomicCircuitBreaker circuitBreaker,
+                        NotificationService notificationService, PlayerTransferGuard playerTransferGuard,
+                        AuditLogger auditLogger) {
+            this.breakerManager = breakerManager;
+            this.circuitBreaker = circuitBreaker;
+            this.notificationService = notificationService;
+            this.playerTransferGuard = playerTransferGuard;
+            this.auditLogger = auditLogger;
+        }
+    }
+
+    /**
+     * Admin-layer services: permissions and the web admin interface.
+     */
+    public static final class AdminContext {
+        private final PermissionManager permissionManager;
+        private final AdminPermissionService permissionService;
+        private final WebAdminServer webAdminServer;
+        private final noietime.syncmoney.web.server.WebAdminConfig webAdminConfig;
+
+        AdminContext(PermissionManager permissionManager, AdminPermissionService permissionService,
+                     WebAdminServer webAdminServer, noietime.syncmoney.web.server.WebAdminConfig webAdminConfig) {
+            this.permissionManager = permissionManager;
+            this.permissionService = permissionService;
+            this.webAdminServer = webAdminServer;
+            this.webAdminConfig = webAdminConfig;
+        }
+    }
 
     /**
      * Builder for PluginContext to ensure all services are properly set.
@@ -91,7 +174,7 @@ public class PluginContext {
         private AdminPermissionService permissionService;
         private EconomicCircuitBreaker circuitBreaker;
         private WebAdminServer webAdminServer;
-        private WebAdminConfig webAdminConfig;
+        private noietime.syncmoney.web.server.WebAdminConfig webAdminConfig;
         private NotificationService notificationService;
 
         public Builder setConfig(SyncmoneyConfig config) {
@@ -209,7 +292,7 @@ public class PluginContext {
             return this;
         }
 
-        public Builder setWebAdminConfig(WebAdminConfig webAdminConfig) {
+        public Builder setWebAdminConfig(noietime.syncmoney.web.server.WebAdminConfig webAdminConfig) {
             this.webAdminConfig = webAdminConfig;
             return this;
         }
@@ -225,132 +308,162 @@ public class PluginContext {
     }
 
     private PluginContext(Builder builder) {
-        this.config = builder.config;
-        this.redisManager = builder.redisManager;
-        this.cacheManager = builder.cacheManager;
-        this.databaseManager = builder.databaseManager;
-        this.dbWriteQueue = builder.dbWriteQueue;
-        this.economyFacade = builder.economyFacade;
-        this.nameResolver = builder.nameResolver;
-        this.fallbackWrapper = builder.fallbackWrapper;
-        this.vaultProvider = builder.vaultProvider;
-        this.crossServerSyncManager = builder.crossServerSyncManager;
-        this.economyModeRouter = builder.economyModeRouter;
-        this.syncManager = builder.syncManager;
-        this.breakerManager = builder.breakerManager;
-        this.permissionManager = builder.permissionManager;
-        this.playerJoinListener = builder.playerJoinListener;
-        this.playerQuitListener = builder.playerQuitListener;
-        this.playerTransferGuard = builder.playerTransferGuard;
-        this.shadowSyncTask = builder.shadowSyncTask;
-        this.auditLogger = builder.auditLogger;
-        this.baltopManager = builder.baltopManager;
-        this.permissionService = builder.permissionService;
-        this.circuitBreaker = builder.circuitBreaker;
-        this.webAdminServer = builder.webAdminServer;
-        this.webAdminConfig = builder.webAdminConfig;
-        this.notificationService = builder.notificationService;
+        this.storage = new StorageContext(
+                builder.config,
+                builder.redisManager,
+                builder.cacheManager,
+                builder.databaseManager,
+                builder.dbWriteQueue);
+        this.economy = new EconomyContext(
+                builder.economyFacade,
+                builder.nameResolver,
+                builder.fallbackWrapper,
+                builder.vaultProvider,
+                builder.crossServerSyncManager,
+                builder.economyModeRouter,
+                builder.syncManager,
+                builder.baltopManager,
+                builder.shadowSyncTask,
+                builder.playerJoinListener,
+                builder.playerQuitListener);
+        this.security = new SecurityContext(
+                builder.breakerManager,
+                builder.circuitBreaker,
+                builder.notificationService,
+                builder.playerTransferGuard,
+                builder.auditLogger);
+        this.admin = new AdminContext(
+                builder.permissionManager,
+                builder.permissionService,
+                builder.webAdminServer,
+                builder.webAdminConfig);
     }
 
+    /**
+     * @return the storage sub-context (config + persistence/caching backends).
+     */
+    public StorageContext storage() {
+        return storage;
+    }
 
+    /**
+     * @return the economy sub-context.
+     */
+    public EconomyContext economy() {
+        return economy;
+    }
+
+    /**
+     * @return the security sub-context.
+     */
+    public SecurityContext security() {
+        return security;
+    }
+
+    /**
+     * @return the admin sub-context.
+     */
+    public AdminContext admin() {
+        return admin;
+    }
 
     public SyncmoneyConfig getConfig() {
-        return config;
+        return storage.config;
     }
 
     public RedisManager getRedisManager() {
-        return redisManager;
+        return storage.redisManager;
     }
 
     public CacheManager getCacheManager() {
-        return cacheManager;
+        return storage.cacheManager;
     }
 
     public DatabaseManager getDatabaseManager() {
-        return databaseManager;
+        return storage.databaseManager;
     }
 
     public DbWriteQueue getDbWriteQueue() {
-        return dbWriteQueue;
+        return storage.dbWriteQueue;
     }
 
     public EconomyFacade getEconomyFacade() {
-        return economyFacade;
+        return economy.economyFacade;
     }
 
     public NameResolver getNameResolver() {
-        return nameResolver;
+        return economy.nameResolver;
     }
 
     public FallbackEconomyWrapper getFallbackWrapper() {
-        return fallbackWrapper;
+        return economy.fallbackWrapper;
     }
 
     public SyncmoneyVaultProvider getVaultProvider() {
-        return vaultProvider;
+        return economy.vaultProvider;
     }
 
     public CrossServerSyncManager getCrossServerSyncManager() {
-        return crossServerSyncManager;
+        return economy.crossServerSyncManager;
     }
 
     public EconomyModeRouter getEconomyModeRouter() {
-        return economyModeRouter;
+        return economy.economyModeRouter;
     }
 
     public SyncManager getSyncManager() {
-        return syncManager;
+        return economy.syncManager;
     }
 
     public BreakerManager getBreakerManager() {
-        return breakerManager;
+        return security.breakerManager;
     }
 
     public PermissionManager getPermissionManager() {
-        return permissionManager;
+        return admin.permissionManager;
     }
 
     public PlayerJoinListener getPlayerJoinListener() {
-        return playerJoinListener;
+        return economy.playerJoinListener;
     }
 
     public PlayerQuitListener getPlayerQuitListener() {
-        return playerQuitListener;
+        return economy.playerQuitListener;
     }
 
     public PlayerTransferGuard getPlayerTransferGuard() {
-        return playerTransferGuard;
+        return security.playerTransferGuard;
     }
 
     public ShadowSyncTask getShadowSyncTask() {
-        return shadowSyncTask;
+        return economy.shadowSyncTask;
     }
 
     public AuditLogger getAuditLogger() {
-        return auditLogger;
+        return security.auditLogger;
     }
 
     public BaltopManager getBaltopManager() {
-        return baltopManager;
+        return economy.baltopManager;
     }
 
     public AdminPermissionService getPermissionService() {
-        return permissionService;
+        return admin.permissionService;
     }
 
     public EconomicCircuitBreaker getCircuitBreaker() {
-        return circuitBreaker;
+        return security.circuitBreaker;
     }
 
     public WebAdminServer getWebAdminServer() {
-        return webAdminServer;
+        return admin.webAdminServer;
     }
 
-    public WebAdminConfig getWebAdminConfig() {
-        return webAdminConfig;
+    public noietime.syncmoney.web.server.WebAdminConfig getWebAdminConfig() {
+        return admin.webAdminConfig;
     }
 
     public NotificationService getNotificationService() {
-        return notificationService;
+        return security.notificationService;
     }
 }

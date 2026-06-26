@@ -228,13 +228,23 @@ public final class Syncmoney extends JavaPlugin {
         }
 
         if (syncmoneyConfig.isCMIMode()) {
+            noietime.syncmoney.sync.CMIApi cmiApi = new noietime.syncmoney.sync.CMIApi(getLogger());
             CMIEconomyHandler cmiHandler = new CMIEconomyHandler(
                     this,
                     syncmoneyConfig,
                     storageManager.getRedisManager(),
-                    economyServiceManager.getCrossServerSyncManager());
+                    economyServiceManager.getCrossServerSyncManager(),
+                    cmiApi);
             economyServiceManager.getEconomyModeRouter().setCmiHandler(cmiHandler);
-            getLogger().fine("CMI Economy Handler initialized");
+            getLogger().fine("CMI Economy Handler initialized (CMI API available: " + cmiApi.isAvailable() + ")");
+
+            noietime.syncmoney.sync.CMIPubsubHandler cmiPubsubHandler =
+                    new noietime.syncmoney.sync.CMIPubsubHandler(
+                            this, syncmoneyConfig, storageManager.getRedisManager(), cmiApi, cmiHandler);
+            if (syncManager != null && syncManager.getPubsubSubscriber() != null) {
+                syncManager.getPubsubSubscriber().setCmiPubsubHandler(cmiPubsubHandler);
+                getLogger().fine("CMI inbound Pub/Sub handler registered");
+            }
         }
 
         this.listenerServiceManager = new ListenerServiceManager(this, economyServiceManager);
@@ -271,9 +281,7 @@ public final class Syncmoney extends JavaPlugin {
                 economyServiceManager.getOverflowLog(),
                 storageManager.getDatabaseManager());
         eventConsumerManager.initialize();
-
-        Thread eventConsumerThread = new Thread(eventConsumerManager.getEconomyEventConsumer(), "Syncmoney-EventConsumer");
-        eventConsumerThread.start();
+        eventConsumerManager.start();
         getLogger().info("EconomyEventConsumer started");
 
         this.commandServiceManager = new CommandServiceManager(
@@ -482,6 +490,10 @@ public final class Syncmoney extends JavaPlugin {
 
     public PlayerTransferGuard getPlayerTransferGuard() {
         return listenerServiceManager != null ? listenerServiceManager.getPlayerTransferGuard() : null;
+    }
+
+    public noietime.syncmoney.uuid.OnlinePlayerRegistry getOnlinePlayerRegistry() {
+        return listenerServiceManager != null ? listenerServiceManager.getOnlinePlayerRegistry() : null;
     }
 
     public ShadowSyncTask getShadowSyncTask() {

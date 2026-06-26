@@ -23,9 +23,11 @@ import java.util.concurrent.TimeUnit;
  */
 public class CrossServerSyncManager {
 
-    private static final String SYNC_CHANNEL = "syncmoney:balance:update";
-    private static final String CMI_CHANNEL = "syncmoney:cmi:balance:update";
+    private static final String SYNC_CHANNEL = noietime.syncmoney.sync.PubSubChannels.BALANCE_UPDATE;
+    private static final String CMI_CHANNEL = noietime.syncmoney.sync.PubSubChannels.CMI_BALANCE_UPDATE;
     private static final long VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+    private static final long MS_PER_TICK = 50L;
+    private static final long VERSION_CHECK_INTERVAL_TICKS = VERSION_CHECK_INTERVAL_MS / MS_PER_TICK;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -84,6 +86,37 @@ public class CrossServerSyncManager {
         if (config.crossServer().isCrossServerNotificationsEnabled()) {
             notifyLocalPlayer(uuid, currentServer, eventType, amount, sourcePlugin);
         }
+    }
+
+    public void publishCMIUpdate(UUID uuid, BigDecimal newBalance, long version,
+                                 String eventType, double amount, String sourcePlugin) {
+        publishCMIUpdate(uuid, newBalance, version, eventType, amount, sourcePlugin, null);
+    }
+
+    public void publishCMIUpdate(UUID uuid, BigDecimal newBalance, long version,
+                                 String eventType, double amount, String sourcePlugin,
+                                 String sourcePlayerName) {
+        String currentServer = config.getServerName();
+
+        PubSubMessage message = new PubSubMessage(
+            uuid.toString(),
+            newBalance.doubleValue(),
+            version,
+            currentServer,
+            UUID.randomUUID().toString(),
+            System.currentTimeMillis(),
+            eventType,
+            amount,
+            sourcePlugin,
+            sourcePlayerName
+        );
+
+        try (var jedis = redisManager.getResource()) {
+            jedis.publish(CMI_CHANNEL, message.toJson());
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to publish CMI update to Pub/Sub: " + e.getMessage());
+        }
+
     }
 
     /**
@@ -283,13 +316,16 @@ public class CrossServerSyncManager {
 
     /**
      * [SYNC-ECO-035] Periodic version check to ensure cross-server data consistency.
-     * Runs every 5 minutes to sync any missed Pub/Sub messages.
-     * Should be called during plugin startup.
+     * Runs every 5 minutes ({@link #VERSION_CHECK_INTERVAL_TICKS} = 6000 ticks) to sync
+     * any missed Pub/Sub messages. Should be called during plugin startup.
+     *
+     * <p>Note: {@code GlobalRegionScheduler.runAtFixedRate} takes its delay/period in ticks,
+     * so the interval is supplied in ticks (not milliseconds) to actually run every 5 minutes.
      */
     public void startPeriodicVersionCheck() {
         plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
             performVersionCheck();
-        }, VERSION_CHECK_INTERVAL_MS / 50, VERSION_CHECK_INTERVAL_MS / 50);
+        }, VERSION_CHECK_INTERVAL_TICKS, VERSION_CHECK_INTERVAL_TICKS);
     }
 
     /**

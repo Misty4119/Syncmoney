@@ -8,13 +8,13 @@ import noietime.syncmoney.audit.HybridAuditManager;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.LocalEconomyHandler;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
 import org.bukkit.entity.Player;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,19 +25,18 @@ import java.util.UUID;
  * API handler for audit log endpoints.
  * Integrates with existing AuditLogger system and HybridAuditManager.
  */
-public class AuditApiHandler {
+public class AuditApiHandler extends AbstractApiHandler {
 
     /** Path index for route: api/audit/player/{name} */
     private static final int PATH_IDX_PLAYER_NAME = 3;
 
-    private final Syncmoney plugin;
     private final AuditLogger auditLogger;
     private final HybridAuditManager hybridAuditManager;
     private NameResolver nameResolver;
     private LocalEconomyHandler localEconomyHandler;
 
     public AuditApiHandler(Syncmoney plugin, AuditLogger auditLogger, HybridAuditManager hybridAuditManager) {
-        this.plugin = plugin;
+        super(plugin);
         this.auditLogger = auditLogger;
         this.hybridAuditManager = hybridAuditManager;
     }
@@ -627,56 +626,6 @@ public class AuditApiHandler {
         }
 
         return map;
-    }
-
-    /**
-     * Extract a path segment by zero-based index from the relative URL.
-     * Example: "api/audit/player/Steve" → index 3 returns "Steve".
-     */
-    private String extractPathParamAt(HttpServerExchange exchange, int index) {
-        String path = exchange.getRelativePath();
-        if (path.startsWith("/")) {
-            path = path.substring(1);
-        }
-        String[] parts = path.split("/");
-        return (parts.length > index) ? parts[index] : "";
-    }
-
-    /**
-     * Get query parameter as integer with default.
-     */
-    private int getQueryParamAsInt(HttpServerExchange exchange, String param, int defaultValue) {
-        Deque<String> values = exchange.getQueryParameters().get(param);
-        if (values == null || values.isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(values.getFirst());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Get query parameter as String.
-     */
-    private String getQueryParam(HttpServerExchange exchange, String param) {
-        Deque<String> values = exchange.getQueryParameters().get(param);
-        if (values == null || values.isEmpty()) {
-            return null;
-        }
-        return values.getFirst();
-    }
-
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8"
-        );
-        exchange.getResponseSender().send(json);
     }
 
     /**

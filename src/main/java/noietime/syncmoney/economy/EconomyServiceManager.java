@@ -108,7 +108,9 @@ public class EconomyServiceManager {
                 storageManager.getRedisManager(),
                 nameResolver
         );
-        if (vaultProvider.setupEconomy()) {
+        if (mode == EconomyMode.CMI) {
+            plugin.getLogger().info("CMI mode: skipping Vault Economy registration (CMI remains the Vault provider).");
+        } else if (vaultProvider.setupEconomy()) {
             plugin.getLogger().fine("Syncmoney Vault Economy registered successfully.");
         } else {
             plugin.getLogger().warning("Vault Economy registration failed. Running without Vault integration.");

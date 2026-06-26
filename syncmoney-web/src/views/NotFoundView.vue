@@ -25,7 +25,7 @@ const { t } = useI18n()
   background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
 }
 
-:global(.light) .not-found {
+:global(html:not(.dark)) .not-found {
   background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
 }
 
@@ -34,7 +34,7 @@ const { t } = useI18n()
   color: white;
 }
 
-:global(.light) .content {
+:global(html:not(.dark)) .content {
   color: #1f2937;
 }
 
@@ -54,7 +54,7 @@ const { t } = useI18n()
   opacity: 0.8;
 }
 
-:global(.light) .message {
+:global(html:not(.dark)) .message {
   color: #4b5563;
 }
 
@@ -72,11 +72,11 @@ const { t } = useI18n()
   background: #2563eb;
 }
 
-:global(.light) .home-link {
+:global(html:not(.dark)) .home-link {
   background: #3b82f6;
 }
 
-:global(.light) .home-link:hover {
+:global(html:not(.dark)) .home-link:hover {
   background: #2563eb;
 }
 </style>

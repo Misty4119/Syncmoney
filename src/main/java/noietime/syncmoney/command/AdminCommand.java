@@ -10,6 +10,7 @@ import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.sync.PubsubSubscriber;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
 import noietime.syncmoney.util.FormatUtil;
@@ -563,6 +564,11 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 2) {
+            // 線上玩家來源：跨服優先（Redis 可用時）否則本機。
+            OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[1], true);
+            }
             return plugin.getServer().getOnlinePlayers().stream()
                     .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))

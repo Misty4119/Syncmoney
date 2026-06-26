@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.1.3'
+version = '1.2.0'
 
 repositories {
     mavenCentral()
@@ -52,9 +52,14 @@ dependencies {
     // YAML configuration
     implementation 'org.yaml:snakeyaml:2.2'
 
+    testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
 }
 
 shadowJar {

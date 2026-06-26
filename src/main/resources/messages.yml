@@ -514,6 +514,7 @@ reload:
 # Cross-server notification (Cross-Server)
 cross-server:
   money-received: '{prefix}<#4ADE80>FUNDS RECEIVED ⦊ <#94A3B8>From <white>{server} <#475569>┇ <#4ADE80>+{amount}'
+  money-received-from-player: '{prefix}<#4ADE80>FUNDS RECEIVED ⦊ <#94A3B8>From <white>{player} <#475569>┇ <#4ADE80>+{amount}'
   money-spent: '{prefix}<#F43F5E>FUNDS SPENT ⦊ <#94A3B8>Server <white>{server} <#475569>┇ <#F43F5E>-{amount}'
   balance-synced: '<#38BDF8>BALANCE SYNCED ⦊ <#94A3B8>From server {server}'
   from-plugin: '<#94A3B8>[Source: {plugin}] '

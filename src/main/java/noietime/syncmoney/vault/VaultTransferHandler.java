@@ -3,12 +3,12 @@ package noietime.syncmoney.vault;
 import net.milkbowl.vault.economy.EconomyResponse;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.uuid.NameResolver;
-import noietime.syncmoney.util.FormatUtil;
-import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * [SYNC-VAULT-011] Handles player-to-player transfer operations.
@@ -36,6 +37,10 @@ public class VaultTransferHandler {
     private final SyncmoneyConfig config;
     private final VaultPlayerHandler playerHandler;
     private final NameResolver nameResolver;
+
+    private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
+
+    private volatile CMIEconomyHandler cmiHandler;
 
     /**
      * Recent withdrawal for transfer correlation.
@@ -70,6 +75,53 @@ public class VaultTransferHandler {
         this.nameResolver = nameResolver;
     }
 
+
+    public void setCmiHandler(CMIEconomyHandler cmiHandler) {
+        this.cmiHandler = cmiHandler;
+    }
+
+    /**
+     * [FIX-CMI-VAULT-PUBLISH] Emit a cross-server balance update for the Vault transfer handler.
+     *
+     * <p>Routes the publish to the right channel for the active economy mode:
+     * <ul>
+     *   <li>SYNC / LOCAL_REDIS → {@code publishAndNotify} on the SYNC channel (legacy behavior).</li>
+     *   <li>CMI → {@code publishCMIUpdate} on the CMI channel with a CMI versioning counter.</li>
+     *   <li>LOCAL → no-op (no cross-server transport).</li>
+     * </ul>
+     *
+     * @param uuid             player whose balance changed
+     * @param newBalance       authoritative post-transaction balance
+     * @param syncModeEventType event type used when publishing to {@code publishAndNotify}
+     *                          (e.g. {@code VAULT_WITHDRAW}, {@code VAULT_DEPOSIT})
+     * @param amount           signed delta ({@code +amount} for deposit, {@code -amount} for withdraw)
+     * @param sourcePlugin     name of the calling plugin (best-effort, {@code null} falls through
+     *                          to {@code pluginDetector.detectCallingPlugin()})
+     * @param sourcePlayerName optional counter-party display name (transfers only)
+     */
+    private void publishCrossServerUpdate(UUID uuid, BigDecimal newBalance,
+                                          String syncModeEventType, double amount,
+                                          String sourcePlugin, String sourcePlayerName) {
+        if (syncManager == null || config == null) {
+            return;
+        }
+        String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
+        if (config.isSyncMode()) {
+            syncManager.publishAndNotify(uuid, newBalance, syncModeEventType, amount, resolvedPlugin, sourcePlayerName);
+        } else if (config.isCMIMode()) {
+            long version = (cmiHandler != null)
+                    ? cmiHandler.mintCmiVersion()
+                    : CMIVersioning.generateVersion(cmiVersionCounter);
+            String cmiEventType = amount >= 0 ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
+            syncManager.publishCMIUpdate(uuid, newBalance, version, cmiEventType, amount, resolvedPlugin, sourcePlayerName);
+            if (config.isDebug()) {
+                plugin.getLogger().fine("[FIX-CMI-VAULT-PUBLISH] CMI mode publish uuid=" + uuid
+                        + " balance=" + newBalance + " v" + version
+                        + " amount=" + amount + " sourcePlugin=" + resolvedPlugin);
+            }
+        }
+    }
+
     /**
      * [SYNC-VAULT-011] Withdraw with optional transfer context for rollback support.
      */
@@ -101,9 +153,10 @@ public class VaultTransferHandler {
 
         UUID uuid = player.getUniqueId();
 
-        if (economyFacade.isPlayerLocked(uuid)) {
-            return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
-                    "Account is locked due to suspicious activity");
+        EconomyResponse locked = LockingHelper.requireNotLocked(economyFacade, uuid,
+                "Account is locked due to suspicious activity");
+        if (locked != null) {
+            return locked;
         }
 
         if (toUuid != null) {
@@ -118,69 +171,41 @@ public class VaultTransferHandler {
                     "Insufficient funds");
         }
 
-        if (toUuid != null) {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            pendingTransfers.put(toUuid, new TransferContext(
-                uuid, toUuid, amountBd, sourcePlugin, System.currentTimeMillis()
-            ));
-        } else {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            RecentWithdrawal withdrawal = new RecentWithdrawal(uuid, amountBd, sourcePlugin, System.currentTimeMillis());
-            recentWithdrawals.compute(uuid, (k, list) -> {
-                if (list == null) {
-                    list = new ArrayList<>();
-                }
-                list.add(withdrawal);
-                long cutoff = System.currentTimeMillis() - 30000;
-                list.removeIf(w -> w.timestamp() < cutoff);
-                return list;
-            });
-        }
-
-        if (player.isOnline()) {
-            final Player finalOnlinePlayer = (Player) player;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.withdrawn");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
-                    MessageHelper.sendMessage(finalOnlinePlayer, message);
-                }
+        String sourcePlugin = pluginDetector.detectCallingPlugin();
+        RecentWithdrawal withdrawal = new RecentWithdrawal(uuid, amountBd, sourcePlugin, System.currentTimeMillis());
+        recentWithdrawals.compute(uuid, (k, list) -> {
+            if (list == null) {
+                list = new ArrayList<>();
             }
-        }
+            list.add(withdrawal);
+            long cutoff = System.currentTimeMillis() - 30000;
+            list.removeIf(w -> w.timestamp() < cutoff);
+            return list;
+        });
 
-        if (syncManager != null && config != null && config.isSyncMode()) {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "VAULT_WITHDRAW",
-                    -amount,
-                    sourcePlugin,
-                    null);
-        }
+        CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, newBalance);
+
+        publishCrossServerUpdate(uuid, newBalance, "VAULT_WITHDRAW", -amount, sourcePlugin, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
     }
 
     /**
      * [SYNC-VAULT-004] Find a correlated withdrawal that matches this deposit.
+     *
+     * <p>Pure query (CQS): performs no state mutation. Expired withdrawals are skipped
+     * via the {@code timestamp() >= windowStart} guard and never returned, so callers get
+     * the same result as before; cleanup of stale entries is handled separately by
+     * {@link #purgeExpiredWithdrawals()}.
+     *
+     * @return the correlated {@link TransferContext}, or {@code null} if none matches
      */
     TransferContext findCorrelatedTransfer(UUID toUuid, BigDecimal amount) {
-        long now = System.currentTimeMillis();
-        long windowStart = now - 30000;
+        long windowStart = System.currentTimeMillis() - 30000;
 
         for (var entry : recentWithdrawals.entrySet()) {
             List<RecentWithdrawal> list = entry.getValue();
             if (list == null) continue;
-
-            list.removeIf(w -> w.timestamp() < windowStart);
-
-            if (list.isEmpty()) {
-                recentWithdrawals.remove(entry.getKey());
-                continue;
-            }
 
             for (RecentWithdrawal withdrawal : list) {
                 if (withdrawal.amount().compareTo(amount) == 0 &&
@@ -203,6 +228,18 @@ public class VaultTransferHandler {
         }
 
         return null;
+    }
+
+    void purgeExpiredWithdrawals() {
+        long windowStart = System.currentTimeMillis() - 30000;
+        recentWithdrawals.entrySet().removeIf(entry -> {
+            List<RecentWithdrawal> list = entry.getValue();
+            if (list == null) {
+                return true;
+            }
+            list.removeIf(w -> w.timestamp() < windowStart);
+            return list.isEmpty();
+        });
     }
 
     /**
@@ -245,43 +282,19 @@ public class VaultTransferHandler {
                     "Insufficient funds");
             }
 
-            if (player.isOnline()) {
-                final Player finalOnlinePlayer = (Player) player;
-                if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                    noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-
-                    String withdrawMsg = syncMoneyPlugin.getMessage("vault.withdrawn");
-                    if (withdrawMsg != null) {
-                        withdrawMsg = withdrawMsg.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                        withdrawMsg = withdrawMsg.replace("{balance}", FormatUtil.formatCurrency(result.fromNewBalance));
-                        MessageHelper.sendMessage(finalOnlinePlayer, withdrawMsg);
-                    }
-                }
-            }
+            CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, result.fromNewBalance);
 
             Player receiverPlayer = plugin.getServer().getPlayer(toUuid);
-            if (receiverPlayer != null && receiverPlayer.isOnline()) {
-                if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                    noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                    String depositMsg = syncMoneyPlugin.getMessage("vault.deposited");
-                    if (depositMsg != null) {
-                        depositMsg = depositMsg.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                        depositMsg = depositMsg.replace("{balance}", FormatUtil.formatCurrency(result.toNewBalance));
-                        MessageHelper.sendMessage(receiverPlayer, depositMsg);
-                    }
-                }
-            }
+            CrossServerNotifier.notifyBalanceChange(plugin, receiverPlayer, "vault.deposited", amountBd, result.toNewBalance);
 
-            if (syncManager != null && config != null && config.isSyncMode()) {
-                String sourcePlugin = pluginDetector.detectCallingPlugin();
+            String sourcePlugin = pluginDetector.detectCallingPlugin();
 
-                String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
-                if (senderName == null) {
-                    senderName = fromUuid.toString();
-                }
-                syncManager.publishAndNotify(fromUuid, result.fromNewBalance, "VAULT_WITHDRAW", -amountBd.doubleValue(), sourcePlugin, senderName);
-                syncManager.publishAndNotify(toUuid, result.toNewBalance, "VAULT_DEPOSIT", amountBd.doubleValue(), sourcePlugin, senderName);
+            String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
+            if (senderName == null) {
+                senderName = fromUuid.toString();
             }
+            publishCrossServerUpdate(fromUuid, result.fromNewBalance, "VAULT_WITHDRAW", -amountBd.doubleValue(), sourcePlugin, senderName);
+            publishCrossServerUpdate(toUuid, result.toNewBalance, "VAULT_DEPOSIT", amountBd.doubleValue(), sourcePlugin, senderName);
 
             plugin.getLogger().info("Atomic transfer completed (Lua): " + fromUuid + " -> " + toUuid + " : " + amountBd);
 

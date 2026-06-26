@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class RateLimiter {
 
+    private static final String NULL_CLIENT_KEY = "__null_client__";
+
     private final int maxRequests;
     private final int burstCapacity;
     private final ConcurrentMap<String, RateLimitEntry> entries = new ConcurrentHashMap<>();
@@ -85,6 +87,10 @@ public class RateLimiter {
      * @return true if allowed, false if rate limit exceeded
      */
     public boolean isAllowed(String clientId) {
+        if (clientId == null) {
+            clientId = NULL_CLIENT_KEY;
+        }
+
         if (isWhitelisted(clientId)) {
             return true;
         }

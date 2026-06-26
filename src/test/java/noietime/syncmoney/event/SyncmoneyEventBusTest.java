@@ -9,7 +9,11 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.mockito.MockedStatic;
+
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for SyncmoneyEventBus.
@@ -24,6 +28,7 @@ class SyncmoneyEventBusTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
         SyncmoneyEventBus.init(mockPlugin);
         eventBus = SyncmoneyEventBus.getInstance();
     }
@@ -136,7 +141,12 @@ class SyncmoneyEventBusTest {
         eventBus.register(TestEvent.class, event -> count.incrementAndGet());
 
         TestEvent event = new TestEvent("SyncTest");
-        eventBus.callEventSync(event);
+        // callEventSync routes through Bukkit.isPrimaryThread(); stub it so the
+        // event is dispatched synchronously in the test JVM (no live server).
+        try (MockedStatic<org.bukkit.Bukkit> bukkit = mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
+            eventBus.callEventSync(event);
+        }
 
         assertEquals(1, count.get());
     }

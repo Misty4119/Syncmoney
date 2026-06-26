@@ -9,8 +9,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -30,9 +28,7 @@ public final class HighValueNotification {
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final ScheduledExecutorService scheduler;
-    private DiscordWebhookNotifier discordNotifier;
-
-    private final Set<String> notifiedAdmins;
+    private volatile DiscordWebhookNotifier discordNotifier;
 
     private final ConcurrentHashMap<UUID, Long> highValueNotifications;
 
@@ -44,7 +40,6 @@ public final class HighValueNotification {
             t.setDaemon(true);
             return t;
         });
-        this.notifiedAdmins = new HashSet<>();
         this.highValueNotifications = new ConcurrentHashMap<>();
 
         startCleanupTask();

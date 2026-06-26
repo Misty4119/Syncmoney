@@ -23,7 +23,7 @@ public final class ConfigMerger {
 
     /**
      * Default config schema version (matches CURRENT_VERSION in SchemaManager)
-     * 11 = v1.1.0, 10 = v1.0.0
+     * 11 = v1.2.0, 11 = v1.1.0, 10 = v1.0.0
      */
     private static final int DEFAULT_CONFIG_VERSION = 11;
 

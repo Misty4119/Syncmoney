@@ -4,7 +4,9 @@ import noietime.syncmoney.util.Constants;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * DB write consumer.
@@ -20,6 +22,8 @@ public final class DbWriterConsumer implements Runnable {
     private final Plugin plugin;
     private volatile boolean running = true;
     private final boolean debug;
+
+    private final Map<DbWriteQueue.DbWriteTask, Integer> retryCounts = new IdentityHashMap<>();
 
     /**
      * Debug-level log output.
@@ -97,42 +101,42 @@ public final class DbWriterConsumer implements Runnable {
 
     /**
      * Processes batch write tasks.
+     * On failure each task is re-queued for retry (bounded by
+     * {@link Constants#DB_WRITE_MAX_RETRIES}) so transient DB outages do not lose data.
      */
     private void processBatch(List<DbWriteQueue.DbWriteTask> tasks) {
         try {
-            if (tasks.size() == 1) {
-                processTask(tasks.get(0));
-            } else {
-                dbManager.batchInsertOrUpdatePlayers(tasks);
-                queue.incrementWrittenCountBy(tasks.size());
+            dbManager.batchInsertOrUpdatePlayers(tasks);
+            queue.incrementWrittenCountBy(tasks.size());
+            for (DbWriteQueue.DbWriteTask task : tasks) {
+                retryCounts.remove(task);
             }
         } catch (Exception e) {
-            plugin.getLogger().severe("Failed to process batch to DB: " + e.getMessage());
+            plugin.getLogger().severe("Failed to process batch to DB (" + tasks.size()
+                    + " tasks): " + e.getMessage());
             for (DbWriteQueue.DbWriteTask task : tasks) {
-                try {
-                    processTask(task);
-                } catch (Exception ex) {
-                    plugin.getLogger().severe("Failed to write player data to DB: " + ex.getMessage());
-                }
+                scheduleRetry(task);
             }
         }
     }
 
-    /**
-     * Processes single write task.
-     */
-    private void processTask(DbWriteQueue.DbWriteTask task) {
-        try {
-            dbManager.insertOrUpdatePlayer(
-                    task.playerUuid(),
-                    task.playerName(),
-                    task.balance(),
-                    task.version(),
-                    task.serverName());
-            queue.incrementWrittenCount();
-        } catch (Exception e) {
-            plugin.getLogger().severe("Failed to write player data to DB: " + e.getMessage());
-            plugin.getLogger().log(java.util.logging.Level.SEVERE, "DB write task stacktrace", e);
+    private void scheduleRetry(DbWriteQueue.DbWriteTask task) {
+        int attempts = retryCounts.merge(task, 1, (a, b) -> a + b);
+
+        if (attempts > Constants.DB_WRITE_MAX_RETRIES) {
+            retryCounts.remove(task);
+            plugin.getLogger().severe("Dropping DB write task after " + (attempts - 1)
+                    + " failed retries for player " + task.playerUuid()
+                    + " (balance=" + task.balance() + ", version=" + task.version() + ")");
+            return;
+        }
+
+        if (queue.requeue(task)) {
+            plugin.getLogger().warning("Re-queued failed DB write task (attempt " + attempts
+                    + "/" + Constants.DB_WRITE_MAX_RETRIES + ") for player " + task.playerUuid());
+        } else {
+            plugin.getLogger().severe("DB write queue is full; could not re-queue task for player "
+                    + task.playerUuid() + " - it will be retried on the next failure cycle");
         }
     }
 

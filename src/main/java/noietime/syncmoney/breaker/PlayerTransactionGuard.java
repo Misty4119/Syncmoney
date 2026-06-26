@@ -569,6 +569,11 @@ public final class PlayerTransactionGuard {
      * Internal player protection state.
      */
     public static class PlayerProtectionState {
+
+        private static final int MAX_TRANSACTIONS_PER_SECOND = 5;
+        private static final int MAX_TRANSACTIONS_PER_MINUTE = 50;
+        private static final long WINDOW_DURATION_MS = 30000L;
+
         private volatile ProtectionState state = ProtectionState.NORMAL;
         private volatile long lastTransactionSecond = 0;
         private volatile int transactionsPerSecond = 0;
@@ -593,7 +598,7 @@ public final class PlayerTransactionGuard {
                 transactionsPerSecond = 0;
             }
             transactionsPerSecond++;
-            return transactionsPerSecond <= 5;
+            return transactionsPerSecond <= MAX_TRANSACTIONS_PER_SECOND;
         }
 
         public synchronized boolean incrementTransactionsPerMinute(BigDecimal amount) {
@@ -605,12 +610,12 @@ public final class PlayerTransactionGuard {
             }
             transactionsPerMinute++;
             amountPerMinute = amountPerMinute.add(amount);
-            return transactionsPerMinute <= 50;
+            return transactionsPerMinute <= MAX_TRANSACTIONS_PER_MINUTE;
         }
 
-        public int getTransactionCountInWindow() {
+        public synchronized int getTransactionCountInWindow() {
             long now = System.currentTimeMillis();
-            if (now - windowStartTime > 30000) {
+            if (now - windowStartTime > WINDOW_DURATION_MS) {
                 windowStartTime = now;
                 windowTransactionCount = 1;
                 return 1;
@@ -624,42 +629,42 @@ public final class PlayerTransactionGuard {
         }
 
         public ProtectionState getState() { return state; }
-        public void setState(ProtectionState state) { this.state = state; this.lastAccessTime = System.currentTimeMillis(); }
+        void setState(ProtectionState state) { this.state = state; this.lastAccessTime = System.currentTimeMillis(); }
 
         public int getTransactionsPerSecond() { return transactionsPerSecond; }
         public int getTransactionsPerMinute() { return transactionsPerMinute; }
         public BigDecimal getAmountPerMinute() { return amountPerMinute; }
 
         public int getWarningCount() { return warningCount; }
-        public int incrementWarningCount() { return ++warningCount; }
-        public void setWarningCount(int count) { this.warningCount = count; }
+        int incrementWarningCount() { return ++warningCount; }
+        void setWarningCount(int count) { this.warningCount = count; }
 
         public int getSuccessfulTransactions() { return successfulTransactions; }
-        public int incrementSuccessfulTransactions() { return ++successfulTransactions; }
-        public void setSuccessfulTransactions(int count) { this.successfulTransactions = count; }
+        int incrementSuccessfulTransactions() { return ++successfulTransactions; }
+        void setSuccessfulTransactions(int count) { this.successfulTransactions = count; }
 
         public long getUnlockTime() { return unlockTime; }
-        public void setUnlockTime(long time) { this.unlockTime = time; }
+        void setUnlockTime(long time) { this.unlockTime = time; }
 
         public int getLockExtensionCount() { return lockExtensionCount; }
-        public void setLockExtensionCount(int count) { this.lockExtensionCount = count; }
+        void setLockExtensionCount(int count) { this.lockExtensionCount = count; }
 
         public BigDecimal getPreviousBalance() { return previousBalance; }
-        public void setPreviousBalance(BigDecimal balance) { this.previousBalance = balance; }
+        void setPreviousBalance(BigDecimal balance) { this.previousBalance = balance; }
 
         public int getWindowTransactionCount() { return windowTransactionCount; }
-        public void setWindowTransactionCount(int count) { this.windowTransactionCount = count; }
+        void setWindowTransactionCount(int count) { this.windowTransactionCount = count; }
 
         public long getWindowStartTime() { return windowStartTime; }
-        public void setWindowStartTime(long time) { this.windowStartTime = time; }
+        void setWindowStartTime(long time) { this.windowStartTime = time; }
 
         public long getLastAccessTime() { return lastAccessTime; }
 
         public long getTransferLockUntil() { return transferLockUntil; }
-        public void setTransferLockUntil(long time) { this.transferLockUntil = time; }
+        void setTransferLockUntil(long time) { this.transferLockUntil = time; }
 
         public String getTransferLockReason() { return transferLockReason; }
-        public void setTransferLockReason(String reason) { this.transferLockReason = reason; }
+        void setTransferLockReason(String reason) { this.transferLockReason = reason; }
 
         public boolean isTransferLocked() {
             return transferLockUntil > System.currentTimeMillis();

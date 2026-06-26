@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-26
+
+### Added
+
+#### Cross-Server Online Players
+- **Online Player Registry**: New `OnlinePlayerRegistry` tracks online players across servers via Redis heartbeat, powering command tab completion.
+
+#### CMI Sync Architecture
+- **CMI API Layer**: New `CMIApi`, `CMIPubsubHandler`, and `CMIVersioning` with dedicated Pub/Sub channels for CMI mode cross-server sync.
+
+#### Core Refactoring
+- **Economy Core Split**: Extracted `MemoryStateManager`, `TransactionWriter`, and `TransferOrchestrator` from `EconomyFacade`.
+- **Circuit Breaker Lock Reasons**: Added `LockReason` enum to replace string-based lock cause matching.
+- **Web Backend Modularization**: Introduced `RouteRegistry`, `StaticFileHandler`, `CorsHandler`, and `AbstractApiHandler`.
+- **Audit Log Frontend**: Refactored audit page into `useAuditData` / `useAuditExport` composables and sub-components.
+- **Test Coverage**: Expanded unit tests for CMI versioning, debounce, Vault, Web API, and PAPI expansion.
+
+### Fixed
+
+#### CMI Mode Cross-Server Sync
+- **Authority & Publishing**: Rewrote CMI sync to use CMI API as the local authority; publishes absolute balances with monotonic version numbers instead of runtime CMI database queries.
+- **Echo Loop Prevention**: Added `suppressOutbound` to stop re-publish loops when applying remote balances into local CMI.
+- **Join Reconcile**: Version-aware balance reconcile on player join to fix cross-server balance drift.
+- **Event vs Polling**: Disables polling when CMI events are available, preventing duplicate publishes during rapid `/cmi pay` spam.
+- **Vault Transfer Publish**: Vault transfers in CMI mode now correctly publish via the CMI channel (`FIX-CMI-VAULT-PUBLISH`).
+- **Cross-Server Pay Notification**: Incoming payment notifications now display the payer's name.
+
+#### Scheduler & Folia
+- **Periodic Version Check**: Fixed `GlobalRegionScheduler` interval to use correct tick units (actually runs every 5 minutes).
+- **Folia Compatibility**: CMI polling and Redis I/O moved to Async / Global Region schedulers.
+
+### Changed
+
+#### Command Tab Completion
+- **Cross-Server Player Suggestions**: `/pay`, `/money`, `/syncmoney admin`, and related commands now suggest all online players across the network (local + cross-server via Redis); `/pay` no longer suggests offline cached names.
+
+#### Miscellaneous
+- **PAPI Expansion**: Merged reflection utilities into `PlaceholderHandler`, reducing class count.
+- **Discord Webhook**: Simplified payload construction using Jackson.
+- **Web Admin**: Bundled frontend version bumped to 1.2.0.
+
+---
+
 ## [1.1.3] - 2026-04-03
 
 ### Fixed

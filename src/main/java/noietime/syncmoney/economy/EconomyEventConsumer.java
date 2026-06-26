@@ -21,10 +21,13 @@ import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * [SYNC-EVENT-001] Single consumer for economic events, driven by Folia
@@ -54,7 +57,9 @@ public final class EconomyEventConsumer implements Runnable {
     private final ShadowSyncTask shadowSyncTask;
     private volatile boolean running = true;
 
-    private final ConcurrentLinkedQueue<FailedEvent> failedEventsQueue;
+    private final ConcurrentMap<String, FailedEvent> failedEvents;
+    private volatile ExecutorService executor;
+    private volatile Thread workerThread;
     private final OverflowLogInterface overflowLog;
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
 
@@ -81,17 +86,63 @@ public final class EconomyEventConsumer implements Runnable {
         this.nameResolver = nameResolver;
         this.baltopManager = baltopManager;
         this.shadowSyncTask = shadowSyncTask;
-        this.failedEventsQueue = new ConcurrentLinkedQueue<>();
+        this.failedEvents = new ConcurrentHashMap<>();
         this.overflowLog = overflowLog;
         this.databaseManager = databaseManager;
     }
 
     /**
-     * Stop the consumer (graceful shutdown).
+     * Start the consumer on a dedicated single-thread executor.
+     * Idempotent: subsequent calls are ignored once the consumer is running.
+     */
+    public synchronized void start() {
+        if (executor != null) {
+            return;
+        }
+        running = true;
+        executor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "Syncmoney-EventConsumer");
+            t.setDaemon(true);
+            return t;
+        });
+        executor.submit(this);
+    }
+
+    /**
+     * Signal the consumer to stop (cooperative, non-blocking).
      */
     public void stop() {
         running = false;
         plugin.getLogger().fine("EconomyEventConsumer shutting down...");
+    }
+
+    public void shutdown() {
+        running = false;
+        plugin.getLogger().fine("EconomyEventConsumer shutting down...");
+
+        Thread worker = this.workerThread;
+        if (worker != null) {
+            worker.interrupt();
+            try {
+                worker.join(TimeUnit.SECONDS.toMillis(2));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        ExecutorService exec = this.executor;
+        if (exec != null) {
+            exec.shutdownNow();
+            try {
+                if (!exec.awaitTermination(2, TimeUnit.SECONDS)) {
+                    plugin.getLogger().severe(
+                            "EconomyEventConsumer executor did not terminate within 2 seconds; events may be unprocessed");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                plugin.getLogger().severe("Interrupted while awaiting EconomyEventConsumer executor termination");
+            }
+        }
     }
 
     /**
@@ -102,65 +153,45 @@ public final class EconomyEventConsumer implements Runnable {
     }
 
     /**
-     * Process pending events (driven by Folia AsyncScheduler).
-     * Processes all available events in the queue on each invocation.
-     *
-     * [AsyncScheduler] This method is called periodically by Folia AsyncScheduler.
-     */
-    public void processPending() {
-        processFailedEvents();
-
-        while (running || !queue.isEmpty()) {
-            try {
-                EconomyEvent event = queue.poll();
-                if (event != null) {
-                    processEvent(event);
-                } else {
-                    break;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-    }
-
-    /**
      * Process failed event retries.
      * [STORE-04 FIX] Added exponential backoff to prevent retry storms.
      */
     private void processFailedEvents() {
+        if (failedEvents.isEmpty()) {
+            return;
+        }
 
         final long BASE_DELAY_MS = 100;
         final long MAX_DELAY_MS = 30000;
+        final long now = System.currentTimeMillis();
 
-        FailedEvent failed;
-        while ((failed = failedEventsQueue.peek()) != null) {
+        for (Map.Entry<String, FailedEvent> entry : failedEvents.entrySet()) {
+            String key = entry.getKey();
+            FailedEvent failed = entry.getValue();
+
             if (failed.retryCount() >= MAX_RETRY_COUNT) {
                 handleCriticalFailure(failed);
-                failedEventsQueue.poll();
+                failedEvents.remove(key, failed);
                 continue;
             }
 
-
             long retryDelay = Math.min(BASE_DELAY_MS * (1L << failed.retryCount()), MAX_DELAY_MS);
-            long timeSinceFirstFailure = System.currentTimeMillis() - failed.firstFailureTime();
+            long timeSinceFirstFailure = now - failed.firstFailureTime();
 
             if (timeSinceFirstFailure < retryDelay) {
-
-
-                break;
+                // Per-event backoff: skip this one for now, keep scanning the rest.
+                continue;
             }
 
             BigDecimal newBalance = processRedisWrite(failed.event());
             if (newBalance != null && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
-                failedEventsQueue.poll();
+                failedEvents.remove(key, failed);
                 plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
 
                 processEventSteps(failed.event(), newBalance);
             } else {
-                failedEventsQueue.poll();
-                failedEventsQueue.add(new FailedEvent(
+                // Atomic CAS bump so a concurrent removal/insert for the same requestId is never lost.
+                failedEvents.replace(key, failed, new FailedEvent(
                         failed.event(),
                         failed.retryCount() + 1,
                         failed.firstFailureTime()));
@@ -169,6 +200,11 @@ public final class EconomyEventConsumer implements Runnable {
                         ", next retry in " + (Math.min(BASE_DELAY_MS * (1L << (failed.retryCount() + 1)), MAX_DELAY_MS)) + "ms)");
             }
         }
+    }
+
+    private static String failedKey(EconomyEvent event) {
+        String id = event.requestId();
+        return id != null ? id : event.playerUuid() + ":" + event.timestamp();
     }
 
     /**
@@ -286,6 +322,7 @@ public final class EconomyEventConsumer implements Runnable {
 
     @Override
     public void run() {
+        this.workerThread = Thread.currentThread();
         plugin.getLogger().fine("EconomyEventConsumer started.");
 
         if (overflowLog != null && overflowLog.hasOverflowRecords()) {
@@ -294,6 +331,8 @@ public final class EconomyEventConsumer implements Runnable {
 
         while (running || !queue.isEmpty()) {
             try {
+                processFailedEvents();
+
                 EconomyEvent event = queue.poll(100, TimeUnit.MILLISECONDS);
                 if (event != null) {
                     processEvent(event);
@@ -362,7 +401,7 @@ public final class EconomyEventConsumer implements Runnable {
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
-            failedEventsQueue.add(new FailedEvent(event, 0, System.currentTimeMillis()));
+            failedEvents.putIfAbsent(failedKey(event), new FailedEvent(event, 0, System.currentTimeMillis()));
         }
     }
 

@@ -21,6 +21,7 @@ public class WebAdminConfig {
     private String apiKey;
     private boolean rateLimitEnabled;
     private int rateLimitPerMinute;
+    private boolean trustProxy;
     private String corsAllowedOrigins;
     private String theme;
     private String language;
@@ -31,7 +32,7 @@ public class WebAdminConfig {
      */
     public void load(FileConfiguration fc) {
         this.enabled = fc.getBoolean("web-admin.enabled", false);
-        this.bundledVersion = fc.getString("web-admin.bundled-version", "1.1.2");
+        this.bundledVersion = fc.getString("web-admin.bundled-version", "1.2.0");
         this.host = fc.getString("web-admin.server.host", "localhost");
         this.port = fc.getInt("web-admin.server.port", 8080);
         this.webPath = fc.getString("web-admin.web.path", "syncmoney-web");
@@ -41,6 +42,7 @@ public class WebAdminConfig {
         this.apiKey = fc.getString("web-admin.security.api-key", "change-me-in-production");
         this.rateLimitEnabled = fc.getBoolean("web-admin.security.rate-limit.enabled", true);
         this.rateLimitPerMinute = fc.getInt("web-admin.security.rate-limit.requests-per-minute", 60);
+        this.trustProxy = fc.getBoolean("web-admin.security.trust-proxy", false);
         this.corsAllowedOrigins = fc.getString("web-admin.security.cors-allowed-origins", "*");
         this.theme = fc.getString("web-admin.ui.theme", "dark");
         this.language = fc.getString("web-admin.ui.language", "zh-TW");
@@ -89,6 +91,10 @@ public class WebAdminConfig {
 
     public int getRateLimitPerMinute() {
         return rateLimitPerMinute;
+    }
+
+    public boolean isTrustProxy() {
+        return trustProxy;
     }
 
     public String getCorsAllowedOrigins() {

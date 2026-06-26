@@ -48,7 +48,7 @@ public class BreakerManager {
         this.discordNotifier = new DiscordWebhookNotifier(plugin, config);
 
         if (config.playerProtection().isPlayerProtectionEnabled()) {
-            this.notificationService = new NotificationService(plugin, config);
+            this.notificationService = new NotificationService(plugin, config, discordNotifier);
             this.playerTransactionGuard = new PlayerTransactionGuard(plugin, config, notificationService, redisManager);
 
             if (economyFacade != null) {
@@ -94,6 +94,10 @@ public class BreakerManager {
 
         if (circuitBreaker != null && circuitBreaker.getResourceMonitor() != null) {
             circuitBreaker.getResourceMonitor().shutdown();
+        }
+
+        if (discordNotifier != null) {
+            discordNotifier.shutdown();
         }
 
         plugin.getLogger().fine("Breaker layer shutdown complete");
@@ -147,8 +151,11 @@ public class BreakerManager {
      * Set Discord webhook notifier for resource alerts.
      */
     public void setDiscordWebhookNotifier(DiscordWebhookNotifier discordNotifier) {
+        this.discordNotifier = discordNotifier;
 
-
+        if (notificationService != null) {
+            notificationService.setDiscordWebhookNotifier(discordNotifier);
+        }
         if (circuitBreaker != null && circuitBreaker.getResourceMonitor() != null) {
             circuitBreaker.getResourceMonitor().setDiscordWebhookNotifier(discordNotifier);
         }

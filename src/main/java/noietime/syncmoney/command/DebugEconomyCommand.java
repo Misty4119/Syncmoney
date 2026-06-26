@@ -237,6 +237,10 @@ public final class DebugEconomyCommand implements CommandExecutor, TabCompleter 
             return List.of("player", "system");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("player")) {
+            noietime.syncmoney.uuid.OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[1], true);
+            }
             return null;
         }
         return Collections.emptyList();

@@ -2,23 +2,27 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.config.SyncmoneyConfig.CMIBalanceMode;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.sync.CMIApi;
+import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.util.NumericUtil;
 
 import java.math.BigDecimal;
-import java.sql.*;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * CMI Economy Handler.
- * Uses Redis to store CMI economy data, synchronized via Pub/Sub.
+ * CMI Economy Handler — the cross-server sync layer for CMI economy.
  *
- * Supports two balance modes:
- * - API: Uses CMI API for balance operations
- * - INTERNAL: Direct database access (faster, default)
+ * <p>Design (see {@code reference/CMIEconomySync}): CMI is the local economy authority. This
+ * handler does NOT query CMI's database at runtime; it reads balances from the in-memory CMI API
+ * (via {@link CMIApi}) and uses Redis purely as the sync transport + mirror. Outbound changes are
+ * published as absolute balances with a monotonic version; inbound updates are applied back into
+ * CMI by {@code CMIPubsubHandler}.
+ *
+ * [ThreadSafe] Redis I/O is performed on async threads by callers; CMI writes go through the
+ * global region scheduler.
  */
 public class CMIEconomyHandler {
 
@@ -26,259 +30,268 @@ public class CMIEconomyHandler {
     private final SyncmoneyConfig config;
     private final RedisManager redisManager;
     private final CrossServerSyncManager syncManager;
+    private final CMIApi cmiApi;
     private final String redisPrefix;
-    private final CMIBalanceMode balanceMode;
 
     private final ConcurrentHashMap<UUID, BigDecimal> lastKnownBalance = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> lastAppliedVersion = new ConcurrentHashMap<>();
     private final AtomicLong versionCounter = new AtomicLong(0L);
-
-    private Connection cmiConnection;
 
     public CMIEconomyHandler(Syncmoney plugin, SyncmoneyConfig config,
                            RedisManager redisManager,
-                           CrossServerSyncManager syncManager) {
+                           CrossServerSyncManager syncManager,
+                           CMIApi cmiApi) {
         this.plugin = plugin;
         this.config = config;
         this.redisManager = redisManager;
         this.syncManager = syncManager;
+        this.cmiApi = cmiApi;
         this.redisPrefix = config.cmi().getCMIRedisPrefix();
-        this.balanceMode = config.getCMIBalanceMode();
+        plugin.getLogger().fine("CMI Economy Handler initialized (CMI API available: " + cmiApi.isAvailable() + ")");
+    }
 
-        initCMIConnection();
-        plugin.getLogger().fine("CMI Economy Handler initialized with mode: " + balanceMode);
+    public CMIApi getCmiApi() {
+        return cmiApi;
+    }
+
+    private volatile noietime.syncmoney.listener.CMIEconomyListener cmiListener;
+
+    public void setCmiListener(noietime.syncmoney.listener.CMIEconomyListener listener) {
+        this.cmiListener = listener;
+    }
+
+    public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance) {
+        notifyInboundApplied(uuid, absoluteBalance, null);
     }
 
     /**
-     * Get current balance mode.
+     * Refresh listener baseline after an inbound write. When {@code appliedVersion} is known,
+     * it is recorded so join-reconcile can compare against the Redis mirror version.
      */
-    public CMIBalanceMode getBalanceMode() {
-        return balanceMode;
+    public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance, Long appliedVersion) {
+        lastKnownBalance.put(uuid, absoluteBalance);
+        if (appliedVersion != null) {
+            lastAppliedVersion.put(uuid, appliedVersion);
+        }
+        if (cmiListener != null) {
+            cmiListener.notifyInboundApplied(uuid, absoluteBalance);
+        }
     }
 
     /**
-     * Handle external balance change from CMI event.
-     * This is called when CMI detects a balance change.
+     * [FIX-CMI-ECHO] Suppress outbound re-publish while applying remote balance into local CMI.
      */
-    public void handleExternalBalanceChange(UUID uuid, BigDecimal diff, boolean isDeposit, String sourceName) {
+    public void suppressOutbound(UUID uuid, long durationMs) {
+        if (cmiListener != null) {
+            cmiListener.suppressOutbound(uuid, durationMs);
+        }
+    }
+
+    private long generateNewVersion() {
+        return CMIVersioning.generateVersion(versionCounter);
+    }
+
+    public long mintCmiVersion() {
+        return generateNewVersion();
+    }
+
+    public void syncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
+                                    boolean isDeposit, String sourceName) {
         try {
-            BigDecimal currentRedisBalance = getRedisBalance(uuid);
+            BigDecimal newBalance = NumericUtil.normalize(absoluteBalance);
+            BigDecimal last = lastKnownBalance.get(uuid);
+            if (last != null && last.compareTo(newBalance) == 0) {
+                return;
+            }
 
-            BigDecimal newBalance = currentRedisBalance.add(diff);
-
-            setRedisBalance(uuid, newBalance);
+            long version = setRedisBalanceWithVersion(uuid, newBalance);
+            lastAppliedVersion.put(uuid, version);
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 String eventType = isDeposit ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
-                syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    eventType,
-                    diff.doubleValue(),
-                    "CMI",
-                    null
-                );
+                double amount = diff != null ? diff.doubleValue() : 0.0;
+                syncManager.publishCMIUpdate(uuid, newBalance, version, eventType, amount, "CMI");
             }
 
             lastKnownBalance.put(uuid, newBalance);
 
             if (config.isDebug()) {
-                plugin.getLogger().fine("[CMI] External balance change: " + uuid +
-                    ", diff: " + diff + ", new balance: " + newBalance);
+                plugin.getLogger().fine("[CMI] Absolute sync: " + uuid + " = " + newBalance
+                        + " v" + version + " (source=" + sourceName + ")");
             }
         } catch (Exception e) {
-            plugin.getLogger().warning("Failed to handle external balance change: " + e.getMessage());
+            plugin.getLogger().warning("Failed to sync CMI absolute balance: " + e.getMessage());
         }
     }
 
     /**
-     * Generate new version number using CMIEconomySync strategy.
+     * Read the authoritative on-disk/in-memory CMI balance for outbound publishing.
+     *
+     * <p>Unlike {@link #getCMIDirectBalance(UUID)} this never falls back to the Redis mirror,
+     * because the mirror may lag behind a just-applied local CMI change (especially for offline
+     * pay targets on the originating server).
      */
-    private long generateNewVersion() {
-        long millis = System.currentTimeMillis();
-        long counter = versionCounter.incrementAndGet() % 10000L;
-        return millis * 10000L + counter;
+    public BigDecimal getCMILocalBalance(UUID uuid) {
+        Double apiBalance = cmiApi.getBalance(uuid);
+        return apiBalance != null ? NumericUtil.normalize(apiBalance) : null;
     }
 
     /**
-     * Get direct balance from CMI database.
-     * Used by polling fallback mechanism.
+     * Read the current CMI balance via the CMI API (used by the polling fallback).
+     *
+     * <p>If the CMI API cannot resolve the player, falls back to the last mirrored value rather
+     * than returning zero, so a transient read failure never publishes a bogus 0 balance.
      */
     public BigDecimal getCMIDirectBalance(UUID uuid) {
-        try {
-            return NumericUtil.normalize(getCMIBalance(uuid));
-        } catch (SQLException e) {
-            plugin.getLogger().warning("Failed to get CMI balance: " + e.getMessage());
-            return BigDecimal.ZERO;
+        Double apiBalance = cmiApi.getBalance(uuid);
+        if (apiBalance != null) {
+            return NumericUtil.normalize(apiBalance);
         }
+        return getRedisBalance(uuid);
     }
 
-    /**
-     * Initializes CMI database connection.
-     */
-    private void initCMIConnection() {
-        try {
-            String sqlitePath = config.migration().getCMISqlitePath();
-            if (sqlitePath != null && !sqlitePath.isEmpty()) {
-                String dbUrl = "jdbc:sqlite:" + sqlitePath;
-                cmiConnection = DriverManager.getConnection(dbUrl);
-                plugin.getLogger().fine("CMI SQLite database connected: " + sqlitePath);
-            } else {
-                String host = config.migration().getCMIDatabaseHost();
-                int port = config.migration().getCMIDatabasePort();
-                String db = config.migration().getCMIDatabaseName();
-                String user = config.migration().getCMIDatabaseUsername();
-                String pass = config.migration().getCMIDatabasePassword();
-
-                String dbUrl = "jdbc:mysql://" + host + ":" + port + "/" + db;
-                cmiConnection = DriverManager.getConnection(dbUrl, user, pass);
-                plugin.getLogger().fine("CMI MySQL database connected: " + host + ":" + port);
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().warning("CMI database connection failed: " + e.getMessage());
+    public void reconcileOnJoin(UUID uuid) {
+        if (!cmiApi.isAvailable()) {
+            return;
         }
+        BigDecimal mirror = getRedisBalanceIfPresent(uuid);
+        Long mirrorVersion = getRedisVersionIfPresent(uuid);
+        if (mirror == null || mirrorVersion == null) {
+            return;
+        }
+
+        long lastApplied = lastAppliedVersion.getOrDefault(uuid, 0L);
+        if (!CMIVersioning.isNewer(mirrorVersion, lastApplied)) {
+            BigDecimal local = getCMILocalBalance(uuid);
+            if (local != null) {
+                notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
+            }
+            return;
+        }
+
+        BigDecimal local = getCMILocalBalance(uuid);
+        if (local != null && local.compareTo(mirror) == 0) {
+            notifyInboundApplied(uuid, mirror, mirrorVersion);
+            return;
+        }
+        if (local != null && local.compareTo(mirror) > 0) {
+            notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
+            return;
+        }
+
+        final double target = mirror.doubleValue();
+        final BigDecimal normalizedMirror = mirror;
+        final long version = mirrorVersion;
+        plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> {
+            suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
+            cmiApi.setBalance(uuid, target);
+            notifyInboundApplied(uuid, normalizedMirror, version);
+            if (config.isDebug()) {
+                plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
+            }
+        });
     }
 
+    private static final long OUTBOUND_SUPPRESS_MS = 750L;
+
     /**
-     * Synchronizes player balance from CMI to Redis.
+     * @deprecated Use {@link #reconcileOnJoin(UUID)} only. Mirror-pull during gameplay reverts local CMI.
      */
-    public void syncPlayerFromCMI(UUID uuid) {
-        try {
-            BigDecimal cmiBalance = getCMIBalance(uuid);
+    @Deprecated
+    public void reconcileFromMirror(UUID uuid) {
+        reconcileOnJoin(uuid);
+    }
 
-            BigDecimal redisBalance = getRedisBalance(uuid);
-
-            if (cmiBalance.subtract(redisBalance).abs().compareTo(BigDecimal.valueOf(0.01)) > 0) {
-                setRedisBalance(uuid, cmiBalance);
-
-                if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-                    syncManager.publishAndNotify(
-                        uuid,
-                        cmiBalance,
-                        "CMI_DEPOSIT",
-                        cmiBalance.subtract(redisBalance).doubleValue(),
-                        "CMI",
-                        null
-                    );
-                }
-
-                lastKnownBalance.put(uuid, cmiBalance);
-
-                plugin.getLogger().fine("CMI balance synchronized: " + uuid + " = " + cmiBalance);
+    private Long getRedisVersionIfPresent(UUID uuid) {
+        if (redisManager == null || redisManager.isDegraded()) {
+            return null;
+        }
+        String versionKey = redisPrefix + ":" + uuid + ":version";
+        try (var jedis = redisManager.getResource()) {
+            String value = jedis.get(versionKey);
+            if (value == null) {
+                return null;
             }
+            return Long.parseLong(value);
         } catch (Exception e) {
-            plugin.getLogger().warning("CMI balance synchronization failed: " + e.getMessage());
+            return null;
         }
     }
 
     /**
-     * Reads balance from CMI database.
-     */
-    private BigDecimal getCMIBalance(UUID uuid) throws SQLException {
-        String tablePrefix = config.migration().getCMITablePrefix();
-        String sql = "SELECT * FROM " + tablePrefix + "users WHERE uuid = ?";
-
-        try (PreparedStatement stmt = cmiConnection.prepareStatement(sql)) {
-            stmt.setString(1, uuid.toString());
-
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return NumericUtil.normalize(rs.getDouble("money"));
-                }
-            }
-        }
-
-        return BigDecimal.ZERO;
-    }
-
-    /**
-     * Reads balance from Redis.
+     * Reads the mirrored balance from Redis.
      */
     private BigDecimal getRedisBalance(UUID uuid) {
-        String key = redisPrefix + ":" + uuid.toString();
+        BigDecimal present = getRedisBalanceIfPresent(uuid);
+        return present != null ? present : BigDecimal.ZERO;
+    }
 
+    private BigDecimal getRedisBalanceIfPresent(UUID uuid) {
+        if (redisManager == null || redisManager.isDegraded()) {
+            return null;
+        }
+        String key = redisPrefix + ":" + uuid.toString();
         try (var jedis = redisManager.getResource()) {
             String value = jedis.get(key);
-            return value != null ? NumericUtil.normalize(value) : BigDecimal.ZERO;
+            return value != null ? NumericUtil.normalize(value) : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 
     /**
-     * Sets Redis balance.
+     * Sets the Redis mirror balance together with an explicit, monotonic version.
+     * Used by the unified CMI publish path so the published version and the stored
+     * version key always agree (see {@link CMIVersioning}).
+     *
+     * @return the version written
      */
-    private void setRedisBalance(UUID uuid, BigDecimal balance) {
+    private long setRedisBalanceWithVersion(UUID uuid, BigDecimal balance) {
+        long version = generateNewVersion();
         String key = redisPrefix + ":" + uuid.toString();
-        String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
+        String versionKey = key + ":version";
 
         try (var jedis = redisManager.getResource()) {
             jedis.set(key, balance.toPlainString());
-            jedis.incr(versionKey);
+            jedis.set(versionKey, String.valueOf(version));
         }
+        return version;
     }
 
     /**
-     * Deposit (CMI mode specific).
+     * Deposit (CMI mode specific). Updates the mirror and publishes; CMI itself is updated either
+     * by the local CMI command that triggered this or by inbound consumers on other servers.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount) {
-        String key = redisPrefix + ":" + uuid.toString();
-        String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
+        BigDecimal newBalance = getRedisBalance(uuid).add(amount);
+        long version = setRedisBalanceWithVersion(uuid, newBalance);
 
-        try (var jedis = redisManager.getResource()) {
-            BigDecimal current = getRedisBalance(uuid);
-            BigDecimal newBalance = current.add(amount);
-
-            jedis.set(key, newBalance.toPlainString());
-            jedis.incr(versionKey);
-
-            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-                syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "CMI_DEPOSIT",
-                    amount.doubleValue(),
-                    "CMI",
-                    null
-                );
-            }
-
-            return newBalance;
+        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_DEPOSIT", amount.doubleValue(), "CMI");
         }
+        return newBalance;
     }
 
     /**
      * Withdraw (CMI mode specific).
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount) {
-        String key = redisPrefix + ":" + uuid.toString();
-        String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
-
-        try (var jedis = redisManager.getResource()) {
-            BigDecimal current = getRedisBalance(uuid);
-            if (current.compareTo(amount) < 0) {
-                throw new IllegalArgumentException("Insufficient funds: cannot withdraw " + amount + " from balance " + current);
-            }
-
-            BigDecimal newBalance = current.subtract(amount);
-
-            jedis.set(key, newBalance.toPlainString());
-            jedis.incr(versionKey);
-
-            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-                syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "CMI_WITHDRAW",
-                    -amount.doubleValue(),
-                    "CMI",
-                    null
-                );
-            }
-
-            return newBalance;
+        BigDecimal current = getRedisBalance(uuid);
+        if (current.compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient funds: cannot withdraw " + amount + " from balance " + current);
         }
+
+        BigDecimal newBalance = current.subtract(amount);
+        long version = setRedisBalanceWithVersion(uuid, newBalance);
+
+        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_WITHDRAW", -amount.doubleValue(), "CMI");
+        }
+        return newBalance;
     }
 
     /**
-     * Gets balance.
+     * Gets balance from the Redis mirror (CMI is the authority; the mirror reflects the synced value).
      */
     public BigDecimal getBalance(UUID uuid) {
         return getRedisBalance(uuid);
@@ -288,47 +301,11 @@ public class CMIEconomyHandler {
      * Sets balance.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance) {
-        String key = redisPrefix + ":" + uuid.toString();
-        String versionKey = redisPrefix + ":" + uuid.toString() + ":version";
+        long version = setRedisBalanceWithVersion(uuid, newBalance);
 
-        try (var jedis = redisManager.getResource()) {
-            jedis.set(key, newBalance.toPlainString());
-            jedis.incr(versionKey);
-
-            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-                syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "CMI_SET_BALANCE",
-                    newBalance.doubleValue(),
-                    "CMI",
-                    null
-                );
-            }
-
-            return newBalance;
+        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_SET_BALANCE", newBalance.doubleValue(), "CMI");
         }
-    }
-
-    /**
-     * Periodically synchronizes all online players.
-     */
-    public void syncAllOnlinePlayers() {
-        plugin.getServer().getOnlinePlayers().forEach(player -> {
-            syncPlayerFromCMI(player.getUniqueId());
-        });
-    }
-
-    /**
-     * Closes database connection.
-     */
-    public void close() {
-        try {
-            if (cmiConnection != null && !cmiConnection.isClosed()) {
-                cmiConnection.close();
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().warning("Failed to close CMI connection: " + e.getMessage());
-        }
+        return newBalance;
     }
 }

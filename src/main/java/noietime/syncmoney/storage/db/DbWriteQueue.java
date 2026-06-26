@@ -1,5 +1,7 @@
 package noietime.syncmoney.storage.db;
 
+import noietime.syncmoney.util.Constants;
+
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -31,12 +33,16 @@ public final class DbWriteQueue {
     public boolean offer(DbWriteTask task) {
 
         int currentSize = queue.size();
-        int usageThreshold = (int) (capacity * 0.8);
+        int usageThreshold = (int) (capacity * Constants.QUEUE_HIGH_USAGE_THRESHOLD);
         
         if (currentSize >= usageThreshold) {
             return false;
         }
         
+        return queue.offer(task);
+    }
+
+    public boolean requeue(DbWriteTask task) {
         return queue.offer(task);
     }
 

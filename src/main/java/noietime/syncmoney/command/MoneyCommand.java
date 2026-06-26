@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
 import org.bukkit.command.Command;
@@ -75,6 +76,10 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd,
                                    @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
+            OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[0], true);
+            }
             return plugin.getServer().getOnlinePlayers().stream()
                     .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(args[0].toLowerCase()))

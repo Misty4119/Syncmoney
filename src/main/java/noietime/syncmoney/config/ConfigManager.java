@@ -414,20 +414,80 @@ public class ConfigManager {
 
     /**
      * [SYNC-CONFIG-010] Validate a configuration value before saving.
+     *
+     * Validation rules are sourced from {@link ConfigFieldMetadata}, the single
+     * structure that declares each field's type, editability, min/max bounds and
+     * allowed values. When a field has no metadata definition we fall back to a
+     * permissive type check for backward compatibility.
      */
     public ValidationResult validate(String section, String key, Object value) {
+        if (value == null) {
+            return new ValidationResult(false, "Value cannot be null");
+        }
 
-        if (value instanceof Number) {
+        ConfigFieldMetadata.ConfigFieldDefinition def = findFieldDefinition(section, key);
 
-        } else if (value instanceof Boolean) {
-
-        } else if (value instanceof String) {
-
-        } else {
+        if (def == null) {
+            if (value instanceof Number || value instanceof Boolean || value instanceof String) {
+                return new ValidationResult(true, "Valid");
+            }
             return new ValidationResult(false, "Invalid value type");
         }
 
+        if (!def.editable()) {
+            return new ValidationResult(false, "Field is not editable: " + def.path());
+        }
+
+        switch (def.type()) {
+            case NUMBER -> {
+                if (!(value instanceof Number)) {
+                    return new ValidationResult(false, "Value must be a number");
+                }
+                double v = ((Number) value).doubleValue();
+                if (def.min() instanceof Number min && v < min.doubleValue()) {
+                    return new ValidationResult(false, "Value must be >= " + min);
+                }
+                if (def.max() instanceof Number max && v > max.doubleValue()) {
+                    return new ValidationResult(false, "Value must be <= " + max);
+                }
+            }
+            case BOOLEAN -> {
+                if (!(value instanceof Boolean)) {
+                    return new ValidationResult(false, "Value must be a boolean");
+                }
+            }
+            case STRING -> {
+                if (!(value instanceof String)) {
+                    return new ValidationResult(false, "Value must be a string");
+                }
+                List<String> allowed = def.allowedValues();
+                if (allowed != null && !allowed.isEmpty() && !allowed.contains(value)) {
+                    return new ValidationResult(false, "Value must be one of " + allowed);
+                }
+            }
+            default -> {
+                // ARRAY / OBJECT types are not range-validated here.
+            }
+        }
+
         return new ValidationResult(true, "Valid");
+    }
+
+    /**
+     * [SYNC-CONFIG-010a] Look up the metadata definition for a given section/key pair.
+     *
+     * @return the matching {@link ConfigFieldMetadata.ConfigFieldDefinition}, or {@code null} if none is defined.
+     */
+    private ConfigFieldMetadata.ConfigFieldDefinition findFieldDefinition(String section, String key) {
+        if (section == null || key == null) {
+            return null;
+        }
+        for (ConfigFieldMetadata.ConfigFieldDefinition def : ConfigFieldMetadata.getAllFields()) {
+            if (def.section().equals(section) && def.key().equals(key)) {
+                return def;
+            }
+        }
+        return null;
     }
 
     /**

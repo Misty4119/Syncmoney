@@ -487,11 +487,11 @@ cd Syncmoney
 
 # Build the plugin (Shadow JAR)
 ./gradlew shadowJar
-# Output: build/libs/Syncmoney-1.1.2.jar
+# Output: build/libs/Syncmoney-1.2.0.jar
 
 # Build PlaceholderAPI expansion
 cd syncmoney-papi-expansion && ../gradlew jar
-# Output: build/libs/SyncmoneyExpansion-1.1.2.jar
+# Output: build/libs/SyncmoneyExpansion-1.2.0.jar
 
 # Build web frontend
 cd syncmoney-web && pnpm install && pnpm build

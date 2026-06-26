@@ -107,6 +107,10 @@ public final class SyncBalanceCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 1) {
+            noietime.syncmoney.uuid.OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[0], true);
+            }
             return null;
         }
         return Collections.emptyList();

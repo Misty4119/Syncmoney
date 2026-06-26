@@ -88,15 +88,23 @@ public class ApiKeyAuthFilter {
 
     /**
      * Get client identifier for rate limiting.
-     * Uses X-Forwarded-For header if available (for proxied requests).
+     *
+     * <p>Trust boundary: the {@code X-Forwarded-For} header is attacker-controllable and
+     * was previously trusted unconditionally, allowing a client to bypass per-IP rate
+     * limiting by rotating the header value. It is now only honoured when
+     * {@code web-admin.security.trust-proxy} is enabled (i.e. the server is known to sit
+     * behind a trusted reverse proxy). Otherwise the direct socket peer address is used.</p>
      */
     private String getClientId(HttpServerExchange exchange) {
-        String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
+        if (config.isTrustProxy()) {
+            String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
+            if (forwarded != null && !forwarded.isBlank()) {
+                String[] hops = forwarded.split(",");
+                return hops[hops.length - 1].trim();
+            }
         }
 
-        if (exchange.getSourceAddress() != null) {
+        if (exchange.getSourceAddress() != null && exchange.getSourceAddress().getAddress() != null) {
             return exchange.getSourceAddress().getAddress().getHostAddress();
         }
 

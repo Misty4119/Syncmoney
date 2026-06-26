@@ -25,14 +25,19 @@ class RateLimiterTest {
         }
     }
 
+    // RateLimiter(5) => maxRequests=5, burstCapacity=min(5/2,5)=2.
+    // Total allowance before blocking = burst(2) + regular(5) = 7 requests.
+    private static final int TOTAL_ALLOWANCE = 7;
+
     @Test
     void testBlocksRequestsOverLimit() {
-        for (int i = 0; i < 5; i++) {
-            rateLimiter.isAllowed("test-client");
+        for (int i = 0; i < TOTAL_ALLOWANCE; i++) {
+            assertTrue(rateLimiter.isAllowed("test-client"),
+                    "Request " + (i + 1) + " within burst+regular allowance should pass");
         }
 
         assertFalse(rateLimiter.isAllowed("test-client"),
-                "Request over limit should be blocked");
+                "Request over burst+regular allowance should be blocked");
     }
 
     @Test
@@ -47,12 +52,12 @@ class RateLimiterTest {
 
     @Test
     void testMultipleClients() {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < TOTAL_ALLOWANCE; i++) {
             assertTrue(rateLimiter.isAllowed("clientA"));
         }
         assertFalse(rateLimiter.isAllowed("clientA"));
 
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < TOTAL_ALLOWANCE; i++) {
             assertTrue(rateLimiter.isAllowed("clientB"));
         }
         assertFalse(rateLimiter.isAllowed("clientB"));
@@ -60,21 +65,19 @@ class RateLimiterTest {
 
     @Test
     void testEmptyClientId() {
-        assertTrue(rateLimiter.isAllowed(""));
-        assertTrue(rateLimiter.isAllowed(""));
-        assertTrue(rateLimiter.isAllowed(""));
-        assertTrue(rateLimiter.isAllowed(""));
-        assertTrue(rateLimiter.isAllowed(""));
+        for (int i = 0; i < TOTAL_ALLOWANCE; i++) {
+            assertTrue(rateLimiter.isAllowed(""));
+        }
         assertFalse(rateLimiter.isAllowed(""));
     }
 
     @Test
     void testNullClientId() {
-        assertTrue(rateLimiter.isAllowed(null));
-        assertTrue(rateLimiter.isAllowed(null));
-        assertTrue(rateLimiter.isAllowed(null));
-        assertTrue(rateLimiter.isAllowed(null));
-        assertTrue(rateLimiter.isAllowed(null));
+        // Null is treated as a single shared anonymous bucket (no NPE) and is
+        // still rate-limited like any other client.
+        for (int i = 0; i < TOTAL_ALLOWANCE; i++) {
+            assertTrue(rateLimiter.isAllowed(null));
+        }
         assertFalse(rateLimiter.isAllowed(null));
     }
 

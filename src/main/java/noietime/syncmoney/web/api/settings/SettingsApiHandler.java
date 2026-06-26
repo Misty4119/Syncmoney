@@ -4,6 +4,7 @@ import io.undertow.server.HttpServerExchange;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.util.JsonParseUtil;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.server.WebAdminConfig;
 
@@ -23,9 +24,8 @@ import java.util.function.Consumer;
  * API handler for user settings.
  * Provides endpoints for theme, language, and timezone preferences.
  */
-public class SettingsApiHandler {
+public class SettingsApiHandler extends AbstractApiHandler {
 
-    private final Syncmoney plugin;
     private final WebAdminConfig config;
     private final SyncmoneyConfig syncmoneyConfig;
 
@@ -42,7 +42,7 @@ public class SettingsApiHandler {
     private static final long SAVE_DEBOUNCE_MS = 500;
 
     public SettingsApiHandler(Syncmoney plugin, WebAdminConfig config, SyncmoneyConfig syncmoneyConfig) {
-        this.plugin = plugin;
+        super(plugin);
         this.config = config;
         this.syncmoneyConfig = syncmoneyConfig;
     }
@@ -301,15 +301,5 @@ public class SettingsApiHandler {
                 callback.accept(null);
             }
         });
-    }
-
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8");
-        exchange.getResponseSender().send(json);
     }
 }

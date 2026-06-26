@@ -155,7 +155,7 @@ public class WebServiceManager {
 
         if (redisManager != null || databaseManager != null) {
             var systemHandler = new noietime.syncmoney.web.api.system.SystemApiHandler(
-                    plugin, config, redisManager, databaseManager, circuitBreaker, schemaManager);
+                    plugin, config, redisManager, databaseManager, circuitBreaker, schemaManager, nodeApiKeyStore);
             systemHandler.registerRoutes(router);
         }
 

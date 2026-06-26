@@ -1,10 +1,12 @@
 package noietime.syncmoney.storage;
 
+import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
@@ -54,7 +56,7 @@ public final class CacheManager {
     private final java.util.concurrent.atomic.AtomicLong cacheHits = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong cacheMisses = new java.util.concurrent.atomic.AtomicLong(0);
 
-    private final int expirationMinutes = 30;
+    private final int expirationMinutes = Constants.DEFAULT_EXPIRATION_MINUTES;
 
     public CacheManager(Plugin plugin, RedisManager redisManager, boolean redisRequired) {
         this.plugin = plugin;
@@ -302,22 +304,28 @@ public final class CacheManager {
      * Reload Lua scripts (called when script is flagged as dangerous by Redis).
      * Prevents infinite loop from repeated reloads in short time.
      */
-    public synchronized void reloadLuaScripts() {
-        if (isReloading) {
-            plugin.getLogger().warning("Lua script reload already in progress, skipping");
-            return;
+    public void reloadLuaScripts() {
+        synchronized (this) {
+            if (isReloading) {
+                plugin.getLogger().warning("Lua script reload already in progress, skipping");
+                return;
+            }
+
+            long now = System.currentTimeMillis();
+
+            if (now - lastReloadTime < MIN_RELOAD_INTERVAL_MS) {
+                plugin.getLogger().warning("Skipping Lua script reload - too soon since last reload");
+                return;
+            }
+
+            isReloading = true;
+            lastReloadTime = now;
         }
 
-        long now = System.currentTimeMillis();
+        CompletableFuture.runAsync(this::doReloadLuaScripts);
+    }
 
-        if (now - lastReloadTime < MIN_RELOAD_INTERVAL_MS) {
-            plugin.getLogger().warning("Skipping Lua script reload - too soon since last reload");
-            return;
-        }
-
-        isReloading = true;
-        lastReloadTime = now;
-
+    private void doReloadLuaScripts() {
         try {
             plugin.getLogger().warning("Reloading Lua scripts due to previous blocking...");
 

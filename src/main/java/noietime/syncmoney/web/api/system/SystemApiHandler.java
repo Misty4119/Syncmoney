@@ -6,8 +6,11 @@ import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
+import noietime.syncmoney.web.security.NodeApiKeyStore;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
+import noietime.syncmoney.web.util.HttpClientUtil;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,28 +22,41 @@ import java.util.Map;
  * API handler for system status endpoints.
  * Provides access to plugin, economy, Redis, database, and circuit-breaker status.
  */
-public class SystemApiHandler {
+public class SystemApiHandler extends AbstractApiHandler {
 
-    private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final RedisManager redisManager;
     private final DatabaseManager databaseManager;
     private final EconomicCircuitBreaker circuitBreaker;
     private final long startTimeMs;
     private final noietime.syncmoney.schema.SchemaManager schemaManager;
+    private final NodeApiKeyStore apiKeyStore;
 
     public SystemApiHandler(Syncmoney plugin, SyncmoneyConfig config,
                             RedisManager redisManager,
                             DatabaseManager databaseManager,
                             EconomicCircuitBreaker circuitBreaker,
-                            noietime.syncmoney.schema.SchemaManager schemaManager) {
-        this.plugin = plugin;
+                            noietime.syncmoney.schema.SchemaManager schemaManager,
+                            NodeApiKeyStore apiKeyStore) {
+        super(plugin);
         this.config = config;
         this.redisManager = redisManager;
         this.databaseManager = databaseManager;
         this.circuitBreaker = circuitBreaker;
         this.schemaManager = schemaManager;
+        this.apiKeyStore = apiKeyStore;
         this.startTimeMs = System.currentTimeMillis();
+    }
+
+    /**
+     * Constructor without an explicit {@link NodeApiKeyStore} (kept for source compatibility).
+     */
+    public SystemApiHandler(Syncmoney plugin, SyncmoneyConfig config,
+                            RedisManager redisManager,
+                            DatabaseManager databaseManager,
+                            EconomicCircuitBreaker circuitBreaker,
+                            noietime.syncmoney.schema.SchemaManager schemaManager) {
+        this(plugin, config, redisManager, databaseManager, circuitBreaker, schemaManager, new NodeApiKeyStore());
     }
 
     /**
@@ -49,7 +65,7 @@ public class SystemApiHandler {
     public SystemApiHandler(Syncmoney plugin, RedisManager redisManager,
                             DatabaseManager databaseManager,
                             EconomicCircuitBreaker circuitBreaker) {
-        this(plugin, null, redisManager, databaseManager, circuitBreaker, null);
+        this(plugin, null, redisManager, databaseManager, circuitBreaker, null, new NodeApiKeyStore());
     }
 
     /**
@@ -292,20 +308,7 @@ public class SystemApiHandler {
             String apiKey = decryptNodeApiKey(node.apiKey);
             String statusUrl = node.url + "/api/system/status";
 
-            java.net.URI uri = java.net.URI.create(statusUrl);
-            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-                    .connectTimeout(java.time.Duration.ofMillis(5000))
-                    .build();
-
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(uri)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .timeout(java.time.Duration.ofMillis(10000))
-                    .GET()
-                    .build();
-
-            java.net.http.HttpResponse<String> response = client.send(request,
-                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            java.net.http.HttpResponse<String> response = HttpClientUtil.getWithBearer(statusUrl, apiKey);
 
             if (response.statusCode() == 200) {
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -337,20 +340,20 @@ public class SystemApiHandler {
 
     /**
      * Decrypt node API key if encrypted.
+     *
+     * <p>Uses the injected {@link NodeApiKeyStore} (JCA / AES-256-GCM) directly instead of
+     * reflectively loading the class and invoking a non-existent static method.</p>
      */
     private String decryptNodeApiKey(String apiKey) {
         if (apiKey == null) {
             return "";
         }
         if (apiKey.startsWith("enc:")) {
-            
             String masterKey = config != null ?
                     config.getConfig().getString("web-admin.security.api-key", "default-master-key") :
                     "default-master-key";
             try {
-                java.lang.reflect.Method method = plugin.getClass().getClassLoader().loadClass("noietime.syncmoney.web.security.NodeApiKeyStore")
-                        .getMethod("decrypt", String.class, String.class);
-                return (String) method.invoke(null, apiKey.substring(4), masterKey);
+                return apiKeyStore.decrypt(apiKey, masterKey);
             } catch (Exception e) {
                 plugin.getLogger().warning("Failed to decrypt node API key: " + e.getMessage());
                 return apiKey;
@@ -365,13 +368,5 @@ public class SystemApiHandler {
      */
     private String getNodeStatus(SyncmoneyConfig.NodeConfig node) {
         return "unknown";
-    }
-
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8"
-        );
-        exchange.getResponseSender().send(json);
     }
 }

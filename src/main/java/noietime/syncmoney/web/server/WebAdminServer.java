@@ -1,32 +1,27 @@
 package noietime.syncmoney.web.server;
 
 import io.undertow.Undertow;
-import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
-import io.undertow.util.HttpString;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.web.builder.WebBuilder;
 import noietime.syncmoney.web.builder.WebDownloader;
 import noietime.syncmoney.web.builder.WebVersionChecker;
 import noietime.syncmoney.web.security.ApiKeyAuthFilter;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Web Admin HTTP Server using Undertow.
- * Handles static files and REST API requests.
+ * Web Admin HTTP server bootstrap (Undertow lifecycle).
+ *
+ * <p>This class now focuses purely on bootstrapping: starting/stopping Undertow,
+ * extracting bundled web files, the startup version check/auto-build, and wiring
+ * the collaborating components together. Request dispatch is delegated to
+ * {@link RouteRegistry}, CORS to {@link CorsHandler}, and static file serving
+ * (with path-traversal protection) to {@link StaticFileHandler}.</p>
  */
 public final class WebAdminServer {
 
@@ -34,19 +29,25 @@ public final class WebAdminServer {
     private final WebAdminConfig config;
     private final HttpHandlerRegistry router;
     private final ApiKeyAuthFilter authFilter;
+
+    private final CorsHandler corsHandler;
+    private final StaticFileHandler staticFileHandler;
+    private final RouteRegistry routeRegistry;
+
     private Undertow server;
     private Path webRoot;
     private noietime.syncmoney.web.websocket.WebSocketManager webSocketManager;
     private noietime.syncmoney.web.websocket.SseManager sseManager;
     private noietime.syncmoney.web.api.settings.SettingsApiHandler settingsHandler;
 
-    private final LRUCache<Path, byte[]> fileCache = new LRUCache<>(100);
-
     public WebAdminServer(Syncmoney plugin, WebAdminConfig config, ApiKeyAuthFilter authFilter) {
         this.plugin = plugin;
         this.config = config;
         this.router = new HttpHandlerRegistry();
         this.authFilter = authFilter;
+        this.corsHandler = new CorsHandler();
+        this.staticFileHandler = new StaticFileHandler(config, corsHandler);
+        this.routeRegistry = new RouteRegistry(plugin, config, router, authFilter, corsHandler, staticFileHandler);
     }
 
     /**
@@ -63,6 +64,7 @@ public final class WebAdminServer {
 
         /* webRoot points to the dist/ subdirectory where built static files reside. */
         webRoot = config.getWebPath(dataFolder).resolve("dist").toAbsolutePath().normalize();
+        staticFileHandler.setWebRoot(webRoot);
         plugin.getLogger().fine("WebAdminServer.start: webRoot=" + webRoot);
 
         if (!Files.exists(webRoot)) {
@@ -81,7 +83,7 @@ public final class WebAdminServer {
 
         server = Undertow.builder()
                 .addHttpListener(config.getPort(), config.getHost())
-                .setHandler(this::handleRequest)
+                .setHandler(routeRegistry::handle)
                 .build();
 
         server.start();
@@ -167,7 +169,7 @@ public final class WebAdminServer {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-            "AuditLogView-CKNjhOaC.js","AuditLogView-CKNjhOaC.js.map","AuditLogView-pgZF1GR4.css","Badge.vue_vue_type_script_setup_true_lang-Bvno6wpb.js","Badge.vue_vue_type_script_setup_true_lang-Bvno6wpb.js.map","Button.vue_vue_type_script_setup_true_lang-CqcN-6ZE.js","Button.vue_vue_type_script_setup_true_lang-CqcN-6ZE.js.map","Card-CmEoH9OM.js","Card-CmEoH9OM.js.map","Card-DwRmiknp.css","CentralDashboardView-B0oySPGk.js","CentralDashboardView-B0oySPGk.js.map","ConfigView-N-OIYDoZ.css","ConfigView-zTYpVSr6.js","ConfigView-zTYpVSr6.js.map","DashboardView-BJD92yfO.js","DashboardView-BJD92yfO.js.map","EmptyState.vue_vue_type_script_setup_true_lang-BIBaXbI1.js","EmptyState.vue_vue_type_script_setup_true_lang-BIBaXbI1.js.map","globe-DULhj_a5.js","globe-DULhj_a5.js.map","index-D7f23sMO.css","index-MvK20Lr7.js","index-MvK20Lr7.js.map","LoginView-DN6bcIbT.js","LoginView-DN6bcIbT.js.map","NodesManagementView-BGwNiV34.css","NodesManagementView-DOjyRCkp.js","NodesManagementView-DOjyRCkp.js.map","NotFoundView-D2U4f3bo.css","NotFoundView-DiX0QO3I.js","NotFoundView-DiX0QO3I.js.map","SettingsView-Dp-9T2ph.js","SettingsView-Dp-9T2ph.js.map","shield-VSZe3MPB.js","shield-VSZe3MPB.js.map","Skeleton.vue_vue_type_script_setup_true_lang-CHV-Xfe1.js","Skeleton.vue_vue_type_script_setup_true_lang-CHV-Xfe1.js.map","StatCard.vue_vue_type_script_setup_true_lang-DVViQwdk.js","StatCard.vue_vue_type_script_setup_true_lang-DVViQwdk.js.map","SystemStatusView-DrJoglIB.js","SystemStatusView-DrJoglIB.js.map","ui-vendor-B_yCxNdJ.js","ui-vendor-B_yCxNdJ.js.map","users-DRHaHHeb.js","users-DRHaHHeb.js.map","vue-vendor-BfI-xpX_.js","vue-vendor-BfI-xpX_.js.map"
+            "AuditLogView-1TqTLEDG.js","AuditLogView-1TqTLEDG.js.map","AuditLogView-ncafTB8a.css","Badge.vue_vue_type_script_setup_true_lang-ButpYfBf.js","Badge.vue_vue_type_script_setup_true_lang-ButpYfBf.js.map","Button.vue_vue_type_script_setup_true_lang-DGNMbe25.js","Button.vue_vue_type_script_setup_true_lang-DGNMbe25.js.map","Card-DwRmiknp.css","Card-QgPLeQ4W.js","Card-QgPLeQ4W.js.map","CentralDashboardView-CRyjfHZG.js","CentralDashboardView-CRyjfHZG.js.map","ConfigView-DoKUJKS3.js","ConfigView-DoKUJKS3.js.map","ConfigView-DOZ3o-6N.css","DashboardView-BA0KEiZr.js","DashboardView-BA0KEiZr.js.map","EmptyState.vue_vue_type_script_setup_true_lang-C59jgcsN.js","EmptyState.vue_vue_type_script_setup_true_lang-C59jgcsN.js.map","globe-BIR30XRw.js","globe-BIR30XRw.js.map","index-DJbJKhkS.js","index-DJbJKhkS.js.map","index-DTkctV0l.css","LoginView-DwalZz_V.js","LoginView-DwalZz_V.js.map","NodesManagementView-Bg7EP4A9.css","NodesManagementView-dKCssAEu.js","NodesManagementView-dKCssAEu.js.map","NotFoundView-BvfRyRzZ.css","NotFoundView-CcED0NHh.js","NotFoundView-CcED0NHh.js.map","SettingsView-DmFsEYE8.js","SettingsView-DmFsEYE8.js.map","shield-BlE-6dZQ.js","shield-BlE-6dZQ.js.map","Skeleton.vue_vue_type_script_setup_true_lang-K0ftSVyN.js","Skeleton.vue_vue_type_script_setup_true_lang-K0ftSVyN.js.map","StatCard.vue_vue_type_script_setup_true_lang-BFGf2dR8.js","StatCard.vue_vue_type_script_setup_true_lang-BFGf2dR8.js.map","SystemStatusView-B74dBDbB.js","SystemStatusView-B74dBDbB.js.map","ui-vendor-CM-HUc5O.js","ui-vendor-CM-HUc5O.js.map","users-Bnhhxj7p.js","users-Bnhhxj7p.js.map","vue-vendor-hiEirxk6.js","vue-vendor-hiEirxk6.js.map"
         };
 
         for (String fileName : assetFiles) {
@@ -261,7 +263,7 @@ public final class WebAdminServer {
 
             plugin.getLogger().fine(plugin.getMessage("web.server.stopped"));
         }
-        fileCache.clear();
+        staticFileHandler.clearCache();
     }
 
     /**
@@ -394,220 +396,24 @@ public final class WebAdminServer {
 
         this.webSocketManager = new noietime.syncmoney.web.websocket.WebSocketManager(plugin);
         this.webSocketManager.init();
+        routeRegistry.setWebSocketManager(webSocketManager);
 
         this.sseManager = new noietime.syncmoney.web.websocket.SseManager(plugin);
         this.sseManager.setApiKey(config.getApiKey());
         this.sseManager.setTokenHandler(wsTokenHandler);
         this.sseManager.init();
+        routeRegistry.setSseManager(sseManager);
 
         plugin.getLogger().fine(
                 plugin.getMessage("web.server.route-count").replace("{count}", String.valueOf(router.getRouteCount())));
     }
 
     /**
-     * Handle incoming HTTP requests.
+     * Send JSON response (used for the unauthenticated health probe route).
      */
-    private void handleRequest(HttpServerExchange exchange) throws Exception {
-        try {
-            String path = exchange.getRelativePath();
-
-            if ("OPTIONS".equals(exchange.getRequestMethod().toString())) {
-
-                String allowedOrigins = config.getCorsAllowedOrigins();
-                exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Origin"), allowedOrigins);
-                exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Methods"),
-                        "GET, POST, PUT, DELETE, OPTIONS");
-                exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Headers"),
-                        "Content-Type, Authorization");
-                exchange.setStatusCode(204);
-                return;
-            }
-
-            String pathForRoute = path.startsWith("/") ? path.substring(1) : path;
-
-            if (path.startsWith("sse") || pathForRoute.startsWith("sse") ||
-                path.startsWith("api/sse") || pathForRoute.startsWith("api/sse")) {
-                if (sseManager != null) {
-                    sseManager.createHandler().handleRequest(exchange);
-                }
-            } else if (path.startsWith("ws") || pathForRoute.startsWith("ws")) {
-                if (webSocketManager != null) {
-                    webSocketManager.createHandler().handleRequest(exchange);
-                }
-            } else if (path.startsWith("api/") || pathForRoute.startsWith("api/")) {
-                if (authFilter != null && !authFilter.authenticate(exchange)) {
-                    authFilter.sendUnauthorized(exchange);
-                    return;
-                }
-                router.handle(exchange);
-            } else if (path.equals("health") || pathForRoute.equals("health")) {
-                router.handle(exchange);
-            } else {
-                serveStatic(exchange, path);
-            }
-        } catch (Exception e) {
-            plugin.getLogger().severe(plugin.getMessage("web.server.error-request").replace("{error}", e.getMessage()));
-            try {
-                if (!exchange.isComplete()) {
-                    exchange.setStatusCode(500);
-                    sendJson(exchange,
-                            "{\"success\":false,\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Internal server error\"}}");
-                }
-            } catch (IllegalStateException ignored) {
-
-            }
-        }
-    }
-
-    /**
-     * Serve static files from web root.
-     */
-    private void serveStatic(HttpServerExchange exchange, String path) throws IOException {
-        String decodedPath;
-        try {
-            decodedPath = java.net.URLDecoder.decode(path, StandardCharsets.UTF_8.name());
-        } catch (IllegalArgumentException e) {
-            exchange.setStatusCode(400);
-            exchange.getResponseSender().send("Bad Request: Invalid URL encoding");
-            return;
-        }
-
-
-        String sanitizedPath = decodedPath.replaceAll("[^a-zA-Z0-9._/-]", "");
-
-
-        if (sanitizedPath.startsWith("/")) {
-            sanitizedPath = sanitizedPath.substring(1);
-        }
-
-        if (sanitizedPath.isEmpty() || sanitizedPath.equals("/")) {
-            sanitizedPath = "index.html";
-        }
-
-
-        Path file = webRoot.resolve(sanitizedPath).normalize();
-
-
-        if (!file.startsWith(webRoot)) {
-            exchange.setStatusCode(403);
-            exchange.getResponseSender().send("Forbidden");
-            return;
-        }
-
-
-        if (!Files.exists(file) || Files.isDirectory(file)) {
-
-            Path indexFile = webRoot.resolve("index.html");
-            if (Files.exists(indexFile) && !Files.isDirectory(indexFile)) {
-                serveFileContent(exchange, indexFile, "index.html");
-                return;
-            }
-            exchange.setStatusCode(404);
-            exchange.getResponseSender().send("Not Found: " + sanitizedPath);
-            return;
-        }
-
-
-        serveFileContent(exchange, file, sanitizedPath);
-    }
-
-    /**
-     * Serve file content to response.
-     * Uses pre-loaded file cache to avoid UT000126 error on IO thread.
-     */
-    private void serveFileContent(HttpServerExchange exchange, Path file, String path) throws IOException {
-        String contentType = guessContentType(path);
-        exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, contentType);
-
-        String allowedOrigins = config.getCorsAllowedOrigins();
-        exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Origin"), allowedOrigins);
-        exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Methods"), "GET, OPTIONS");
-        exchange.getResponseHeaders().put(HttpString.tryFromString("Access-Control-Allow-Headers"), "Content-Type, Authorization");
-
-
-        byte[] cached = fileCache.get(file);
-        if (cached != null) {
-            sendFileResponse(exchange, cached, contentType.startsWith("image/") || contentType.startsWith("font/"));
-            return;
-        }
-
-
-        try {
-            byte[] bytes = Files.readAllBytes(file);
-
-            fileCache.put(file, bytes);
-            sendFileResponse(exchange, bytes, path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg") ||
-                    path.endsWith(".gif") || path.endsWith(".ico") || path.endsWith(".woff2") ||
-                    path.endsWith(".woff") || path.endsWith(".ttf"));
-        } catch (Exception e) {
-            exchange.setStatusCode(500);
-            exchange.getResponseSender().send("Error reading file: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Send file response data.
-     */
-    private void sendFileResponse(HttpServerExchange exchange, byte[] data, boolean isBinary) {
-        if (isBinary) {
-            exchange.getResponseSender().send(java.nio.ByteBuffer.wrap(data));
-        } else {
-            exchange.getResponseSender().send(new String(data, java.nio.charset.StandardCharsets.UTF_8));
-        }
-    }
-
-    /**
-     * Guess content type from file extension.
-     */
-    private String guessContentType(String path) {
-        if (path.endsWith(".html"))
-            return "text/html;charset=UTF-8";
-        if (path.endsWith(".css"))
-            return "text/css;charset=UTF-8";
-        if (path.endsWith(".js"))
-            return "application/javascript;charset=UTF-8";
-        if (path.endsWith(".json"))
-            return "application/json;charset=UTF-8";
-        if (path.endsWith(".png"))
-            return "image/png";
-        if (path.endsWith(".jpg") || path.endsWith(".jpeg"))
-            return "image/jpeg";
-        if (path.endsWith(".svg"))
-            return "image/svg+xml";
-        if (path.endsWith(".ico"))
-            return "image/x-icon";
-        if (path.endsWith(".woff"))
-            return "font/woff";
-        if (path.endsWith(".woff2"))
-            return "font/woff2";
-        if (path.endsWith(".ttf"))
-            return "font/ttf";
-        return "text/plain;charset=UTF-8";
-    }
-
-    /**
-     * Send JSON response.
-     */
-    protected void sendJson(HttpServerExchange exchange, String json) {
+    private void sendJson(HttpServerExchange exchange, String json) {
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json;charset=UTF-8");
         exchange.getResponseSender().send(json);
-    }
-
-    /**
-     * Send 401 Unauthorized response.
-     */
-    protected void sendUnauthorized(HttpServerExchange exchange) {
-        exchange.setStatusCode(401);
-        exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json;charset=UTF-8");
-        exchange.getResponseSender().send(
-                "{\"success\":false,\"error\":{\"code\":\"AUTHENTICATION_FAILED\",\"message\":\"Missing or invalid authorization header\"}}");
-    }
-
-    /**
-     * Extract path parameter from URL.
-     */
-    private String extractPathParam(HttpServerExchange exchange, String name) {
-        return router.extractPathParam(exchange, name);
     }
 
     /**
@@ -653,6 +459,7 @@ public final class WebAdminServer {
     public void reloadWebRoot() throws IOException {
         Path dataFolder = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
         webRoot = config.getWebPath(dataFolder).resolve("dist").toAbsolutePath().normalize();
+        staticFileHandler.setWebRoot(webRoot);
 
         if (!Files.exists(webRoot)) {
             Files.createDirectories(webRoot);
@@ -660,23 +467,5 @@ public final class WebAdminServer {
 
         extractDefaultWebFiles(webRoot);
         plugin.getLogger().fine("Web root reloaded: " + webRoot);
-    }
-
-    /**
-     * Simple LRU Cache implementation using LinkedHashMap.
-     * [SEC-09 FIX] Prevents memory exhaustion from unbounded cache.
-     */
-    private static class LRUCache<K, V> extends LinkedHashMap<K, V> {
-        private final int maxSize;
-
-        public LRUCache(int maxSize) {
-            super(16, 0.75f, true);
-            this.maxSize = maxSize;
-        }
-
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
-            return size() > maxSize;
-        }
     }
 }

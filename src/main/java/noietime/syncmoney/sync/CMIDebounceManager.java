@@ -1,10 +1,11 @@
 package noietime.syncmoney.sync;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -17,7 +18,7 @@ public final class CMIDebounceManager {
 
     private final Plugin plugin;
     private final int debounceTicks;
-    private final ConcurrentHashMap<UUID, BukkitTask> pendingTasks;
+    private final ConcurrentHashMap<UUID, ScheduledTask> pendingTasks;
 
     public CMIDebounceManager(Plugin plugin, int debounceTicks) {
         this.plugin = plugin;
@@ -25,44 +26,43 @@ public final class CMIDebounceManager {
         this.pendingTasks = new ConcurrentHashMap<>();
     }
 
-    /**
-     * Schedule a debounced action.
-     * If a task already exists for the UUID, it will be cancelled and replaced.
-     */
+    private long debounceDelayMs() {
+        return Math.max(1L, debounceTicks * 50L);
+    }
+
     public void scheduleDebounced(UUID uuid, Runnable action) {
-        BukkitTask existing = pendingTasks.get(uuid);
+        ScheduledTask existing = pendingTasks.remove(uuid);
         if (existing != null) {
             existing.cancel();
         }
 
-        BukkitTask task = plugin.getServer().getScheduler().runTaskLater(
+        ScheduledTask task = plugin.getServer().getAsyncScheduler().runDelayed(
             plugin,
-            () -> {
+            t -> {
                 pendingTasks.remove(uuid);
                 action.run();
             },
-            debounceTicks
+            debounceDelayMs(),
+            TimeUnit.MILLISECONDS
         );
 
         pendingTasks.put(uuid, task);
     }
 
-    /**
-     * Schedule a debounced action with parameter.
-     */
     public void scheduleDebounced(UUID uuid, Consumer<UUID> action) {
-        BukkitTask existing = pendingTasks.get(uuid);
+        ScheduledTask existing = pendingTasks.remove(uuid);
         if (existing != null) {
             existing.cancel();
         }
 
-        BukkitTask task = plugin.getServer().getScheduler().runTaskLater(
+        ScheduledTask task = plugin.getServer().getAsyncScheduler().runDelayed(
             plugin,
-            () -> {
+            t -> {
                 pendingTasks.remove(uuid);
                 action.accept(uuid);
             },
-            debounceTicks
+            debounceDelayMs(),
+            TimeUnit.MILLISECONDS
         );
 
         pendingTasks.put(uuid, task);
@@ -72,7 +72,7 @@ public final class CMIDebounceManager {
      * Cancel a specific player's pending task.
      */
     public void cancel(UUID uuid) {
-        BukkitTask task = pendingTasks.remove(uuid);
+        ScheduledTask task = pendingTasks.remove(uuid);
         if (task != null) {
             task.cancel();
         }
@@ -82,7 +82,7 @@ public final class CMIDebounceManager {
      * Cancel all pending tasks.
      */
     public void cancelAll() {
-        pendingTasks.values().forEach(BukkitTask::cancel);
+        pendingTasks.values().forEach(ScheduledTask::cancel);
         pendingTasks.clear();
     }
 

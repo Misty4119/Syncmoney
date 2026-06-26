@@ -1,32 +1,37 @@
 package noietime.syncmoney.vault;
 
-import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.FormatUtil;
-import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * [SYNC-VAULT-001] Core Vault Economy API wrapper for Syncmoney.
- * Delegates to specialized handlers for different operations.
- * Provides BigDecimal conversion layer to avoid floating-point errors.
+ * [SYNC-VAULT-001] Internal core implementation of the Syncmoney Vault economy logic.
+ * Delegates to specialized handlers for different operations and provides a
+ * BigDecimal conversion layer to avoid floating-point errors.
+ *
+ * <p>This class is <b>not</b> the object registered with Vault; it is an internal
+ * delegate owned by {@link SyncmoneyVaultProvider}, which is the public
+ * {@link Economy} contract. Method signatures mirror the {@link Economy} interface
+ * one-to-one so {@code SyncmoneyVaultProvider} can forward calls verbatim.
  *
  * [MainThread] Vault API is synchronous, all methods execute on main thread.
  */
-public class VaultProviderCore implements Economy {
+public class VaultProviderCore {
 
     private final Plugin plugin;
     private final EconomyFacade economyFacade;
@@ -36,6 +41,10 @@ public class VaultProviderCore implements Economy {
 
     private final AtomicInteger orphanDepositCount = new AtomicInteger(0);
     private static final int ORPHAN_LOG_INTERVAL = 100;
+
+    private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
+
+    private volatile CMIEconomyHandler cmiHandler;
 
     private final VaultPlayerHandler playerHandler;
     private final VaultTransferHandler transferHandler;
@@ -91,7 +100,10 @@ public class VaultProviderCore implements Economy {
         this.nameResolver = nameResolver;
     }
 
-    @Override
+    public void setCmiHandler(CMIEconomyHandler cmiHandler) {
+        this.cmiHandler = cmiHandler;
+    }
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -103,63 +115,74 @@ public class VaultProviderCore implements Economy {
         this.enabled = enabled;
     }
 
-    @Override
+    private void publishCrossServerUpdate(UUID uuid, BigDecimal newBalance,
+                                          String syncModeEventType, double amount,
+                                          String sourcePlugin, String sourcePlayerName) {
+        if (syncManager == null || config == null) {
+            return;
+        }
+        String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
+        if (config.isSyncMode()) {
+            syncManager.publishAndNotify(uuid, newBalance, syncModeEventType, amount, resolvedPlugin, sourcePlayerName);
+        } else if (config.isCMIMode()) {
+            long version = (cmiHandler != null)
+                    ? cmiHandler.mintCmiVersion()
+                    : CMIVersioning.generateVersion(cmiVersionCounter);
+            String cmiEventType = amount >= 0 ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
+            syncManager.publishCMIUpdate(uuid, newBalance, version, cmiEventType, amount, resolvedPlugin, sourcePlayerName);
+            if (config.isDebug()) {
+                this.plugin.getLogger().fine("[FIX-CMI-VAULT-PUBLISH] CMI mode publish uuid=" + uuid
+                        + " balance=" + newBalance + " v" + version
+                        + " amount=" + amount + " sourcePlugin=" + resolvedPlugin);
+            }
+        }
+    }
+
     public String getName() {
         return "Syncmoney";
     }
 
-    @Override
     public boolean hasBankSupport() {
         return true;
     }
 
-    @Override
     public int fractionalDigits() {
         return 2;
     }
 
-    @Override
     public String format(double amount) {
         BigDecimal bd = NumericUtil.normalize(amount);
         return FormatUtil.formatCurrency(bd) + " " + currencyName;
     }
 
-    @Override
     public String currencyNamePlural() {
         return currencyName;
     }
 
-    @Override
     public String currencyNameSingular() {
         return currencyName;
     }
 
-    @Override
     public boolean hasAccount(String playerName) {
         return playerHandler.hasAccount(playerName);
     }
 
-    @Override
     public boolean hasAccount(OfflinePlayer player) {
         return playerHandler.hasAccount(player);
     }
 
-    @Override
     public boolean hasAccount(String playerName, String worldName) {
         return playerHandler.hasAccount(playerName, worldName);
     }
 
-    @Override
     public boolean hasAccount(OfflinePlayer player, String worldName) {
         return playerHandler.hasAccount(player, worldName);
     }
 
-    @Override
     public double getBalance(String playerName) {
         return playerHandler.getBalance(playerName);
     }
 
-    @Override
     public double getBalance(OfflinePlayer player) {
         return playerHandler.getBalance(player);
     }
@@ -171,52 +194,42 @@ public class VaultProviderCore implements Economy {
         return playerHandler.getBalanceAsBigDecimal(player);
     }
 
-    @Override
     public double getBalance(String playerName, String world) {
         return playerHandler.getBalance(playerName, world);
     }
 
-    @Override
     public double getBalance(OfflinePlayer player, String world) {
         return playerHandler.getBalance(player, world);
     }
 
-    @Override
     public boolean has(String playerName, double amount) {
         return playerHandler.has(playerName, amount);
     }
 
-    @Override
     public boolean has(OfflinePlayer player, double amount) {
         return playerHandler.has(player, amount);
     }
 
-    @Override
     public boolean has(String playerName, String worldName, double amount) {
         return playerHandler.has(playerName, worldName, amount);
     }
 
-    @Override
     public boolean has(OfflinePlayer player, String worldName, double amount) {
         return playerHandler.has(player, worldName, amount);
     }
 
-    @Override
     public boolean createPlayerAccount(String playerName) {
         return true;
     }
 
-    @Override
     public boolean createPlayerAccount(OfflinePlayer player) {
         return player != null;
     }
 
-    @Override
     public boolean createPlayerAccount(String playerName, String worldName) {
         return createPlayerAccount(playerName);
     }
 
-    @Override
     public boolean createPlayerAccount(OfflinePlayer player, String worldName) {
         return createPlayerAccount(player);
     }
@@ -225,12 +238,10 @@ public class VaultProviderCore implements Economy {
     // Deposit/Withdraw delegation to TransferHandler
     // =========================================================================
 
-    @Override
     public EconomyResponse withdrawPlayer(String playerName, double amount) {
         return transferHandler.withdrawPlayer(playerHandler.getOfflinePlayerSafe(playerName), amount);
     }
 
-    @Override
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount) {
         return transferHandler.withdrawPlayer(player, amount);
     }
@@ -242,22 +253,18 @@ public class VaultProviderCore implements Economy {
         return transferHandler.withdrawPlayer(player, amount, toUuid);
     }
 
-    @Override
     public EconomyResponse withdrawPlayer(String playerName, String worldName, double amount) {
         return withdrawPlayer(playerName, amount);
     }
 
-    @Override
     public EconomyResponse withdrawPlayer(OfflinePlayer player, String worldName, double amount) {
         return withdrawPlayer(player, amount);
     }
 
-    @Override
     public EconomyResponse depositPlayer(String playerName, double amount) {
         return depositPlayer(playerHandler.getOfflinePlayerSafe(playerName), amount);
     }
 
-    @Override
     public EconomyResponse depositPlayer(OfflinePlayer player, double amount) {
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
@@ -278,6 +285,7 @@ public class VaultProviderCore implements Economy {
 
         if (pendingTransfer == null) {
             pendingTransfer = transferHandler.findCorrelatedTransfer(uuid, amountBd);
+            transferHandler.purgeExpiredWithdrawals();
         }
 
         if (pendingTransfer == null) {
@@ -289,9 +297,9 @@ public class VaultProviderCore implements Economy {
                 plugin.getLogger().info("[Vault-Orphan-Recovery] " + count + " orphan deposits processed since startup (cross-server expected behavior).");
             }
 
-            if (economyFacade.isPlayerLocked(uuid)) {
-                return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
-                        "Target account is locked");
+            EconomyResponse locked = LockingHelper.requireNotLocked(economyFacade, uuid, "Target account is locked");
+            if (locked != null) {
+                return locked;
             }
 
             BigDecimal newBalance = economyFacade.pluginDeposit(uuid, amountBd, "Vault-Orphan-Recovery");
@@ -300,28 +308,14 @@ public class VaultProviderCore implements Economy {
                         EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
             }
 
-            if (player.isOnline()) {
-                final org.bukkit.entity.Player finalOnlinePlayer = (org.bukkit.entity.Player) player;
-                if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                    noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                    String message = syncMoneyPlugin.getMessage("vault.deposited");
-                    if (message != null) {
-                        message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                        message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
-                        noietime.syncmoney.util.MessageHelper.sendMessage(finalOnlinePlayer, message);
-                    }
-                }
-            }
+            CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
 
-            if (syncManager != null && config != null && config.isSyncMode()) {
-                String sourcePlugin = pluginDetector.detectCallingPlugin();
-                syncManager.publishAndNotify(uuid, newBalance, "PLUGIN_DEPOSIT", amount, sourcePlugin, null);
-            }
+            publishCrossServerUpdate(uuid, newBalance, "PLUGIN_DEPOSIT", amount, "Vault-Orphan-Recovery", null);
 
             return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
         }
 
-        if (economyFacade.isPlayerLocked(uuid)) {
+        if (LockingHelper.isLocked(economyFacade, uuid)) {
             if (pendingTransfer != null) {
                 plugin.getLogger().warning("Deposit failed: target account locked. Rolling back transfer: " +
                     pendingTransfer.fromUuid() + " -> " + pendingTransfer.toUuid());
@@ -352,39 +346,17 @@ public class VaultProviderCore implements Economy {
                 pendingTransfer.fromUuid() + " -> " + pendingTransfer.toUuid() + " : " + amountBd);
         }
 
-        if (player.isOnline()) {
-            final org.bukkit.entity.Player finalOnlinePlayer = (org.bukkit.entity.Player) player;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.deposited");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
-                    noietime.syncmoney.util.MessageHelper.sendMessage(finalOnlinePlayer, message);
-                }
-            }
-        }
+        CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
 
-        if (syncManager != null && config != null && config.isSyncMode()) {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "VAULT_DEPOSIT",
-                    amount,
-                    sourcePlugin,
-                    null);
-        }
+        publishCrossServerUpdate(uuid, newBalance, "VAULT_DEPOSIT", amount, null, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
     }
 
-    @Override
     public EconomyResponse depositPlayer(String playerName, String worldName, double amount) {
         return depositPlayer(playerName, amount);
     }
 
-    @Override
     public EconomyResponse depositPlayer(OfflinePlayer player, String worldName, double amount) {
         return depositPlayer(player, amount);
     }
@@ -416,9 +388,9 @@ public class VaultProviderCore implements Economy {
         BigDecimal amountBd = NumericUtil.normalize(amount);
         UUID uuid = player.getUniqueId();
 
-        if (economyFacade.isPlayerLocked(uuid)) {
-            return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
-                    "Target account is locked");
+        EconomyResponse locked = LockingHelper.requireNotLocked(economyFacade, uuid, "Target account is locked");
+        if (locked != null) {
+            return locked;
         }
 
         BigDecimal newBalance = economyFacade.pluginDeposit(uuid, amountBd, pluginName);
@@ -428,29 +400,9 @@ public class VaultProviderCore implements Economy {
                     EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
         }
 
-        if (player.isOnline()) {
-            final org.bukkit.entity.Player finalOnlinePlayer = (org.bukkit.entity.Player) player;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.deposited");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
-                    noietime.syncmoney.util.MessageHelper.sendMessage(finalOnlinePlayer, message);
-                }
-            }
-        }
+        CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
 
-        if (syncManager != null && config != null && config.isSyncMode()) {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "PLUGIN_DEPOSIT",
-                    amount,
-                    pluginName,
-                    null);
-        }
+        publishCrossServerUpdate(uuid, newBalance, "PLUGIN_DEPOSIT", amount, pluginName, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
     }
@@ -478,9 +430,10 @@ public class VaultProviderCore implements Economy {
         BigDecimal amountBd = NumericUtil.normalize(amount);
         UUID uuid = player.getUniqueId();
 
-        if (economyFacade.isPlayerLocked(uuid)) {
-            return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
-                    "Account is locked due to suspicious activity");
+        EconomyResponse locked = LockingHelper.requireNotLocked(economyFacade, uuid,
+                "Account is locked due to suspicious activity");
+        if (locked != null) {
+            return locked;
         }
 
         BigDecimal newBalance = economyFacade.pluginWithdraw(uuid, amountBd, pluginName);
@@ -491,29 +444,9 @@ public class VaultProviderCore implements Economy {
                     "Insufficient funds");
         }
 
-        if (player.isOnline()) {
-            final Player finalOnlinePlayer = (Player) player;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.withdrawn");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(newBalance));
-                    noietime.syncmoney.util.MessageHelper.sendMessage(finalOnlinePlayer, message);
-                }
-            }
-        }
+        CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, newBalance);
 
-        if (syncManager != null && config != null && config.isSyncMode()) {
-            String sourcePlugin = pluginDetector.detectCallingPlugin();
-            syncManager.publishAndNotify(
-                    uuid,
-                    newBalance,
-                    "PLUGIN_WITHDRAW",
-                    -amount,
-                    pluginName,
-                    null);
-        }
+        publishCrossServerUpdate(uuid, newBalance, "PLUGIN_WITHDRAW", -amount, pluginName, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
     }
@@ -542,7 +475,7 @@ public class VaultProviderCore implements Economy {
         UUID fromUuid = from.getUniqueId();
         UUID toUuid = to.getUniqueId();
 
-        if (economyFacade.isPlayerLocked(fromUuid) || economyFacade.isPlayerLocked(toUuid)) {
+        if (LockingHelper.isLocked(economyFacade, fromUuid) || LockingHelper.isLocked(economyFacade, toUuid)) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
                     "One or both accounts are locked");
         }
@@ -555,40 +488,15 @@ public class VaultProviderCore implements Economy {
                     "Atomic transfer failed - insufficient funds or locked account");
         }
 
-        if (from.isOnline()) {
-            final Player finalFromPlayer = (Player) from;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.withdrawn");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(result.fromNewBalance));
-                    noietime.syncmoney.util.MessageHelper.sendMessage(finalFromPlayer, message);
-                }
-            }
-        }
+        CrossServerNotifier.notifyBalanceChange(plugin, from, "vault.withdrawn", amountBd, result.fromNewBalance);
+        CrossServerNotifier.notifyBalanceChange(plugin, to, "vault.deposited", amountBd, result.toNewBalance);
 
-        if (to.isOnline()) {
-            final Player finalToPlayer = (Player) to;
-            if (plugin instanceof noietime.syncmoney.Syncmoney) {
-                noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String message = syncMoneyPlugin.getMessage("vault.deposited");
-                if (message != null) {
-                    message = message.replace("{amount}", FormatUtil.formatCurrency(amountBd));
-                    message = message.replace("{balance}", FormatUtil.formatCurrency(result.toNewBalance));
-                    noietime.syncmoney.util.MessageHelper.sendMessage(finalToPlayer, message);
-                }
-            }
+        String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
+        if (senderName == null) {
+            senderName = fromUuid.toString();
         }
-
-        if (syncManager != null && config != null && config.isSyncMode()) {
-            String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
-            if (senderName == null) {
-                senderName = fromUuid.toString();
-            }
-            syncManager.publishAndNotify(fromUuid, result.fromNewBalance, "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
-            syncManager.publishAndNotify(toUuid, result.toNewBalance, "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
-        }
+        publishCrossServerUpdate(fromUuid, result.fromNewBalance, "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
+        publishCrossServerUpdate(toUuid, result.toNewBalance, "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
 
         plugin.getLogger().info("Plugin atomic transfer completed: " + fromUuid + " -> " + toUuid + " : " + amountBd + " by " + pluginName);
 
@@ -600,37 +508,30 @@ public class VaultProviderCore implements Economy {
     // Bank delegation to BankHandler
     // =========================================================================
 
-    @Override
     public EconomyResponse createBank(String name, String player) {
         return bankHandler.createBank(name, player);
     }
 
-    @Override
     public EconomyResponse createBank(String name, OfflinePlayer player) {
         return bankHandler.createBank(name, player);
     }
 
-    @Override
     public EconomyResponse deleteBank(String name) {
         return bankHandler.deleteBank(name);
     }
 
-    @Override
     public EconomyResponse bankBalance(String name) {
         return bankHandler.bankBalance(name);
     }
 
-    @Override
     public EconomyResponse bankHas(String name, double amount) {
         return bankHandler.bankHas(name, amount);
     }
 
-    @Override
     public EconomyResponse bankWithdraw(String name, double amount) {
         return bankHandler.bankWithdraw(name, amount);
     }
 
-    @Override
     public EconomyResponse bankDeposit(String name, double amount) {
         return bankHandler.bankDeposit(name, amount);
     }
@@ -642,27 +543,22 @@ public class VaultProviderCore implements Economy {
         return bankHandler.bankTransfer(fromBankName, toBankName, amount);
     }
 
-    @Override
     public EconomyResponse isBankOwner(String name, String playerName) {
         return bankHandler.isBankOwner(name, playerName);
     }
 
-    @Override
     public EconomyResponse isBankOwner(String name, OfflinePlayer player) {
         return bankHandler.isBankOwner(name, player);
     }
 
-    @Override
     public EconomyResponse isBankMember(String name, String playerName) {
         return bankHandler.isBankMember(name, playerName);
     }
 
-    @Override
     public EconomyResponse isBankMember(String name, OfflinePlayer player) {
         return bankHandler.isBankMember(name, player);
     }
 
-    @Override
     public java.util.List<String> getBanks() {
         return bankHandler.getBanks();
     }

@@ -27,7 +27,7 @@ import java.util.logging.Logger;
 public final class SchemaManager {
 
     /**
-     * Current plugin version (corresponds to 1.1.0)
+     * Current plugin version (corresponds to 1.2.0)
      */
     private static final int CURRENT_VERSION = 11;
 

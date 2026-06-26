@@ -31,13 +31,11 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
     private static final boolean DEBUG_MODE = Boolean.getBoolean("syncmoney.papi.debug");
 
     private final Object syncMoneyPlugin;
-    private final PluginCache pluginCache;
     private final PlaceholderHandler placeholderHandler;
 
     public SyncmoneyExpansion() {
         this.syncMoneyPlugin = Bukkit.getPluginManager().getPlugin("Syncmoney");
-        this.pluginCache = new PluginCache(syncMoneyPlugin, DEBUG_MODE);
-        this.placeholderHandler = new PlaceholderHandler(pluginCache, DEBUG_MODE);
+        this.placeholderHandler = new PlaceholderHandler(syncMoneyPlugin, DEBUG_MODE);
 
         if (DEBUG_MODE) {
             log("SyncmoneyExpansion initialized, plugin: " + (syncMoneyPlugin != null ? "found" : "NOT FOUND"));
@@ -56,7 +54,7 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getVersion() {
-        return "1.1.2";
+        return "1.2.0";
     }
 
     @Override

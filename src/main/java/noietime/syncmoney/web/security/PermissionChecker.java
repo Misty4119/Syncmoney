@@ -2,14 +2,15 @@ package noietime.syncmoney.web.security;
 
 import io.undertow.server.HttpServerExchange;
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.permission.AdminPermissionService;
 import org.bukkit.configuration.Configuration;
 import org.bukkit.configuration.ConfigurationSection;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,12 +23,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PermissionChecker {
 
     private final Syncmoney plugin;
+    private final SyncmoneyConfig syncmoneyConfig;
     private final Map<String, Set<String>> apiKeyPermissions = new ConcurrentHashMap<>();
 
     /**
-     * API endpoint to permission mapping.
+     * Built-in default endpoint → permission mapping. Used as a fallback when no
+     * {@code web-admin.endpoint-permissions} section is present in config, so the
+     * shipped config.yml does not need to change.
      */
-    private static final Map<String, String> ENDPOINT_PERMISSIONS = Map.ofEntries(
+    private static final Map<String, String> DEFAULT_ENDPOINT_PERMISSIONS = Map.ofEntries(
             Map.entry("api/audit/player", "syncmoney.admin.audit"),
             Map.entry("api/audit/search", "syncmoney.admin.audit"),
             Map.entry("api/audit/search-cursor", "syncmoney.admin.audit"),
@@ -44,9 +48,47 @@ public class PermissionChecker {
             Map.entry("api/nodes", "syncmoney.web.nodes.view"),
             Map.entry("api/nodes/manage", "syncmoney.web.nodes.manage"));
 
+
+    private final Map<String, String> endpointPermissions;
+
     public PermissionChecker(Syncmoney plugin) {
+        this(plugin, plugin.getSyncmoneyConfig());
+    }
+
+    public PermissionChecker(Syncmoney plugin, SyncmoneyConfig syncmoneyConfig) {
         this.plugin = plugin;
+        this.syncmoneyConfig = syncmoneyConfig;
+        this.endpointPermissions = loadEndpointPermissions();
         loadPermissionsFromConfig();
+    }
+
+    /**
+     * Resolve the FileConfiguration to read from, preferring the injected
+     * {@link SyncmoneyConfig} (never bypassing it via {@code plugin.getConfig()}).
+     */
+    private Configuration resolveConfig() {
+        if (syncmoneyConfig != null && syncmoneyConfig.getConfig() != null) {
+            return syncmoneyConfig.getConfig();
+        }
+        return plugin.getConfig();
+    }
+
+    private Map<String, String> loadEndpointPermissions() {
+        Map<String, String> result = new LinkedHashMap<>(DEFAULT_ENDPOINT_PERMISSIONS);
+        try {
+            ConfigurationSection section = resolveConfig().getConfigurationSection("web-admin.endpoint-permissions");
+            if (section != null) {
+                for (String key : section.getKeys(false)) {
+                    String permission = section.getString(key);
+                    if (permission != null && !permission.isBlank()) {
+                        result.put(key, permission);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to load endpoint permissions from config, using defaults: " + e.getMessage());
+        }
+        return result;
     }
 
     /**
@@ -54,7 +96,7 @@ public class PermissionChecker {
      */
     private void loadPermissionsFromConfig() {
         try {
-            Configuration config = plugin.getConfig();
+            Configuration config = resolveConfig();
             ConfigurationSection keysSection = config.getConfigurationSection("web-admin.api-keys");
 
             if (keysSection != null) {
@@ -99,7 +141,7 @@ public class PermissionChecker {
      * @return Required permission string, or null if no permission required
      */
     public String getRequiredPermission(String endpoint) {
-        for (Map.Entry<String, String> entry : ENDPOINT_PERMISSIONS.entrySet()) {
+        for (Map.Entry<String, String> entry : endpointPermissions.entrySet()) {
             if (endpoint.startsWith(entry.getKey())) {
                 return entry.getValue();
             }

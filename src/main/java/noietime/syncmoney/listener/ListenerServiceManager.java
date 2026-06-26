@@ -9,6 +9,7 @@ import noietime.syncmoney.economy.EconomyServiceManager;
 import noietime.syncmoney.guard.PlayerTransferGuard;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 
 /**
  * Unified listener service manager.
@@ -26,7 +27,7 @@ public class ListenerServiceManager {
     private PlayerQuitListener playerQuitListener;
     private PlayerTransferGuard playerTransferGuard;
     private CMIEconomyListener cmiListener;
-    private EventListenerManager eventListenerManager;
+    private OnlinePlayerRegistry onlinePlayerRegistry;
 
     public ListenerServiceManager(Syncmoney plugin, EconomyServiceManager economyServiceManager) {
         this.plugin = plugin;
@@ -41,6 +42,7 @@ public class ListenerServiceManager {
             CMIEconomyHandler cmiHandler = economyServiceManager.getEconomyModeRouter().getCmiHandler();
             if (cmiHandler != null) {
                 this.cmiListener = new CMIEconomyListener(plugin, cmiHandler, config);
+                cmiHandler.setCmiListener(cmiListener);
                 registerListener(cmiListener, "CMI Economy Listener");
             }
         }
@@ -57,11 +59,16 @@ public class ListenerServiceManager {
         NameResolver nameResolver = economyServiceManager.getNameResolver();
         BaltopManager baltopManager = plugin.getBaltopManager();
 
+        this.onlinePlayerRegistry = new OnlinePlayerRegistry(plugin, config, plugin.getRedisManager());
+        this.onlinePlayerRegistry.startHeartbeat();
+
         if (economyFacade != null && nameResolver != null) {
-            this.playerJoinListener = new PlayerJoinListener(plugin, economyFacade, nameResolver, baltopManager);
+            this.playerJoinListener = new PlayerJoinListener(plugin, economyFacade, nameResolver, baltopManager,
+                    onlinePlayerRegistry);
             registerListener(playerJoinListener, "Player Join Listener");
 
-            this.playerQuitListener = new PlayerQuitListener(plugin, economyFacade, nameResolver);
+            this.playerQuitListener = new PlayerQuitListener(plugin, economyFacade, nameResolver,
+                    onlinePlayerRegistry);
             registerListener(playerQuitListener, "Player Quit Listener");
         }
 
@@ -75,7 +82,14 @@ public class ListenerServiceManager {
 
     public void shutdown() {
         plugin.getLogger().fine("Shutting down listener layer...");
+        if (onlinePlayerRegistry != null) {
+            onlinePlayerRegistry.shutdown();
+        }
         plugin.getLogger().fine("Listener layer shutdown complete");
+    }
+
+    public OnlinePlayerRegistry getOnlinePlayerRegistry() {
+        return onlinePlayerRegistry;
     }
 
     public PlayerJoinListener getPlayerJoinListener() {
@@ -92,9 +106,5 @@ public class ListenerServiceManager {
 
     public CMIEconomyListener getCmiListener() {
         return cmiListener;
-    }
-
-    public EventListenerManager getEventListenerManager() {
-        return eventListenerManager;
     }
 }

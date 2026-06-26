@@ -1,9 +1,13 @@
 package noietime.syncmoney.sync;
 
+import noietime.syncmoney.config.SyncmoneyConfig;
 import org.bukkit.plugin.Plugin;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.UUID;
 
@@ -20,11 +24,13 @@ public final class DebounceManager {
     private static final long CLEANUP_INTERVAL_MS = 60000;
 
     private final Plugin plugin;
+    private final SyncmoneyConfig config;
     private final ConcurrentMap<String, ProcessedMessage> processedMessages;
     private volatile long lastCleanupTime = 0;
 
-    public DebounceManager(Plugin plugin) {
+    public DebounceManager(Plugin plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
+        this.config = config;
         this.processedMessages = new ConcurrentHashMap<>();
     }
 
@@ -43,7 +49,7 @@ public final class DebounceManager {
 
         if (existing != null) {
             if (System.currentTimeMillis() - existing.timestamp() < MESSAGE_TTL_MS) {
-                if (plugin.getConfig().getBoolean("debug", false)) {
+                if (config.isDebug()) {
                     plugin.getLogger().fine("Debounce: rejected duplicate " + uuid + " v" + version);
                 }
                 return false;
@@ -70,7 +76,10 @@ public final class DebounceManager {
     }
 
     /**
-     * Cleans up expired entries.
+     * Cleans up expired entries. First removes everything past the TTL; if the map is still over
+     * the hard cap (a burst can outpace TTL expiry), forcibly evicts the oldest entries (LRU by
+     * insertion timestamp) until the size is back within {@link #MAX_ENTRIES}. This guarantees the
+     * map can never grow without bound.
      */
     public void cleanup() {
         long now = System.currentTimeMillis();
@@ -85,9 +94,29 @@ public final class DebounceManager {
             }
         }
 
-        if (removed > 0 && plugin.getConfig().getBoolean("debug", false)) {
-            plugin.getLogger().fine("Debounce: cleaned up " + removed + " expired entries");
+        removed += evictOldestOverCap();
+
+        if (removed > 0 && config.isDebug()) {
+            plugin.getLogger().fine("Debounce: cleaned up " + removed + " entries");
         }
+    }
+
+    private int evictOldestOverCap() {
+        int evicted = 0;
+        while (processedMessages.size() > MAX_ENTRIES) {
+            List<Map.Entry<String, ProcessedMessage>> entries = new ArrayList<>(processedMessages.entrySet());
+            int overflow = entries.size() - MAX_ENTRIES;
+            if (overflow <= 0) {
+                break;
+            }
+            entries.sort(Comparator.comparingLong(e -> e.getValue().timestamp()));
+            for (int i = 0; i < overflow; i++) {
+                if (processedMessages.remove(entries.get(i).getKey()) != null) {
+                    evicted++;
+                }
+            }
+        }
+        return evicted;
     }
 
     /**

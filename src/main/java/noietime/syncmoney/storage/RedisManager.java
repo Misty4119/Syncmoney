@@ -1,6 +1,7 @@
 package noietime.syncmoney.storage;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.util.Constants;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -79,24 +80,7 @@ public final class RedisManager implements AutoCloseable {
         poolConfig.setTestWhileIdle(true);
         poolConfig.setTestOnCreate(true);
 
-        int timeout = 5000;
-        if (config.redis().getRedisPassword() != null && !config.redis().getRedisPassword().isEmpty()) {
-            this.jedisPool = new JedisPool(
-                    poolConfig,
-                    config.redis().getRedisHost(),
-                    config.redis().getRedisPort(),
-                    timeout,
-                    config.redis().getRedisPassword(),
-                    config.redis().getRedisDatabase());
-        } else {
-            this.jedisPool = new JedisPool(
-                    poolConfig,
-                    config.redis().getRedisHost(),
-                    config.redis().getRedisPort(),
-                    timeout,
-                    (String) null,
-                    config.redis().getRedisDatabase());
-        }
+        this.jedisPool = createJedisPool(Constants.REDIS_DEFAULT_TIMEOUT_MS);
 
         if (!isConnected()) {
             this.degraded = true;
@@ -105,6 +89,13 @@ public final class RedisManager implements AutoCloseable {
             debug("Connected to Redis successfully.");
             warmUpPool();
         }
+    }
+
+    private JedisPool createJedisPool(int timeout) {
+        if (redisPassword != null && !redisPassword.isEmpty()) {
+            return new JedisPool(poolConfig, redisHost, redisPort, timeout, redisPassword, redisDatabase);
+        }
+        return new JedisPool(poolConfig, redisHost, redisPort, timeout, (String) null, redisDatabase);
     }
 
     /**
@@ -207,23 +198,7 @@ public final class RedisManager implements AutoCloseable {
             if (!jedisPool.isClosed()) {
                 jedisPool.close();
             }
-            if (redisPassword != null && !redisPassword.isEmpty()) {
-                this.jedisPool = new JedisPool(
-                        poolConfig,
-                        redisHost,
-                        redisPort,
-                        5000,
-                        redisPassword,
-                        redisDatabase);
-            } else {
-                this.jedisPool = new JedisPool(
-                        poolConfig,
-                        redisHost,
-                        redisPort,
-                        5000,
-                        (String) null,
-                        redisDatabase);
-            }
+            this.jedisPool = createJedisPool(Constants.REDIS_DEFAULT_TIMEOUT_MS);
             return isConnected();
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to reconnect to Redis: " + e.getMessage());

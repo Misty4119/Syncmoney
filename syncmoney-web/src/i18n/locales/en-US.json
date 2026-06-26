@@ -87,7 +87,8 @@
       "type": "Transaction Type",
       "startTime": "Start Time",
       "endTime": "End Time",
-      "dateRange": "Select Date Range"
+      "dateRange": "Select Date Range",
+      "clearDate": "Clear date filter"
     },
     "dateShortcut": {
       "today": "Today",
@@ -99,6 +100,14 @@
     "newRecords": "new records",
     "export": {
       "failed": "Export failed"
+    },
+    "detail": {
+      "title": "Transaction Detail",
+      "close": "Close",
+      "balanceBefore": "Balance Before",
+      "target": "Target Player",
+      "playerUuid": "Player UUID",
+      "id": "Record ID"
     }
   },
   "system": {
@@ -549,6 +558,16 @@
   "app": {
     "disconnected": "SSE connection lost",
     "reconnect": "Reconnect"
+  },
+  "api": {
+    "sessionExpired": "Session Expired",
+    "sessionExpiredDesc": "Your session has expired. Please log in again.",
+    "permissionDenied": "Permission Denied",
+    "permissionDeniedDesc": "You do not have permission to perform this action.",
+    "serverError": "Server Error",
+    "serverErrorDesc": "An internal server error occurred. Please try again later.",
+    "rateLimited": "Rate Limited",
+    "rateLimitedDesc": "Too many requests. Please wait a moment before retrying."
   },
   "nodes": {
     "selectServer": "Select a server...",

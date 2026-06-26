@@ -20,8 +20,6 @@ import org.mockito.MockitoAnnotations;
 import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -80,6 +78,10 @@ class EconomyEventConsumerTest {
 
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
+        // Keep processing on the success path and avoid NPEs in the downstream steps.
+        when(mockCacheManager.atomicAddBalance(any(), any())).thenReturn(BigDecimal.TEN);
+        when(mockConfig.shadowSync()).thenReturn(mock(noietime.syncmoney.config.ShadowSyncConfig.class));
+
         consumer = new EconomyEventConsumer(
                 mockPlugin, mockConfig, mockQueue, mockCacheManager,
                 mockRedisManager, mockDbWriteQueue, mockAuditLogger,
@@ -113,26 +115,29 @@ class EconomyEventConsumerTest {
     @Test
     void testBatchProcessing() throws Exception {
 
-        when(mockQueue.poll()).thenReturn(
+        when(mockQueue.poll(anyLong(), any())).thenReturn(
                 createTestEvent(UUID.randomUUID(), BigDecimal.valueOf(100)),
                 createTestEvent(UUID.randomUUID(), BigDecimal.valueOf(200)),
-                null
+                (EconomyEvent) null
         );
+        when(mockQueue.isEmpty()).thenReturn(true);
 
+        consumer.start();
+        Thread.sleep(300);
+        consumer.shutdown();
 
-        consumer.processPending();
-
-
-        verify(mockQueue, atLeastOnce()).poll();
+        verify(mockQueue, atLeastOnce()).poll(anyLong(), any());
     }
 
     @Test
     void testEmptyQueueHandling() throws Exception {
 
-        when(mockQueue.poll()).thenReturn(null);
+        when(mockQueue.poll(anyLong(), any())).thenReturn(null);
+        when(mockQueue.isEmpty()).thenReturn(true);
 
-
-        assertDoesNotThrow(() -> consumer.processPending());
+        consumer.start();
+        Thread.sleep(150);
+        assertDoesNotThrow(() -> consumer.shutdown());
     }
 
     @Test
@@ -153,25 +158,19 @@ class EconomyEventConsumerTest {
         CountDownLatch latch = new CountDownLatch(eventCount);
 
 
-        when(mockQueue.poll()).thenAnswer(invocation -> {
-            latch.countDown();
+        when(mockQueue.poll(anyLong(), any())).thenAnswer(invocation -> {
             if (latch.getCount() == 0) {
                 return null;
             }
+            latch.countDown();
             return createTestEvent(UUID.randomUUID(), BigDecimal.valueOf(100));
         });
+        when(mockQueue.isEmpty()).thenReturn(true);
 
-
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        executor.submit(() -> {
-            for (int i = 0; i < eventCount; i++) {
-                consumer.processPending();
-            }
-        });
-
+        consumer.start();
 
         boolean completed = latch.await(5, TimeUnit.SECONDS);
-        executor.shutdown();
+        consumer.shutdown();
 
         assertTrue(completed, "All events should be processed");
     }

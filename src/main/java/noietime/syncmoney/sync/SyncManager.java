@@ -45,7 +45,7 @@ public class SyncManager {
      * Initialize sync layer components.
      */
     public void initialize() {
-        this.debounceManager = new DebounceManager(plugin);
+        this.debounceManager = new DebounceManager(plugin, config);
         
         boolean redisRequired = config.getEconomyMode() != noietime.syncmoney.economy.EconomyMode.LOCAL;
         this.pubsubSubscriber = new PubsubSubscriber(
@@ -131,17 +131,21 @@ public class SyncManager {
             UUID uuid = entry.getKey();
             long redisVersion = entry.getValue();
 
-            EconomyState localState = economyFacade.getMemoryState(uuid);
-            if (localState != null && localState.version() < redisVersion) {
+            try {
+                EconomyState localState = economyFacade.getMemoryState(uuid);
+                if (localState != null && localState.version() < redisVersion) {
 
-                logger.info("Version sync: " + uuid + " local v" + localState.version() + " < Redis v" + redisVersion);
+                    logger.info("Version sync: " + uuid + " local v" + localState.version() + " < Redis v" + redisVersion);
 
 
-                BigDecimal redisBalance = cacheManager.getBalance(uuid);
-                long redisVersionFromCache = cacheManager.getVersion(uuid);
+                    BigDecimal redisBalance = cacheManager.getBalance(uuid);
+                    long redisVersionFromCache = cacheManager.getVersion(uuid);
 
-                economyFacade.forceUpdateMemoryState(uuid, redisBalance, redisVersionFromCache);
-                syncCount++;
+                    economyFacade.forceUpdateMemoryState(uuid, redisBalance, redisVersionFromCache);
+                    syncCount++;
+                }
+            } catch (Exception e) {
+                logger.warning("Version sync failed for " + uuid + ": " + e.getMessage());
             }
         }
 

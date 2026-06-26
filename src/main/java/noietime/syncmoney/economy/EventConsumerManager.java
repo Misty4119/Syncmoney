@@ -83,9 +83,15 @@ public class EventConsumerManager {
      * Start the consumer.
      */
     public void start() {
-        if (economyEventConsumer != null) {
-            plugin.getLogger().fine("EconomyEventConsumer ready");
+        if (economyEventConsumer == null) {
+            return;
         }
+        if (config.isCMIMode()) {
+            plugin.getLogger().info("EconomyEventConsumer skipped: CMI mode publishes directly via CMIPubsubHandler, no in-process queue to drain.");
+            return;
+        }
+        economyEventConsumer.start();
+        plugin.getLogger().fine("EconomyEventConsumer ready");
     }
 
     /**
@@ -95,7 +101,7 @@ public class EventConsumerManager {
         plugin.getLogger().fine("Shutting down event consumer layer...");
         
         if (economyEventConsumer != null) {
-            economyEventConsumer.stop();
+            economyEventConsumer.shutdown();
         }
         
         plugin.getLogger().fine("Event consumer layer shutdown complete");

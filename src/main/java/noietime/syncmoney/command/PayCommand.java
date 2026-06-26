@@ -12,6 +12,7 @@ import noietime.syncmoney.storage.TransferLockManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.PubsubSubscriber;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.command.Command;
@@ -37,9 +38,7 @@ import java.util.List;
 public final class PayCommand implements CommandExecutor, TabCompleter {
 
     private final Syncmoney plugin;
-    private SyncmoneyConfig config;
     private final EconomyFacade economyFacade;
-    private final NameResolver nameResolver;
     private final FallbackEconomyWrapper fallbackWrapper;
     private final CooldownManager cooldownManager;
     private boolean allowInDegraded;
@@ -60,9 +59,7 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
             double minAmount, double maxAmount, boolean allowInDegraded,
             boolean localMode) {
         this.plugin = plugin;
-        this.config = config;
         this.economyFacade = economyFacade;
-        this.nameResolver = nameResolver;
         this.fallbackWrapper = fallbackWrapper;
         this.cooldownManager = cooldownManager;
         this.allowInDegraded = allowInDegraded;
@@ -138,14 +135,15 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd,
             @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
+            OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[0], true);
+            }
             String input = args[0].toLowerCase();
-
-            java.util.Set<String> suggestions = new java.util.HashSet<>();
-            plugin.getServer().getOnlinePlayers().forEach(p -> suggestions.add(p.getName()));
-            suggestions.addAll(nameResolver.getAllCachedNames());
-
-            return suggestions.stream()
+            return plugin.getServer().getOnlinePlayers().stream()
+                    .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(input))
+                    .distinct()
                     .sorted()
                     .toList();
         }
@@ -222,7 +220,6 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
      * Called by {@link CommandServiceManager#reload(SyncmoneyConfig)} after /syncmoney reload.
      */
     public void reload(SyncmoneyConfig newConfig) {
-        this.config = newConfig;
         this.minAmount = NumericUtil.normalize(newConfig.pay().getPayMinAmount());
         this.maxAmount = NumericUtil.normalize(newConfig.pay().getPayMaxAmount());
         this.allowInDegraded = newConfig.isPayAllowedInDegraded();

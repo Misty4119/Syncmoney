@@ -5,7 +5,7 @@ import io.undertow.server.HttpServerExchange;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.ConfigManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.web.api.ApiResponse;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.security.NodeApiKeyStore;
 import noietime.syncmoney.web.security.PermissionChecker;
 
@@ -21,7 +21,7 @@ import java.util.Set;
  * Shared context and utilities for node-related handlers.
  * All node handlers extend this to access plugin, config, and utility methods.
  */
-public abstract class NodesApiContext {
+public abstract class NodesApiContext extends AbstractApiHandler {
 
     protected static final Set<String> BLOCKED_IP_PREFIXES = Set.of(
             "127.", "0.", "10.", "172.16.", "172.17.", "172.18.", "172.19.",
@@ -39,7 +39,6 @@ public abstract class NodesApiContext {
     protected static final String PERMISSION_MANAGE = "syncmoney.web.nodes.manage";
     protected static final String PERMISSION_CENTRAL = "syncmoney.web.central";
 
-    protected final Syncmoney plugin;
     protected final SyncmoneyConfig config;
     protected final PermissionChecker permissionChecker;
     protected final NodeApiKeyStore apiKeyStore;
@@ -47,7 +46,7 @@ public abstract class NodesApiContext {
 
     protected NodesApiContext(Syncmoney plugin, SyncmoneyConfig config,
                              PermissionChecker permissionChecker, NodeApiKeyStore apiKeyStore) {
-        this.plugin = plugin;
+        super(plugin);
         this.config = config;
         this.permissionChecker = permissionChecker;
         this.apiKeyStore = apiKeyStore;
@@ -63,18 +62,6 @@ public abstract class NodesApiContext {
     @SuppressWarnings("unchecked")
     protected Map<String, Object> parseJson(String json) throws Exception {
         return objectMapper.readValue(json, Map.class);
-    }
-
-    protected void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8");
-        exchange.getResponseSender().send(json);
-    }
-
-    protected void sendError(HttpServerExchange exchange, int statusCode, String code, String message) {
-        exchange.setStatusCode(statusCode);
-        sendJson(exchange, ApiResponse.error(code, message));
     }
 
     protected String maskApiKey(String key) {

@@ -56,6 +56,9 @@ class EconomyFacadeTest {
     @Mock
     private PlayerTransactionGuard mockGuard;
 
+    @Mock
+    private OverflowLogInterface mockOverflowLog;
+
     private EconomyFacade economyFacade;
 
     private final UUID testUuid = UUID.randomUUID();
@@ -66,10 +69,13 @@ class EconomyFacadeTest {
 
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
+        // Inject a mock OverflowLog via the full constructor so the test does not
+        // touch the filesystem (the no-arg overflow path builds a real OverflowLog
+        // from plugin.getDataFolder(), which is null under mocks).
         economyFacade = new EconomyFacade(
                 mockPlugin, mockConfig, mockCacheManager, mockRedisManager,
                 mockDatabaseManager, mockLocalEconomyHandler, mockWriteQueue,
-                mockFallbackWrapper, mockGuard
+                mockFallbackWrapper, mockGuard, mockOverflowLog
         );
     }
 

@@ -3,6 +3,7 @@ package noietime.syncmoney.vault;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
@@ -60,6 +61,15 @@ public class SyncmoneyVaultProvider implements Economy {
      */
     public void setConfig(SyncmoneyConfig config) {
         core.setConfig(config);
+    }
+
+    /**
+     * [FIX-CMI-VAULT-PUBLISH] Inject the {@link CMIEconomyHandler} so the Vault path mints CMI
+     * versions through the handler's authoritative counter instead of its own local one. Set by
+     * {@code Syncmoney.onEnable} in CMI mode after {@code CMIEconomyHandler} is constructed.
+     */
+    public void setCmiHandler(CMIEconomyHandler cmiHandler) {
+        core.setCmiHandler(cmiHandler);
     }
 
     /**

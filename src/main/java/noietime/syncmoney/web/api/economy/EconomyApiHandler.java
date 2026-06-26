@@ -7,6 +7,7 @@ import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.baltop.RankEntry;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.LocalEconomyHandler;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
 
@@ -22,12 +23,11 @@ import java.util.Map;
  * API handler for economy statistics endpoints.
  * Provides access to total supply, player counts, and transaction statistics.
  */
-public class EconomyApiHandler {
+public class EconomyApiHandler extends AbstractApiHandler {
 
     /** Path index for route: api/economy/player/{uuid}/balance */
     private static final int PATH_IDX_PLAYER_UUID = 3;
 
-    private final Syncmoney plugin;
     private final EconomyFacade economyFacade;
     private final BaltopManager baltopManager;
     private final AuditLogger auditLogger;
@@ -35,7 +35,7 @@ public class EconomyApiHandler {
 
     public EconomyApiHandler(Syncmoney plugin, EconomyFacade economyFacade,
             BaltopManager baltopManager, AuditLogger auditLogger, LocalEconomyHandler localEconomyHandler) {
-        this.plugin = plugin;
+        super(plugin);
         this.economyFacade = economyFacade;
         this.baltopManager = baltopManager;
         this.auditLogger = auditLogger;
@@ -120,19 +120,6 @@ public class EconomyApiHandler {
             exchange.setStatusCode(503);
             sendJson(exchange, ApiResponse.error("BALTOP_NOT_AVAILABLE", "Leaderboard not available"));
         }
-    }
-
-    /**
-     * Extract path parameter at a fixed position index.
-     * e.g. api/economy/player/{uuid}/balance → index 3 gives the uuid segment
-     */
-    private String extractPathParamAt(HttpServerExchange exchange, int index) {
-        String path = exchange.getRelativePath();
-        if (path.startsWith("/")) {
-            path = path.substring(1);
-        }
-        String[] parts = path.split("/");
-        return (parts.length > index) ? parts[index] : null;
     }
 
     /**
@@ -225,15 +212,5 @@ public class EconomyApiHandler {
                 .atStartOfDay(zone)
                 .toInstant()
                 .toEpochMilli();
-    }
-
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8");
-        exchange.getResponseSender().send(json);
     }
 }

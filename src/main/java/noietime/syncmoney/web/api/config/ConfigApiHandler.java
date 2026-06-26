@@ -6,6 +6,7 @@ import io.undertow.server.HttpServerExchange;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.ConfigManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
 
@@ -17,15 +18,14 @@ import java.util.Map;
  * API handler for configuration endpoints.
  * Provides access to plugin configuration, save functionality, and reload.
  */
-public class ConfigApiHandler {
+public class ConfigApiHandler extends AbstractApiHandler {
 
-    private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final ConfigManager configManager;
     private final ObjectMapper objectMapper;
 
     public ConfigApiHandler(Syncmoney plugin, SyncmoneyConfig config, ConfigManager configManager) {
-        this.plugin = plugin;
+        super(plugin);
         this.config = config;
         this.configManager = configManager;
         this.objectMapper = new ObjectMapper();
@@ -196,23 +196,4 @@ public class ConfigApiHandler {
         }
     }
 
-    /**
-     * Get request body as string.
-     */
-    private String getRequestBody(HttpServerExchange exchange) throws Exception {
-        return exchange.getInputStream().readAllBytes().length > 0
-            ? new String(exchange.getInputStream().readAllBytes(), "UTF-8")
-            : "{}";
-    }
-
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8"
-        );
-        exchange.getResponseSender().send(json);
-    }
 }

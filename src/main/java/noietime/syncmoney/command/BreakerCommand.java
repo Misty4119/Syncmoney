@@ -310,6 +310,10 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
 
 
         if (args.length == 2 && (args[0].equalsIgnoreCase("player") || args[0].equalsIgnoreCase("unlock"))) {
+            noietime.syncmoney.uuid.OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+            if (registry != null) {
+                return registry.suggestOnlinePlayerNames(args[1], true);
+            }
             return plugin.getServer().getOnlinePlayers().stream()
                     .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))

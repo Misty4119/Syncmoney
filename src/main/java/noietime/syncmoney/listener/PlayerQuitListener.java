@@ -3,6 +3,7 @@ package noietime.syncmoney.listener;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.web.server.WebAdminServer;
 import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.event.EventHandler;
@@ -23,11 +24,14 @@ public final class PlayerQuitListener implements Listener {
     private final Plugin plugin;
     private final EconomyFacade economyFacade;
     private final NameResolver nameResolver;
+    private final OnlinePlayerRegistry onlinePlayerRegistry;
 
-    public PlayerQuitListener(Plugin plugin, EconomyFacade economyFacade, NameResolver nameResolver) {
+    public PlayerQuitListener(Plugin plugin, EconomyFacade economyFacade, NameResolver nameResolver,
+            OnlinePlayerRegistry onlinePlayerRegistry) {
         this.plugin = plugin;
         this.economyFacade = economyFacade;
         this.nameResolver = nameResolver;
+        this.onlinePlayerRegistry = onlinePlayerRegistry;
     }
 
     @EventHandler
@@ -37,6 +41,10 @@ public final class PlayerQuitListener implements Listener {
         String name = player.getName();
 
         nameResolver.invalidate(name);
+
+        if (onlinePlayerRegistry != null) {
+            onlinePlayerRegistry.unregister(uuid);
+        }
 
         var state = economyFacade.getMemoryState(uuid);
         if (state != null) {

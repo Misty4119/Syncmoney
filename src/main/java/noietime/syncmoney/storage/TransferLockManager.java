@@ -110,7 +110,9 @@ public final class TransferLockManager {
         String lockKey = LOCK_PREFIX + uuid.toString();
         String lockValue = UUID.randomUUID().toString();
 
-        for (int i = 0; i < Constants.LOCK_MAX_RETRIES; i++) {
+        long deadline = System.currentTimeMillis() + Constants.LOCK_TIMEOUT_SECONDS * 1000L;
+
+        while (System.currentTimeMillis() < deadline) {
             try (var jedis = redisManager.getResource()) {
                 String result = jedis.set(lockKey,
                     lockValue,

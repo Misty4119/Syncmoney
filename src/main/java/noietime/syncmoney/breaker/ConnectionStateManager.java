@@ -33,7 +33,7 @@ public final class ConnectionStateManager {
 
     private final AtomicLong consecutiveFailures = new AtomicLong(0);
 
-    private ConnectionStateCallback callback;
+    private volatile ConnectionStateCallback callback;
     private final boolean redisRequired;
 
     public ConnectionStateManager(Plugin plugin, SyncmoneyConfig config, RedisManager redisManager, boolean redisRequired, EconomicCircuitBreaker circuitBreaker) {
@@ -68,7 +68,7 @@ public final class ConnectionStateManager {
      */
     private void triggerCircuitBreakerLockdown(String reason) {
         if (circuitBreaker != null) {
-            circuitBreaker.triggerLockdown(reason);
+            circuitBreaker.triggerLockdown(reason, LockReason.REDIS_DISCONNECT);
         }
     }
 
@@ -93,8 +93,7 @@ public final class ConnectionStateManager {
                             plugin.getLogger().fine("ConnectionStateManager: Successfully reconnected to Redis");
                         }
                         if (circuitBreaker != null && circuitBreaker.isLocked()
-                                && circuitBreaker.getLockReason() != null
-                                && circuitBreaker.getLockReason().contains("Redis")) {
+                                && circuitBreaker.getLockCause() == LockReason.REDIS_DISCONNECT) {
                             circuitBreaker.reset();
                             plugin.getLogger().info("CircuitBreaker: Auto-reset after Redis reconnection");
                         }

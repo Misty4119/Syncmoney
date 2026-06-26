@@ -4,6 +4,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.web.server.WebAdminServer;
 import noietime.syncmoney.web.websocket.SseManager;
@@ -27,13 +28,16 @@ public final class PlayerJoinListener implements Listener {
     private final EconomyFacade economyFacade;
     private final NameResolver nameResolver;
     private final BaltopManager baltopManager;
+    private final OnlinePlayerRegistry onlinePlayerRegistry;
 
     public PlayerJoinListener(Plugin plugin, EconomyFacade economyFacade,
-            NameResolver nameResolver, BaltopManager baltopManager) {
+            NameResolver nameResolver, BaltopManager baltopManager,
+            OnlinePlayerRegistry onlinePlayerRegistry) {
         this.plugin = plugin;
         this.economyFacade = economyFacade;
         this.nameResolver = nameResolver;
         this.baltopManager = baltopManager;
+        this.onlinePlayerRegistry = onlinePlayerRegistry;
     }
 
     @EventHandler
@@ -44,6 +48,9 @@ public final class PlayerJoinListener implements Listener {
 
         nameResolver.cacheName(name, uuid);
 
+        if (onlinePlayerRegistry != null) {
+            onlinePlayerRegistry.register(player);
+        }
 
         broadcastPlayerJoinEvent(name, uuid);
 

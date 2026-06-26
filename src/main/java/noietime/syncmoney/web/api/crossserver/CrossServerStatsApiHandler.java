@@ -5,16 +5,15 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyMode;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.security.NodeApiKeyStore;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
+import noietime.syncmoney.web.util.HttpClientUtil;
 
 import java.math.BigDecimal;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -30,16 +29,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Thread safety: All fields are accessed atomically or under proper synchronization.
  */
-public class CrossServerStatsApiHandler {
+public class CrossServerStatsApiHandler extends AbstractApiHandler {
 
     private static final String PERMISSION_VIEW = "syncmoney.web.nodes.view";
     private static final String PERMISSION_CENTRAL = "syncmoney.web.central";
 
-    private static final long CONNECT_TIMEOUT_MS = 5_000L;
-    private static final long READ_TIMEOUT_MS = 10_000L;
     private static final int HTTP_OK = 200;
 
-    private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final EconomyFacade economyFacade;
     private final NodeApiKeyStore apiKeyStore;
@@ -50,7 +46,7 @@ public class CrossServerStatsApiHandler {
 
     public CrossServerStatsApiHandler(Syncmoney plugin, SyncmoneyConfig config,
                                      EconomyFacade economyFacade, NodeApiKeyStore apiKeyStore) {
-        this.plugin = plugin;
+        super(plugin);
         this.config = config;
         this.economyFacade = economyFacade;
         this.apiKeyStore = apiKeyStore;
@@ -217,18 +213,7 @@ public class CrossServerStatsApiHandler {
             String apiKey = decryptApiKey(node.apiKey);
             String statsUrl = buildNodeUrl(node.url, "/api/economy/stats");
 
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofMillis(CONNECT_TIMEOUT_MS))
-                    .build();
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(statsUrl))
-                    .header("Authorization", "Bearer " + apiKey)
-                    .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = HttpClientUtil.getWithBearer(statsUrl, apiKey);
 
             if (response.statusCode() == HTTP_OK) {
                 return parseNodeStats(node.name, node.url, response.body());
@@ -257,18 +242,7 @@ public class CrossServerStatsApiHandler {
                 String apiKey = decryptApiKey(node.apiKey);
                 String topUrl = buildNodeUrl(node.url, "/api/economy/top");
 
-                HttpClient client = HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofMillis(CONNECT_TIMEOUT_MS))
-                        .build();
-
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(topUrl))
-                        .header("Authorization", "Bearer " + apiKey)
-                        .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
-                        .GET()
-                        .build();
-
-                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = HttpClientUtil.getWithBearer(topUrl, apiKey);
 
                 if (response.statusCode() == HTTP_OK) {
                     List<TopPlayerEntry> nodeTop = parseNodeTopPlayers(node.name, response.body());
@@ -567,18 +541,7 @@ public class CrossServerStatsApiHandler {
             String apiKey = decryptApiKey(nodeConfig.apiKey);
             String topUrl = buildNodeUrl(nodeUrl, "/api/economy/top");
 
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofMillis(CONNECT_TIMEOUT_MS))
-                    .build();
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(topUrl))
-                    .header("Authorization", "Bearer " + apiKey)
-                    .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = HttpClientUtil.getWithBearer(topUrl, apiKey);
 
             if (response.statusCode() == HTTP_OK) {
                 players = parseNodeTopPlayers(nodeName, response.body());
@@ -640,19 +603,6 @@ public class CrossServerStatsApiHandler {
         Map<String, NodeStats> fresh = fetchAllNodeStats(nodes);
         cacheStats(fresh);
     }
-
-    private void sendError(HttpServerExchange exchange, int statusCode, String code, String message) {
-        exchange.setStatusCode(statusCode);
-        sendJson(exchange, ApiResponse.error(code, message));
-    }
-
-    private void sendJson(HttpServerExchange exchange, String json) {
-        exchange.getResponseHeaders().put(
-                io.undertow.util.Headers.CONTENT_TYPE,
-                "application/json;charset=UTF-8");
-        exchange.getResponseSender().send(json);
-    }
-
 
     /**
      * Node statistics record.

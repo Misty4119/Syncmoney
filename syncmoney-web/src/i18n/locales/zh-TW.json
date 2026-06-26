@@ -87,7 +87,8 @@
       "type": "交易類型",
       "startTime": "開始時間",
       "endTime": "結束時間",
-      "dateRange": "選擇日期範圍"
+      "dateRange": "選擇日期範圍",
+      "clearDate": "清除日期篩選"
     },
     "dateShortcut": {
       "today": "今天",
@@ -99,6 +100,14 @@
     "newRecords": "筆新記錄",
     "export": {
       "failed": "匯出失敗"
+    },
+    "detail": {
+      "title": "交易詳情",
+      "close": "關閉",
+      "balanceBefore": "交易前餘額",
+      "target": "目標玩家",
+      "playerUuid": "玩家 UUID",
+      "id": "記錄 ID"
     }
   },
   "system": {
@@ -549,6 +558,16 @@
   "app": {
     "disconnected": "SSE 連線已斷開",
     "reconnect": "重新連線"
+  },
+  "api": {
+    "sessionExpired": "工作階段已過期",
+    "sessionExpiredDesc": "您的工作階段已過期，請重新登入。",
+    "permissionDenied": "權限不足",
+    "permissionDeniedDesc": "您沒有執行此操作的權限。",
+    "serverError": "伺服器錯誤",
+    "serverErrorDesc": "發生內部伺服器錯誤，請稍後再試。",
+    "rateLimited": "請求過於頻繁",
+    "rateLimitedDesc": "請求次數過多，請稍候再試。"
   },
   "nodes": {
     "selectServer": "選擇伺服器...",

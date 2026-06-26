@@ -1,8 +1,15 @@
 import axios, { type AxiosInstance } from 'axios'
 import type { ApiResponse, AuditRecord, DashboardStats, SystemStatus, Settings, PaginatedResponse, PluginConfig, SystemMetrics, NodeInfo, NodeStatusResponse } from './types'
 import router from '@/router'
+import i18n from '@/i18n'
 
 import { useNotificationStore } from '@/stores/notification'
+
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    silent?: boolean
+  }
+}
 
 
 const centralApiClient: AxiosInstance = axios.create({
@@ -42,19 +49,22 @@ centralApiClient.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const notificationStore = useNotificationStore()
+    const t = i18n.global.t
+    const silent = error.config?.silent === true
 
     if (status === 401) {
+      // Session errors must always redirect, regardless of the silent flag.
       localStorage.removeItem('apiKey')
-      notificationStore.addNotification('error', 'Session Expired', 'Your session has expired. Please log in again.')
+      if (!silent) notificationStore.error(t('api.sessionExpired'), t('api.sessionExpiredDesc'))
       router.push('/login')
     } else if (status === 403) {
-      notificationStore.addNotification('error', 'Permission Denied', 'You do not have permission to perform this action.')
+      if (!silent) notificationStore.error(t('api.permissionDenied'), t('api.permissionDeniedDesc'))
       router.push('/?error=forbidden')
     } else if (status === 500) {
-      notificationStore.addNotification('error', 'Server Error', 'An internal server error occurred. Please try again later.')
+      if (!silent) notificationStore.error(t('api.serverError'), t('api.serverErrorDesc'))
       router.push('/?error=server_error')
     } else if (status === 429) {
-      notificationStore.addNotification('warning', 'Rate Limited', 'Too many requests. Please wait a moment before retrying.')
+      if (!silent) notificationStore.warning(t('api.rateLimited'), t('api.rateLimitedDesc'))
       router.push('/?error=rate_limited')
     }
     return Promise.reject(error)

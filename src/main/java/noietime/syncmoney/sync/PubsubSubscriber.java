@@ -14,7 +14,6 @@ import redis.clients.jedis.JedisPubSub;
 import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 import java.util.logging.Level;
 
 /**
@@ -26,7 +25,8 @@ import java.util.logging.Level;
  */
 public final class PubsubSubscriber {
 
-    private static final String CHANNEL = "syncmoney:balance:update";
+    private static final String CHANNEL = PubSubChannels.BALANCE_UPDATE;
+    private static final String CMI_CHANNEL = PubSubChannels.CMI_BALANCE_UPDATE;
     private static final long INITIAL_RETRY_DELAY_MS = 1000;
     private static final long MAX_RETRY_DELAY_MS = 30000;
 
@@ -40,6 +40,7 @@ public final class PubsubSubscriber {
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile Thread subscriberThread;
+    private volatile CMIPubsubHandler cmiPubsubHandler;
 
     public PubsubSubscriber(Plugin plugin, SyncmoneyConfig config,
                           CacheManager cacheManager, EconomyFacade economyFacade,
@@ -119,8 +120,11 @@ public final class PubsubSubscriber {
                 JedisPubSub pubSub = new JedisPubSub() {
                     @Override
                     public void onMessage(String channel, String message) {
-                        if (!CHANNEL.equals(channel)) return;
-                        handleMessage(message);
+                        if (CHANNEL.equals(channel)) {
+                            handleMessage(message);
+                        } else if (CMI_CHANNEL.equals(channel)) {
+                            handleCMIMessage(message);
+                        }
                     }
 
                     @Override
@@ -134,7 +138,7 @@ public final class PubsubSubscriber {
                     }
                 };
 
-                jedis.subscribe(pubSub, CHANNEL);
+                jedis.subscribe(pubSub, CHANNEL, CMI_CHANNEL);
 
                 retryDelayMs = INITIAL_RETRY_DELAY_MS;
 
@@ -193,6 +197,27 @@ public final class PubsubSubscriber {
         }
 
         plugin.getLogger().fine("Pub/Sub subscription stopped.");
+    }
+
+    public void setCmiPubsubHandler(CMIPubsubHandler cmiPubsubHandler) {
+        this.cmiPubsubHandler = cmiPubsubHandler;
+    }
+
+    private void handleCMIMessage(String message) {
+        CMIPubsubHandler handler = this.cmiPubsubHandler;
+        if (handler == null) {
+            return;
+        }
+        try {
+            PubSubMessage msg = PubSubMessage.fromJson(message);
+            if (msg == null) {
+                plugin.getLogger().warning("Failed to parse CMI Pub/Sub message: " + message);
+                return;
+            }
+            handler.process(msg);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Error processing CMI Pub/Sub message: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -259,21 +284,6 @@ public final class PubsubSubscriber {
     }
 
     /**
-     * If player is online, update their UI via EntityScheduler
-     *
-     * [EntityScheduler] This method switches to player's EntityScheduler for execution.
-     */
-    private void notifyPlayerIfOnline(UUID uuid, BigDecimal newBalance) {
-        Player player = Bukkit.getServer().getPlayer(uuid);
-        if (player == null || !player.isOnline()) {
-            return;
-        }
-
-        player.getScheduler().run(plugin, (task) -> {
-        }, null);
-    }
-
-    /**
      * If player is online, notify them of balance change (cross-server)
      * Sends notification message to target player
      *
@@ -288,23 +298,7 @@ public final class PubsubSubscriber {
         player.getScheduler().run(plugin, (task) -> {
             if (plugin instanceof noietime.syncmoney.Syncmoney) {
                 noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
-                String messageKey = null;
-
-                
-                if ("VAULT_DEPOSIT".equals(eventType)) {
-                    messageKey = "cross-server.money-received";
-                } else if ("VAULT_WITHDRAW".equals(eventType)) {
-                    messageKey = "cross-server.money-spent";
-                } else if ("DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
-                    
-                    messageKey = "admin.money-received";
-                } else if ("WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
-                    messageKey = "admin.money-taken";
-                } else if ("SET_BALANCE".equals(eventType)) {
-                    messageKey = "admin.balance-set-by-admin";
-                } else if ("TRANSFER_IN".equals(eventType)) {
-                    messageKey = "pay.success-receiver";
-                }
+                String messageKey = MessageKeys.forEventType(eventType);
 
                 if (messageKey != null) {
                     String message = syncMoneyPlugin.getMessage(messageKey);
@@ -327,7 +321,7 @@ public final class PubsubSubscriber {
     }
 
     private boolean isDebugEnabled() {
-        return plugin.getConfig().getBoolean("debug", false);
+        return config.isDebug();
     }
 
     /**

@@ -3,6 +3,9 @@ package noietime.syncmoney.storage.db;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.exception.DatabaseException;
+import noietime.syncmoney.exception.SyncmoneyException;
+import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
 
@@ -238,7 +241,11 @@ public final class DatabaseManager implements AutoCloseable {
                 }
             }
         } catch (SQLException e) {
-            plugin.getLogger().warning("Failed to create database: " + e.getMessage());
+            plugin.getLogger().severe("Failed to create database '" + dbName + "': " + e.getMessage());
+            throw new DatabaseException(
+                    SyncmoneyException.ErrorCode.DATABASE_ERROR,
+                    "Failed to create database '" + dbName + "'",
+                    e);
         }
     }
 
@@ -379,6 +386,11 @@ public final class DatabaseManager implements AutoCloseable {
 
     /**
      * Batch insert or update player data.
+     *
+     * <p>Rows are flushed in chunks of at most {@link Constants#DB_BATCH_SIZE} to
+     * keep each {@code executeBatch} bounded. On any failure the transaction is
+     * rolled back and a {@link DatabaseException} is thrown so the caller (the DB
+     * write consumer) can re-queue and retry the tasks instead of losing them.
      */
     public void batchInsertOrUpdatePlayers(List<DbWriteQueue.DbWriteTask> tasks) {
         if (tasks == null || tasks.isEmpty()) {
@@ -389,6 +401,7 @@ public final class DatabaseManager implements AutoCloseable {
             conn.setAutoCommit(false);
 
             try (PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
+                int pending = 0;
                 for (DbWriteQueue.DbWriteTask task : tasks) {
                     stmt.setString(1, task.playerUuid().toString());
                     stmt.setString(2, task.playerName());
@@ -397,19 +410,26 @@ public final class DatabaseManager implements AutoCloseable {
                     stmt.setString(5, task.serverName());
                     stmt.setTimestamp(6, java.sql.Timestamp.from(Instant.now()));
                     stmt.addBatch();
+
+                    if (++pending >= Constants.DB_BATCH_SIZE) {
+                        stmt.executeBatch();
+                        pending = 0;
+                    }
                 }
 
-                stmt.executeBatch();
+                if (pending > 0) {
+                    stmt.executeBatch();
+                }
                 conn.commit();
             } catch (SQLException e) {
                 conn.rollback();
-                plugin.getLogger().severe("Failed to batch insert/update players: " + e.getMessage());
                 throw e;
             } finally {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to batch insert/update players: " + e.getMessage());
+            throw DatabaseException.updateFailed("players", e);
         }
     }
 

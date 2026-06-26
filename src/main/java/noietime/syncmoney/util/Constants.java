@@ -29,6 +29,12 @@ public final class Constants {
     /** Batch size for database writes */
     public static final int BATCH_SIZE = 100;
 
+    /** Maximum number of rows flushed per JDBC executeBatch in the DB write path */
+    public static final int DB_BATCH_SIZE = 100;
+
+    /** Maximum retry attempts for a failed DB write task before it is dropped */
+    public static final int DB_WRITE_MAX_RETRIES = 3;
+
     /** Batch timeout in milliseconds */
     public static final long BATCH_TIMEOUT_MS = 1000;
 
@@ -67,6 +73,9 @@ public final class Constants {
     
     /** Maximum retry delay for pub/sub reconnection (ms) */
     public static final long PUBSUB_MAX_RETRY_DELAY_MS = 30_000;
+
+    /** Default Redis socket/connection timeout in milliseconds */
+    public static final int REDIS_DEFAULT_TIMEOUT_MS = 5000;
     
     /** Vault registration retry delay (ms) */
     public static final int VAULT_RETRY_DELAY_MS = 1000;

@@ -2,6 +2,7 @@ package noietime.syncmoney.web.api.auth;
 
 import io.undertow.server.HttpServerExchange;
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.api.ApiResponse;
 import noietime.syncmoney.web.server.WebAdminConfig;
 import noietime.syncmoney.web.server.HttpHandlerRegistry;
@@ -24,16 +25,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * 3. Client uses the token to connect via WebSocket: /ws?token=xxx
  * 4. Server validates the token and establishes the connection
  */
-public class WsTokenHandler {
+public class WsTokenHandler extends AbstractApiHandler {
 
-    private final Syncmoney plugin;
     private final WebAdminConfig config;
     private final Map<String, TokenEntry> tokens = new ConcurrentHashMap<>();
     
     private static final long TOKEN_VALIDITY_MS = 60000;
 
     public WsTokenHandler(Syncmoney plugin, WebAdminConfig config) {
-        this.plugin = plugin;
+        super(plugin);
         this.config = config;
     }
 

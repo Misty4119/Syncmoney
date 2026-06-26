@@ -2,7 +2,6 @@ package noietime.syncmoney.breaker;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.uuid.NameResolver;
@@ -11,32 +10,34 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.math.BigDecimal;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * NotificationService - Unified notification system.
  * Handles in-game notifications and Discord webhook notifications.
- * 
+ *
+ * <p>The {@link DiscordWebhookNotifier} is owned by {@link BreakerManager} and injected here,
+ * so this service does NOT shut it down.
+ *
  * [ThreadSafe] This class is thread-safe for concurrent operations.
  */
 public final class NotificationService {
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
-    private final DiscordWebhookNotifier discordNotifier;
-
-    private final Set<String> notifiedAdmins;
+    private volatile DiscordWebhookNotifier discordNotifier;
 
     private volatile SseManager sseManager;
     private volatile NameResolver nameResolver;
 
-    public NotificationService(Syncmoney plugin, SyncmoneyConfig config) {
+    public NotificationService(Syncmoney plugin, SyncmoneyConfig config, DiscordWebhookNotifier discordNotifier) {
         this.plugin = plugin;
         this.config = config;
-        this.discordNotifier = new DiscordWebhookNotifier(plugin, config);
-        this.notifiedAdmins = ConcurrentHashMap.newKeySet();
+        this.discordNotifier = discordNotifier;
+    }
+
+    public void setDiscordWebhookNotifier(DiscordWebhookNotifier discordNotifier) {
+        this.discordNotifier = discordNotifier;
     }
 
     /**
@@ -190,13 +191,6 @@ public final class NotificationService {
     }
 
     /**
-     * Get admin list from config.
-     */
-    private String[] getAdminList() {
-        return plugin.getConfig().getStringList("notify-admins").toArray(new String[0]);
-    }
-
-    /**
      * Set SSE manager for broadcasting system alerts to web clients.
      */
     public void setSseManager(SseManager sseManager) {
@@ -222,10 +216,10 @@ public final class NotificationService {
 
     /**
      * Shutdown the notification service.
+     *
+     * <p>The {@link DiscordWebhookNotifier} is owned and shut down by {@link BreakerManager},
+     * so it is intentionally not closed here.
      */
     public void shutdown() {
-        if (discordNotifier != null) {
-            discordNotifier.shutdown();
-        }
     }
 }

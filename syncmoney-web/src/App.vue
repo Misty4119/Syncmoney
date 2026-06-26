@@ -71,7 +71,7 @@ onMounted(async () => {
   z-index: 9999;
 }
 
-:global(.light) .connection-warning {
+:global(html:not(.dark)) .connection-warning {
   background: #dc2626;
 }
 
@@ -90,7 +90,7 @@ onMounted(async () => {
   font-size: 12px;
 }
 
-:global(.light) .reconnect-btn {
+:global(html:not(.dark)) .reconnect-btn {
   background: #f3f4f6;
   color: #dc2626;
 }
@@ -99,7 +99,7 @@ onMounted(async () => {
   background: #f5f5f5;
 }
 
-:global(.light) .reconnect-btn:hover {
+:global(html:not(.dark)) .reconnect-btn:hover {
   background: #e5e7eb;
 }
 </style>

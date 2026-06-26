@@ -44,6 +44,7 @@ public final class EconomicCircuitBreaker {
 
     private volatile CircuitState state = CircuitState.NORMAL;
     private volatile String lockReason = null;
+    private volatile LockReason lockCause = null;
 
     private final ConcurrentMap<Long, AtomicInteger> transactionsPerSecond;
 
@@ -189,7 +190,8 @@ public final class EconomicCircuitBreaker {
                         "Previous: " + lastTotalBalance + ", Current: " + currentTotal +
                         ", Ratio: " + increaseRatio);
                 triggerLockdown("Total increased by " + (increaseRatio.doubleValue() * 100) + "% in " +
-                        config.circuitBreaker().getCircuitBreakerInflationCheckIntervalMinutes() + " minutes");
+                        config.circuitBreaker().getCircuitBreakerInflationCheckIntervalMinutes() + " minutes",
+                        LockReason.INFLATION);
                 notification.notifyRapidInflation(lastTotalBalance, currentTotal, increaseRatio);
             }
         }
@@ -301,8 +303,19 @@ public final class EconomicCircuitBreaker {
      * Triggers circuit breaker lockdown.
      */
     public void triggerLockdown(String reason) {
+        triggerLockdown(reason, LockReason.OTHER);
+    }
+
+    /**
+     * Triggers circuit breaker lockdown with an explicit cause.
+     *
+     * @param reason human-readable reason
+     * @param cause  structured cause used by recovery logic
+     */
+    public void triggerLockdown(String reason, LockReason cause) {
         state = CircuitState.LOCKED;
         lockReason = reason;
+        lockCause = cause;
         plugin.getLogger().severe("CircuitBreaker: LOCKDOWN triggered. Reason: " + reason);
         notification.notifyLockdown(reason);
         broadcastCircuitBreakerEvent("LOCKDOWN", reason);
@@ -355,6 +368,7 @@ public final class EconomicCircuitBreaker {
         String previousState = state.name();
         state = CircuitState.NORMAL;
         lockReason = null;
+        lockCause = null;
         transactionsPerSecond.clear();
         balanceChangeRecords.clear();
         logger.fine("CircuitBreaker: Reset to NORMAL state");
@@ -373,6 +387,10 @@ public final class EconomicCircuitBreaker {
      */
     public String getLockReason() {
         return lockReason;
+    }
+
+    public LockReason getLockCause() {
+        return lockCause;
     }
 
     /**

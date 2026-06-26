@@ -87,8 +87,7 @@ economy:
     # api - Use CMI API (slower but more compatible)
     # internal - Direct database access (faster, default)
     balance-mode: "internal"
-    # Debounce delay in ticks (1 tick = 0.05 seconds)
-    # Reduces redundant sync operations during rapid balance changes
+    # Debounce delay in ticks (1 tick = 0.05 seconds) before reading final CMI balance and publishing.
     debounce-ticks: 5
   local:
     # SQLite path
@@ -504,7 +503,7 @@ web-admin:
   central-mode: false
 
   # Bundled web version in JAR (update this when releasing new version)
-  bundled-version: "1.1.2"
+  bundled-version: "1.2.0"
 
   # HTTP server configuration
   server:

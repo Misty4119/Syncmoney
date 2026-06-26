@@ -119,26 +119,20 @@ class DbWriterConsumerTest {
     @Test
     void testEmptyQueueSleep() throws InterruptedException {
 
-        when(mockQueue.isEmpty()).thenReturn(true, false);
+        // Idle: queue always reports empty so that after stop() the run loop
+        // condition (running || !queue.isEmpty()) becomes false and the thread exits.
+        when(mockQueue.isEmpty()).thenReturn(true);
 
-
-        Thread consumerThread = new Thread(() -> {
-            consumer.run();
-        });
-
+        Thread consumerThread = new Thread(consumer::run);
         consumerThread.start();
-
 
         Thread.sleep(200);
 
-
         consumer.stop();
-        consumerThread.join(1000);
+        consumerThread.join(2000);
 
-
-
-        assertFalse(consumerThread.isAlive() || !consumerThread.isAlive(),
-                "Consumer should handle idle state properly");
+        assertFalse(consumerThread.isAlive(),
+                "Consumer should stop gracefully when idle and stop() is called");
     }
 
     @Test
@@ -187,6 +181,69 @@ class DbWriterConsumerTest {
         latch.countDown();
         executor.shutdown();
         assertTrue(executor.awaitTermination(1, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void testFailedTaskIsRetriedAndNotLost() throws InterruptedException {
+        // Use a real queue so re-queued retries are actually observable.
+        DbWriteQueue realQueue = new DbWriteQueue(1000);
+        DatabaseManager failingThenOk = mock(DatabaseManager.class);
+
+        // Simulate a transient DB outage: the first batch attempt fails,
+        // the retry succeeds. The task must not be lost.
+        doThrow(new RuntimeException("Simulated DB outage"))
+                .doNothing()
+                .when(failingThenOk).batchInsertOrUpdatePlayers(any());
+
+        DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, failingThenOk);
+
+        realQueue.offer(new DbWriteQueue.DbWriteTask(
+                UUID.randomUUID(), "RetryPlayer", 777.0, 1L, "test-server", Instant.now()));
+
+        Thread consumerThread = new Thread(retryConsumer::run);
+        consumerThread.start();
+
+        // Deterministically wait for the retry to happen (>= 2 attempts) rather than
+        // racing on the transient queue size. Each batch poll window is up to
+        // BATCH_TIMEOUT_MS (1s), so allow a generous timeout.
+        verify(failingThenOk, timeout(10000).atLeast(2)).batchInsertOrUpdatePlayers(any());
+
+        retryConsumer.stop();
+        consumerThread.join(3000);
+
+        assertEquals(0, realQueue.size(), "Failed task should be retried until written, not lost");
+        assertTrue(realQueue.getWrittenCount() >= 1, "Successful write should be counted");
+    }
+
+    @Test
+    void testTaskDroppedAfterMaxRetries() throws InterruptedException {
+        // DB never recovers: the task should be retried up to the cap, then dropped
+        // (logged), and the consumer must not loop forever on it.
+        DbWriteQueue realQueue = new DbWriteQueue(1000);
+        DatabaseManager alwaysFailing = mock(DatabaseManager.class);
+
+        doThrow(new RuntimeException("Permanent DB failure"))
+                .when(alwaysFailing).batchInsertOrUpdatePlayers(any());
+
+        DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, alwaysFailing);
+
+        realQueue.offer(new DbWriteQueue.DbWriteTask(
+                UUID.randomUUID(), "DoomedPlayer", 1.0, 1L, "test-server", Instant.now()));
+
+        Thread consumerThread = new Thread(retryConsumer::run);
+        consumerThread.start();
+
+        // initial attempt + DB_WRITE_MAX_RETRIES retries, then dropped. Each batch
+        // poll window is up to BATCH_TIMEOUT_MS (1s), so wait deterministically for
+        // the expected number of attempts instead of racing on queue size.
+        verify(alwaysFailing,
+                timeout(15000).atLeast(noietime.syncmoney.util.Constants.DB_WRITE_MAX_RETRIES + 1))
+                .batchInsertOrUpdatePlayers(any());
+
+        retryConsumer.stop();
+        consumerThread.join(3000);
+
+        assertEquals(0, realQueue.size(), "Task should be dropped after exceeding the retry cap");
     }
 
     @Test

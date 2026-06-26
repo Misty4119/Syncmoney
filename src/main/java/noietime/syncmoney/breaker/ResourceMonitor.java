@@ -39,9 +39,9 @@ public final class ResourceMonitor {
 
     private volatile long availableMemoryMb = 0;
 
-    private volatile int redisAvailableConnections = 0;
+    private volatile long lastMemoryWarningTime = 0;
 
-    private volatile long lastWarningTime = 0;
+    private volatile long lastRedisPoolWarningTime = 0;
 
     private volatile SseManager sseManager;
 
@@ -93,12 +93,12 @@ public final class ResourceMonitor {
 
             if (usagePercent > config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold()) {
                 long now = System.currentTimeMillis();
-                if (now - lastWarningTime > WARNING_INTERVAL_MS) {
+                if (now - lastMemoryWarningTime > WARNING_INTERVAL_MS) {
                     plugin.getLogger().warning("ResourceMonitor: Memory usage is " +
                             FormatUtil.formatPercent(usagePercent) +
                             " (" + usedMb + "/" + maxMb + " MB). " +
                             "Threshold: " + config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold() + "%");
-                    lastWarningTime = now;
+                    lastMemoryWarningTime = now;
 
                     broadcastResourceAlert("memory_high",
                         "High Memory Usage",
@@ -128,11 +128,11 @@ public final class ResourceMonitor {
             int poolWarningThreshold = maxTotal - config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning();
             if (active >= poolWarningThreshold && active >= maxTotal * 8 / 10) {
                 long now = System.currentTimeMillis();
-                if (now - lastWarningTime > WARNING_INTERVAL_MS) {
+                if (now - lastRedisPoolWarningTime > WARNING_INTERVAL_MS) {
                     plugin.getLogger().severe("ResourceMonitor: Redis connection pool critical! " +
                             "Active: " + active + ", Max: " + maxTotal +
                             " (threshold: " + config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning() + " available)");
-                    lastWarningTime = now;
+                    lastRedisPoolWarningTime = now;
 
                     broadcastResourceAlert("redis_pool_critical",
                         "Redis Connection Pool Critical",
@@ -164,10 +164,17 @@ public final class ResourceMonitor {
     }
 
     /**
-     * Get Redis available connections.
+     * Get Redis available connections (live value derived from the connection pool).
      */
     public int getRedisAvailableConnections() {
-        return redisAvailableConnections;
+        if (redisManager == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, redisManager.getMaxConnections() - redisManager.getActiveConnections());
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /**
@@ -190,6 +197,7 @@ public final class ResourceMonitor {
      * Get resource status summary.
      */
     public String getStatusSummary() {
+        int redisAvailableConnections = getRedisAvailableConnections();
         if (syncMoneyPlugin != null) {
             return syncMoneyPlugin.getMessage("resource-monitor.status-summary")
                     .replace("{memory}", FormatUtil.formatPercentRaw(currentMemoryUsagePercent))
