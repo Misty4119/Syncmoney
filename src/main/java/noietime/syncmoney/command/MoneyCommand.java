@@ -3,6 +3,7 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.EconomyModeRouter;
 import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.uuid.OnlinePlayerRegistry;
@@ -18,7 +19,6 @@ import org.jetbrains.annotations.NotNull;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -29,17 +29,19 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
 
     private final Syncmoney plugin;
     private final EconomyFacade economyFacade;
+    private final EconomyModeRouter economyModeRouter;
     private final NameResolver nameResolver;
     private final FallbackEconomyWrapper fallbackWrapper;
 
     private String currencyName;
     private int decimalPlaces;
 
-    public MoneyCommand(Syncmoney plugin, EconomyFacade economyFacade,
+    public MoneyCommand(Syncmoney plugin, EconomyFacade economyFacade, EconomyModeRouter economyModeRouter,
                        NameResolver nameResolver, FallbackEconomyWrapper fallbackWrapper,
                        String currencyName, int decimalPlaces) {
         this.plugin = plugin;
         this.economyFacade = economyFacade;
+        this.economyModeRouter = economyModeRouter;
         this.nameResolver = nameResolver;
         this.fallbackWrapper = fallbackWrapper;
         this.currencyName = currencyName;
@@ -92,18 +94,15 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
      * Query other player's balance from console.
      */
     private boolean showOtherBalanceFromConsole(CommandSender sender, String targetName) {
-        Optional<UUID> targetUuid = nameResolver.resolve(targetName);
-
-        if (targetUuid.isEmpty()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("money.player-not-found")
-                    .replace("{player}", targetName));
-            return true;
-        }
-
-        UUID target = targetUuid.get();
-
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            BigDecimal balance = economyFacade.getBalance(target);
+            var targetUuid = nameResolver.resolve(targetName);
+            if (targetUuid.isEmpty()) {
+                MessageHelper.sendMessage(sender, plugin.getMessage("money.player-not-found")
+                        .replace("{player}", targetName));
+                return;
+            }
+
+            BigDecimal balance = getBalance(targetUuid.get());
 
             String message = plugin.getMessage("money.others")
                     .replace("{player}", targetName)
@@ -123,7 +122,7 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
         UUID uuid = player.getUniqueId();
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            var balance = economyFacade.getBalance(uuid);
+            var balance = getBalance(uuid);
 
             player.getScheduler().run(plugin, (t) -> {
                 String balanceStr = FormatUtil.formatCurrency(balance);
@@ -158,21 +157,17 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        Optional<UUID> targetUuid = nameResolver.resolve(targetName);
-
-        if (targetUuid.isEmpty()) {
-            player.getScheduler().run(plugin, (task) -> {
-                MessageHelper.sendMessage(player, plugin.getMessage("money.player-not-found")
-                        .replace("{player}", targetName));
-            }, null);
-            return true;
-        }
-
-        UUID target = targetUuid.get();
         String targetPlayerName = targetName;
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            BigDecimal balance = economyFacade.getBalance(target);
+            var targetUuid = nameResolver.resolve(targetName);
+            if (targetUuid.isEmpty()) {
+                player.getScheduler().run(plugin, (t) -> MessageHelper.sendMessage(player,
+                        plugin.getMessage("money.player-not-found").replace("{player}", targetPlayerName)), null);
+                return;
+            }
+
+            BigDecimal balance = getBalance(targetUuid.get());
 
             player.getScheduler().run(plugin, (t) -> {
                 String message = plugin.getMessage("money.others")
@@ -197,5 +192,17 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
     public void reload(SyncmoneyConfig newConfig) {
         this.currencyName = newConfig.display().getCurrencyName();
         this.decimalPlaces = newConfig.display().getDecimalPlaces();
+    }
+
+    /**
+     * Reads through the active economy-mode route. In CMI mode this reaches CMI's API first and
+     * uses its Redis mirror only as a fallback, which keeps offline-player lookups correct before
+     * the player has joined this server after a restart.
+     */
+    private BigDecimal getBalance(UUID uuid) {
+        if (economyModeRouter != null) {
+            return economyModeRouter.getBalance(uuid);
+        }
+        return economyFacade.getBalance(uuid);
     }
 }

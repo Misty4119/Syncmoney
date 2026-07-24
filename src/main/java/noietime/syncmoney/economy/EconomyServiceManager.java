@@ -5,6 +5,8 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.StorageManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import noietime.syncmoney.vault.VaultRuntimeDetector;
+import noietime.syncmoney.vault.VaultUnlockedIntegrationLoader;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.economy.CMIEconomyHandler;
@@ -27,6 +29,7 @@ public class EconomyServiceManager {
     private FallbackEconomyWrapper fallbackWrapper;
     private LocalEconomyHandler localHandler;
     private SyncmoneyVaultProvider vaultProvider;
+    private Object vaultUnlockedRegistrar;
     private CrossServerSyncManager crossServerSyncManager;
     private EconomyModeRouter economyModeRouter;
     private ShadowSyncTask shadowSyncTask;
@@ -109,11 +112,10 @@ public class EconomyServiceManager {
                 nameResolver
         );
         if (mode == EconomyMode.CMI) {
-            plugin.getLogger().info("CMI mode: skipping Vault Economy registration (CMI remains the Vault provider).");
-        } else if (vaultProvider.setupEconomy()) {
-            plugin.getLogger().fine("Syncmoney Vault Economy registered successfully.");
+            plugin.getLogger().info(
+                    "CMI mode: skipping Vault/VaultUnlocked Economy registration (CMI remains the provider).");
         } else {
-            plugin.getLogger().warning("Vault Economy registration failed. Running without Vault integration.");
+            initializeVaultIntegrations();
         }
 
         this.crossServerSyncManager = new CrossServerSyncManager(
@@ -159,6 +161,40 @@ public class EconomyServiceManager {
     }
 
     /**
+     * [SYNC-ECO-073] Selects the primary Vault API from runtime capabilities.
+     *
+     * <p>VaultUnlocked keeps the Bukkit plugin name "Vault", so the modern
+     * net.milkbowl.vault2 API is detected by class capability. Its provider is
+     * registered as the primary API while the legacy provider remains available
+     * for plugins compiled against Vault 1.7.
+     */
+    private void initializeVaultIntegrations() {
+        VaultRuntimeDetector.Runtime runtime = VaultRuntimeDetector.detect(plugin);
+
+        if (runtime == VaultRuntimeDetector.Runtime.VAULT_UNLOCKED) {
+            vaultUnlockedRegistrar = VaultUnlockedIntegrationLoader.register(
+                    plugin, economyFacade, nameResolver, config);
+            if (vaultUnlockedRegistrar != null) {
+                plugin.getLogger().info(
+                        "VaultUnlocked detected: Vault2 is the primary economy API; Vault 1.7 compatibility remains enabled.");
+            } else {
+                plugin.getLogger().warning(
+                        "VaultUnlocked detected but Vault2 registration failed; falling back to Vault 1.7 compatibility.");
+            }
+        } else if (runtime == VaultRuntimeDetector.Runtime.VAULT) {
+            plugin.getLogger().info("Legacy Vault detected: using the Vault 1.7 economy API.");
+        } else {
+            plugin.getLogger().warning("No enabled Vault-compatible runtime was detected.");
+        }
+
+        if (runtime != VaultRuntimeDetector.Runtime.NONE && vaultProvider.setupEconomy()) {
+            plugin.getLogger().fine("Syncmoney Vault 1.7 Economy registered successfully.");
+        } else if (runtime != VaultRuntimeDetector.Runtime.NONE) {
+            plugin.getLogger().warning("Vault 1.7 Economy registration failed.");
+        }
+    }
+
+    /**
      * [SYNC-ECO-072] Shutdown economy components in reverse order.
      */
     public void shutdown() {
@@ -201,6 +237,10 @@ public class EconomyServiceManager {
 
     public SyncmoneyVaultProvider getVaultProvider() {
         return vaultProvider;
+    }
+
+    public boolean isVaultUnlockedRegistered() {
+        return vaultUnlockedRegistrar != null;
     }
 
     public CrossServerSyncManager getCrossServerSyncManager() {

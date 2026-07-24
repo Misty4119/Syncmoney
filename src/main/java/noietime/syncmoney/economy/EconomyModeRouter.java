@@ -224,7 +224,7 @@ public class EconomyModeRouter {
         @Override
         public BigDecimal getBalance(UUID uuid) {
             if (cmiHandler != null) {
-                return cmiHandler.getBalance(uuid);
+                return cmiHandler.getCMIDirectBalance(uuid);
             }
             return BigDecimal.ZERO;
         }

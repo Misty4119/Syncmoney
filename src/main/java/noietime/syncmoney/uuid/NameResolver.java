@@ -104,7 +104,15 @@ public final class NameResolver {
         if (name != null && uuid != null) {
             evictIfOverCapacity();
             nameToUuidCache.put(name.toLowerCase(), uuid);
+            uuidToNameCache.put(uuid, name);
         }
+    }
+
+    /**
+     * [SYNC-UUID-004] Returns an immutable snapshot of cached UUID/name mappings.
+     */
+    public java.util.Map<UUID, String> getCachedUuidNameMap() {
+        return java.util.Map.copyOf(uuidToNameCache);
     }
 
     /**

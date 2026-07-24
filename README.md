@@ -109,7 +109,7 @@ Syncmoney is a high-performance Minecraft economy plugin designed for multi-serv
 | Java | 21+ |
 | Redis | 5.0+ (for multi-server sync) |
 | Database | MySQL 8.0+ / MariaDB 10.5+ / PostgreSQL 13+ / SQLite |
-| Plugin | Vault (required) |
+| Plugin | Vault or VaultUnlocked (required) |
 | Plugin | PlaceholderAPI (optional) |
 
 > **Note:** Redis and a database (MySQL/PostgreSQL) are required for cross-server sync. For single-server use, Syncmoney works with SQLite only (no Redis needed).
@@ -420,6 +420,11 @@ Syncmoney provides multiple integration points:
 
 ### Vault API
 
+Syncmoney detects the API generation supplied by the installed plugin named
+`Vault`. On VaultUnlocked, Syncmoney registers the modern Vault2 API as its
+primary economy service and also keeps the Vault 1.7 service registered for
+older plugins. On legacy Vault, the existing Vault 1.7 integration is used.
+
 ```java
 // Get economy via Vault
 Economy economy = Bukkit.getServicesManager()
@@ -487,11 +492,11 @@ cd Syncmoney
 
 # Build the plugin (Shadow JAR)
 ./gradlew shadowJar
-# Output: build/libs/Syncmoney-1.2.0.jar
+# Output: build/libs/Syncmoney-1.2.2.jar
 
 # Build PlaceholderAPI expansion
 cd syncmoney-papi-expansion && ../gradlew jar
-# Output: build/libs/SyncmoneyExpansion-1.2.1.jar
+# Output: build/libs/SyncmoneyExpansion-1.2.2.jar
 
 # Build web frontend
 cd syncmoney-web && pnpm install && pnpm build

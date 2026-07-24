@@ -87,9 +87,14 @@ public final class DatabaseManager implements AutoCloseable {
             SELECT version FROM syncmoney_schema_version WHERE id = '1'
             """;
 
-    private static final String UPSERT_SCHEMA_VERSION_SQL = """
+    private static final String UPSERT_SCHEMA_VERSION_SQL_MYSQL = """
             INSERT INTO syncmoney_schema_version (id, version) VALUES ('1', ?)
             ON DUPLICATE KEY UPDATE version = VALUES(version)
+            """;
+
+    private static final String UPSERT_SCHEMA_VERSION_SQL_PGSQL = """
+            INSERT INTO syncmoney_schema_version (id, version) VALUES ('1', ?)
+            ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version
             """;
 
     private static final String INSERT_OR_UPDATE_SQL_MYSQL = """
@@ -176,6 +181,15 @@ public final class DatabaseManager implements AutoCloseable {
      */
     private String getInsertOrUpdateSql() {
         return "mysql".equals(databaseType) ? INSERT_OR_UPDATE_SQL_MYSQL : INSERT_OR_UPDATE_SQL_PGSQL;
+    }
+
+    /**
+     * Selects the vendor-specific schema-version upsert syntax.
+     */
+    static String getSchemaVersionUpsertSql(String databaseType) {
+        return "postgresql".equalsIgnoreCase(databaseType)
+                ? UPSERT_SCHEMA_VERSION_SQL_PGSQL
+                : UPSERT_SCHEMA_VERSION_SQL_MYSQL;
     }
 
     /**
@@ -309,7 +323,8 @@ public final class DatabaseManager implements AutoCloseable {
             try (PreparedStatement checkStmt = conn.prepareStatement(GET_SCHEMA_VERSION_SQL);
                     ResultSet rs = checkStmt.executeQuery()) {
                 if (!rs.next()) {
-                    try (PreparedStatement insertStmt = conn.prepareStatement(UPSERT_SCHEMA_VERSION_SQL)) {
+                    try (PreparedStatement insertStmt =
+                            conn.prepareStatement(getSchemaVersionUpsertSql(databaseType))) {
                         insertStmt.setInt(1, 1);
                         insertStmt.executeUpdate();
                         debug("Schema version initialized to 1.");
@@ -343,7 +358,7 @@ public final class DatabaseManager implements AutoCloseable {
      */
     public void setSchemaVersion(int version) {
         try (Connection conn = getConnection();
-                PreparedStatement stmt = conn.prepareStatement(UPSERT_SCHEMA_VERSION_SQL)) {
+                PreparedStatement stmt = conn.prepareStatement(getSchemaVersionUpsertSql(databaseType))) {
             stmt.setInt(1, version);
             stmt.executeUpdate();
             debug("Schema version updated to " + version + ".");

@@ -140,6 +140,7 @@ public class CommandServiceManager {
         this.moneyCommand = new MoneyCommand(
                 plugin,
                 economyFacade,
+                economyServiceManager.getEconomyModeRouter(),
                 nameResolver,
                 fallbackWrapper,
                 config.display().getCurrencyName(),

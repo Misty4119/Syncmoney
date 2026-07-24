@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.2.1'
+version = '1.2.2'
 
 repositories {
     mavenCentral()
@@ -25,12 +25,18 @@ repositories {
         name = "extendedclip"
         url = "https://repo.extendedclip.com/content/repositories/placeholderapi/"
     }
+    maven {
+        name = "codemc-creatorfromhell"
+        url = "https://repo.codemc.io/repository/creatorfromhell/"
+    }
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
 
-    implementation("com.github.MilkBowl:VaultAPI:1.7")
+    // VaultUnlockedAPI contains both the legacy Vault 1.7 contracts and the
+    // modern net.milkbowl.vault2 API. The server runtime supplies these classes.
+    compileOnly("net.milkbowl.vault:VaultUnlockedAPI:2.20")
 
     compileOnly("me.clip:placeholderapi:2.12.2")
 
@@ -53,6 +59,7 @@ dependencies {
     implementation 'org.yaml:snakeyaml:2.4'
 
     testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    testImplementation("net.milkbowl.vault:VaultUnlockedAPI:2.20")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
