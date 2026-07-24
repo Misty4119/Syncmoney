@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.2.0'
+version = '1.2.1'
 
 repositories {
     mavenCentral()
@@ -29,9 +29,9 @@ dependencies {
     compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
 
     compileOnly("me.clip:placeholderapi:2.12.2")
-    compileOnly("com.zaxxer:HikariCP:5.1.0")
-    compileOnly("mysql:mysql-connector-java:8.0.33")
-    compileOnly("org.postgresql:postgresql:42.7.1")
+    compileOnly("com.zaxxer:HikariCP:6.2.1")
+    compileOnly("com.mysql:mysql-connector-j:9.2.0")
+    compileOnly("org.postgresql:postgresql:42.7.5")
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -58,4 +58,10 @@ tasks.withType(JavaCompile).configureEach {
 
 jar {
     archiveFileName = "SyncmoneyExpansion-${version}.jar"
+    manifest {
+        attributes(
+                'Implementation-Title': 'Syncmoney PlaceholderAPI Expansion',
+                'Implementation-Version': project.version
+        )
+    }
 }

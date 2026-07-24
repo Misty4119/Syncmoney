@@ -84,11 +84,11 @@ public final class DatabaseManager implements AutoCloseable {
             """;
 
     private static final String GET_SCHEMA_VERSION_SQL = """
-            SELECT version FROM syncmoney_schema_version WHERE id = 1
+            SELECT version FROM syncmoney_schema_version WHERE id = '1'
             """;
 
     private static final String UPSERT_SCHEMA_VERSION_SQL = """
-            INSERT INTO syncmoney_schema_version (id, version) VALUES (1, ?)
+            INSERT INTO syncmoney_schema_version (id, version) VALUES ('1', ?)
             ON DUPLICATE KEY UPDATE version = VALUES(version)
             """;
 

@@ -41,6 +41,14 @@ public final class PlaceholderHandler {
      * [SYNC-PAPI-025] Main entry point for placeholder requests.
      */
     public String handle(OfflinePlayer player, @NotNull String params) {
+        if (params == null) {
+            return "N/A";
+        }
+        params = params.trim();
+        if (params.isEmpty()) {
+            return "N/A";
+        }
+
         if (debugMode) {
             log("handle: params=" + params + ", player=" + (player != null ? player.getName() : "null"));
         }
@@ -51,6 +59,10 @@ public final class PlaceholderHandler {
             }
 
             if (player == null) {
+                // If player is null, check if params contains target player name (e.g. balance_PlayerName)
+                if (params.toLowerCase().startsWith("balance_")) {
+                    return handleOtherPlayerBalance(params);
+                }
                 return "N/A";
             }
 
@@ -231,9 +243,26 @@ public final class PlaceholderHandler {
 
     /**
      * [SYNC-PAPI-030] Handle balance for another player.
+     * Supports formats: balance_<player>, balance_formatted_<player>, balance_abbreviated_<player>
      */
     private String handleOtherPlayerBalance(String params) {
-        String playerName = params.substring(8).trim();
+        String lower = params.toLowerCase();
+        String playerName;
+        int formatType = 0; // 0: raw currency, 1: formatted, 2: abbreviated
+
+        if (lower.startsWith("balance_formatted_")) {
+            playerName = params.substring(18).trim();
+            formatType = 1;
+        } else if (lower.startsWith("balance_abbreviated_")) {
+            playerName = params.substring(20).trim();
+            formatType = 2;
+        } else if (lower.startsWith("balance_")) {
+            playerName = params.substring(8).trim();
+            formatType = 0;
+        } else {
+            return "N/A";
+        }
+
         if (playerName.isEmpty()) {
             return "N/A";
         }
@@ -243,7 +272,9 @@ public final class PlaceholderHandler {
         OfflinePlayer targetPlayer = Bukkit.getOfflinePlayerIfCached(playerName);
         if (targetPlayer != null) {
             targetUuid = targetPlayer.getUniqueId();
-        } else {
+        }
+
+        if (targetUuid == null) {
             Object nameResolver = getNameResolver();
             if (nameResolver != null) {
                 Object uuid = invokeMethod(nameResolver, "resolveUUID", playerName);
@@ -251,6 +282,16 @@ public final class PlaceholderHandler {
                     targetUuid = (UUID) uuid;
                 }
             }
+        }
+
+        if (targetUuid == null) {
+            try {
+                @SuppressWarnings("deprecation")
+                OfflinePlayer fallbackPlayer = Bukkit.getOfflinePlayer(playerName);
+                if (fallbackPlayer != null && (fallbackPlayer.hasPlayedBefore() || fallbackPlayer.isOnline())) {
+                    targetUuid = fallbackPlayer.getUniqueId();
+                }
+            } catch (Exception ignored) {}
         }
 
         if (targetUuid == null) {
@@ -264,7 +305,12 @@ public final class PlaceholderHandler {
 
         Object balance = invokeMethod(economyFacade, "getBalanceAsDouble", targetUuid);
         if (balance instanceof Number) {
-            return ExpansionFormatUtil.formatCurrency(((Number) balance).doubleValue());
+            double val = ((Number) balance).doubleValue();
+            return switch (formatType) {
+                case 1 -> ExpansionFormatUtil.formatCompact(val);
+                case 2 -> ExpansionFormatUtil.formatAbbreviated(val);
+                default -> ExpansionFormatUtil.formatCurrency(val);
+            };
         }
 
         return "0.00";

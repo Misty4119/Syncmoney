@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.2.0'
+version = '1.2.1'
 
 repositories {
     mavenCentral()
@@ -34,23 +34,23 @@ dependencies {
 
     compileOnly("me.clip:placeholderapi:2.12.2")
 
-    implementation("redis.clients:jedis:5.1.0")
-    implementation("org.apache.commons:commons-pool2:2.11.1")
-    implementation("com.zaxxer:HikariCP:5.1.0")
-    implementation("com.mysql:mysql-connector-j:8.2.0")
-    implementation("org.postgresql:postgresql:42.7.1")
-    implementation("org.xerial:sqlite-jdbc:3.44.1.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.16.1")
-    implementation("net.kyori:adventure-text-minimessage:4.14.0")
-    implementation("net.kyori:adventure-text-serializer-ansi:4.14.0")
+    implementation("redis.clients:jedis:5.2.0")
+    implementation("org.apache.commons:commons-pool2:2.12.1")
+    implementation("com.zaxxer:HikariCP:6.2.1")
+    implementation("com.mysql:mysql-connector-j:9.2.0")
+    implementation("org.postgresql:postgresql:42.7.5")
+    implementation("org.xerial:sqlite-jdbc:3.49.1.0")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+    implementation("net.kyori:adventure-text-minimessage:4.20.0")
+    implementation("net.kyori:adventure-text-serializer-ansi:4.20.0")
     implementation("org.bstats:bstats-bukkit:3.1.0")
 
-    implementation 'io.undertow:undertow-core:2.3.23.Final'
-    implementation 'io.undertow:undertow-websockets-jsr:2.3.23.Final'
-    implementation 'io.undertow:undertow-servlet:2.3.23.Final'
+    implementation 'io.undertow:undertow-core:2.3.18.Final'
+    implementation 'io.undertow:undertow-websockets-jsr:2.3.18.Final'
+    implementation 'io.undertow:undertow-servlet:2.3.18.Final'
 
     // YAML configuration
-    implementation 'org.yaml:snakeyaml:2.2'
+    implementation 'org.yaml:snakeyaml:2.4'
 
     testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
@@ -126,8 +126,13 @@ processResources {
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
     }
 
-    copy {
-        from 'src/main/resources/syncmoney-web'
-        into 'build/resources/main/syncmoney-web'
+    doLast {
+        def webDir = file('src/main/resources/syncmoney-web')
+        if (webDir.exists()) {
+            copy {
+                from webDir
+                into 'build/resources/main/syncmoney-web'
+            }
+        }
     }
 }

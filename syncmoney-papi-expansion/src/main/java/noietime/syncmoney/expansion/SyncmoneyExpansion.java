@@ -30,12 +30,11 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     private static final boolean DEBUG_MODE = Boolean.getBoolean("syncmoney.papi.debug");
 
-    private final Object syncMoneyPlugin;
-    private final PlaceholderHandler placeholderHandler;
+    private volatile Object syncMoneyPlugin;
+    private volatile PlaceholderHandler placeholderHandler;
 
     public SyncmoneyExpansion() {
-        this.syncMoneyPlugin = Bukkit.getPluginManager().getPlugin("Syncmoney");
-        this.placeholderHandler = new PlaceholderHandler(syncMoneyPlugin, DEBUG_MODE);
+        resolvePlugin();
 
         if (DEBUG_MODE) {
             log("SyncmoneyExpansion initialized, plugin: " + (syncMoneyPlugin != null ? "found" : "NOT FOUND"));
@@ -54,12 +53,12 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getVersion() {
-        return "1.2.0";
+        return "1.2.1";
     }
 
     @Override
     public boolean canRegister() {
-        return syncMoneyPlugin != null;
+        return resolvePlugin() != null;
     }
 
     @Override
@@ -69,18 +68,36 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public String onRequest(OfflinePlayer player, @NotNull String params) {
-        if (syncMoneyPlugin == null) {
+        PlaceholderHandler handler = placeholderHandler;
+        if (handler == null && resolvePlugin() != null) {
+            handler = placeholderHandler;
+        }
+        if (handler == null) {
             return "N/A";
         }
 
         try {
-            return placeholderHandler.handle(player, params);
+            return handler.handle(player, params);
         } catch (Exception e) {
             if (DEBUG_MODE) {
                 log("onRequest exception: params=" + params + ", error=" + e.getMessage());
             }
             return "N/A";
         }
+    }
+
+    /**
+     * PlaceholderAPI and TAB-Bridge may reload expansions after the Bukkit plugin
+     * lifecycle has already started. Resolve Syncmoney lazily so a load-order race
+     * does not permanently leave this expansion detached until a full restart.
+     */
+    private synchronized Object resolvePlugin() {
+        Object current = Bukkit.getPluginManager().getPlugin("Syncmoney");
+        if (current != null && current != syncMoneyPlugin) {
+            syncMoneyPlugin = current;
+            placeholderHandler = new PlaceholderHandler(current, DEBUG_MODE);
+        }
+        return syncMoneyPlugin;
     }
 
     private void log(String message) {
