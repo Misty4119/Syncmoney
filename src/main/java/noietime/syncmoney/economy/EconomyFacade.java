@@ -377,7 +377,7 @@ public final class EconomyFacade {
     }
 
     /**
-     * [SYNC-ECO-110] Plugin deposit - third-party plugins directly call this, bypassing Vault pairing.
+     * [SYNC-ECO-110] Plugin deposit - third-party plugins directly call this with explicit attribution.
      *
      * [AsyncScheduler] Must be called from async thread.
      *
@@ -391,7 +391,7 @@ public final class EconomyFacade {
     }
 
     /**
-     * [SYNC-ECO-111] Plugin withdraw - third-party plugins directly call this, bypassing Vault pairing.
+     * [SYNC-ECO-111] Plugin withdraw - third-party plugins directly call this with explicit attribution.
      *
      * [AsyncScheduler] Must be called from async thread.
      *

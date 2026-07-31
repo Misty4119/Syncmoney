@@ -466,7 +466,7 @@ public class SyncmoneyVaultProvider implements Economy {
     }
 
     /**
-     * [SYNC-VAULT-015] Deposit for plugin use - bypasses Vault pairing logic.
+     * [SYNC-VAULT-015] Deposit for plugin use with explicit attribution.
      * Third-party plugins (e.g., chest shops) should call this directly instead
      * of the Vault Economy API when they need to ensure plugin-level attribution.
      *
@@ -482,7 +482,7 @@ public class SyncmoneyVaultProvider implements Economy {
     }
 
     /**
-     * [SYNC-VAULT-016] Withdraw for plugin use - bypasses Vault pairing logic.
+     * [SYNC-VAULT-016] Withdraw for plugin use with explicit attribution.
      * Third-party plugins (e.g., chest shops) should call this directly instead
      * of the Vault Economy API when they need to ensure plugin-level attribution.
      *
@@ -499,7 +499,7 @@ public class SyncmoneyVaultProvider implements Economy {
 
     /**
      * [SYNC-VAULT-017] Atomic transfer for plugin use.
-     * Ensures both withdraw and deposit succeed atomically without Vault pairing.
+     * Ensures both withdraw and deposit succeed atomically with explicit participants.
      *
      * [AsyncScheduler] Must be called from async thread.
      *

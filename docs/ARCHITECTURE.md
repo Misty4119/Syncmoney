@@ -226,21 +226,24 @@ VaultAPI.depositPlayer(player, amount)
 
 ### Plugin API (Third-Party Integration)
 
-Third-party plugins (e.g., chest shops, auction houses) should use the `SyncmoneyVaultProvider` extended API instead of standard Vault methods to bypass the pairing mechanism.
+Third-party plugins that need an atomic player-to-player transfer should use the `SyncmoneyVaultProvider` extended API.
 
-**Standard Vault flow (with pairing):**
+**Standard Vault flow (independent operations):**
 ```
 Plugin withdrawPlayer() → SyncmoneyVaultProvider.withdrawPlayer()
-  → Records to recentWithdrawals (30s sliding window)
+  → Immediate independent withdrawal (VAULT_WITHDRAW)
 Plugin depositPlayer() → SyncmoneyVaultProvider.depositPlayer()
-  → findCorrelatedTransfer() ← May fail in high-frequency scenarios
+  → Immediate independent deposit (VAULT_DEPOSIT)
 ```
 
-**Plugin API flow (bypasses pairing):**
+Standard Vault calls do not expose a transaction identifier or counterparty, so Syncmoney never infers a transfer from matching amount and timing. If a plugin needs transfer semantics, it must provide both participants through the extended API.
+
+**Plugin API flow (explicit operation):**
 ```
 Plugin depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
   → EconomyEvent.EventSource = PLUGIN_DEPOSIT
-  → No pairing lookup, direct atomic operation
+  → Direct attributed deposit
+Plugin pluginTransfer(from, to, amount, pluginName) → EconomyFacade.pluginAtomicTransfer()
   → Uses atomic_plugin_transfer.lua with plugin attribution metadata
 ```
 
@@ -248,10 +251,10 @@ Plugin depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
 
 | Value | Purpose |
 |-------|---------|
-| `PLUGIN_DEPOSIT` | Third-party plugin deposit (bypasses Vault pairing) |
-| `PLUGIN_WITHDRAW` | Third-party plugin withdrawal (bypasses Vault pairing) |
+| `PLUGIN_DEPOSIT` | Explicitly attributed third-party plugin deposit |
+| `PLUGIN_WITHDRAW` | Explicitly attributed third-party plugin withdrawal |
 
-**Orphan VAULT_DEPOSIT handling:** When `findCorrelatedTransfer()` returns null (no matching withdrawal found), the deposit is now processed as `PLUGIN_DEPOSIT` instead of being rejected. This prevents money loss during high-frequency transactions while maintaining audit trail.
+`PLUGIN_DEPOSIT` and `PLUGIN_WITHDRAW` are reserved for the explicit plugin methods. A standard Vault deposit is always recorded as `VAULT_DEPOSIT`.
 
 ### Cross-Server Sync
 

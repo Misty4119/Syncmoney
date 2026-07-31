@@ -53,7 +53,7 @@ public class SyncmoneyExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getVersion() {
-        return "1.2.2";
+        return "1.2.3";
     }
 
     @Override

@@ -122,8 +122,8 @@ java.math.BigDecimal getBalanceChange(); // 淨變化（可為負）
 | `MIGRATION` | 資料遷移過程 |
 | `SHADOW_SYNC` | 背景影子同步 |
 | `TEST` | 壓力測試指令 |
-| `PLUGIN_DEPOSIT` | 第三方插件存款（繞過 Vault 配對） |
-| `PLUGIN_WITHDRAW` | 第三方插件取款（繞過 Vault 配對） |
+| `PLUGIN_DEPOSIT` | 第三方插件明確歸因的存款 |
+| `PLUGIN_WITHDRAW` | 第三方插件明確歸因的取款 |
 
 #### ShadowSyncEvent
 
@@ -444,7 +444,7 @@ economy.withdrawPlayer(player, amount);
 
 #### 插件 API（推薦給第三方插件）
 
-對於第三方插件（如箱子商店、拍賣行），建議直接使用 `SyncmoneyVaultProvider` 的擴展 API，繞過 Vault 配對機制。這可以避免高頻交易時出現「orphan VAULT_DEPOSIT」問題。
+需要來源歸因或玩家間轉帳的第三方插件，建議直接使用 `SyncmoneyVaultProvider` 擴展 API。標準 Vault 呼叫一律是獨立操作；Syncmoney 不會依相同金額與時間推論為轉帳。
 
 ```java
 import net.milkbowl.vault.economy.Economy;
@@ -459,10 +459,10 @@ if (!(economy instanceof SyncmoneyVaultProvider)) {
 }
 SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
 
-// 插件存款（繞過 Vault 配對）
+// 帶插件來源歸因的存款
 EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
 
-// 插件取款（繞過 Vault 配對）
+// 帶插件來源歸因的提款
 EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
 
 // 玩家之間原子轉帳（插件級歸因）
@@ -473,8 +473,8 @@ EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "M
 
 | 情境 | 推薦 API | 原因 |
 |------|----------|------|
-| 箱子商店買賣 | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | 避免 Vault 配對的競爭條件 |
-| 拍賣行轉帳 | `pluginTransfer` | 原子操作，無需配對 |
+| 箱子商店買賣 | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | 明確插件來源歸因 |
+| 拍賣行轉帳 | `pluginTransfer` | 明確雙方的原子操作 |
 | 標準經濟操作 | 標準 Vault API | 完整相容性 |
 
 ### Vault 權限

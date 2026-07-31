@@ -122,8 +122,8 @@ java.math.BigDecimal getBalanceChange(); // Net change (can be negative)
 | `MIGRATION` | Data migration process |
 | `SHADOW_SYNC` | Background shadow sync |
 | `TEST` | Stress test command |
-| `PLUGIN_DEPOSIT` | Third-party plugin deposit (bypasses Vault pairing) |
-| `PLUGIN_WITHDRAW` | Third-party plugin withdrawal (bypasses Vault pairing) |
+| `PLUGIN_DEPOSIT` | Explicitly attributed third-party plugin deposit |
+| `PLUGIN_WITHDRAW` | Explicitly attributed third-party plugin withdrawal |
 
 #### ShadowSyncEvent
 
@@ -444,7 +444,7 @@ economy.withdrawPlayer(player, amount);
 
 #### Plugin API (Recommended for Third-Party Plugins)
 
-For third-party plugins (e.g., chest shops, auction houses), use the `SyncmoneyVaultProvider` extended API directly to bypass the Vault pairing mechanism. This prevents "orphan VAULT_DEPOSIT" issues during high-frequency transactions.
+For third-party plugins that need attributed operations or a player-to-player transfer, use the `SyncmoneyVaultProvider` extended API directly. Standard Vault calls are always independent operations; Syncmoney never infers a transfer from matching amount and timing.
 
 ```java
 import net.milkbowl.vault.economy.Economy;
@@ -459,10 +459,10 @@ if (!(economy instanceof SyncmoneyVaultProvider)) {
 }
 SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
 
-// Deposit for plugin (bypasses Vault pairing)
+// Attributed deposit for a plugin
 EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
 
-// Withdraw for plugin (bypasses Vault pairing)
+// Attributed withdrawal for a plugin
 EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
 
 // Atomic transfer between players (plugin-level attribution)
@@ -473,8 +473,8 @@ EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "M
 
 | Scenario | Recommended API | Reason |
 |----------|-----------------|--------|
-| Chest shop buy/sell | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | Avoids Vault pairing race conditions |
-| Auction house transfers | `pluginTransfer` | Atomic operation, no pairing needed |
+| Chest shop buy/sell | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | Explicit plugin attribution |
+| Auction house transfers | `pluginTransfer` | Atomic operation with explicit participants |
 | Standard economy operations | Standard Vault API | Full compatibility |
 
 ### Vault Permissions

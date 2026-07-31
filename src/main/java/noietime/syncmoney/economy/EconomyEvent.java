@@ -57,7 +57,7 @@ public record EconomyEvent(
 
         TEST,
 
-        // Third-party plugin source - bypasses Vault pairing logic, uses atomic_transfer.lua
+        // Third-party plugin source with explicit attribution
         PLUGIN_DEPOSIT,
 
         PLUGIN_WITHDRAW

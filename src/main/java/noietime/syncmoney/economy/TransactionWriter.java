@@ -380,7 +380,7 @@ final class TransactionWriter {
     }
 
     /**
-     * [SYNC-ECO-110] Plugin deposit - third-party plugins directly call this, bypassing Vault pairing.
+     * [SYNC-ECO-110] Plugin deposit - third-party plugins directly call this with explicit attribution.
      */
     BigDecimal pluginDeposit(UUID uuid, BigDecimal amount, String pluginName) {
         if (uuid == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
@@ -424,7 +424,7 @@ final class TransactionWriter {
     }
 
     /**
-     * [SYNC-ECO-111] Plugin withdraw - third-party plugins directly call this, bypassing Vault pairing.
+     * [SYNC-ECO-111] Plugin withdraw - third-party plugins directly call this with explicit attribution.
      */
     BigDecimal pluginWithdraw(UUID uuid, BigDecimal amount, String pluginName) {
         if (uuid == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {

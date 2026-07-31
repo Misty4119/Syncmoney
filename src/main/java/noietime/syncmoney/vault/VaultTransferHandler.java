@@ -15,20 +15,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * [SYNC-VAULT-011] Handles player-to-player transfer operations.
- * Withdraw, deposit, atomic transfers, rollback, and correlation logic.
+ * Handles direct withdrawals and explicit atomic player-to-player transfers.
  */
 public class VaultTransferHandler {
-
-    private final ConcurrentHashMap<UUID, TransferContext> pendingTransfers = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, List<RecentWithdrawal>> recentWithdrawals = new ConcurrentHashMap<>();
 
     private final Plugin plugin;
     private final EconomyFacade economyFacade;
@@ -41,27 +35,6 @@ public class VaultTransferHandler {
     private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
 
     private volatile CMIEconomyHandler cmiHandler;
-
-    /**
-     * Recent withdrawal for transfer correlation.
-     */
-    public record RecentWithdrawal(
-        UUID fromUuid,
-        BigDecimal amount,
-        String sourcePlugin,
-        long timestamp
-    ) {}
-
-    /**
-     * Transfer context for linking withdraw + deposit as a single transaction.
-     */
-    public record TransferContext(
-        UUID fromUuid,
-        UUID toUuid,
-        BigDecimal amount,
-        String sourcePlugin,
-        long timestamp
-    ) {}
 
     public VaultTransferHandler(Plugin plugin, EconomyFacade economyFacade, CrossServerSyncManager syncManager,
                                VaultPluginDetector pluginDetector, SyncmoneyConfig config, VaultPlayerHandler playerHandler,
@@ -123,7 +96,7 @@ public class VaultTransferHandler {
     }
 
     /**
-     * [SYNC-VAULT-011] Withdraw with optional transfer context for rollback support.
+     * [SYNC-VAULT-011] Withdraw with an explicit target for an atomic transfer.
      */
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount) {
         return withdrawPlayer(player, amount, null);
@@ -134,7 +107,7 @@ public class VaultTransferHandler {
      *
      * @param player The player to withdraw from
      * @param amount Amount to withdraw
-     * @param toUuid Optional target UUID for transfer tracking (used for rollback)
+     * @param toUuid Optional target UUID; when provided, the transfer is atomic
      */
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount, UUID toUuid) {
         if (player == null) {
@@ -172,97 +145,12 @@ public class VaultTransferHandler {
         }
 
         String sourcePlugin = pluginDetector.detectCallingPlugin();
-        RecentWithdrawal withdrawal = new RecentWithdrawal(uuid, amountBd, sourcePlugin, System.currentTimeMillis());
-        recentWithdrawals.compute(uuid, (k, list) -> {
-            if (list == null) {
-                list = new ArrayList<>();
-            }
-            list.add(withdrawal);
-            long cutoff = System.currentTimeMillis() - 30000;
-            list.removeIf(w -> w.timestamp() < cutoff);
-            return list;
-        });
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, newBalance);
 
         publishCrossServerUpdate(uuid, newBalance, "VAULT_WITHDRAW", -amount, sourcePlugin, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
-    }
-
-    /**
-     * [SYNC-VAULT-004] Find a correlated withdrawal that matches this deposit.
-     *
-     * <p>Pure query (CQS): performs no state mutation. Expired withdrawals are skipped
-     * via the {@code timestamp() >= windowStart} guard and never returned, so callers get
-     * the same result as before; cleanup of stale entries is handled separately by
-     * {@link #purgeExpiredWithdrawals()}.
-     *
-     * @return the correlated {@link TransferContext}, or {@code null} if none matches
-     */
-    TransferContext findCorrelatedTransfer(UUID toUuid, BigDecimal amount) {
-        long windowStart = System.currentTimeMillis() - 30000;
-
-        for (var entry : recentWithdrawals.entrySet()) {
-            List<RecentWithdrawal> list = entry.getValue();
-            if (list == null) continue;
-
-            for (RecentWithdrawal withdrawal : list) {
-                if (withdrawal.amount().compareTo(amount) == 0 &&
-                    withdrawal.timestamp() >= windowStart) {
-
-                    TransferContext ctx = new TransferContext(
-                        withdrawal.fromUuid(),
-                        toUuid,
-                        withdrawal.amount(),
-                        withdrawal.sourcePlugin(),
-                        withdrawal.timestamp()
-                    );
-
-                    plugin.getLogger().fine("Correlated transfer found: " +
-                        withdrawal.fromUuid() + " -> " + toUuid + " : " + amount);
-
-                    return ctx;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    void purgeExpiredWithdrawals() {
-        long windowStart = System.currentTimeMillis() - 30000;
-        recentWithdrawals.entrySet().removeIf(entry -> {
-            List<RecentWithdrawal> list = entry.getValue();
-            if (list == null) {
-                return true;
-            }
-            list.removeIf(w -> w.timestamp() < windowStart);
-            return list.isEmpty();
-        });
-    }
-
-    /**
-     * [SYNC-VAULT-012] Rollback a transfer when deposit fails.
-     */
-    void rollbackTransfer(TransferContext transfer) {
-        try {
-            BigDecimal rollbackAmount = transfer.amount();
-            UUID fromUuid = transfer.fromUuid();
-
-            BigDecimal newBalance = economyFacade.deposit(fromUuid, rollbackAmount,
-                EconomyEvent.EventSource.ADMIN_GIVE);
-
-            if (newBalance.compareTo(BigDecimal.ZERO) >= 0) {
-                plugin.getLogger().info("Rollback successful: restored " + rollbackAmount +
-                    " to " + fromUuid + " (from failed transfer to " + transfer.toUuid() + ")");
-            } else {
-                plugin.getLogger().severe("Rollback FAILED: could not restore " + rollbackAmount +
-                    " to " + fromUuid);
-            }
-        } catch (Exception e) {
-            plugin.getLogger().severe("Rollback exception: " + e.getMessage());
-        }
     }
 
     /**
@@ -307,29 +195,4 @@ public class VaultTransferHandler {
         }
     }
 
-    /**
-     * Gets a pending transfer for a player.
-     */
-    TransferContext getPendingTransfer(UUID toUuid) {
-        return pendingTransfers.get(toUuid);
-    }
-
-    /**
-     * Removes a pending transfer for a player.
-     */
-    void removePendingTransfer(UUID toUuid) {
-        pendingTransfers.remove(toUuid);
-    }
-
-    /**
-     * Removes a recent withdrawal for a player.
-     */
-    void removeRecentWithdrawal(UUID fromUuid, BigDecimal amount) {
-        recentWithdrawals.compute(fromUuid, (k, list) -> {
-            if (list != null) {
-                list.removeIf(w -> w.amount().compareTo(amount) == 0);
-            }
-            return list;
-        });
-    }
 }

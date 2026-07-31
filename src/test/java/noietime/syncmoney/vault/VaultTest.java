@@ -25,15 +25,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * Unit tests guarding the behavior-critical contracts of the refactored Vault
- * provider handlers (Task D): rollback semantics and the atomic-transfer
- * InsufficientFunds error code must remain byte-for-byte identical to the
- * pre-refactor implementation.
+ * provider handlers: standard Vault operations must remain independent, while
+ * explicit transfers retain their atomic failure semantics.
  *
  * <p>{@code syncManager} and {@code config} are passed as {@code null} to mirror how
  * {@link SyncmoneyVaultProvider} constructs the handler in production, which keeps the
@@ -51,8 +49,13 @@ class VaultTest {
     private VaultPlayerHandler playerHandler;
     @Mock
     private NameResolver nameResolver;
+    @Mock
+    private VaultBankHandler bankHandler;
+    @Mock
+    private VaultLuaScriptManager luaScriptManager;
 
     private VaultTransferHandler transferHandler;
+    private VaultProviderCore providerCore;
 
     private AutoCloseable mocks;
 
@@ -62,6 +65,8 @@ class VaultTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("VaultTest"));
         transferHandler = new VaultTransferHandler(
                 plugin, economyFacade, null, pluginDetector, null, playerHandler, nameResolver);
+        providerCore = new VaultProviderCore(plugin, economyFacade, playerHandler, transferHandler,
+                bankHandler, pluginDetector, luaScriptManager, nameResolver);
     }
 
     @AfterEach
@@ -69,44 +74,6 @@ class VaultTest {
         if (mocks != null) {
             mocks.close();
         }
-    }
-
-    // =========================================================================
-    // Rollback behavior: must restore the full amount to the sender via deposit
-    // with EventSource.ADMIN_GIVE (unchanged contract).
-    // =========================================================================
-
-    @Test
-    void rollbackTransfer_restoresFullAmountToSenderViaAdminGive() {
-        UUID fromUuid = UUID.randomUUID();
-        UUID toUuid = UUID.randomUUID();
-        BigDecimal amount = new BigDecimal("100.00");
-
-        when(economyFacade.deposit(eq(fromUuid), eq(amount), eq(EconomyEvent.EventSource.ADMIN_GIVE)))
-                .thenReturn(new BigDecimal("200.00"));
-
-        VaultTransferHandler.TransferContext ctx = new VaultTransferHandler.TransferContext(
-                fromUuid, toUuid, amount, "TestPlugin", System.currentTimeMillis());
-
-        transferHandler.rollbackTransfer(ctx);
-
-        verify(economyFacade, times(1))
-                .deposit(eq(fromUuid), eq(amount), eq(EconomyEvent.EventSource.ADMIN_GIVE));
-    }
-
-    @Test
-    void rollbackTransfer_swallowsExceptionsAndDoesNotPropagate() {
-        UUID fromUuid = UUID.randomUUID();
-        BigDecimal amount = new BigDecimal("50.00");
-
-        when(economyFacade.deposit(any(UUID.class), any(BigDecimal.class), any(EconomyEvent.EventSource.class)))
-                .thenThrow(new RuntimeException("boom"));
-
-        VaultTransferHandler.TransferContext ctx = new VaultTransferHandler.TransferContext(
-                fromUuid, UUID.randomUUID(), amount, "TestPlugin", System.currentTimeMillis());
-
-        // Rollback must never let an exception escape (preserves prior behavior).
-        assertDoesNotThrow(() -> transferHandler.rollbackTransfer(ctx));
     }
 
     // =========================================================================
@@ -201,16 +168,22 @@ class VaultTest {
         assertNull(LockingHelper.requireNotLocked(economyFacade, uuid, "locked-message"));
     }
 
-    // =========================================================================
-    // findCorrelatedTransfer must be a pure query (no mutation); purge is separate.
-    // =========================================================================
-
     @Test
-    void findCorrelatedTransfer_returnsNullWhenNoWithdrawalRecorded() {
-        UUID toUuid = UUID.randomUUID();
-        // No prior withdrawal recorded -> no correlation, and no exception.
-        assertNull(transferHandler.findCorrelatedTransfer(toUuid, new BigDecimal("10.00")));
-        assertDoesNotThrow(transferHandler::purgeExpiredWithdrawals);
+    void standardVaultDeposit_isIndependentFromSameAmountWithdrawal() {
+        UUID recipientUuid = UUID.randomUUID();
+        OfflinePlayer recipient = mock(OfflinePlayer.class);
+        BigDecimal amount = new BigDecimal("47.50");
+
+        when(recipient.getUniqueId()).thenReturn(recipientUuid);
+        when(economyFacade.isPlayerLocked(recipientUuid)).thenReturn(false);
+        when(economyFacade.deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT))
+                .thenReturn(new BigDecimal("100.00"));
+
+        EconomyResponse response = providerCore.depositPlayer(recipient, amount.doubleValue());
+
+        assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
+        verify(economyFacade).deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT);
+        verify(economyFacade, never()).pluginDeposit(any(UUID.class), any(BigDecimal.class), any(String.class));
     }
 
     // =========================================================================

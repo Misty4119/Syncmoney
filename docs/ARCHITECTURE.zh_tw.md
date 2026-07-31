@@ -226,21 +226,24 @@ VaultAPI.depositPlayer(player, amount)
 
 ### 插件 API（第三方整合）
 
-第三方插件（如箱子商店、拍賣行）應使用 `SyncmoneyVaultProvider` 擴展 API，而非標準 Vault 方法，來繞過配對機制。
+需要原子玩家轉帳的第三方插件，應使用 `SyncmoneyVaultProvider` 擴展 API。
 
-**標準 Vault 流程（帶配對）：**
+**標準 Vault 流程（獨立操作）：**
 ```
 插件 withdrawPlayer() → SyncmoneyVaultProvider.withdrawPlayer()
-  → 記錄到 recentWithdrawals（30 秒滑動視窗）
+  → 立即獨立提款（VAULT_WITHDRAW）
 插件 depositPlayer() → SyncmoneyVaultProvider.depositPlayer()
-  → findCorrelatedTransfer() ← 高頻場景下可能失敗
+  → 立即獨立存款（VAULT_DEPOSIT）
 ```
 
-**插件 API 流程（繞過配對）：**
+標準 Vault 呼叫不提供交易 ID 或對手方，因此 Syncmoney 不會根據相同金額與時間推論轉帳。需要轉帳語義時，插件必須透過擴展 API 明確提供雙方玩家。
+
+**插件 API 流程（明確操作）：**
 ```
 插件 depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
   → EconomyEvent.EventSource = PLUGIN_DEPOSIT
-  → 無需配對查詢，直接原子操作
+  → 直接執行帶來源歸因的存款
+插件 pluginTransfer(from, to, amount, pluginName) → EconomyFacade.pluginAtomicTransfer()
   → 使用 atomic_plugin_transfer.lua 並附帶插件歸因元資料
 ```
 
@@ -248,10 +251,10 @@ VaultAPI.depositPlayer(player, amount)
 
 | 值 | 用途 |
 |-------|------|
-| `PLUGIN_DEPOSIT` | 第三方插件存款（繞過 Vault 配對） |
-| `PLUGIN_WITHDRAW` | 第三方插件取款（繞過 Vault 配對） |
+| `PLUGIN_DEPOSIT` | 第三方插件明確歸因的存款 |
+| `PLUGIN_WITHDRAW` | 第三方插件明確歸因的取款 |
 
-**Orphan VAULT_DEPOSIT 處理：** 當 `findCorrelatedTransfer()` 返回 null（找不到對應的提款）時，存款現在會作為 `PLUGIN_DEPOSIT` 處理，而非直接拒絕。這可以避免高頻交易時金錢丢失，同時保持審計軌跡。
+`PLUGIN_DEPOSIT` 與 `PLUGIN_WITHDRAW` 僅供明確的插件方法使用；標準 Vault 存款一律記錄為 `VAULT_DEPOSIT`。
 
 ### 跨伺服器同步
 

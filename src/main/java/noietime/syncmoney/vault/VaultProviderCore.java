@@ -16,7 +16,6 @@ import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -38,9 +37,6 @@ public class VaultProviderCore {
     private final String currencyName;
 
     private volatile boolean enabled = false;
-
-    private final AtomicInteger orphanDepositCount = new AtomicInteger(0);
-    private static final int ORPHAN_LOG_INTERVAL = 100;
 
     private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
 
@@ -247,7 +243,7 @@ public class VaultProviderCore {
     }
 
     /**
-     * [SYNC-VAULT-011] Withdraw with optional transfer context for rollback support.
+     * [SYNC-VAULT-011] Withdraw with an explicit target for an atomic transfer.
      */
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount, UUID toUuid) {
         return transferHandler.withdrawPlayer(player, amount, toUuid);
@@ -281,47 +277,7 @@ public class VaultProviderCore {
         BigDecimal amountBd = NumericUtil.normalize(amount);
         UUID uuid = player.getUniqueId();
 
-        VaultTransferHandler.TransferContext pendingTransfer = transferHandler.getPendingTransfer(uuid);
-
-        if (pendingTransfer == null) {
-            pendingTransfer = transferHandler.findCorrelatedTransfer(uuid, amountBd);
-            transferHandler.purgeExpiredWithdrawals();
-        }
-
-        if (pendingTransfer == null) {
-
-            int count = orphanDepositCount.incrementAndGet();
-            plugin.getLogger().fine("No corresponding withdrawal found for VAULT_DEPOSIT: " + uuid +
-                " amount " + amountBd + ". Processing as PLUGIN_DEPOSIT.");
-            if (count > 0 && count % ORPHAN_LOG_INTERVAL == 0) {
-                plugin.getLogger().info("[Vault-Orphan-Recovery] " + count + " orphan deposits processed since startup (cross-server expected behavior).");
-            }
-
-            EconomyResponse locked = LockingHelper.requireNotLocked(economyFacade, uuid, "Target account is locked");
-            if (locked != null) {
-                return locked;
-            }
-
-            BigDecimal newBalance = economyFacade.pluginDeposit(uuid, amountBd, "Vault-Orphan-Recovery");
-            if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-                return new EconomyResponse(0, economyFacade.getBalance(uuid).doubleValue(),
-                        EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
-            }
-
-            CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
-
-            publishCrossServerUpdate(uuid, newBalance, "PLUGIN_DEPOSIT", amount, "Vault-Orphan-Recovery", null);
-
-            return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
-        }
-
         if (LockingHelper.isLocked(economyFacade, uuid)) {
-            if (pendingTransfer != null) {
-                plugin.getLogger().warning("Deposit failed: target account locked. Rolling back transfer: " +
-                    pendingTransfer.fromUuid() + " -> " + pendingTransfer.toUuid());
-                transferHandler.rollbackTransfer(pendingTransfer);
-                transferHandler.removePendingTransfer(uuid);
-            }
             return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
                     "Target account is locked");
         }
@@ -329,21 +285,8 @@ public class VaultProviderCore {
         BigDecimal newBalance = economyFacade.deposit(uuid, amountBd, EconomyEvent.EventSource.VAULT_DEPOSIT);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            if (pendingTransfer != null) {
-                plugin.getLogger().warning("Deposit failed: deposit rejected. Rolling back transfer: " +
-                    pendingTransfer.fromUuid() + " -> " + pendingTransfer.toUuid());
-                transferHandler.rollbackTransfer(pendingTransfer);
-                transferHandler.removePendingTransfer(uuid);
-            }
             return new EconomyResponse(0, economyFacade.getBalance(uuid).doubleValue(),
                     EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
-        }
-
-        if (pendingTransfer != null) {
-            transferHandler.removePendingTransfer(uuid);
-            transferHandler.removeRecentWithdrawal(pendingTransfer.fromUuid(), amountBd);
-            plugin.getLogger().info("Atomic transfer completed: " +
-                pendingTransfer.fromUuid() + " -> " + pendingTransfer.toUuid() + " : " + amountBd);
         }
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
@@ -362,11 +305,11 @@ public class VaultProviderCore {
     }
 
     // =========================================================================
-    // Plugin API - bypasses Vault pairing for third-party plugins
+    // Plugin API - explicit attribution and transfers for third-party plugins
     // =========================================================================
 
     /**
-     * [SYNC-VAULT-015] Deposit for plugin use - bypasses Vault pairing logic.
+     * [SYNC-VAULT-015] Deposit for plugin use with explicit attribution.
      * Third-party plugins (e.g., chest shops) should call this instead of the standard
      * Vault Economy API when they need plugin-level attribution.
      *
@@ -408,7 +351,7 @@ public class VaultProviderCore {
     }
 
     /**
-     * [SYNC-VAULT-016] Withdraw for plugin use - bypasses Vault pairing logic.
+     * [SYNC-VAULT-016] Withdraw for plugin use with explicit attribution.
      * Third-party plugins (e.g., chest shops) should call this instead of the standard
      * Vault Economy API when they need plugin-level attribution.
      *
@@ -453,7 +396,7 @@ public class VaultProviderCore {
 
     /**
      * [SYNC-VAULT-017] Atomic transfer for plugin use.
-     * Ensures both withdraw and deposit succeed atomically without Vault pairing.
+     * Ensures both withdraw and deposit succeed atomically with explicit participants.
      *
      * [AsyncScheduler] Must be called from async thread.
      *
