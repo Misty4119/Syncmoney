@@ -27,10 +27,33 @@ public final class PlaceholderHandler {
     private final Object plugin;
     private final boolean debugMode;
 
-    private Object cachedEconomyFacade;
-    private Object cachedBaltopManager;
-    private Object cachedNameResolver;
-    private long cacheTimestamp = 0;
+    private volatile Object cachedEconomyFacade;
+    private volatile Object cachedBaltopManager;
+    private volatile Object cachedNameResolver;
+    private volatile long cacheTimestamp = 0;
+    private record CachedValue(String value, long timestamp) {}
+    private final java.util.Map<String, CachedValue> values = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(128, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, CachedValue> eldest) {
+                    return size() > 10000;
+                }
+            });
+    private final java.util.Set<String> pending = ConcurrentHashMap.newKeySet();
+
+    private String cachedQuery(String key, java.util.function.Supplier<String> query) {
+        CachedValue cached = values.get(key);
+        if ((cached == null || System.currentTimeMillis() - cached.timestamp() >= CACHE_EXPIRY_MS)
+                && plugin instanceof org.bukkit.plugin.Plugin owner && owner.isEnabled()
+                && pending.size() < 10000 && pending.add(key)) {
+            try {
+                owner.getServer().getAsyncScheduler().runNow(owner, task -> {
+                    try { values.put(key, new CachedValue(query.get(), System.currentTimeMillis())); }
+                    finally { pending.remove(key); }
+                });
+            } catch (RuntimeException e) { pending.remove(key); }
+        }
+        return cached == null || cached.value() == null ? "N/A" : cached.value();
+    }
 
     public PlaceholderHandler(Object plugin, boolean debugMode) {
         this.plugin = plugin;
@@ -54,6 +77,14 @@ public final class PlaceholderHandler {
         }
 
         try {
+            String lower = params.toLowerCase(java.util.Locale.ROOT);
+            final String request = params;
+            if (lower.equals("total_supply") || lower.equals("total_players") || lower.startsWith("top_")) {
+                return cachedQuery(lower, () -> handleGlobal(request));
+            }
+            if ((lower.equals("rank") || lower.equals("my_rank")) && player != null) {
+                return cachedQuery("rank:" + player.getUniqueId(), () -> handlePlayer(player, request));
+            }
             if (isGlobalPlaceholder(params)) {
                 return handleGlobal(params);
             }
@@ -92,6 +123,11 @@ public final class PlaceholderHandler {
     private String handleGlobal(String params) {
         String lower = params.toLowerCase();
 
+        if (lower.equals("total_players")) {
+            Object total = invokeMethod(getBaltopManager(), "getTotalRegisteredPlayers");
+            return total instanceof Number ? total.toString() : "N/A";
+        }
+
         if (lower.equals("total_supply")) {
             Object baltopManager = getBaltopManager();
             if (baltopManager != null) {
@@ -129,7 +165,7 @@ public final class PlaceholderHandler {
         Object economyFacade = getEconomyFacade();
         Object baltopManager = getBaltopManager();
 
-        if (economyFacade == null || baltopManager == null) {
+        if (economyFacade == null) {
             return "N/A";
         }
 
@@ -137,7 +173,8 @@ public final class PlaceholderHandler {
         String lower = params.toLowerCase();
 
         if (lower.equals("balance")) {
-            Object balance = invokeMethod(economyFacade, "getBalanceAsDouble", uuid);
+            Object balance = invokeMethod(economyFacade, "getBalanceForPlaceholder", uuid);
+            if (balance == null) return "N/A";
             if (balance instanceof Number) {
                 return ExpansionFormatUtil.formatCurrency(((Number) balance).doubleValue());
             }
@@ -145,7 +182,8 @@ public final class PlaceholderHandler {
         }
 
         if (lower.equals("balance_formatted")) {
-            Object balance = invokeMethod(economyFacade, "getBalanceAsDouble", uuid);
+            Object balance = invokeMethod(economyFacade, "getBalanceForPlaceholder", uuid);
+            if (balance == null) return "N/A";
             if (balance instanceof Number) {
                 return ExpansionFormatUtil.formatCompact(((Number) balance).doubleValue());
             }
@@ -153,7 +191,8 @@ public final class PlaceholderHandler {
         }
 
         if (lower.equals("balance_abbreviated")) {
-            Object balance = invokeMethod(economyFacade, "getBalanceAsDouble", uuid);
+            Object balance = invokeMethod(economyFacade, "getBalanceForPlaceholder", uuid);
+            if (balance == null) return "N/A";
             if (balance instanceof Number) {
                 return ExpansionFormatUtil.formatAbbreviated(((Number) balance).doubleValue());
             }
@@ -277,22 +316,14 @@ public final class PlaceholderHandler {
         if (targetUuid == null) {
             Object nameResolver = getNameResolver();
             if (nameResolver != null) {
-                Object uuid = invokeMethod(nameResolver, "resolveUUID", playerName);
+                Object uuid = invokeMethod(nameResolver, "resolveUUIDForPlaceholder", playerName);
                 if (uuid instanceof UUID) {
                     targetUuid = (UUID) uuid;
                 }
             }
         }
 
-        if (targetUuid == null) {
-            try {
-                @SuppressWarnings("deprecation")
-                OfflinePlayer fallbackPlayer = Bukkit.getOfflinePlayer(playerName);
-                if (fallbackPlayer != null && (fallbackPlayer.hasPlayedBefore() || fallbackPlayer.isOnline())) {
-                    targetUuid = fallbackPlayer.getUniqueId();
-                }
-            } catch (Exception ignored) {}
-        }
+
 
         if (targetUuid == null) {
             return "N/A";
@@ -303,7 +334,8 @@ public final class PlaceholderHandler {
             return "N/A";
         }
 
-        Object balance = invokeMethod(economyFacade, "getBalanceAsDouble", targetUuid);
+        Object balance = invokeMethod(economyFacade, "getBalanceForPlaceholder", targetUuid);
+            if (balance == null) return "N/A";
         if (balance instanceof Number) {
             double val = ((Number) balance).doubleValue();
             return switch (formatType) {
@@ -354,7 +386,7 @@ public final class PlaceholderHandler {
                 return version.toString();
             }
         }
-        return "1.0.0";
+        return "N/A";
     }
 
     private static Object invokeMethod(Object obj, String methodName, Object... args) {

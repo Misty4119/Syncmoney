@@ -69,7 +69,7 @@ public final class AuditLogger {
         this.maxRetry = Constants.AUDIT_MAX_RETRY;
         this.buffer = new ConcurrentLinkedQueue<>();
 
-        if (dataSource == null) {
+        if (!config.audit().isAuditEnabled() || dataSource == null) {
             enabled = false;
             logger.fine("Audit logging disabled: no database source available (LOCAL mode?).");
             return;
@@ -77,11 +77,6 @@ public final class AuditLogger {
 
         initializeSchema();
 
-        if (!config.audit().isAuditEnabled()) {
-            enabled = false;
-            logger.warning("Audit logging is disabled in config.");
-            return;
-        }
 
         startScheduledFlush();
     }
@@ -466,7 +461,7 @@ public final class AuditLogger {
      * @return list of audit records
      */
     public List<AuditRecord> getPlayerRecords(UUID uuid, int limit, int offset) {
-        if (dataSource == null) {
+        if (!enabled || dataSource == null) {
             return Collections.emptyList();
         }
 
@@ -522,7 +517,7 @@ public final class AuditLogger {
      * @return exact number of matching records, or 0 if unavailable
      */
     public int countByTimeRange(long startTime, long endTime) {
-        if (dataSource == null) {
+        if (!enabled || dataSource == null) {
             return 0;
         }
 
@@ -562,7 +557,7 @@ public final class AuditLogger {
      * Searches audit records.
      */
     public List<AuditRecord> search(AuditSearchCriteria criteria) {
-        if (dataSource == null) {
+        if (!enabled || dataSource == null) {
             return Collections.emptyList();
         }
 
@@ -621,7 +616,7 @@ public final class AuditLogger {
      * @return SearchResult with records, nextCursor and hasMore flag
      */
     public SearchResult searchWithCursor(AuditSearchCriteria criteria) {
-        if (dataSource == null) {
+        if (!enabled || dataSource == null) {
             return new SearchResult(Collections.emptyList(), null, false);
         }
 

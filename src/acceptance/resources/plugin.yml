@@ -1,0 +1,13 @@
+name: SyncmoneyAcceptance
+version: '1'
+main: noietime.syncmoney.acceptance.AcceptanceProbe
+api-version: '1.20'
+folia-supported: true
+depend: [Syncmoney, Vault]
+commands:
+  smaccept:
+    description: Isolated local acceptance checks
+    permission: syncmoney.acceptance
+permissions:
+  syncmoney.acceptance:
+    default: op

@@ -85,8 +85,8 @@
                   </Badge>
                 </td>
                 <td class="px-4 py-2">
-                  <span class="font-mono font-bold" :class="parseFloat(String(item.record?.amount)) >= 0 ? 'text-success drop-shadow-[0_0_5px_rgba(34,197,94,0.3)]' : 'text-error drop-shadow-[0_0_5px_rgba(239,68,68,0.3)]'">
-                    {{ parseFloat(String(item.record?.amount)) >= 0 ? '+' : '' }}{{ item.record?.amount }}
+                  <span class="font-mono font-bold" :class="isPositiveAmount(item.record?.amount) ? 'text-success drop-shadow-[0_0_5px_rgba(34,197,94,0.3)]' : 'text-error drop-shadow-[0_0_5px_rgba(239,68,68,0.3)]'">
+                    {{ formatAmount(item.record?.amount) }}
                   </span>
                 </td>
                 <td class="px-4 py-2 text-sm text-surface-900 dark:text-surface-100 font-mono overflow-hidden text-ellipsis whitespace-nowrap">
@@ -122,8 +122,8 @@
             </div>
             <div class="mt-1.5 flex items-center justify-between gap-2">
               <span class="text-surface-500 dark:text-surface-400 text-xs font-mono">{{ formatDate(Number(item.record?.timestamp)) }}</span>
-              <span class="font-mono font-bold text-sm" :class="parseFloat(String(item.record?.amount)) >= 0 ? 'text-success' : 'text-error'">
-                {{ parseFloat(String(item.record?.amount)) >= 0 ? '+' : '' }}{{ item.record?.amount }}
+              <span class="font-mono font-bold text-sm" :class="isPositiveAmount(item.record?.amount) ? 'text-success' : 'text-error'">
+                {{ formatAmount(item.record?.amount) }}
               </span>
             </div>
             <div class="mt-1 flex items-center justify-between gap-2 text-xs text-surface-500 dark:text-surface-400">
@@ -267,6 +267,17 @@ function formatDate(timestamp: number): string {
   } catch {
     return new Date(timestamp).toLocaleString()
   }
+}
+
+function isPositiveAmount(amount: unknown): boolean {
+  const str = String(amount ?? '').trim()
+  return !str.startsWith('-')
+}
+
+function formatAmount(amount: unknown): string {
+  const str = String(amount ?? '').trim()
+  if (!str) return '0'
+  return !str.startsWith('-') && !str.startsWith('+') ? `+${str}` : str
 }
 
 function getRowClass(row: AuditRecord | undefined): string {

@@ -79,13 +79,13 @@ public final class EconomicCircuitBreaker {
         startCleanupTask();
         startPeriodicInflationCheck();
 
+        this.notification = new HighValueNotification((Syncmoney) plugin, config);
+        this.resourceMonitor = new ResourceMonitor(plugin, config, redisManager);
         if (redisRequired) {
             this.connectionStateManager = new ConnectionStateManager(plugin, config, redisManager, redisRequired, this);
         } else {
             this.connectionStateManager = null;
         }
-        this.resourceMonitor = new ResourceMonitor(plugin, config, redisManager);
-        this.notification = new HighValueNotification((Syncmoney) plugin, config);
     }
 
     /**
@@ -288,6 +288,9 @@ public final class EconomicCircuitBreaker {
      * Shuts down the cleanup scheduler.
      */
     public void shutdown() {
+        notification.shutdown();
+        if (connectionStateManager != null) connectionStateManager.shutdown();
+        resourceMonitor.shutdown();
         cleanupScheduler.shutdown();
         try {
             if (!cleanupScheduler.awaitTermination(30, TimeUnit.SECONDS)) {

@@ -1,8 +1,8 @@
 # Syncmoney Architecture Overview
 
 > **Audience**: Developers contributing to or extending Syncmoney
-> **Version**: 1.1.2
-> **Last Updated**: 2026-03-22 (refactored)
+> **Version**: 1.3.0
+> **Last Updated**: 2026-09-06
 
 ---
 

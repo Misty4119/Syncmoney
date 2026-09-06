@@ -108,9 +108,8 @@ public final class CMIEconomyListener implements Listener {
         }
         long intervalMs = Math.max(1000L, config.cmi().getCMIDetectIntervalMs());
         pollingTask = plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin, task -> {
-            for (Player player : plugin.getServer().getOnlinePlayers()) {
-                publishDebounced(player.getUniqueId(), "CMI-POLLING");
-            }
+            noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin,
+                    player -> publishDebounced(player.getUniqueId(), "CMI-POLLING"));
         }, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
         plugin.getLogger().fine("CMI polling fallback started (interval: " + intervalMs + "ms)");
     }
@@ -145,6 +144,11 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void publishDebounced(UUID uuid, String sourceName) {
+        noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
+                player -> publishOnPlayerScheduler(uuid, sourceName));
+    }
+
+    private void publishOnPlayerScheduler(UUID uuid, String sourceName) {
         if (isOutboundSuppressed(uuid)) {
             return;
         }
@@ -195,10 +199,10 @@ public final class CMIEconomyListener implements Listener {
         final UUID uuid = event.getPlayer().getUniqueId();
         plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
             cmiHandler.reconcileOnJoin(uuid);
-            BigDecimal local = cmiHandler.getCMILocalBalance(uuid);
-            if (local != null) {
-                lastKnownCMIBalance.put(uuid, local);
-            }
+            noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid, player -> {
+                BigDecimal local = cmiHandler.getCMILocalBalance(uuid);
+                if (local != null) lastKnownCMIBalance.put(uuid, local);
+            });
         });
     }
 

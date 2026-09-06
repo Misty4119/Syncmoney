@@ -22,8 +22,7 @@ import java.util.*;
 public final class ConfigMerger {
 
     /**
-     * Default config schema version (matches CURRENT_VERSION in SchemaManager)
-     * 11 = v1.2.0, 11 = v1.1.0, 10 = v1.0.0
+     * Legacy fallback when a bundled schema cannot be read; database schema is independent.
      */
     private static final int DEFAULT_CONFIG_VERSION = 11;
 
@@ -69,7 +68,8 @@ public final class ConfigMerger {
      * @return default config version
      */
     public int getDefaultConfigVersion() {
-        return DEFAULT_CONFIG_VERSION;
+        FileConfiguration defaults = loadDefaultConfig("config.yml");
+        return defaults != null ? defaults.getInt("config-version", DEFAULT_CONFIG_VERSION) : DEFAULT_CONFIG_VERSION;
     }
 
     /**
@@ -91,7 +91,7 @@ public final class ConfigMerger {
      * @return true if local version is less than default version
      */
     public boolean needsUpgrade() {
-        return getLocalConfigVersion() < DEFAULT_CONFIG_VERSION;
+        return getLocalConfigVersion() < getDefaultConfigVersion();
     }
 
     /**

@@ -21,14 +21,19 @@
       <form @submit.prevent="handleLogin" class="space-y-5">
         <!-- API Key input -->
         <div>
-          <label for="api-key" class="block text-sm text-surface-700 dark:text-surface-400 mb-2 font-medium">{{ t('auth.apiKey') }}</label>
+          <label for="api-key" class="block text-sm text-surface-800 dark:text-surface-300 mb-2 font-medium">{{ t('auth.apiKey') }}</label>
           <div class="relative group mt-1">
-            <KeyRound class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-500 dark:text-surface-400 group-focus-within:text-primary transition-colors duration-300" />
+            <KeyRound class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-400 group-focus-within:text-primary transition-colors duration-300" />
             <input
               id="api-key"
               v-model="apiKey"
               type="password"
-              class="w-full pl-11 pr-4 py-3 bg-surface-50 border border-surface-200 rounded-xl text-surface-700 dark:text-surface-100 placeholder-surface-500 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300 shadow-inner"
+              class="w-full pl-11 pr-4 py-3 rounded-xl shadow-sm transition-all duration-300 focus:outline-none focus:ring-2"
+              :style="{
+                background: 'var(--ctrl-bg)',
+                border: '1px solid var(--ctrl-border)',
+                color: 'var(--ctrl-text)',
+              }"
               :placeholder="t('auth.apiKeyPlaceholder')"
               required
             />
@@ -62,7 +67,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNodesStore } from '@/stores/nodes'
 import { Zap, KeyRound, AlertCircle } from 'lucide-vue-next'
@@ -72,6 +77,7 @@ declare const __APP_VERSION__: string
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const nodesStore = useNodesStore()
 const appVersion = __APP_VERSION__
@@ -81,12 +87,14 @@ const loading = computed(() => authStore.isLoading)
 const error = computed(() => authStore.error)
 
 async function handleLogin() {
-  const success = await authStore.login(apiKey.value)
+  const trimmedKey = apiKey.value.trim()
+  if (!trimmedKey) return
+
+  const success = await authStore.login(trimmedKey)
   if (success) {
-    
-    
     await nodesStore.fetchNodes().catch(() => {})
-    router.push('/dashboard')
+    const redirectPath = (route.query.redirect as string) || '/dashboard'
+    router.push(redirectPath)
   }
 }
 </script>

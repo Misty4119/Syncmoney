@@ -1,0 +1,25 @@
+# Reproducible two-backend PlugDev acceptance profile.
+# Runtime state, downloaded servers and credentials remain under .plugdev/.
+type: network
+proxy:
+  software: velocity-ctd
+  version: "latest"
+  port: 25565
+  loginRateLimit: 0
+forwarding:
+  secret: "syncmoney-plugdev-network"
+backends:
+  - name: lobby
+    software: paper
+    version: "26.2"
+    port: 25566
+    plugin:
+      jar: build/plugdev/Syncmoney.jar
+      config: tools/plugdev/network-lobby.yml
+  - name: survival
+    software: paper
+    version: "26.2"
+    port: 25567
+    plugin:
+      jar: build/plugdev/Syncmoney.jar
+      config: tools/plugdev/network-survival.yml

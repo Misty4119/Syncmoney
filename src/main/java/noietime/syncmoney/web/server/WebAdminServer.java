@@ -17,11 +17,14 @@ import java.util.List;
 /**
  * Web Admin HTTP server bootstrap (Undertow lifecycle).
  *
- * <p>This class now focuses purely on bootstrapping: starting/stopping Undertow,
- * extracting bundled web files, the startup version check/auto-build, and wiring
+ * <p>
+ * This class now focuses purely on bootstrapping: starting/stopping Undertow,
+ * extracting bundled web files, the startup version check/auto-build, and
+ * wiring
  * the collaborating components together. Request dispatch is delegated to
  * {@link RouteRegistry}, CORS to {@link CorsHandler}, and static file serving
- * (with path-traversal protection) to {@link StaticFileHandler}.</p>
+ * (with path-traversal protection) to {@link StaticFileHandler}.
+ * </p>
  */
 public final class WebAdminServer {
 
@@ -100,8 +103,8 @@ public final class WebAdminServer {
         Path webDir = webRoot.getParent();
 
         plugin.getLogger().info("Checking web files: webDir=" + webDir + ", webRoot=" + webRoot);
-        plugin.getLogger().info("webDir exists: " + Files.exists(webDir) + ", webRoot exists: " + Files.exists(webRoot));
-
+        plugin.getLogger()
+                .info("webDir exists: " + Files.exists(webDir) + ", webRoot exists: " + Files.exists(webRoot));
 
         if (Files.exists(webDir) && Files.exists(webRoot)) {
             boolean hasFiles = hasAnyFiles(webRoot);
@@ -112,7 +115,6 @@ public final class WebAdminServer {
             }
         }
 
-
         if (!Files.exists(webDir)) {
             Files.createDirectories(webDir);
             plugin.getLogger().info("Created web directory: " + webDir);
@@ -121,7 +123,6 @@ public final class WebAdminServer {
             Files.createDirectories(webRoot);
             plugin.getLogger().info("Created web root directory: " + webRoot);
         }
-
 
         plugin.getLogger().info("Extracting web files from JAR resources...");
         var classLoader = plugin.getClass().getClassLoader();
@@ -149,7 +150,8 @@ public final class WebAdminServer {
     private void extractIndividualFiles(ClassLoader classLoader, Path webRoot) throws IOException {
 
         String[] rootFiles = {
-            "favicon.png","index.html","manifest.json","manifest.webmanifest","mockServiceWorker.js","registerSW.js","sw.js","sw.js.map","version.json","workbox-daba6f28.js","workbox-daba6f28.js.map"
+                "favicon.png", "index.html", "manifest.json", "manifest.webmanifest", "mockServiceWorker.js",
+                "registerSW.js", "sw.js", "sw.js.map", "version.json", "workbox-daba6f28.js", "workbox-daba6f28.js.map"
         };
 
         for (String fileName : rootFiles) {
@@ -163,13 +165,34 @@ public final class WebAdminServer {
             }
         }
 
-
         Path assetsDir = webRoot.resolve("assets");
         if (!Files.exists(assetsDir)) {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-            "AuditLogView-1TqTLEDG.js","AuditLogView-1TqTLEDG.js.map","AuditLogView-ncafTB8a.css","Badge.vue_vue_type_script_setup_true_lang-ButpYfBf.js","Badge.vue_vue_type_script_setup_true_lang-ButpYfBf.js.map","Button.vue_vue_type_script_setup_true_lang-DGNMbe25.js","Button.vue_vue_type_script_setup_true_lang-DGNMbe25.js.map","Card-DwRmiknp.css","Card-QgPLeQ4W.js","Card-QgPLeQ4W.js.map","CentralDashboardView-CRyjfHZG.js","CentralDashboardView-CRyjfHZG.js.map","ConfigView-DoKUJKS3.js","ConfigView-DoKUJKS3.js.map","ConfigView-DOZ3o-6N.css","DashboardView-BA0KEiZr.js","DashboardView-BA0KEiZr.js.map","EmptyState.vue_vue_type_script_setup_true_lang-C59jgcsN.js","EmptyState.vue_vue_type_script_setup_true_lang-C59jgcsN.js.map","globe-BIR30XRw.js","globe-BIR30XRw.js.map","index-DJbJKhkS.js","index-DJbJKhkS.js.map","index-DTkctV0l.css","LoginView-DwalZz_V.js","LoginView-DwalZz_V.js.map","NodesManagementView-Bg7EP4A9.css","NodesManagementView-dKCssAEu.js","NodesManagementView-dKCssAEu.js.map","NotFoundView-BvfRyRzZ.css","NotFoundView-CcED0NHh.js","NotFoundView-CcED0NHh.js.map","SettingsView-DmFsEYE8.js","SettingsView-DmFsEYE8.js.map","shield-BlE-6dZQ.js","shield-BlE-6dZQ.js.map","Skeleton.vue_vue_type_script_setup_true_lang-K0ftSVyN.js","Skeleton.vue_vue_type_script_setup_true_lang-K0ftSVyN.js.map","StatCard.vue_vue_type_script_setup_true_lang-BFGf2dR8.js","StatCard.vue_vue_type_script_setup_true_lang-BFGf2dR8.js.map","SystemStatusView-B74dBDbB.js","SystemStatusView-B74dBDbB.js.map","ui-vendor-CM-HUc5O.js","ui-vendor-CM-HUc5O.js.map","users-Bnhhxj7p.js","users-Bnhhxj7p.js.map","vue-vendor-hiEirxk6.js","vue-vendor-hiEirxk6.js.map"
+                "AuditLogView-CDka0WzL.js", "AuditLogView-CDka0WzL.js.map", "AuditLogView-DSvYadoU.css",
+                "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js",
+                "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js.map",
+                "Button.vue_vue_type_script_setup_true_lang-XDsdg4_2.js",
+                "Button.vue_vue_type_script_setup_true_lang-XDsdg4_2.js.map", "Card-T3c5PiAk.js",
+                "Card-T3c5PiAk.js.map", "Card-XdX29y7v.css", "CentralDashboardView-piiFgUPz.js",
+                "CentralDashboardView-piiFgUPz.js.map", "ConfigView-CK2Za0KX.js", "ConfigView-CK2Za0KX.js.map",
+                "ConfigView-nxIbKMd_.css", "DashboardView-TLOk4xnY.js", "DashboardView-TLOk4xnY.js.map",
+                "EmptyState.vue_vue_type_script_setup_true_lang-BEVqqON3.js",
+                "EmptyState.vue_vue_type_script_setup_true_lang-BEVqqON3.js.map", "globe-6q1ubD0R.js",
+                "globe-6q1ubD0R.js.map", "index-BrNP_EjM.css", "index-CsOu-9F1.js", "index-CsOu-9F1.js.map",
+                "LoginView-BzMfBKyV.js", "LoginView-BzMfBKyV.js.map", "NodesManagementView-CcXcUn_j.js",
+                "NodesManagementView-CcXcUn_j.js.map", "NodesManagementView-IuUDUfJE.css", "NotFoundView-BvfRyRzZ.css",
+                "NotFoundView-NEFg-0dz.js", "NotFoundView-NEFg-0dz.js.map", "SettingsView-Raeb2BqA.js",
+                "SettingsView-Raeb2BqA.js.map", "shield-D4Z-ILjl.js", "shield-D4Z-ILjl.js.map",
+                "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js",
+                "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js.map",
+                "StatCard.vue_vue_type_script_setup_true_lang-D6R_a49w.js",
+                "StatCard.vue_vue_type_script_setup_true_lang-D6R_a49w.js.map",
+                "Switch.vue_vue_type_script_setup_true_lang-B_21kxDS.js",
+                "Switch.vue_vue_type_script_setup_true_lang-B_21kxDS.js.map", "SystemStatusView-Bj-o0M0Q.js",
+                "SystemStatusView-Bj-o0M0Q.js.map", "ui-vendor-C7Hq5Kfe.js", "ui-vendor-C7Hq5Kfe.js.map",
+                "users-BQO0BSkJ.js", "users-BQO0BSkJ.js.map", "vue-vendor-BdqzwXPG.js", "vue-vendor-BdqzwXPG.js.map"
         };
 
         for (String fileName : assetFiles) {
@@ -182,7 +205,6 @@ public final class WebAdminServer {
                 }
             }
         }
-
 
         Path iconsDir = webRoot.resolve("icons");
         if (!Files.exists(iconsDir)) {
@@ -205,8 +227,10 @@ public final class WebAdminServer {
     /**
      * Stop the HTTP server.
      *
-     * Undertow.stop() initiates an async XNIO worker shutdown and returns immediately.
-     * The XNIO worker threads continue running their cleanup tasks for several seconds.
+     * Undertow.stop() initiates an async XNIO worker shutdown and returns
+     * immediately.
+     * The XNIO worker threads continue running their cleanup tasks for several
+     * seconds.
      * If the plugin classloader is unloaded before they finish, they cannot find
      * jboss-threads classes (e.g. ContextClassLoaderSavingRunnable), causing
      * NoClassDefFoundError and an ~11-second server shutdown hang.
@@ -220,45 +244,45 @@ public final class WebAdminServer {
             if (settingsHandler != null) {
                 try {
                     settingsHandler.saveNow();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
-
 
             if (sseManager != null) {
                 try {
                     sseManager.shutdown();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             if (webSocketManager != null) {
                 try {
                     webSocketManager.shutdown();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             if (settingsHandler != null) {
                 try {
                     settingsHandler.shutdown();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
-
 
             org.xnio.XnioWorker worker = null;
             try {
                 worker = server.getWorker();
-            } catch (Exception ignored) {}
-
+            } catch (Exception ignored) {
+            }
 
             server.stop();
             server = null;
-
-
-
 
             if (worker != null) {
                 try {
                     worker.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
 
             plugin.getLogger().fine(plugin.getMessage("web.server.stopped"));
@@ -281,7 +305,8 @@ public final class WebAdminServer {
 
                 if (latestVersion != null && checker.hasNewerVersion(latestVersion, localVersion)) {
                     plugin.getLogger()
-                            .fine(plugin.getMessage("web.server.version.downloading").replace("{version}", latestVersion));
+                            .fine(plugin.getMessage("web.server.version.downloading").replace("{version}",
+                                    latestVersion));
                     try {
                         WebDownloader downloader = new WebDownloader(plugin, config.getGithubRepo(), webRoot);
                         if (downloader.downloadLatest()) {
@@ -297,7 +322,8 @@ public final class WebAdminServer {
                         }
                     } catch (Exception e) {
                         plugin.getLogger().warning(
-                                plugin.getMessage("web.server.version.download-error").replace("{error}", e.getMessage()));
+                                plugin.getMessage("web.server.version.download-error").replace("{error}",
+                                        e.getMessage()));
                     }
                 }
             } else {
@@ -310,7 +336,8 @@ public final class WebAdminServer {
                             .replace("{latest}", latestVersion));
                 } else {
                     plugin.getLogger()
-                            .fine(plugin.getMessage("web.server.version.up-to-date").replace("{version}", localVersion));
+                            .fine(plugin.getMessage("web.server.version.up-to-date").replace("{version}",
+                                    localVersion));
                 }
             }
 
@@ -385,13 +412,12 @@ public final class WebAdminServer {
             sendJson(exchange, "{\"success\":true,\"data\":{\"status\":\"ok\",\"version\":\"" + pluginVersion + "\"}}");
         });
 
-
         settingsHandler = new noietime.syncmoney.web.api.settings.SettingsApiHandler(
                 plugin, config, plugin.getSyncmoneyConfig());
         settingsHandler.registerRoutes(router);
 
-
-        noietime.syncmoney.web.api.auth.WsTokenHandler wsTokenHandler = new noietime.syncmoney.web.api.auth.WsTokenHandler(plugin, config);
+        noietime.syncmoney.web.api.auth.WsTokenHandler wsTokenHandler = new noietime.syncmoney.web.api.auth.WsTokenHandler(
+                plugin, config);
         wsTokenHandler.registerRoutes(router);
 
         this.webSocketManager = new noietime.syncmoney.web.websocket.WebSocketManager(plugin);

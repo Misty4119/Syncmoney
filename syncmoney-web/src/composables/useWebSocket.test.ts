@@ -1,104 +1,78 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { WebSocketMessageData } from './useWebSocket'
-
 
 class MockEventSource {
-  static CONNECTING = 0
-  static OPEN = 1
-  static CLOSING = 2
-  static CLOSED = 3
-  
-  readyState = MockEventSource.OPEN
+  static instances: MockEventSource[] = []
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
-  onerror: ((event: Event) => void) | null = null
-  onclose: (() => void) | null = null
-  
-  private listeners: Map<string, ((event: MessageEvent) => void)[]> = new Map()
-  
-  constructor(public url: string) {
-    setTimeout(() => this.onopen?.(), 0)
-  }
-  
-  addEventListener(type: string, handler: (event: MessageEvent) => void) {
-    const handlers = this.listeners.get(type) || []
-    handlers.push(handler)
-    this.listeners.set(type, handlers)
-  }
-  
-  removeEventListener(type: string, handler: (event: MessageEvent) => void) {
-    const handlers = this.listeners.get(type)
-    if (handlers) {
-      const index = handlers.indexOf(handler)
-      if (index > -1) {
-        handlers.splice(index, 1)
-      }
-    }
-  }
-  
-
-  triggerEvent(type: string, data: WebSocketMessageData) {
-    const handlers = this.listeners.get(type)
-    if (handlers) {
-      handlers.forEach(h => h({ data: JSON.stringify(data) } as MessageEvent))
-    }
-  }
-  
+  onerror: (() => void) | null = null
   close = vi.fn()
+  addEventListener = vi.fn()
+  constructor(public url: string) { MockEventSource.instances.push(this) }
 }
 
-vi.stubGlobal('EventSource', MockEventSource)
-
 describe('useSSE', () => {
-  let useSSE: () => ReturnType<typeof import('@/composables/useSSE').useSSE>
-  
+  let sse: ReturnType<typeof import('./useSSE').useSSE>
+
   beforeEach(async () => {
-    const module = await import('@/composables/useSSE')
-    useSSE = module.useSSE
-  })
-  
-  afterEach(() => {
+    vi.useFakeTimers()
     vi.resetModules()
+    MockEventSource.instances = []
+    vi.stubGlobal('EventSource', MockEventSource)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ success: true, data: { token: 'test-session' } })
+    }))
+    localStorage.setItem('apiKey', 'test-key')
+    sse = (await import('./useSSE')).useSSE()
   })
 
-  it('should initialize with disconnected state', () => {
-    const sse = useSSE()
+  afterEach(() => {
+    sse.disconnect()
+    localStorage.clear()
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  async function connect() {
+    sse.connect('/sse')
+    await vi.advanceTimersByTimeAsync(0)
+    const source = MockEventSource.instances[0]!
+    source.onopen?.()
+    return source
+  }
+
+  it('starts disconnected', () => expect(sse.connected.value).toBe(false))
+
+  it('obtains a session token before opening the stream', async () => {
+    const source = await connect()
+    expect(fetch).toHaveBeenCalledWith('/api/auth/ws-token', expect.objectContaining({ method: 'POST' }))
+    expect(source.url).toBe('/sse?token=test-session')
+    expect(sse.connected.value).toBe(true)
+  })
+
+  it('dispatches messages and unregisters handlers', async () => {
+    const source = await connect()
+    const handler = vi.fn()
+    sse.on('system', handler)
+    source.onmessage?.({ data: JSON.stringify({ type: 'system', data: { message: 'test' } }) })
+    expect(handler).toHaveBeenCalledWith({ message: 'test' })
+    sse.off('system', handler)
+    source.onmessage?.({ data: JSON.stringify({ type: 'system', data: {} }) })
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the stream on explicit disconnect', async () => {
+    const source = await connect()
+    sse.disconnect()
+    expect(source.close).toHaveBeenCalledOnce()
     expect(sse.connected.value).toBe(false)
   })
 
-  it('should connect to SSE server', () => {
-    const sse = useSSE()
+  it('does not reopen after disconnect while token acquisition is pending', async () => {
     sse.connect('/sse')
-    
-    return new Promise(resolve => setTimeout(() => {
-      expect(sse.connected.value).toBe(true)
-      resolve(true)
-    }, 10))
-  })
-
-  it('should register and trigger event handlers', () => {
-    const sse = useSSE()
-    
-    const handler = vi.fn()
-    sse.on('transaction', handler)
-    
-    sse.connect('/sse')
-    
-    return new Promise(resolve => setTimeout(() => {
-
-      expect(sse.on).toBeDefined()
-      resolve(true)
-    }, 10))
-  })
-
-  it('should disconnect properly', () => {
-    const sse = useSSE()
-    sse.connect('/sse')
-    
-    return new Promise(resolve => setTimeout(() => {
-      sse.disconnect()
-      expect(sse.connected.value).toBe(false)
-      resolve(true)
-    }, 10))
+    sse.disconnect()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(MockEventSource.instances).toHaveLength(0)
   })
 })

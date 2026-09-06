@@ -54,9 +54,9 @@ public final class PlayerJoinListener implements Listener {
 
         broadcastPlayerJoinEvent(name, uuid);
 
-        player.getScheduler().run(plugin, task -> {
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
             loadPlayerData(uuid, name);
-        }, null);
+        });
     }
 
     /**

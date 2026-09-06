@@ -16,10 +16,11 @@ test.describe('Audit Log', () => {
   })
 
   test('should display audit log page', async ({ page }) => {
-    // Directly go to audit page (would require auth in real app)
+    await page.addInitScript(() => localStorage.setItem('apiKey', 'test-api-key'))
+    await page.route('**/api/nodes', route => route.fulfill({ json: { success: true, data: { nodes: [], centralMode: false } } }))
+    await page.route('**/api/audit/**', route => route.fulfill({ json: { success: true, data: { records: [], hasMore: false } } }))
     await page.goto('/audit')
-    
-    // Page should load (may redirect to login if not authenticated)
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page).toHaveURL(/\/audit$/)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('審計日誌')
   })
 })

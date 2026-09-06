@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-06
+
+### Fixed
+
+- Route player/CMI updates and notifications through entity schedulers; use common Paper async/global schedulers instead of legacy Bukkit fallbacks.
+- Preserve pending economic events on logout and teleport timeout; cancel obsolete deferred teleports and use `teleportAsync`.
+- Keep one player Guard owner and gate optional breaker, Shadow, audit and notifier resources before initialization. Disabled commands explain their state.
+- Run audit cleanup/export asynchronously with cancellable handles; correct the cleanup interval's hours-to-ticks error.
+- Reject restart-only configuration changes before publishing the runtime snapshot; ordinary reload no longer stops cross-server notifications.
+- Prevent SSE token callbacks from reopening a disconnected session; isolate and await frontend authentication tests.
+- Align MiniMessage/ANSI with the Paper 1.20.4 Adventure baseline to prevent a runtime `ShadowColorTag` linkage failure.
+- Warm placeholder balance/name caches asynchronously instead of issuing cold lookups on the caller's region thread.
+- Fix resource leaks and exception handling in `WebAdminServer`; resolve SSE/WebSocket connection lifecycle races and auth-store conflicts.
+- Correct color-token and CSS variable inconsistencies across web UI components (`Button`, `Card`, `Input`, `Select`, `Switch`, `Sidebar`, `Header`).
+
+### Added / Changed
+
+- External PlugDev profiles, an isolated acceptance probe and generated-state ignore rules; no server JARs, worlds or secrets are vendored.
+- Java 21 API/bytecode baseline with a Java 21 toolchain; Gradle 9.1 can run on Java 25 for newer server testing. Runtime 26.2 acceptance remains a release gate, not an assumed compatibility claim.
+- Unified core/PAPI/API version metadata at 1.3.0; refreshed frontend source metadata.
+- Removed unused deprecated `WebModuleConfig` and duplicated `EconomyFacade` construction; retained reflection-facing compatibility wrappers and runtime frontend assets.
+- Replaced stale agent inventory with durable maintenance rules and rewrote user installation, configuration, security and compatibility documentation.
+- Refactored web admin Vue components (`Badge`, `Button`, `Card`, `Input`, `Select`, `Switch`, `Header`, `Sidebar`), views (`ConfigView`, `LoginView`, `SettingsView`, `SystemStatusView`, `AuditLogFilters`), and added `config` mock handler for offline development.
+- Validated full acceptance matrix: Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2; multi-backend (PostgreSQL + Redis) two-server network; all unit and integration tests passing.
+
+### Previously unlisted 1.2.x changes (included here)
+
+- **1.2.1** (`1f816df`): dependency updates, PAPI formatting/reflection enhancements, schema identifier fixes and independent expansion packaging adjustments.
+- **1.2.2** (`cb641ad`): VaultUnlocked/Vault2 runtime detection, isolated integration loader, provider/registrar and compatibility tests.
+- **1.2.3** (`10d914b`): Vault provider/transfer handling consolidation and redundant logic removal.
+
+These entries summarize the existing tagged Git history; they are not newly reimplemented features. Earlier changelog entries remain historical descriptions and may be superseded by the fixes above.
+
 ## [1.2.0] - 2026-06-26
 
 ### Added
@@ -189,4 +222,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audit logging system**: Full transaction history with search
 - **Circuit breaker protection**: Prevents economy exploits during outages
 - **Shadow sync mechanism**: Background data consistency verification
-

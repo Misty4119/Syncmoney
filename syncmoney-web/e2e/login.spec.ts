@@ -6,7 +6,7 @@ test.describe('Login Flow', () => {
     
     // Check page title
     await expect(page.locator('h1')).toContainText('Syncmoney')
-    await expect(page.locator('h2')).toContainText('登入')
+    await expect(page.getByText('管理控制台', { exact: true })).toBeVisible()
     
     // Check input fields
     await expect(page.locator('#api-key')).toBeVisible()

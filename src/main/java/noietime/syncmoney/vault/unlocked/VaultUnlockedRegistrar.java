@@ -62,12 +62,7 @@ public final class VaultUnlockedRegistrar {
     private void scheduleDelayedRegistration() {
         try {
             var server = plugin.getServer();
-            try {
-                server.getClass().getMethod("getGlobalRegionScheduler");
-                server.getGlobalRegionScheduler().runDelayed(plugin, task -> registerEconomy(), 20L);
-            } catch (NoSuchMethodException | NoSuchMethodError ignored) {
-                server.getScheduler().runTaskLater(plugin, this::registerEconomy, 20L);
-            }
+            server.getGlobalRegionScheduler().runDelayed(plugin, task -> registerEconomy(), 20L);
         } catch (RuntimeException | LinkageError e) {
             plugin.getLogger().fine("Deferred VaultUnlocked registration skipped: " + e.getMessage());
         }

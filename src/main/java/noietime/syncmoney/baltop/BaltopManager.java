@@ -77,7 +77,7 @@ public final class BaltopManager {
         topCache.clear();
         lastCacheTime = 0;
 
-        if (dataSource == null && localEconomyHandler == null) {
+        if (dataSource == null && localEconomyHandler == null && redisManager == null) {
             enabled = false;
             logger.fine("Baltop manager disabled: no database source available.");
             return;
@@ -86,7 +86,7 @@ public final class BaltopManager {
         if (isLocalMode) {
             logger.fine("Baltop manager initialized in LOCAL mode (SQLite).");
             initializeLocalSchema();
-        } else {
+        } else if (dataSource != null) {
             initializeSchema();
         }
     }

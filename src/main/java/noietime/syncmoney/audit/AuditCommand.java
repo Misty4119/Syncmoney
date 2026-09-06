@@ -45,6 +45,10 @@ public final class AuditCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
+        if (!plugin.getSyncmoneyConfig().audit().isAuditEnabled()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.feature-disabled"));
+            return true;
+        }
         if (args.length < 1) {
             sendUsage(sender);
             return true;

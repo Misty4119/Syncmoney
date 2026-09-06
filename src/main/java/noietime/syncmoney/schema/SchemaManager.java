@@ -156,7 +156,7 @@ public final class SchemaManager {
         }
 
 
-        Bukkit.getOnlinePlayers().forEach(player -> {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
                 player.sendMessage(net.kyori.adventure.text.Component.text(message));
             }

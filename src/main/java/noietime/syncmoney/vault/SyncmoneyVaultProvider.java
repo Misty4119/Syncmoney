@@ -151,42 +151,7 @@ public class SyncmoneyVaultProvider implements Economy {
      * Uses Folia-compatible scheduling or falls back to immediate execution.
      */
     private void scheduleDelayedRegistration() {
-        try {
-            var server = plugin.getServer();
-
-            if (hasFoliaScheduler(server)) {
-                scheduleDelayedRegistrationFolia(server);
-            } else {
-                server.getScheduler().runTaskLater(plugin, () -> {
-                    var existingProvider = server.getServicesManager().getRegistration(Economy.class);
-
-                    if (existingProvider != null
-                            && !(existingProvider.getProvider() instanceof SyncmoneyVaultProvider)) {
-                        server.getServicesManager().unregister(Economy.class, existingProvider.getProvider());
-                        server.getServicesManager().register(
-                                Economy.class,
-                                this,
-                                plugin,
-                                org.bukkit.plugin.ServicePriority.Highest);
-                        plugin.getLogger().fine("Syncmoney Vault Economy re-registered for compatibility.");
-                    }
-                }, 20L);
-            }
-        } catch (UnsupportedOperationException e) {
-            plugin.getLogger().fine("Deferred registration skipped, using initial registration.");
-        }
-    }
-
-    /**
-     * Check if server has Folia-style entity scheduler.
-     */
-    private boolean hasFoliaScheduler(org.bukkit.Server server) {
-        try {
-            server.getClass().getMethod("getGlobalRegionScheduler");
-            return true;
-        } catch (NoSuchMethodError | NoSuchMethodException e) {
-            return false;
-        }
+        scheduleDelayedRegistrationFolia(plugin.getServer());
     }
 
     /**

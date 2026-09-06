@@ -13,7 +13,7 @@ import java.util.Map;
 public class ApiResponse {
 
     private static final ObjectMapper mapper = new ObjectMapper();
-    private static final String VERSION = "1.2.0";
+    private static final String VERSION = noietime.syncmoney.util.BuildVersion.VERSION;
 
     /**
      * Create a successful response with data.

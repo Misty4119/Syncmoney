@@ -120,10 +120,11 @@ public final class ResourceMonitor {
      * we use simpler logic: only warn when usage is extremely high.
      */
     private void checkRedisPool() {
+        if (redisManager == null || config.getEconomyMode() == noietime.syncmoney.economy.EconomyMode.LOCAL) return;
         try {
             int active = redisManager.getActiveConnections();
             int maxTotal = redisManager.getMaxConnections();
-
+            if (maxTotal <= 0) return;
 
             int poolWarningThreshold = maxTotal - config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning();
             if (active >= poolWarningThreshold && active >= maxTotal * 8 / 10) {
@@ -184,7 +185,8 @@ public final class ResourceMonitor {
         boolean memoryOk = currentMemoryUsagePercent < config.circuitBreaker().getCircuitBreakerMemoryWarningThreshold();
 
         boolean redisOk = true;
-        if (redisManager != null && !redisManager.isDegraded()) {
+        if (config.getEconomyMode() != noietime.syncmoney.economy.EconomyMode.LOCAL
+                && redisManager != null && !redisManager.isDegraded() && redisManager.getMaxConnections() > 0) {
             int active = redisManager.getActiveConnections();
             int maxTotal = redisManager.getMaxConnections();
             redisOk = (maxTotal - active) > config.circuitBreaker().getCircuitBreakerPoolExhaustedWarning();

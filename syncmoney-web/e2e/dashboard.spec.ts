@@ -2,6 +2,10 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/nodes', route => route.fulfill({ json: { success: true, data: { nodes: [], centralMode: false } } }))
+    await page.route('**/api/economy/stats', route => route.fulfill({ json: {
+      success: true, data: { totalSupply: 1520, totalPlayers: 2, todayTransactions: 3 }
+    } }))
     // Login first
     await page.route('/api/system/status', async (route) => {
       await route.fulfill({
@@ -36,10 +40,11 @@ test.describe('Dashboard', () => {
 
   test('should display dashboard stats', async ({ page }) => {
     // Check stats cards are visible
-    await expect(page.locator('.stat-grid, .stats-grid').first()).toBeVisible()
+    await expect(page.getByText('總貨幣供應', { exact: true })).toBeVisible()
     
     // Check circuit breaker status
-    await expect(page.locator('text=保險絲狀態')).toBeVisible()
+    await expect(page.getByText('熔斷器狀態', { exact: true })).toBeVisible()
+    await expect(page.getByText('NORMAL', { exact: true })).toBeVisible()
   })
 
   test('should display page title', async ({ page }) => {

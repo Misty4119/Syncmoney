@@ -165,6 +165,8 @@
     "title": "插件設定",
     "enabled": "已啟用",
     "disabled": "已停用",
+    "readOnly": "系統唯讀",
+    "readOnlyFieldHint": "此項設定由系統底層鎖定，無法線上直接更改",
     "reload": "重新載入設定",
     "reloadSuccess": "設定已重新載入",
     "reloadSuccessDesc": "插件設定已成功重新載入",

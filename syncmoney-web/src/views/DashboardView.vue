@@ -193,24 +193,30 @@ function formatCurrency(value: number | string): string {
   return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 2 }).format(value)
 }
 
+const onPlayerJoin = (data: unknown) => {
+  const playerData = data as { playerName?: string }
+  notificationStore.addNotification('info', t('notification.playerJoined'), t('notification.playerJoinedMessage', { player: playerData.playerName }))
+  debouncedLoadData()
+}
+
+const onPlayerQuit = (data: unknown) => {
+  const playerData = data as { playerName?: string }
+  notificationStore.addNotification('info', t('notification.playerLeft'), t('notification.playerLeftMessage', { player: playerData.playerName }))
+  debouncedLoadData()
+}
+
 onMounted(async () => {
   await nodesStore.fetchNodes().catch(() => {})
   loadDashboardData()
   refreshInterval = setInterval(loadDashboardData, 5000)
 
-  ws.on('player_join', (data: unknown) => {
-    const playerData = data as { playerName?: string }
-    notificationStore.addNotification('info', t('notification.playerJoined'), t('notification.playerJoinedMessage', { player: playerData.playerName }))
-    debouncedLoadData()
-  })
-  ws.on('player_quit', (data: unknown) => {
-    const playerData = data as { playerName?: string }
-    notificationStore.addNotification('info', t('notification.playerLeft'), t('notification.playerLeftMessage', { player: playerData.playerName }))
-    debouncedLoadData()
-  })
+  ws.on('player_join', onPlayerJoin)
+  ws.on('player_quit', onPlayerQuit)
 })
 
 onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
+  ws.off('player_join', onPlayerJoin)
+  ws.off('player_quit', onPlayerQuit)
 })
 </script>

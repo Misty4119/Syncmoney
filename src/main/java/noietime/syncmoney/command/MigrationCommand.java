@@ -72,7 +72,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                         .replace("{current}", String.valueOf(current))
                         .replace("{total}", String.valueOf(total))
                         .replace("{percent}", FormatUtil.formatPercentRaw(percent));
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
             }
 
             @Override
@@ -80,7 +80,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                 String message = plugin.getMessage("migration.completed")
                         .replace("{count}", String.valueOf(successCount))
                         .replace("{total}", FormatUtil.formatCurrency(checkpoint.getTotalBackupAmount()));
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
 
 
                 if (discordNotifier != null) {
@@ -92,7 +92,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             public void onError(String error) {
                 String message = plugin.getMessage("migration.error")
                         .replace("{error}", error);
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
 
 
                 if (discordNotifier != null) {
@@ -108,7 +108,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                         .replace("{current}", String.valueOf(current))
                         .replace("{total}", String.valueOf(total))
                         .replace("{percent}", FormatUtil.formatPercentRaw(percent));
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
             }
 
             @Override
@@ -116,7 +116,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                 String message = plugin.getMessage("migration.local-to-sync-completed")
                         .replace("{count}", String.valueOf(successCount))
                         .replace("{failed}", String.valueOf(failedCount));
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
 
 
                 if (discordNotifier != null) {
@@ -128,7 +128,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             public void onError(String error) {
                 String message = plugin.getMessage("migration.error")
                         .replace("{error}", error);
-                plugin.getServer().getOnlinePlayers().forEach(p -> MessageHelper.sendMessage(p, message));
+                noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, p -> MessageHelper.sendMessage(p, message));
 
 
                 if (discordNotifier != null) {

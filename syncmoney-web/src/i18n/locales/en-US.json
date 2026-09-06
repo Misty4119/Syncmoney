@@ -165,6 +165,8 @@
     "title": "Plugin Config",
     "enabled": "Enabled",
     "disabled": "Disabled",
+    "readOnly": "Read Only",
+    "readOnlyFieldHint": "This setting is locked by system and cannot be edited online",
     "reload": "Reload Config",
     "reloadSuccess": "Config Reloaded",
     "reloadSuccessDesc": "Plugin configuration has been reloaded successfully",

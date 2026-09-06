@@ -36,12 +36,15 @@ const cardClasses = computed(() => {
         ? 'glass-card-hoverable'
         : 'glass-card'
       : props.variant === 'solid'
-        ? 'bg-surface-800 rounded-xl border border-surface-700'
-        : 'rounded-xl border border-surface-700'
+        ? 'rounded-xl shadow-sm'
+        : 'rounded-xl'
+
 
   return [
     base,
-    { 'shadow-glow-sm border-cyan-500/20': props.glow },
+    props.variant === 'solid' ? 'bg-white dark:bg-surface-800 border border-surface-300 dark:border-surface-700' : '',
+    props.variant === 'outline' ? 'border border-surface-300 dark:border-surface-700 bg-white/40 dark:bg-surface-900/40' : '',
+    { 'shadow-glow-sm border-primary/20 shadow-glow-primary': props.glow },
     { 'hoverable': props.hoverable && props.variant !== 'glass' },
   ]
 })
@@ -59,9 +62,9 @@ const bodyClass = computed(() => {
 
 <style scoped>
 .card-header {
-  @apply px-5 py-3 border-b border-gray-200 dark:border-surface-700/50;
+  @apply px-5 py-3 border-b border-surface-200 dark:border-surface-700/50;
 }
 .card-footer {
-  @apply px-5 py-3 border-t border-gray-200 dark:border-surface-700/50;
+  @apply px-5 py-3 border-t border-surface-200 dark:border-surface-700/50;
 }
 </style>

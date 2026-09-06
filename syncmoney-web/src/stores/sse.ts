@@ -15,6 +15,12 @@ export const useSSEStore = defineStore('sse', () => {
 
   let sseComposable: ReturnType<typeof useSSE> | null = null
   let initialized = false
+  let unwatchFns: (() => void)[] = []
+
+  function clearWatchers() {
+    unwatchFns.forEach(fn => fn())
+    unwatchFns = []
+  }
 
 
   const connected = ref(false)
@@ -44,20 +50,15 @@ export const useSSEStore = defineStore('sse', () => {
     console.log('[SSE Store] Initializing SSE connection...')
 
 
+    clearWatchers()
     const sse = useSSE()
     sseComposable = sse
 
-
-    watch(() => sse.connected.value, (val) => {
-      connected.value = val
-    })
-    watch(() => sse.error.value, (val) => {
-      error.value = val
-    })
-    watch(() => sse.connectionStatus.value, (val) => {
-      connectionStatus.value = val
-    })
-
+    unwatchFns.push(
+      watch(() => sse.connected.value, (val) => { connected.value = val }),
+      watch(() => sse.error.value, (val) => { error.value = val }),
+      watch(() => sse.connectionStatus.value, (val) => { connectionStatus.value = val })
+    )
 
     sse.connect('/api/sse')
     
@@ -69,6 +70,7 @@ export const useSSEStore = defineStore('sse', () => {
    * [SYNC-WEB-022] Destroy SSE connection
    */
   function destroy() {
+    clearWatchers()
     if (!initialized || !sseComposable) {
       console.log('[SSE Store] Not initialized, skipping destroy')
       return
@@ -76,9 +78,7 @@ export const useSSEStore = defineStore('sse', () => {
 
     console.log('[SSE Store] Destroying SSE connection...')
 
-
     sseComposable.disconnect()
-
 
     connected.value = false
     error.value = ''
@@ -102,17 +102,7 @@ export const useSSEStore = defineStore('sse', () => {
       return
     }
 
-
-    const sse = useSSE()
-    sseComposable = sse
-
-
-    watch(() => sse.connected.value, (val) => { connected.value = val })
-    watch(() => sse.error.value, (val) => { error.value = val })
-    watch(() => sse.connectionStatus.value, (val) => { connectionStatus.value = val })
-
-    sse.connect('/api/sse')
-    initialized = true
+    init()
     console.log('[SSE Store] SSE reconnected')
   }
 

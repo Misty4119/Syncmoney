@@ -3,7 +3,7 @@
 # Style: HUD (Holographic Terminal) / Purple gradient / Blue gradient
 
 # Config schema version (DO NOT EDIT) 
-version: "11"
+version: "12"
 
 # System prefix (Purple gradient / Blue gradient)
 prefix: '<bold><gradient:#A78BFA:#38BDF8>SyncMoney</gradient></bold> <#475569>⦊ <reset>'
@@ -58,6 +58,7 @@ pay:
 
 # General messages
 general:
+  feature-disabled: "<yellow>此功能目前已停用。啟用或停用服務後請重新啟動伺服器。</yellow>"
   degraded-warning: '{prefix}<b><#FBBF24>[ NETWORK DESYNC ]</b> <#94A3B8>Central database unreachable. Displaying cached local data only.'
   degraded-local: '{prefix}<b><#FBBF24>[ OFFLINE STATUS ]</b> <#94A3B8>Cross-server protocols suspended. Reading local node data.'
   error: '{prefix}<#F43F5E>Critical failure encountered. Please file a diagnostic report.'

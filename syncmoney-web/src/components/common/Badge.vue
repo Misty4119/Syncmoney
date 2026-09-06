@@ -26,11 +26,11 @@ const sizeClass = computed(() =>
 
 const variantClass = computed(() => {
   const map: Record<string, string> = {
-    success: 'bg-success/15 text-success border border-success/20',
-    warning: 'bg-warning/15 text-warning border border-warning/20',
-    error:   'bg-error/15 text-error border border-error/20',
-    info:    'bg-info/15 text-info border border-info/20',
-    default: 'bg-transparent dark:bg-surface-700/50 text-surface-600 dark:text-surface-300 border border-surface-300 dark:border-surface-600',
+    success: 'bg-success/15 text-success border border-success/25 font-semibold',
+    warning: 'bg-warning/15 text-warning border border-warning/25 font-semibold',
+    error:   'bg-error/15 text-error border border-error/25 font-semibold',
+    info:    'bg-info/15 text-info border border-info/25 font-semibold',
+    default: 'bg-surface-100 dark:bg-surface-800 text-surface-700 dark:text-surface-300 border border-surface-300 dark:border-surface-700 font-medium',
   }
   return map[props.variant]
 })

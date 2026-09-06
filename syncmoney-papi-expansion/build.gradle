@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.2.3'
+version = rootProject.version
 
 repositories {
     mavenCentral()
@@ -43,6 +43,7 @@ test {
 
 def targetJavaVersion = 21
 java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
@@ -63,5 +64,12 @@ jar {
                 'Implementation-Title': 'Syncmoney PlaceholderAPI Expansion',
                 'Implementation-Version': project.version
         )
+    }
+}
+
+processResources {
+    inputs.property('version', project.version)
+    filesMatching('expansions.yml') {
+        expand(version: project.version)
     }
 }

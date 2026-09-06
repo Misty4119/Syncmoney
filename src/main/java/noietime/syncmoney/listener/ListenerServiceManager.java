@@ -50,7 +50,7 @@ public class ListenerServiceManager {
         if (config.transferGuard().isTransferGuardEnabled()) {
             this.playerTransferGuard = new PlayerTransferGuard(
                     plugin,
-                    economyWriteQueue);
+                    economyWriteQueue, config.transferGuard().getTransferGuardMaxWaitMs());
             registerListener(playerTransferGuard, "Player Transfer Guard");
             plugin.getLogger().fine("Transfer guard enabled (max wait: "
                     + config.transferGuard().getTransferGuardMaxWaitMs() + "ms)");
@@ -82,6 +82,8 @@ public class ListenerServiceManager {
 
     public void shutdown() {
         plugin.getLogger().fine("Shutting down listener layer...");
+        if (playerTransferGuard != null) playerTransferGuard.shutdown();
+        if (cmiListener != null) cmiListener.shutdown();
         if (onlinePlayerRegistry != null) {
             onlinePlayerRegistry.shutdown();
         }

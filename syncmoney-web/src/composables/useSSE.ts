@@ -58,6 +58,7 @@ function createSSEInstance() {
   const reconnectDelay = 3000
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   let currentBaseUrl = '/sse'
+  let connectionGeneration = 0
 
 
   const seenEventIds = new Set<string>()
@@ -84,7 +85,9 @@ function createSSEInstance() {
 
 
 
+    const generation = connectionGeneration
     obtainSessionToken().then(token => {
+      if (generation !== connectionGeneration) return
       if (!token) {
         errorMessage.value = 'Failed to obtain session token. Please login again.'
         console.error('SSE connection failed: No session token')
@@ -126,7 +129,6 @@ function createSSEInstance() {
       }
 
       const data = await response.json()
-      console.log('[SSE] Token response:', data)
       return data.success ? data.data.token : null
     } catch (error) {
       console.error('[SSE] Error obtaining session token:', error)
@@ -403,6 +405,7 @@ function createSSEInstance() {
    * The singleton persists so connect() can be called again after this.
    */
   function disconnect() {
+    connectionGeneration++
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout)
       reconnectTimeout = null
@@ -445,7 +448,7 @@ function createSSEInstance() {
     lastMessage,
     error: errorMessage,
     connect,
-    disconnect: () => { /* no-op: SSE persists across page navigations */ },
+    disconnect,
     on,
     off
   }

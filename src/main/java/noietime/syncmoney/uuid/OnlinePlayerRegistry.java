@@ -103,7 +103,8 @@ public final class OnlinePlayerRegistry {
     }
 
     public void startHeartbeat() {
-        if (heartbeatTask != null) {
+        if (heartbeatTask != null || redisManager == null
+                || config.getEconomyMode() == noietime.syncmoney.economy.EconomyMode.LOCAL) {
             return;
         }
         this.heartbeatTask = plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin, task -> {

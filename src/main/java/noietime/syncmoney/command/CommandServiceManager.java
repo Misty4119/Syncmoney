@@ -182,7 +182,7 @@ public class CommandServiceManager {
         BaltopCommand baltopCommand = new BaltopCommand(plugin, config, baltopManager, economyFacade);
         register("baltop", baltopCommand);
 
-        if (config.circuitBreaker().isCircuitBreakerEnabled() && circuitBreaker != null) {
+        {
             BreakerCommand breakerCommand = new BreakerCommand(plugin, circuitBreaker);
             syncmoneyRouter.register("breaker", breakerCommand);
         }
@@ -202,7 +202,7 @@ public class CommandServiceManager {
         WebCommand webCommand = new WebCommand(plugin);
         syncmoneyRouter.register("web", webCommand);
 
-        if (config.shadowSync().isShadowSyncEnabled() && shadowSyncTask != null) {
+        {
             ShadowCommand shadowCommand = new ShadowCommand(plugin, shadowSyncTask);
             syncmoneyRouter.register("shadow", shadowCommand);
         }

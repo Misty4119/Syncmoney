@@ -37,12 +37,14 @@ public class BreakerManager {
      * Initialize breaker layer components.
      */
     public void initialize() {
-        this.circuitBreaker = new EconomicCircuitBreaker(
+        if (config.circuitBreaker().isCircuitBreakerEnabled()) {
+            this.circuitBreaker = new EconomicCircuitBreaker(
                 plugin,
                 config,
                 economyFacade,
                 redisManager,
                 useRedis);
+        }
 
 
         this.discordNotifier = new DiscordWebhookNotifier(plugin, config);
@@ -62,6 +64,7 @@ public class BreakerManager {
             this.notificationService = null;
 
             if (economyFacade != null) {
+                economyFacade.setPlayerTransactionGuard(null);
                 economyFacade.setCircuitBreaker(circuitBreaker);
             }
             plugin.getLogger().fine("Player transaction guard disabled");
@@ -88,13 +91,6 @@ public class BreakerManager {
             circuitBreaker.shutdown();
         }
 
-        if (circuitBreaker != null && circuitBreaker.getConnectionStateManager() != null) {
-            circuitBreaker.getConnectionStateManager().shutdown();
-        }
-
-        if (circuitBreaker != null && circuitBreaker.getResourceMonitor() != null) {
-            circuitBreaker.getResourceMonitor().shutdown();
-        }
 
         if (discordNotifier != null) {
             discordNotifier.shutdown();

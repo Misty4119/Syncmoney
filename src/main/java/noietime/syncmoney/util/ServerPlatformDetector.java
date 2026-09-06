@@ -10,10 +10,10 @@ import org.bukkit.Server;
 public final class ServerPlatformDetector {
 
     public enum Platform {
-        SPIGOT, PAPER, PURPUR, FOLIA
+        SPIGOT, PAPER, PURPUR, FOLIA, CANVAS
     }
 
-    private static Platform cachedPlatform;
+    private static volatile Platform cachedPlatform;
 
     public static Platform detect() {
         if (cachedPlatform != null) {
@@ -23,7 +23,9 @@ public final class ServerPlatformDetector {
         Server server = Bukkit.getServer();
         String name = server.getName();
 
-        if (name.contains("Folia")) {
+        if (name.toLowerCase(java.util.Locale.ROOT).contains("canvas")) {
+            cachedPlatform = Platform.CANVAS;
+        } else if (name.contains("Folia") || hasRegionThreading()) {
             cachedPlatform = Platform.FOLIA;
         } else if (name.contains("Purpur")) {
             cachedPlatform = Platform.PURPUR;
@@ -37,7 +39,16 @@ public final class ServerPlatformDetector {
     }
 
     public static boolean isFolia() {
-        return detect() == Platform.FOLIA;
+        return detect() == Platform.FOLIA || detect() == Platform.CANVAS;
+    }
+
+    private static boolean hasRegionThreading() {
+        try {
+            Class.forName("io.papermc.paper.threadedregions.RegionizedServer");
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            return false;
+        }
     }
 
     public static boolean hasAsyncScheduler() {

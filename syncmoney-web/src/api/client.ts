@@ -4,6 +4,7 @@ import router from '@/router'
 import i18n from '@/i18n'
 
 import { useNotificationStore } from '@/stores/notification'
+import { useAuthStore } from '@/stores/auth'
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -44,6 +45,8 @@ centralApiClient.interceptors.request.use(
 )
 
 
+let isHandlingSessionExpired = false
+
 centralApiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -53,19 +56,46 @@ centralApiClient.interceptors.response.use(
     const silent = error.config?.silent === true
 
     if (status === 401) {
-      // Session errors must always redirect, regardless of the silent flag.
-      localStorage.removeItem('apiKey')
-      if (!silent) notificationStore.error(t('api.sessionExpired'), t('api.sessionExpiredDesc'))
-      router.push('/login')
+      if (!isHandlingSessionExpired) {
+        isHandlingSessionExpired = true
+        localStorage.removeItem('apiKey')
+
+        try {
+          const authStore = useAuthStore()
+          authStore.logout()
+        } catch {
+          // fallback if pinia not ready yet
+        }
+
+        if (!silent) {
+          notificationStore.error(t('api.sessionExpired'), t('api.sessionExpiredDesc'))
+        }
+
+        if (router.currentRoute.value.path !== '/login') {
+          router.push({
+            path: '/login',
+            query: { redirect: router.currentRoute.value.fullPath }
+          }).finally(() => {
+            setTimeout(() => {
+              isHandlingSessionExpired = false
+            }, 1000)
+          })
+        } else {
+          isHandlingSessionExpired = false
+        }
+      }
     } else if (status === 403) {
       if (!silent) notificationStore.error(t('api.permissionDenied'), t('api.permissionDeniedDesc'))
-      router.push('/?error=forbidden')
     } else if (status === 500) {
       if (!silent) notificationStore.error(t('api.serverError'), t('api.serverErrorDesc'))
-      router.push('/?error=server_error')
     } else if (status === 429) {
       if (!silent) notificationStore.warning(t('api.rateLimited'), t('api.rateLimitedDesc'))
-      router.push('/?error=rate_limited')
+    } else if (!error.response && !silent) {
+      // Network drop, timeout, or server unreachable
+      notificationStore.error(
+        t('api.networkError') || 'Network Error',
+        t('api.networkErrorDesc') || 'Unable to connect to Syncmoney server. Please check your connection.'
+      )
     }
     return Promise.reject(error)
   }

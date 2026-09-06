@@ -20,7 +20,7 @@ import java.util.Map;
  */
 public class ResponseBuilder {
 
-    private static final String VERSION = "1.2.0";
+    private static final String VERSION = noietime.syncmoney.util.BuildVersion.VERSION;
     private final Map<String, Object> data = new LinkedHashMap<>();
     private boolean success = true;
     private String errorCode;

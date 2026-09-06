@@ -75,7 +75,7 @@ import java.util.logging.Level;
  */
 public final class Syncmoney extends JavaPlugin {
 
-    private SyncmoneyConfig syncmoneyConfig;
+    private volatile SyncmoneyConfig syncmoneyConfig;
     private MessageService messageService;
 
     private StorageManager storageManager;
@@ -373,24 +373,25 @@ public final class Syncmoney extends JavaPlugin {
             listenerServiceManager.shutdown();
         }
 
-        if (auditServiceManager != null) {
-            auditServiceManager.shutdown();
-        }
-
-        if (breakerManager != null) {
-            breakerManager.shutdown();
-        }
-
         if (syncManager != null) {
             syncManager.shutdown();
+        }
+
+        // Drain accepted writes while audit, Shadow and storage are still available.
+        if (eventConsumerManager != null) {
+            eventConsumerManager.shutdown();
         }
 
         if (economyServiceManager != null) {
             economyServiceManager.shutdown();
         }
 
-        if (eventConsumerManager != null) {
-            eventConsumerManager.shutdown();
+        if (auditServiceManager != null) {
+            auditServiceManager.shutdown();
+        }
+
+        if (breakerManager != null) {
+            breakerManager.shutdown();
         }
 
         if (baltopManager != null) {
@@ -625,7 +626,9 @@ public final class Syncmoney extends JavaPlugin {
         try {
             reloadConfig();
 
-            this.syncmoneyConfig = new SyncmoneyConfig(this);
+            reloadSyncmoneyConfig();
+            reloadPermissionService();
+            reloadEconomyFacade();
 
             getLogger().fine("Configuration reloaded.");
             return true;
@@ -641,7 +644,16 @@ public final class Syncmoney extends JavaPlugin {
      * (command cooldowns, pay limits, display settings, etc.).
      */
     public void reloadSyncmoneyConfig() {
-        this.syncmoneyConfig = new SyncmoneyConfig(this);
+        var candidate = new SyncmoneyConfig(this);
+        if (syncmoneyConfig != null) {
+            var changed = noietime.syncmoney.config.ConfigReloadPolicy.restartRequired(
+                    syncmoneyConfig.getConfig(), candidate.getConfig());
+            if (!changed.isEmpty()) {
+                throw new IllegalStateException("Restart required; active services unchanged. Settings: "
+                        + String.join(", ", changed));
+            }
+        }
+        this.syncmoneyConfig = candidate;
 
         if (commandServiceManager != null) {
             commandServiceManager.reload(syncmoneyConfig);
@@ -692,11 +704,6 @@ public final class Syncmoney extends JavaPlugin {
             var vaultProvider = economyServiceManager.getVaultProvider();
             if (vaultProvider != null) {
                 vaultProvider.setConfig(syncmoneyConfig);
-            }
-            var crossServerSyncManager = economyServiceManager.getCrossServerSyncManager();
-            if (crossServerSyncManager != null) {
-                crossServerSyncManager.shutdown();
-                getLogger().warning("CrossServerSyncManager config changed, some changes require server restart.");
             }
             getLogger().fine("Economy facade services config updated.");
         }

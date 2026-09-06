@@ -46,7 +46,15 @@ public final class SyncmoneyConfig {
     public SyncmoneyConfig(JavaPlugin plugin) {
         this.plugin = plugin;
         plugin.saveDefaultConfig();
-        this.config = plugin.getConfig();
+        // Editing the live Bukkit config (e.g. from the Web UI) must not mutate running services.
+        var snapshot = new org.bukkit.configuration.file.YamlConfiguration();
+        try {
+            snapshot.loadFromString(plugin.getConfig().saveToString());
+        } catch (org.bukkit.configuration.InvalidConfigurationException e) {
+            throw new IllegalArgumentException("Cannot snapshot configuration", e);
+        }
+        snapshot.setDefaults(plugin.getConfig().getDefaults());
+        this.config = snapshot;
 
         String customServerName = config.getString("server-name", "");
         this.serverIdentityManager = new ServerIdentityManager(plugin, customServerName);

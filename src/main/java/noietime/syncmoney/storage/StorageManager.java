@@ -48,10 +48,12 @@ public class StorageManager {
 
         this.dbWriteQueue = new DbWriteQueue(config.getQueueCapacity());
 
-        this.dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager);
-        this.dbWriterThread = new Thread(dbWriterConsumer, "Syncmoney-DbWriter");
-        dbWriterThread.setDaemon(true);
-        dbWriterThread.start();
+        if (databaseManager != null) {
+            this.dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager);
+            this.dbWriterThread = new Thread(dbWriterConsumer, "Syncmoney-DbWriter");
+            dbWriterThread.setDaemon(true);
+            dbWriterThread.start();
+        }
 
         plugin.getLogger().fine("Storage layer initialized");
     }
@@ -66,10 +68,16 @@ public class StorageManager {
             dbWriterConsumer.stop();
         }
         if (dbWriterThread != null) {
-            dbWriterThread.interrupt();
             try {
-                dbWriterThread.join(3000);
-            } catch (InterruptedException ignored) {
+                dbWriterThread.join(10000);
+                if (dbWriterThread.isAlive()) {
+                    plugin.getLogger().severe("DB writer drain timed out; pending writes require recovery");
+                    dbWriterThread.interrupt();
+                    dbWriterThread.join(2000);
+                }
+            } catch (InterruptedException interrupted) {
+                dbWriterThread.interrupt();
+                Thread.currentThread().interrupt();
             }
         }
 

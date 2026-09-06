@@ -4,7 +4,7 @@ A comprehensive guide for developers who want to integrate with Syncmoney or ext
 
 > **See also:** [Architecture Overview](ARCHITECTURE.md) for system-level design and data flow diagrams.
 >
-> **Version**: v1.1.2
+> **Version**: v1.3.0
 
 ---
 

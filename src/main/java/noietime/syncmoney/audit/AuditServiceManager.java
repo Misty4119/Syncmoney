@@ -34,6 +34,11 @@ public class AuditServiceManager {
      * Initialize all audit components.
      */
     public void initialize() {
+        this.auditLogger = new AuditLogger(plugin, config, dataSource);
+        if (!config.audit().isAuditEnabled()) {
+            plugin.getLogger().fine("Audit disabled; no audit resources started.");
+            return;
+        }
 
         var webAdminServer = plugin.getWebAdminServer();
         var sseManager = webAdminServer != null ? webAdminServer.getSseManager() : null;
@@ -45,17 +50,20 @@ public class AuditServiceManager {
         }
 
 
-        this.auditLogger = new AuditLogger(plugin, config, dataSource);
         plugin.getLogger().fine("AuditLogger initialized");
 
         if (dataSource != null) {
+            if (config.audit().isAuditCleanupEnabled()) {
             this.auditLogCleanup = new AuditLogCleanup(plugin, config, dataSource);
             auditLogCleanup.start();
             plugin.getLogger().fine("AuditLogCleanup started");
+            }
 
+            if (config.audit().isAuditExportEnabled()) {
             this.auditLogExporter = new AuditLogExporter(plugin, config, dataSource);
             auditLogExporter.start();
             plugin.getLogger().fine("AuditLogExporter started");
+            }
         }
 
         plugin.getLogger().fine("Audit layer initialized");
@@ -80,10 +88,12 @@ public class AuditServiceManager {
         }
 
         if (auditLogCleanup != null) {
+            auditLogCleanup.stop();
             plugin.getLogger().fine("AuditLogCleanup shutdown");
         }
 
         if (auditLogExporter != null) {
+            auditLogExporter.stop();
             plugin.getLogger().fine("AuditLogExporter shutdown");
         }
 
