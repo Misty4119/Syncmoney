@@ -58,8 +58,16 @@ public class AuditApiHandler extends AbstractApiHandler {
     /**
      * Register all audit API routes.
      */
+    private boolean rejectDisabled(HttpServerExchange exchange) {
+        if (plugin.getSyncmoneyConfig().audit().isAuditEnabled()) return false;
+        exchange.setStatusCode(503);
+        sendJson(exchange, ApiResponse.error("FEATURE_DISABLED", "Audit is disabled; restart after changing audit.enabled."));
+        return true;
+    }
+
     public void registerRoutes(HttpHandlerRegistry router) {
         router.get("api/audit/player/{name}", exchange -> {
+            if (rejectDisabled(exchange)) return;
             String playerName = extractPathParamAt(exchange, PATH_IDX_PLAYER_NAME);
             int page = getQueryParamAsInt(exchange, "page", 1);
             int pageSize = getQueryParamAsInt(exchange, "pageSize", 20);
@@ -70,6 +78,7 @@ public class AuditApiHandler extends AbstractApiHandler {
         });
 
         router.get("api/audit/search", exchange -> {
+            if (rejectDisabled(exchange)) return;
 
             String cursor = getQueryParam(exchange, "cursor");
             if (cursor != null && !cursor.isEmpty()) {
@@ -89,10 +98,12 @@ public class AuditApiHandler extends AbstractApiHandler {
 
 
         router.get("api/audit/search-cursor", exchange -> {
+            if (rejectDisabled(exchange)) return;
             handleSearchAuditCursor(exchange);
         });
 
         router.get("api/audit/stats", exchange -> {
+            if (rejectDisabled(exchange)) return;
             handleGetStats(exchange);
         });
     }

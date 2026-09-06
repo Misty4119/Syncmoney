@@ -20,11 +20,17 @@ import java.util.concurrent.ConcurrentMap;
 public final class PlayerTransferGuard implements Listener {
     private final Plugin plugin;
     private final EconomyWriteQueue writeQueue;
+    private final long maxWaitMs;
     private final ConcurrentMap<UUID, ScheduledTask> waitingTransfers = new ConcurrentHashMap<>();
 
     public PlayerTransferGuard(Plugin plugin, EconomyWriteQueue writeQueue) {
+        this(plugin, writeQueue, Constants.MAX_WAIT_MS);
+    }
+
+    public PlayerTransferGuard(Plugin plugin, EconomyWriteQueue writeQueue, long maxWaitMs) {
         this.plugin = plugin;
         this.writeQueue = writeQueue;
+        this.maxWaitMs = Math.max(1, maxWaitMs);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -40,7 +46,7 @@ public final class PlayerTransferGuard implements Listener {
         event.setCancelled(true);
         Location target = destination.clone();
         PlayerTeleportEvent.TeleportCause cause = event.getCause();
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Constants.MAX_WAIT_MS);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(maxWaitMs);
         long intervalTicks = Math.max(1, Constants.CHECK_INTERVAL_MS / 50);
         ScheduledTask scheduled = player.getScheduler().runAtFixedRate(plugin, task -> {
             if (waitingTransfers.get(uuid) != task) {

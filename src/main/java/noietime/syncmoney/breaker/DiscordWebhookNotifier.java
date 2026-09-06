@@ -40,11 +40,11 @@ public final class DiscordWebhookNotifier {
     public DiscordWebhookNotifier(Plugin plugin, SyncmoneyConfig config) {
         this.plugin = plugin;
         this.config = config;
-        this.executor = Executors.newCachedThreadPool(r -> {
+        this.executor = config.discordWebhook().isDiscordWebhookEnabled() ? Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "Syncmoney-DiscordWebhook");
             t.setDaemon(true);
             return t;
-        });
+        }) : null;
     }
 
     /**
@@ -238,7 +238,7 @@ public final class DiscordWebhookNotifier {
      */
     private void dispatch(String eventName, String title, String description, String fields,
                           String colorHex, java.util.UUID playerId) {
-        if (!config.discordWebhook().isDiscordWebhookEnabled()) {
+        if (executor == null || executor.isShutdown() || !config.discordWebhook().isDiscordWebhookEnabled()) {
             return;
         }
 
@@ -349,6 +349,7 @@ public final class DiscordWebhookNotifier {
      * Shutdown the webhook notifier.
      */
     public void shutdown() {
+        if (executor == null) return;
         executor.shutdown();
         try {
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {

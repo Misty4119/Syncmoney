@@ -21,6 +21,7 @@ public final class AuditLogCleanup {
     private final SyncmoneyConfig config;
     private final HikariDataSource dataSource;
     private final Logger logger;
+    private io.papermc.paper.threadedregions.scheduler.ScheduledTask scheduledTask;
 
     public AuditLogCleanup(Plugin plugin, SyncmoneyConfig config, HikariDataSource dataSource) {
         this.plugin = plugin;
@@ -33,29 +34,25 @@ public final class AuditLogCleanup {
      * Starts scheduled cleanup task.
      */
     public void start() {
-        if (!config.audit().isAuditCleanupEnabled()) {
+        if (!config.audit().isAuditEnabled() || !config.audit().isAuditCleanupEnabled() || scheduledTask != null) {
             logger.fine("Audit log cleanup is disabled.");
             return;
         }
 
-        long intervalHours = config.audit().getAuditCleanupIntervalHours();
-        long intervalTicks = intervalHours * 1200L;
-        long initialDelay = intervalTicks;
+        long intervalHours = Math.max(1, config.audit().getAuditCleanupIntervalHours());
+        scheduledTask = plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin,
+                task -> performCleanup(), intervalHours, intervalHours, java.util.concurrent.TimeUnit.HOURS);
+    }
 
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(
-                plugin,
-                task -> performCleanup(),
-                initialDelay,
-                intervalTicks
-        );
-
-        logger.fine("Audit log cleanup scheduled every " + intervalHours + " hours (" + intervalTicks + " ticks).");
+    public void stop() {
+        if (scheduledTask != null) { scheduledTask.cancel(); scheduledTask = null; }
     }
 
     /**
      * Performs the cleanup operation.
      */
     public void performCleanup() {
+        if (!config.audit().isAuditEnabled() || !config.audit().isAuditCleanupEnabled()) return;
         int retentionDays = config.audit().getAuditRetentionDays();
         if (retentionDays <= 0) {
             logger.fine("Audit log retention is set to infinite, skipping cleanup.");

@@ -48,6 +48,10 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
+        if (shadowSyncTask == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.feature-disabled"));
+            return true;
+        }
         if (args.length < 1) {
             sendUsage(sender);
             return true;

@@ -202,7 +202,7 @@ public class CommandServiceManager {
         WebCommand webCommand = new WebCommand(plugin);
         syncmoneyRouter.register("web", webCommand);
 
-        if (config.shadowSync().isShadowSyncEnabled() && shadowSyncTask != null) {
+        {
             ShadowCommand shadowCommand = new ShadowCommand(plugin, shadowSyncTask);
             syncmoneyRouter.register("shadow", shadowCommand);
         }

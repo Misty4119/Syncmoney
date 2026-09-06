@@ -49,6 +49,10 @@ public final class BreakerCommand implements CommandExecutor, TabCompleter {
         }
 
         String subCommand = args[0].toLowerCase();
+        if (circuitBreaker == null && !subCommand.equals("player") && !subCommand.equals("unlock")) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.feature-disabled"));
+            return true;
+        }
 
         switch (subCommand) {
             case "status" -> handleStatus(sender);

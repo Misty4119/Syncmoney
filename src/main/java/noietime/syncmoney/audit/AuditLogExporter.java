@@ -36,6 +36,7 @@ public final class AuditLogExporter {
     private final Logger logger;
 
     private final Path exportFolder;
+    private io.papermc.paper.threadedregions.scheduler.ScheduledTask scheduledTask;
 
     public AuditLogExporter(Plugin plugin, SyncmoneyConfig config, HikariDataSource dataSource) {
         this.plugin = plugin;
@@ -46,6 +47,7 @@ public final class AuditLogExporter {
         String folderPath = config.audit().getAuditExportFolder();
         this.exportFolder = Paths.get(folderPath);
 
+        if (!config.audit().isAuditEnabled() || !config.audit().isAuditExportEnabled()) return;
         try {
             Files.createDirectories(exportFolder);
         } catch (IOException e) {
@@ -57,14 +59,15 @@ public final class AuditLogExporter {
      * Starts export task (scheduled execution)
      */
     public void start() {
-        if (!config.audit().isAuditExportEnabled()) {
+        if (!config.audit().isAuditEnabled() || !config.audit().isAuditExportEnabled()) {
             logger.fine("Audit log export is disabled in config.");
             return;
         }
 
-        long intervalTicks = 20L * 60 * 60 * 24;
+        if (scheduledTask != null) return;
+        long intervalDays = 1L;
 
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(
+        scheduledTask = plugin.getServer().getAsyncScheduler().runAtFixedRate(
                 plugin,
                 task -> {
                     try {
@@ -73,8 +76,9 @@ public final class AuditLogExporter {
                         logger.warning("Failed to export audit logs: " + e.getMessage());
                     }
                 },
-                intervalTicks,
-                intervalTicks
+                intervalDays,
+                intervalDays,
+                java.util.concurrent.TimeUnit.DAYS
         );
 
         logger.fine("Audit log export task scheduled.");
@@ -85,8 +89,12 @@ public final class AuditLogExporter {
      * @param daysOld How many days old the records should be
      * @return Number of records exported, -1 if failed
      */
+    public void stop() {
+        if (scheduledTask != null) { scheduledTask.cancel(); scheduledTask = null; }
+    }
+
     public int exportToLogFile(int daysOld) {
-        if (!config.audit().isAuditExportEnabled()) {
+        if (!config.audit().isAuditEnabled() || !config.audit().isAuditExportEnabled()) {
             logger.fine("Audit log export is disabled.");
             return -1;
         }

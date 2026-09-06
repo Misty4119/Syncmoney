@@ -34,7 +34,7 @@ public class EconomyServiceManager {
     private EconomyModeRouter economyModeRouter;
     private ShadowSyncTask shadowSyncTask;
     private NameResolver nameResolver;
-    private PlayerTransactionGuard playerTransactionGuard;
+
 
     public EconomyServiceManager(Syncmoney plugin, SyncmoneyConfig config, StorageManager storageManager) {
         this.plugin = plugin;
@@ -61,7 +61,6 @@ public class EconomyServiceManager {
             plugin.getLogger().fine("Local Economy Handler initialized (SQLite mode)");
         }
 
-        this.playerTransactionGuard = new PlayerTransactionGuard(plugin, config, null, storageManager.getRedisManager());
 
 
         OverflowLogInterface overflowLog = new RedisOverflowLog(plugin, storageManager.getRedisManager());
@@ -75,7 +74,7 @@ public class EconomyServiceManager {
                     localHandler,
                     economyWriteQueue,
                     fallbackWrapper,
-                    playerTransactionGuard,
+                    null,
                     overflowLog
             );
         } else {
@@ -87,7 +86,7 @@ public class EconomyServiceManager {
                     null,
                     economyWriteQueue,
                     fallbackWrapper,
-                    playerTransactionGuard,
+                    null,
                     overflowLog
             );
         }
@@ -98,12 +97,14 @@ public class EconomyServiceManager {
                 storageManager.getDatabaseManager()
         );
 
+        if (config.shadowSync().isShadowSyncEnabled()) {
         this.shadowSyncTask = new ShadowSyncTask(
                 plugin, config, economyFacade,
                 storageManager.getCacheManager(),
                 storageManager.getDatabaseManager()
         );
         shadowSyncTask.start();
+        }
 
         this.vaultProvider = new SyncmoneyVaultProvider(
                 plugin,
@@ -208,9 +209,6 @@ public class EconomyServiceManager {
             crossServerSyncManager.shutdown();
         }
 
-        if (playerTransactionGuard != null) {
-            playerTransactionGuard.shutdown();
-        }
 
         if (economyFacade != null) {
             economyFacade.shutdown();
@@ -265,7 +263,7 @@ public class EconomyServiceManager {
     }
 
     public PlayerTransactionGuard getPlayerTransactionGuard() {
-        return playerTransactionGuard;
+        return plugin.getPlayerTransactionGuard();
     }
 
     public FallbackEconomyWrapper getFallbackWrapper() {
