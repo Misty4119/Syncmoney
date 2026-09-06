@@ -307,8 +307,7 @@ public final class EconomyEventConsumer implements Runnable {
             auditLogger.logCriticalFailure(playerName, failed.event(), failureDuration);
         }
 
-        plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> {
-            Player player = Bukkit.getPlayer(playerUuid);
+        noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, playerUuid, player -> {
             if (player != null && player.isOnline()) {
                 String warnMessage = ((noietime.syncmoney.Syncmoney) plugin).getMessage("general.sync-error");
                 if (warnMessage != null) {

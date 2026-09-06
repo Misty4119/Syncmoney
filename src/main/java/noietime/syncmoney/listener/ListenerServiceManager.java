@@ -82,6 +82,7 @@ public class ListenerServiceManager {
 
     public void shutdown() {
         plugin.getLogger().fine("Shutting down listener layer...");
+        if (playerTransferGuard != null) playerTransferGuard.shutdown();
         if (onlinePlayerRegistry != null) {
             onlinePlayerRegistry.shutdown();
         }

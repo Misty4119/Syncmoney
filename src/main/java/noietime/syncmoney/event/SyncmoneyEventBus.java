@@ -15,7 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class SyncmoneyEventBus {
 
-    private static SyncmoneyEventBus instance;
+    private static volatile SyncmoneyEventBus instance;
 
     private final Syncmoney plugin;
     private final Map<Class<? extends SyncmoneyEvent>, List<ListenerRegistration<?>>> listeners = new ConcurrentHashMap<>();
@@ -128,7 +128,7 @@ public final class SyncmoneyEventBus {
         if (Bukkit.isPrimaryThread()) {
             callEvent(event);
         } else {
-            Bukkit.getScheduler().runTask(plugin, () -> callEvent(event));
+            plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> callEvent(event));
         }
     }
 

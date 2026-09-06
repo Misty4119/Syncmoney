@@ -96,6 +96,7 @@ public final class CMIPubsubHandler {
                 final long appliedVersion = incoming;
                 Runnable apply = () -> {
                     try {
+                        if (currentVersion(uuid) != appliedVersion) return;
                         Double beforeObj = cmiApi.getBalance(uuid);
                         double before = beforeObj != null ? beforeObj.doubleValue() : targetBalance.doubleValue();
                         if (Double.compare(before, targetBalance.doubleValue()) == 0) {
@@ -116,7 +117,8 @@ public final class CMIPubsubHandler {
                     }
                 };
                 try {
-                    plugin.getServer().getGlobalRegionScheduler().run(plugin, t -> apply.run());
+                    // Offline mirrors are reconciled on join; only online entities are mutated here.
+                    noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid, player -> apply.run());
                 } catch (Throwable schedEx) {
                     if (config.isDebug()) {
                         plugin.getLogger().fine("[CMI Inbound] GlobalRegionScheduler.run failed for "

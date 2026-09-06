@@ -75,7 +75,8 @@ public final class NotificationService {
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
             String message = plugin.getMessage("player-protection.rate-limited." + limitType);
-            MessageHelper.sendMessage(player, message);
+            noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, message));
         }
 
         String adminMessage = plugin.getMessage("player-protection.rate-limited.broadcast")
@@ -112,7 +113,8 @@ public final class NotificationService {
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
             String playerMessage = plugin.getMessage("player-protection.warning.player-notify");
-            MessageHelper.sendMessage(player, playerMessage);
+            noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, playerMessage));
         }
 
         discordNotifier.sendWarningEvent(playerId, transactionCount, threshold, totalAmount);
@@ -140,7 +142,8 @@ public final class NotificationService {
         if (player != null) {
             String playerMessage = plugin.getMessage("player-protection.locked.player-message")
                     .replace("{minutes}", String.valueOf(config.playerProtection().getPlayerProtectionLockDurationMinutes()));
-            MessageHelper.sendMessage(player, playerMessage);
+            noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, playerMessage));
         }
 
         discordNotifier.sendLockedEvent(playerId, reason, config.playerProtection().getPlayerProtectionLockDurationMinutes());
@@ -162,7 +165,8 @@ public final class NotificationService {
 
         Player player = Bukkit.getPlayer(playerId);
         if (player != null) {
-            MessageHelper.sendMessage(player, message);
+            noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, message));
         }
 
         discordNotifier.sendUnlockedEvent(playerId, reason);
@@ -183,11 +187,12 @@ public final class NotificationService {
      * Broadcast message to all online admins.
      */
     private void broadcastToAdmins(String message) {
-        for (Player player : Bukkit.getOnlinePlayers()) {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
-                MessageHelper.sendMessage(player, message);
+                noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, message));
             }
-        }
+        });
     }
 
     /**

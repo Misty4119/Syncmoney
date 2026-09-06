@@ -197,7 +197,8 @@ public final class HighValueNotification {
     private void sendMessage(String adminName, String message) {
         Player player = Bukkit.getServer().getPlayer(adminName);
         if (player != null && player.isOnline()) {
-            MessageHelper.sendMessage(player, message);
+            noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, message));
         }
     }
 
@@ -205,11 +206,12 @@ public final class HighValueNotification {
      * Broadcast message to all online admins.
      */
     private void broadcastToAdmins(String message) {
-        for (Player player : Bukkit.getOnlinePlayers()) {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
-                MessageHelper.sendMessage(player, message);
+                noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
+                    () -> MessageHelper.sendMessage(player, message));
             }
-        }
+        });
     }
 
     /**

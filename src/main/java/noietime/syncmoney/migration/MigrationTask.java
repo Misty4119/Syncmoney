@@ -424,7 +424,7 @@ public final class MigrationTask {
         }
 
 
-        Bukkit.getOnlinePlayers().forEach(player -> {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
                 player.sendMessage(net.kyori.adventure.text.Component.text(message));
             }
@@ -546,7 +546,7 @@ public final class MigrationTask {
             message = "Warning: Migration paused - " + reason;
         }
 
-        Bukkit.getOnlinePlayers().forEach(player -> {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
                 player.sendMessage(net.kyori.adventure.text.Component.text(message));
             }
@@ -583,7 +583,7 @@ public final class MigrationTask {
         }
 
 
-        Bukkit.getOnlinePlayers().forEach(player -> {
+        noietime.syncmoney.util.PlayerLookupUtil.forEachOnlinePlayer(plugin, player -> {
             if (player.hasPermission("syncmoney.admin")) {
                 player.sendMessage(net.kyori.adventure.text.Component.text(header));
                 player.sendMessage(net.kyori.adventure.text.Component.text(playersInfo));

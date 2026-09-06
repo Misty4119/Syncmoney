@@ -1,7 +1,9 @@
 package noietime.syncmoney.guard;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import noietime.syncmoney.economy.EconomyWriteQueue;
 import noietime.syncmoney.util.Constants;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -13,171 +15,75 @@ import org.bukkit.plugin.Plugin;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.TimeUnit;
-import java.util.logging.Logger;
 
-/**
- * Cross-server portal protection mechanism.
- * Prevents players from teleporting during economic transactions to avoid data inconsistency.
- *
- * [MainThread] This listener runs on main thread.
- */
+/** [EntityScheduler] Wait for economic writes before crossing worlds; never discard queued writes. */
 public final class PlayerTransferGuard implements Listener {
-
     private final Plugin plugin;
     private final EconomyWriteQueue writeQueue;
-    private final Logger logger;
-
-    private final ConcurrentMap<UUID, TransferWait> waitingTransfers;
-
-    private record TransferWait(UUID playerUuid, long startTime, PlayerTeleportEvent event) {}
+    private final ConcurrentMap<UUID, ScheduledTask> waitingTransfers = new ConcurrentHashMap<>();
 
     public PlayerTransferGuard(Plugin plugin, EconomyWriteQueue writeQueue) {
         this.plugin = plugin;
         this.writeQueue = writeQueue;
-        this.logger = plugin.getLogger();
-        this.waitingTransfers = new ConcurrentHashMap<>();
     }
 
-    /**
-     * Intercept teleport event, check if there are pending economic transactions.
-     * Only applies protection for cross-world/cross-server teleports.
-     * Same-server teleports (bed, /spawn, /home, ender pearl) are ignored.
-     */
     @EventHandler(ignoreCancelled = true)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
-
-        if (!isCrossWorldTeleport(event)) {
-            return;
-        }
-
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
-
-        if (!writeQueue.hasPending(uuid)) {
-            return;
-        }
-
-        TransferWait wait = new TransferWait(uuid, System.currentTimeMillis(), event);
-        waitingTransfers.put(uuid, wait);
+        // A newer teleport supersedes an older deferred destination, including same-world teleports.
+        cancelWait(uuid);
+        Location destination = event.getTo();
+        if (destination == null || event.getFrom().getWorld() == destination.getWorld()
+                || !writeQueue.hasPending(uuid)) return;
 
         event.setCancelled(true);
-
-        AtomicInteger waited = new AtomicInteger(0);
-
-        plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin, (task) -> {
-            if (!writeQueue.hasPending(uuid)) {
-                waitingTransfers.remove(uuid);
-                plugin.getServer().getGlobalRegionScheduler().run(plugin, teleportTask -> {
-                    player.teleport(event.getTo());
-                });
-                logger.fine("Player " + player.getName() + " transferred after pending transactions completed.");
+        Location target = destination.clone();
+        PlayerTeleportEvent.TeleportCause cause = event.getCause();
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Constants.MAX_WAIT_MS);
+        long intervalTicks = Math.max(1, Constants.CHECK_INTERVAL_MS / 50);
+        ScheduledTask scheduled = player.getScheduler().runAtFixedRate(plugin, task -> {
+            if (waitingTransfers.get(uuid) != task) {
                 task.cancel();
                 return;
             }
-
-            int currentWaited = waited.addAndGet(Constants.CHECK_INTERVAL_MS);
-
-            if (currentWaited >= Constants.MAX_WAIT_MS) {
-                waitingTransfers.remove(uuid);
-                writeQueue.clearPendingTracking(uuid);
-                logger.warning("Player " + player.getName() + " transfer forced after " + Constants.MAX_WAIT_MS + "ms wait. Events will be processed asynchronously by consumer.");
-                plugin.getServer().getGlobalRegionScheduler().run(plugin, teleportTask -> {
-                    player.teleport(event.getTo());
-                });
+            if (!writeQueue.hasPending(uuid)) {
+                waitingTransfers.remove(uuid, task);
                 task.cancel();
+                // Cross-region teleport must load/move asynchronously; never join this future.
+                player.teleportAsync(target, cause);
+            } else if (System.nanoTime() >= deadline) {
+                waitingTransfers.remove(uuid, task);
+                task.cancel();
+                plugin.getLogger().warning("Deferred teleport timed out for " + uuid
+                        + "; economic writes remain queued. The player can retry the teleport.");
             }
-        }, Constants.CHECK_INTERVAL_MS, Constants.CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        }, () -> waitingTransfers.remove(uuid), intervalTicks, intervalTicks);
+        if (scheduled != null) waitingTransfers.put(uuid, scheduled);
     }
 
-    /**
-     * Check if this is a cross-world/cross-server teleport.
-     * Same-server teleports (bed, /spawn, /home, ender pearl, etc.) return false.
-     *
-     * Works on Paper 1.20+ and Folia.
-     *
-     * @param event The teleport event
-     * @return true if this is a cross-world transfer, false for same-server teleport
-     */
-    private boolean isCrossWorldTeleport(PlayerTeleportEvent event) {
-
-
-
-
-
-
-        var fromWorld = event.getFrom().getWorld();
-        var toWorld = event.getTo().getWorld();
-
-
-        if (fromWorld == null || toWorld == null) {
-            return true;
-        }
-
-        return !fromWorld.getUID().equals(toWorld.getUID());
-    }
-
-    /**
-     * Handle player quit event, clear wait record and handle pending transactions.
-     */
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        UUID uuid = event.getPlayer().getUniqueId();
-
-        if (writeQueue.hasPending(uuid)) {
-            logger.fine("Player " + event.getPlayer().getName() + " is quitting with pending transactions. Attempting to drain...");
-
-            int drained = writeQueue.drainPendingForPlayer(uuid, 10);
-
-            if (drained > 0) {
-                logger.fine("Drained " + drained + " pending events for " + event.getPlayer().getName());
-            }
-
-            if (writeQueue.hasPending(uuid)) {
-                logger.warning("Player " + event.getPlayer().getName() + " quit with " +
-                    writeQueue.getPendingCount(uuid) + " pending transactions (data already saved to Redis). Events will be processed asynchronously.");
-            } else {
-                logger.fine("Player " + event.getPlayer().getName() + " pending transactions drained successfully.");
-            }
-        }
-
-        writeQueue.clearPendingTracking(uuid);
-        waitingTransfers.remove(uuid);
+        // The consumer owns queued events and pending counts, even after the player leaves.
+        cancelWait(event.getPlayer().getUniqueId());
     }
 
-    /**
-     * Handle player kick event, clear wait record.
-     */
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onPlayerKick(PlayerKickEvent event) {
-        UUID uuid = event.getPlayer().getUniqueId();
-        waitingTransfers.remove(uuid);
+        cancelWait(event.getPlayer().getUniqueId());
     }
 
-    /**
-     * Check if player can safely transfer (no pending transactions).
-     * @param uuid Player UUID
-     * @return true if can safely transfer
-     */
-    public boolean canSafelyTransfer(UUID uuid) {
-        return !writeQueue.hasPending(uuid);
+    private void cancelWait(UUID uuid) {
+        ScheduledTask task = waitingTransfers.remove(uuid);
+        if (task != null) task.cancel();
     }
 
-    /**
-     * Get player's pending transaction count.
-     * @param uuid Player UUID
-     * @return Pending transaction count
-     */
-    public int getPendingTransactionCount(UUID uuid) {
-        return writeQueue.getPendingCount(uuid);
+    public void shutdown() {
+        waitingTransfers.values().forEach(ScheduledTask::cancel);
+        waitingTransfers.clear();
     }
 
-    /**
-     * Get number of players waiting to transfer.
-     * @return Count
-     */
-    public int getWaitingCount() {
-        return waitingTransfers.size();
-    }
+    public boolean canSafelyTransfer(UUID uuid) { return !writeQueue.hasPending(uuid); }
+    public int getPendingTransactionCount(UUID uuid) { return writeQueue.getPendingCount(uuid); }
+    public int getWaitingCount() { return waitingTransfers.size(); }
 }

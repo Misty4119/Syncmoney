@@ -160,6 +160,12 @@ public class CMIEconomyHandler {
             return;
         }
 
+        noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
+                player -> applyJoinMirror(uuid, mirror, mirrorVersion));
+    }
+
+    private void applyJoinMirror(UUID uuid, BigDecimal mirror, long mirrorVersion) {
+
         long lastApplied = lastAppliedVersion.getOrDefault(uuid, 0L);
         if (!CMIVersioning.isNewer(mirrorVersion, lastApplied)) {
             BigDecimal local = getCMILocalBalance(uuid);
@@ -182,14 +188,12 @@ public class CMIEconomyHandler {
         final double target = mirror.doubleValue();
         final BigDecimal normalizedMirror = mirror;
         final long version = mirrorVersion;
-        plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> {
             suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
             cmiApi.setBalance(uuid, target);
             notifyInboundApplied(uuid, normalizedMirror, version);
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
             }
-        });
     }
 
     private static final long OUTBOUND_SUPPRESS_MS = 750L;
