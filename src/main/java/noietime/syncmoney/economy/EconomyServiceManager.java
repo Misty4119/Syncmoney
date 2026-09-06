@@ -9,7 +9,6 @@ import noietime.syncmoney.vault.VaultRuntimeDetector;
 import noietime.syncmoney.vault.VaultUnlockedIntegrationLoader;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
-import noietime.syncmoney.economy.CMIEconomyHandler;
 
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -65,31 +64,12 @@ public class EconomyServiceManager {
 
         OverflowLogInterface overflowLog = new RedisOverflowLog(plugin, storageManager.getRedisManager());
 
-        if (localHandler != null) {
-            this.economyFacade = new EconomyFacade(
-                    plugin, config,
-                    storageManager.getCacheManager(),
-                    storageManager.getRedisManager(),
-                    storageManager.getDatabaseManager(),
-                    localHandler,
-                    economyWriteQueue,
-                    fallbackWrapper,
-                    null,
-                    overflowLog
-            );
-        } else {
-            this.economyFacade = new EconomyFacade(
-                    plugin, config,
-                    storageManager.getCacheManager(),
-                    storageManager.getRedisManager(),
-                    storageManager.getDatabaseManager(),
-                    null,
-                    economyWriteQueue,
-                    fallbackWrapper,
-                    null,
-                    overflowLog
-            );
-        }
+        this.economyFacade = new EconomyFacade(
+                plugin, config,
+                storageManager.getCacheManager(),
+                storageManager.getRedisManager(),
+                storageManager.getDatabaseManager(),
+                localHandler, economyWriteQueue, fallbackWrapper, null, overflowLog);
 
         this.nameResolver = new NameResolver(
                 plugin,
@@ -98,12 +78,11 @@ public class EconomyServiceManager {
         );
 
         if (config.shadowSync().isShadowSyncEnabled()) {
-        this.shadowSyncTask = new ShadowSyncTask(
-                plugin, config, economyFacade,
-                storageManager.getCacheManager(),
-                storageManager.getDatabaseManager()
-        );
-        shadowSyncTask.start();
+            this.shadowSyncTask = new ShadowSyncTask(
+                    plugin, config, economyFacade,
+                    storageManager.getCacheManager(),
+                    storageManager.getDatabaseManager());
+            shadowSyncTask.start();
         }
 
         this.vaultProvider = new SyncmoneyVaultProvider(
