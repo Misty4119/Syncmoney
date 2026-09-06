@@ -272,6 +272,24 @@ public final class EconomyFacade {
         return getBalance(uuid).doubleValue();
     }
 
+    private final java.util.Set<UUID> placeholderLoads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** [ThreadSafe] Never performs IO on a PlaceholderAPI caller's region thread. */
+    public BigDecimal getBalanceForPlaceholder(UUID uuid) {
+        EconomyState state = stateManager.get(uuid);
+        if (state != null) return state.balance();
+        if (placeholderLoads.add(uuid)) {
+            try {
+                plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                    try { getBalance(uuid); } finally { placeholderLoads.remove(uuid); }
+                });
+            } catch (RuntimeException e) {
+                placeholderLoads.remove(uuid);
+            }
+        }
+        return null;
+    }
+
     /**
      * [SYNC-ECO-045] Synchronously gets player balance.
      * Intended for Vault API compatibility mapping.

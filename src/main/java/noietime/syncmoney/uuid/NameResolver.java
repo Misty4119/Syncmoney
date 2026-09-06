@@ -141,6 +141,26 @@ public final class NameResolver {
         return resolve(name).orElse(null);
     }
 
+    private final java.util.Set<String> pendingNameLookups = ConcurrentHashMap.newKeySet();
+
+    /** [ThreadSafe] Cached lookup for placeholders; resolves a cache miss asynchronously. */
+    public UUID resolveUUIDForPlaceholder(String name) {
+        if (name == null || name.isBlank()) return null;
+        String key = name.toLowerCase(java.util.Locale.ROOT);
+        UUID cached = nameToUuidCache.get(key);
+        if (cached != null) return cached;
+        if (pendingNameLookups.add(key)) {
+            try {
+                plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                    try { resolve(name); } finally { pendingNameLookups.remove(key); }
+                });
+            } catch (RuntimeException e) {
+                pendingNameLookups.remove(key);
+            }
+        }
+        return null;
+    }
+
     /**
      * Get player name by UUID.
      *
