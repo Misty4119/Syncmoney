@@ -373,24 +373,25 @@ public final class Syncmoney extends JavaPlugin {
             listenerServiceManager.shutdown();
         }
 
-        if (auditServiceManager != null) {
-            auditServiceManager.shutdown();
-        }
-
-        if (breakerManager != null) {
-            breakerManager.shutdown();
-        }
-
         if (syncManager != null) {
             syncManager.shutdown();
+        }
+
+        // Drain accepted writes while audit, Shadow and storage are still available.
+        if (eventConsumerManager != null) {
+            eventConsumerManager.shutdown();
         }
 
         if (economyServiceManager != null) {
             economyServiceManager.shutdown();
         }
 
-        if (eventConsumerManager != null) {
-            eventConsumerManager.shutdown();
+        if (auditServiceManager != null) {
+            auditServiceManager.shutdown();
+        }
+
+        if (breakerManager != null) {
+            breakerManager.shutdown();
         }
 
         if (baltopManager != null) {

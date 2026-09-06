@@ -192,6 +192,9 @@ public class EconomyServiceManager {
         if (economyFacade != null) {
             economyFacade.shutdown();
         }
+        if (localHandler != null) {
+            localHandler.close();
+        }
 
         plugin.getLogger().fine("Economy layer shutdown complete");
     }

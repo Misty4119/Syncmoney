@@ -1,43 +1,96 @@
 # Syncmoney
 
-Minecraft economy synchronization with Vault/VaultUnlocked integration, Redis Pub/Sub, optional transaction protection, auditing, Shadow backups and a Web Admin panel.
+<p align="center">
+  <a href="https://github.com/Misty4119/Syncmoney">
+    <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney" alt="Stars">
+    <img src="https://img.shields.io/github/downloads/Misty4119/Syncmoney/total" alt="Downloads">
+  </a>
+  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.0-blue.svg" alt="Release"></a>
+  <a href="https://github.com/Misty4119/Syncmoney/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
+</p>
+<p align="center">
+  <a href="https://docs.papermc.io/paper/getting-started/"><img src="https://img.shields.io/badge/Platform-Paper%20%7C%20Folia%20%7C%20Canvas-orange.svg" alt="Platform"></a>
+  <img src="https://img.shields.io/badge/Java-21%20%2F%2025-blueviolet.svg" alt="Java">
+  <a href="https://official.noie.fun"><img src="https://img.shields.io/badge/Discord-Community-7289DA.svg?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://paypal.me/NoieSrv"><img src="https://img.shields.io/badge/Donate-PayPal-blue" alt="Donate">
+  </a>
+</p>
 
-Syncmoney manages balances and its own economy commands/permissions. It is **not** a general-purpose command or permission synchronization plugin.
+<p align="center">
+  <b>Vault / VaultUnlocked compatible cross-server economy synchronization with Redis Pub/Sub, multi-layer transaction guards, auditing, shadow backups, and embedded Web Admin.</b>
+</p>
 
-## Compatibility
+---
 
-- Build/API baseline: Paper **1.20.4**, Java **21** bytecode. Plain Spigot is not supported.
-- Folia and Canvas use the region-threaded scheduling path. Install compatible versions of every dependency; a Folia declaration alone does not guarantee third-party plugin safety.
-- Minecraft 26.1+ Paper requires **Java 25**; older supported versions use Java 21. See [Paper's Java requirements](https://docs.papermc.io/paper/getting-started/).
-- Release validation is in progress: Paper 1.20.4 build 499 has passed core economy smoke tests with VaultUnlocked 2.20.0. The 26.2 matrix will be updated after runtime acceptance; do not treat an untested version as verified.
-- Future versions are compatibility targets, not unconditional guarantees. Test upgrades on a separate server before touching live balances.
+## Overview
 
-Required: one plugin providing Vault (legacy Vault or VaultUnlocked). Optional: PlaceholderAPI plus SyncmoneyExpansion; a compatible licensed CMI build for CMI mode. Do not install Vault and VaultUnlocked simultaneously under the same plugin name.
+Syncmoney is an enterprise-oriented Minecraft economy plugin focused on safe, consistent cross-server balance synchronization. It bridges Vault and VaultUnlocked economies across network nodes using Redis Pub/Sub and relational database persistence, backed by in-memory caching and comprehensive circuit breakers.
 
-## Install or upgrade
+Syncmoney manages balances, currency operations, and its own economy commands and administration tiers. It is **not** a general-purpose permission or arbitrary command replicator.
 
-1. Stop the server and back up plugin configuration, economy databases and Redis persistence. Existing economy balances are not automatically imported from every other plugin.
-2. Install `Syncmoney-1.3.0.jar` and a compatible Vault provider in `plugins/`; remove the previous Syncmoney JAR from the active plugins directory.
-3. Start once to generate configuration, then stop and select the economy mode. Give each network node a unique `server-name`.
-4. Configure storage and optional features, restart, and check the log for successful Syncmoney/Vault registration. Test `/money` and a small `/pay` before allowing normal traffic.
-5. For placeholders, install `SyncmoneyExpansion-1.3.0.jar` in `plugins/PlaceholderAPI/expansions/`, alongside PlaceholderAPI itself, and restart.
+---
 
-Existing YAML values are preserved when missing defaults are merged. Release version and config/message schema version are different; do not manually change schema numbers. Review renamed/deprecated options and [the changelog](CHANGELOG.md) when upgrading.
+## Key Features
 
-## Choose an economy mode
+- **Standard Economy Compatibility**: Integrates seamlessly with Vault 1.7 and VaultUnlocked (Vault2 API).
+- **Flexible Economy Modes**: Supports standalone SQLite (`local`), Redis-only sync (`local_redis`), Redis + SQL database persistence (`sync`), and CMI-authoritative sync (`cmi`).
+- **Distributed Synchronization**: Redis Pub/Sub with atomic Lua scripts, monotonic versioning, and echo suppression to eliminate race conditions.
+- **In-Memory Performance**: O(1) balance reads served directly from memory; persistent storage writes handled asynchronously off the tick thread.
+- **Multi-Layer Circuit Breaker**: Real-time per-transaction limits, anomaly rate detection, and an independent per-player guard (L1–L4 states).
+- **Comprehensive Auditing & Analytics**: High-throughput asynchronous audit log pipeline with search, stats, automated cleanup, and external export.
+- **Shadow Backups**: Independent background account synchronization designed for cold-standby snapshots and state tracking.
+- **Embedded Web Admin Dashboard**: Modern web interface (Vue 3 / Undertow) for health telemetry, configuration inspection, audit viewing, and economy monitoring.
+- **Region Scheduler Safe**: Validated on Paper 1.20.4/26.2, Folia 26.2 BETA, and Canvas 26.2; scheduler boundaries are designed for region-threaded architectures.
+- **Extensible Ecosystem**: Official PlaceholderAPI expansion and Bukkit transaction events (`PostTransactionEvent`).
 
-| `economy.mode` | Storage and purpose |
+---
+
+## Platform & Compatibility
+
+| Component | Requirement / Specification |
 |---|---|
-| `local` | Single-server SQLite; no Redis/MySQL required. |
-| `local_redis` | Redis-backed network economy without SQL persistence; configure Redis persistence/backups. |
-| `sync` | Redis plus database persistence for a shared network economy. |
-| `cmi` | CMI remains local economy authority; CMI API changes are synchronized through Redis. Requires compatible CMI. |
-| `auto` | Detects the available mode; production operators should explicitly select the intended mode. |
+| **Server Engine** | Paper 1.20.4+ (Build API baseline), Folia, Canvas. *Plain Spigot is not supported.* |
+| **Java Runtime** | Java **21** (Paper 1.20.4 – 1.20.6); Java **25** required for Paper 26.1+ environments. |
+| **Economy Bridge** | Required: **Vault** (legacy 1.7) or **VaultUnlocked** (2.20.0+). *Do not load both concurrently under the same name.* |
+| **Message Broker** | Redis 5.0+ (Required for `sync`, `local_redis`, and `cmi` modes). |
+| **Database** | MySQL 8.0+, MariaDB 10.5+, PostgreSQL 13+, or local SQLite. |
+| **Optional Integrations** | PlaceholderAPI (with `SyncmoneyExpansion`), CMI (compatible licensed release for `cmi` mode). |
 
-Minimal standalone configuration (merge into the generated file):
+> [!NOTE]
+> Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
+
+The 1.3.0 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. This is a tested compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
+
+---
+
+## Installation & Setup
+
+1. **Backup**: Stop your server and take a full backup of existing plugin configs, economy databases, and Redis persistence.
+2. **Install Plugin**: Place `Syncmoney-1.3.0.jar` and your preferred Vault provider in the server's `plugins/` directory. Remove any older Syncmoney JAR versions.
+3. **Initialize Configuration**: Start the server once to generate default configuration files, then stop it.
+4. **Configure Node**: In `plugins/Syncmoney/config.yml`:
+   - Assign a unique `server-name` (e.g., `survival-01`, `lobby-01`).
+   - Select your target `economy.mode`.
+   - Configure Redis and SQL database connection credentials if using synchronized modes.
+5. **Start & Verify**: Start the server. Confirm in the console logs that Syncmoney and Vault have registered successfully. Verify basic transactions with `/money` and `/pay`.
+6. **Placeholders (Optional)**: If using PlaceholderAPI, copy `SyncmoneyExpansion-1.3.0.jar` into `plugins/PlaceholderAPI/expansions/` and run `/papi reload`.
+
+---
+
+## Economy Modes
+
+| Mode (`economy.mode`) | Storage & Architecture | Intended Environment |
+|---|---|---|
+| `local` | Single-server SQLite file. No Redis or external database required. | Standalone servers without cross-server requirements. |
+| `local_redis` | Redis-backed network economy without SQL persistence. | Networks relying on persistent Redis storage (AOF/RDB). |
+| `sync` | Redis Pub/Sub + central SQL database (MySQL / MariaDB / PostgreSQL). | Standard multi-server networks requiring robust relational persistence. SQLite is for LOCAL/Shadow storage, not this shared database connection. |
+| `cmi` | CMI retains primary economy authority; mutations propagate via Redis. | Networks using CMI as the authoritative economy engine. |
+| `auto` | Automatically detects installed environment and suggests mode. | For quick evaluations; explicit mode configuration is recommended for production. |
+
+### Minimal Standalone Configuration (`local`)
 
 ```yaml
-server-name: "survival-01"
+server-name: "single-01"
 economy:
   mode: "local"
 redis:
@@ -48,60 +101,109 @@ db-enabled: false
 pubsub-enabled: false
 ```
 
-For a shared network, select `sync`, enable Redis/database and `db-enabled`/`pubsub-enabled`, and configure all nodes with the same isolated Redis database and SQL database. Use different `server-name` values. SQL implementations include MySQL/MariaDB, PostgreSQL and SQLite; a local SQLite file is not shared network storage.
+### Shared Network Configuration (`sync`)
 
-Keep Redis and SQL on a private network, use dedicated credentials and backup retention, and restrict access with a firewall. Never point test servers at production storage. Disconnections and backpressure can reject operations; do not rely on fallback as a substitute for backups.
+Set `economy.mode: "sync"`, enable both `redis` and `database`, and ensure `db-enabled: true` and `pubsub-enabled: true`. Point all participating nodes to the same isolated Redis database and relational database schema while giving each server a distinct `server-name`.
 
-## Optional features and config switches
+---
 
-All paths below are in `plugins/Syncmoney/config.yml`. Existing defaults are retained; toggle services while stopped, then restart.
+## Optional Modules & Lifecycle
 
-| Feature | Switch | Disabled behavior |
+All optional modules can be toggled in `plugins/Syncmoney/config.yml`.
+
+| Module | Configuration Switch | Description & Disabled Behavior |
 |---|---|---|
-| Global economic breaker | `circuit-breaker.enabled` | No breaker monitoring/cleanup/inflation tasks. Status command reports disabled. |
-| Per-player protection | `circuit-breaker.player-protection.enabled` | No player Guard or its executor; independent of the global breaker switch. |
-| Shadow backup | `shadow-sync.enabled` | No Shadow task/storage; command reports disabled. |
-| Audit history | `audit.enabled` | No audit schema/writer/Redis pipeline/cleanup/export; API returns `FEATURE_DISABLED`. Core economy persistence remains enabled. |
-| Audit cleanup/export/Redis | `audit.cleanup.enabled`, `audit.export.enabled`, `audit.redis.enabled` | Each requires the parent audit switch; disabled exporter does not create an export folder. |
-| Teleport protection | `transfer-guard.enabled` | No transfer-guard listener/task. This is not a proxy transfer protocol. |
-| Discord alerts | `discord-webhook.enabled` | No webhook sending executor or outbound alerts. |
-| Web Admin | `web-admin.enabled` | No HTTP listener. |
-| Cross-server notifications | `cross-server-notifications.enabled` | Controls notification presentation, not authoritative balance synchronization. |
+| **Global Circuit Breaker** | `circuit-breaker.enabled` | Halts global economy operations upon abnormal inflation or anomalies. Status reports disabled when inactive. |
+| **Per-Player Protection** | `circuit-breaker.player-protection.enabled` | Independent rate-limiting, warnings, and automatic account freeze for suspicious player activities. |
+| **Transaction Guard** | `transfer-guard.enabled` | Protects players from balance inconsistency during cross-server transfers or teleports. |
+| **Audit Logging** | `audit.enabled` | Asynchronous transaction audit trail. Sub-features (`cleanup`, `export`, `redis`) require this parent switch. |
+| **Shadow Sync** | `shadow-sync.enabled` | Background snapshot mirroring to secondary databases. Does not replace primary database backups. |
+| **Discord Webhooks** | `discord-webhook.enabled` | Real-time notifications for circuit breaker triggers, locks, and migration events. |
+| **Web Admin Panel** | `web-admin.enabled` | Embedded Undertow HTTP/WebSocket service for administrative dashboard. |
 
-The global breaker limits transaction amounts/rates and detects abnormal growth. Player protection separately provides rate limiting, warnings and locks. Tune thresholds for your economy; disabling safeguards is not a performance recommendation. Investigate the cause before using administrative reset/unlock commands.
+> [!IMPORTANT]
+> **Configuration Reload vs. Full Restart**:
+> `/syncmoney reload` updates localization messages and safe runtime parameters (`display`, `pay`, `permissions`, `admin-permissions`, `debug`).
+> Changes to database/Redis connections, economy modes, module switches, schedulers, or Web Admin server endpoints require a **full server restart**. If modified, reload will notify you of the restart-only keys.
 
-Shadow Sync is an optional background copy with safety/rollback checks, not a replacement for database backups. Review target/storage settings before enabling it. CMI migration is a separate, administrative workflow: back up and preview data before executing `/syncmoney migrate`; do not force a migration on a live network without a maintenance window.
+---
 
-### Reload versus restart
+## Commands & Permissions
 
-`/syncmoney reload` reloads messages and permitted command/display settings (`display`, `pay`, `permissions`, `admin-permissions`, `debug`). Redis/SQL connections, economy mode, feature switches, scheduler owners, audit/shadow pipelines and Web settings require restart. If any restart-only key changed, reload reports the affected keys and keeps the running configuration unchanged. Saving via Web Admin does not rebuild these services.
+### Player Commands
 
-## Common commands and permissions
+| Command | Description | Default Permission |
+|---|---|---|
+| `/money` | View personal balance | `syncmoney.money` (default: true) |
+| `/money <player>` | View another player's balance | `syncmoney.money.others` (default: op) |
+| `/pay <player> <amount>` | Send money to another player | `syncmoney.pay` (default: true) |
+| `/pay confirm` | Confirm high-value transaction above threshold | None (session verified) |
+| `/baltop [page]` | View global wealth leaderboard | `syncmoney.money` (default: true) |
+| `/baltop me` | Check personal leaderboard position | `syncmoney.money` (default: true) |
 
-| Command | Permission |
+### Administrative Commands
+
+| Command | Description | Permission |
+|---|---|---|
+| `/syncmoney admin give <player> <amount>` | Add balance to player | `syncmoney.admin.give` / Admin tier |
+| `/syncmoney admin take <player> <amount>` | Deduct balance from player | `syncmoney.admin.take` / Admin tier |
+| `/syncmoney admin set <player> <amount>` | Set player balance directly | `syncmoney.admin.set` / Admin tier |
+| `/syncmoney admin reset <player>` | Reset player balance to zero | `syncmoney.admin.set` / Admin tier |
+| `/syncmoney admin view <player>` | Inspect detailed balance state | `syncmoney.admin` |
+| `/syncmoney breaker status` | View circuit breaker health and state | `syncmoney.admin` |
+| `/syncmoney breaker reset` | Reset tripped global breaker | `syncmoney.admin` |
+| `/syncmoney breaker unlock <player>` | Manually unlock a frozen player | `syncmoney.admin` |
+| `/syncmoney audit <player> [page]` | View player audit history | `syncmoney.admin.audit` |
+| `/syncmoney audit search <args>` | Advanced audit record search | `syncmoney.admin.audit` |
+| `/syncmoney audit stats` | View audit storage statistics | `syncmoney.admin.audit` |
+| `/syncmoney monitor [redis\|cache\|db]` | View real-time system and resource health | `syncmoney.admin.monitor` |
+| `/syncmoney econstats [supply\|players]` | Inspect total supply and distribution | `syncmoney.admin.econstats` |
+| `/syncmoney debug <player\|system>` | Multi-tier balance inspection across layers | `syncmoney.admin` |
+| `/syncmoney sync-balance <player>` | Force push memory balance to Redis and SQL | `syncmoney.admin` |
+| `/syncmoney shadow [status\|now\|logs]` | Monitor and trigger Shadow Sync tasks | `syncmoney.admin` |
+| `/syncmoney web [status\|open\|reload]` | Manage embedded web service | `syncmoney.admin` |
+| `/syncmoney migrate <cmi\|local-to-sync>` | Execute economy database migration | `syncmoney.admin` |
+| `/syncmoney test concurrent-pay <t> <i>` | Run concurrent load tests on disposable setups | `syncmoney.admin.test` |
+| `/syncmoney reload [config\|messages]` | Reload allowable configuration sections | `syncmoney.admin.reload` |
+
+### Administrative Permission Tiers
+
+Configurable in `config.yml` under `admin-permissions`:
+
+| Tier | Permission Node | Default Daily Limits |
+|---|---|---|
+| **Observe** | `syncmoney.admin.observe` | View only (0 give / 0 take) |
+| **Reward** | `syncmoney.admin.reward` | 100,000 give / 0 take |
+| **General** | `syncmoney.admin.general` | 1,000,000 give / 1,000,000 take |
+| **Full** | `syncmoney.admin.full` | Unlimited |
+
+---
+
+## PlaceholderAPI Identifiers
+
+Syncmoney provides an optional expansion (`SyncmoneyExpansion`) for PlaceholderAPI:
+
+| Placeholder | Description |
 |---|---|
-| `/money`, `/money <player>` | `syncmoney.money`, `syncmoney.money.others` |
-| `/pay <player> <amount>`, `/pay confirm` | `syncmoney.pay` |
-| `/baltop [page]` | `syncmoney.money` |
-| `/syncmoney admin give/take/set <player> <amount>` | Corresponding `syncmoney.admin.give/take/set` and configured admin tier |
-| `/syncmoney breaker status`, `/syncmoney breaker unlock <player>` | `syncmoney.admin` |
-| `/syncmoney audit <player>` | `syncmoney.admin.audit` |
-| `/syncmoney shadow status`, `/syncmoney web status` | `syncmoney.admin` |
-| `/syncmoney reload` | Configured administrative permission |
+| `%syncmoney_balance%` | Unformatted numeric balance |
+| `%syncmoney_balance_formatted%` | Balance formatted with comma groupings (`1,250.00`) |
+| `%syncmoney_balance_abbreviated%` | Abbreviated balance notation (`1.5K`, `2.4M`) |
+| `%syncmoney_balance_<player>%` | Balance of a specific target player |
+| `%syncmoney_rank%` or `%syncmoney_my_rank%` | Player's rank on the leaderboard |
+| `%syncmoney_top_<n>%` | Balance of the player at rank `n` |
+| `%syncmoney_total_supply%` | Total currency circulating in the economy |
+| `%syncmoney_total_players%` | Total registered accounts tracked in leaderboard |
+| `%syncmoney_online_players%` | Current online player count |
+| `%syncmoney_version%` | Active Syncmoney plugin version |
 
-See in-game help for subcommands. The `observe`, `reward`, `general` and `full` admin tiers have configurable limits under `admin-permissions`. Grant only required permissions. Stress-test commands belong on disposable servers.
+> [!TIP]
+> Cache misses for offline player lookups resolve asynchronously in the background. If data is still loading, placeholders return `N/A` without freezing the main server thread.
 
-## Vault, CMI and placeholders
+---
 
-On VaultUnlocked, Syncmoney registers Vault2 and the legacy Vault economy interface; on legacy Vault it uses the legacy interface. In CMI mode, CMI remains the provider. Other economy plugins may compete for provider registration: verify the selected provider instead of assuming automatic import or universal compatibility.
+## Web Admin Setup & Security
 
-Useful placeholders: `%syncmoney_balance%`, `%syncmoney_balance_formatted%`, `%syncmoney_balance_abbreviated%`, `%syncmoney_rank%`, `%syncmoney_total_supply%`, `%syncmoney_total_players%`, `%syncmoney_online_players%`, `%syncmoney_version%`, `%syncmoney_top_1%`, `%syncmoney_balance_<player>%`.
-
-Balance/name cache misses are warmed asynchronously and may initially show `N/A`. Use the matching expansion release. PlaceholderAPI and CMI must independently support your server platform.
-
-## Web Admin security
-
-Web Admin is optional and disabled by default. Bind it to loopback behind an HTTPS reverse proxy, configure a long random API key, and restrict CORS origins and firewall access. Keep API keys, node credentials and webhook URLs private. Do not expose an unauthenticated development server.
+The Web Admin module includes a lightweight Undertow HTTP server and pre-built frontend distribution.
 
 ```yaml
 web-admin:
@@ -110,23 +212,86 @@ web-admin:
     host: "127.0.0.1"
     port: 8080
   security:
-    api-key: "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+    api-key: "GENERATE_A_LONG_SECURE_RANDOM_KEY"
+    cors-allowed-origins: "https://admin.yournetwork.com"
 ```
 
-Open the configured address and authenticate with the key. `/health` is unauthenticated; protected API routes require `Authorization: Bearer <key>`. Proxy SSE without buffering for live updates. See [API reference](docs/API_REFERENCE.md) for endpoints.
+### Security Recommendations
 
-## Troubleshooting and support
+1. **Reverse Proxy**: Bind Web Admin to `127.0.0.1` and route external traffic through Nginx or Caddy with HTTPS.
+2. **API Key**: Always replace the placeholder API key with a cryptographically secure token.
+3. **SSE / WebSocket**: When reverse proxying, ensure proxy buffering is disabled to support live SSE updates.
+4. **Firewall**: Restrict external access to the configured HTTP port.
 
-For missing synchronization, check mode, unique server names, shared Redis database, Pub/Sub switches and connection errors. For locked transactions, inspect protection/audit status before resetting anything. For failed reload, restart after reviewing the listed changed keys. On Paper 1.20.4 the acceptance profile uses VaultUnlocked 2.20.0; 2.20.1's descriptor was rejected by that server.
+---
 
-Report issues at [GitHub Issues](https://github.com/Misty4119/Syncmoney/issues) with Syncmoney version, exact server build, Java version, dependency versions, reproduction steps and redacted logs/config. Remove passwords, API keys, player-private data and webhook URLs. [Discord](https://official.noie.fun) is also available.
+## Developer Integration
 
-## Build and test
+### Vault Provider Access
 
-```powershell
-.\gradlew.bat test shadowJar :syncmoney-papi-expansion:jar
+Syncmoney registers itself as a standard Vault provider:
+
+```java
+RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
+if (rsp != null) {
+    Economy economy = rsp.getProvider();
+    BigDecimal balance = BigDecimal.valueOf(economy.getBalance(player));
+}
 ```
 
-Release artifacts are under `build/libs` and `syncmoney-papi-expansion/build/libs`. Frontend changes require `pnpm typecheck`, `pnpm test:unit --run`, `pnpm build` and refreshing the embedded bundle before packaging. See [PlugDev testing](tools/plugdev/README.md) for reproducible isolated runtime checks. Download releases from [GitHub Releases](https://github.com/Misty4119/Syncmoney/releases).
+On servers running VaultUnlocked, Syncmoney also registers modern Vault2 services automatically.
 
-[Apache License 2.0](LICENSE).
+### Transaction Events
+
+Subscribe to `PostTransactionEvent` for transaction auditing:
+
+```java
+@EventHandler
+public void onPostTransaction(PostTransactionEvent event) {
+    if (!event.isSuccess()) {
+        return;
+    }
+    UUID playerUuid = event.getPlayerUuid();
+    BigDecimal amount = event.getAmount();
+    AsyncPreTransactionEvent.TransactionType type = event.getType();
+    // Handle post-transaction telemetry
+}
+```
+
+---
+
+## Building from Source
+
+Syncmoney uses Gradle with a Java 21 toolchain:
+
+```bash
+# Build the plugin JAR and PAPI expansion
+./gradlew test shadowJar :syncmoney-papi-expansion:jar
+
+# Build Web Admin frontend (requires Node.js and pnpm)
+cd syncmoney-web
+pnpm install
+pnpm typecheck
+pnpm test:unit --run
+pnpm build
+```
+
+Compiled JAR files are produced in `build/libs/` and `syncmoney-papi-expansion/build/libs/`.
+
+---
+
+## Troubleshooting & Support
+
+- **Balances Not Synchronizing**: Ensure all nodes have identical Redis server settings and databases. Verify that each node has a unique `server-name` in `config.yml` and `pubsub-enabled: true`.
+- **Account Locked**: If a player account trips rate or anomaly limits, inspect `/syncmoney audit <player>` to diagnose the trigger, then unlock with `/syncmoney breaker unlock <player>`.
+- **Configuration Reload Incomplete**: Check the console output when executing `/syncmoney reload`. Settings requiring service reconstruction require a full server restart.
+- **Reporting Issues**: Include plugin version (`/syncmoney version`), server software build (`/version`), Java version, and sanitized logs/configs (redact passwords, API keys, and webhook URLs).
+
+- **GitHub Issues**: [Issues Tracker](https://github.com/Misty4119/Syncmoney/issues)
+- **Community Discord**: [Join Discord](https://official.noie.fun)
+
+---
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).

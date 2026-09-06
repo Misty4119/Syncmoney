@@ -1,0 +1,33 @@
+config-version: 12
+server-name: network-lobby
+pubsub-enabled: true
+db-enabled: true
+redis:
+  enabled: true
+  host: 127.0.0.1
+  port: 16379
+  database: 14
+database:
+  enabled: true
+  type: postgresql
+  host: 127.0.0.1
+  port: 15432
+  username: syncmoney_test
+  password: ""
+  database: syncmoney_network_acceptance
+economy:
+  mode: sync
+circuit-breaker:
+  enabled: true
+  player-protection:
+    enabled: true
+transfer-guard:
+  enabled: true
+audit:
+  enabled: false
+shadow-sync:
+  enabled: false
+web-admin:
+  enabled: false
+pay:
+  cooldown-seconds: 0

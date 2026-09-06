@@ -120,25 +120,20 @@ public final class EconomyEventConsumer implements Runnable {
         running = false;
         plugin.getLogger().fine("EconomyEventConsumer shutting down...");
 
-        Thread worker = this.workerThread;
-        if (worker != null) {
-            worker.interrupt();
-            try {
-                worker.join(TimeUnit.SECONDS.toMillis(2));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
         ExecutorService exec = this.executor;
         if (exec != null) {
-            exec.shutdownNow();
+            // Let the single worker drain accepted writes before interrupting it.
+            exec.shutdown();
+            if (Thread.currentThread() == workerThread) return;
             try {
-                if (!exec.awaitTermination(2, TimeUnit.SECONDS)) {
+                if (!exec.awaitTermination(10, TimeUnit.SECONDS)) {
                     plugin.getLogger().severe(
-                            "EconomyEventConsumer executor did not terminate within 2 seconds; events may be unprocessed");
+                            "EconomyEventConsumer drain timed out; interrupting worker with pending writes");
+                    exec.shutdownNow();
+                    exec.awaitTermination(2, TimeUnit.SECONDS);
                 }
             } catch (InterruptedException e) {
+                exec.shutdownNow();
                 Thread.currentThread().interrupt();
                 plugin.getLogger().severe("Interrupted while awaiting EconomyEventConsumer executor termination");
             }

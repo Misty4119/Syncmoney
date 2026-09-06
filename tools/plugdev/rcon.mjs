@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url'
 
 // Fallback for a PlugDev launcher that has not persisted session.json yet.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const properties = await readFile(resolve(root, '.plugdev/run/server.properties'), 'utf8')
+const runDir = resolve(root, process.env.SYNCMONEY_TEST_RUN || '.plugdev/run')
+if (!runDir.startsWith(resolve(root, '.plugdev') + (process.platform === 'win32' ? '\\' : '/'))) throw Error('RCON only supports isolated .plugdev runs')
+const properties = await readFile(resolve(runDir, 'server.properties'), 'utf8')
 const property = name => properties.split(/\r?\n/).find(line => line.startsWith(name + '='))?.slice(name.length + 1)
 const password = property('rcon.password')
 if (!password) throw Error('No local test RCON password')

@@ -3,7 +3,7 @@
 # Style: HUD (Holographic Terminal) / Purple gradient / Blue gradient
 
 # Config schema version (DO NOT EDIT) 
-version: "11"
+version: "12"
 
 # System prefix (Purple gradient / Blue gradient)
 prefix: '<bold><gradient:#A78BFA:#38BDF8>SyncMoney</gradient></bold> <#475569>⦊ <reset>'
