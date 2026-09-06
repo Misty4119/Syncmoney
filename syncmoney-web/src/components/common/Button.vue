@@ -50,10 +50,10 @@ const sizeClass = computed(() => {
 
 const variantClass = computed(() => {
   const map: Record<string, string> = {
-    primary:   'bg-primary text-white hover:bg-primary-hover shadow-glow-sm hover:shadow-glow-primary active:scale-[0.98] border border-white/10 font-semibold',
-    secondary: 'bg-surface-200 text-surface-800 hover:bg-surface-300 border border-surface-300 dark:bg-surface-800/80 dark:text-surface-200 dark:hover:bg-surface-700/80 dark:border-surface-700 active:scale-[0.98]',
+    primary:   'bg-primary text-white hover:bg-primary-hover shadow-glow-sm hover:shadow-glow-primary active:scale-[0.98] font-semibold',
+    secondary: 'border border-surface-300 text-surface-700 hover:bg-surface-100 dark:border-surface-700 dark:text-surface-300 dark:hover:bg-surface-800/60 active:scale-[0.98]',
     ghost:     'text-surface-600 hover:text-surface-900 hover:bg-surface-100 dark:text-surface-300 dark:hover:text-surface-100 dark:hover:bg-surface-800/60 active:scale-[0.98]',
-    danger:    'bg-error text-white hover:bg-red-600 shadow-glow-error dark:bg-error dark:hover:bg-red-600 active:scale-[0.98] font-semibold',
+    danger:    'bg-error text-white hover:bg-red-500 shadow-glow-error active:scale-[0.98] font-semibold',
     outline:   'border border-surface-300 text-surface-700 hover:border-primary hover:text-primary dark:border-surface-700 dark:text-surface-300 dark:hover:border-primary/50 dark:hover:text-primary active:scale-[0.98]',
   }
   return map[props.variant]

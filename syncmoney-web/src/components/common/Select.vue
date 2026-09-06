@@ -8,14 +8,15 @@
         :id="selectId"
         :value="modelValue"
         :disabled="disabled"
-        :class="[
-          'w-full px-4 py-2.5 bg-surface-50 dark:bg-surface-800 border rounded-xl text-surface-900 dark:text-surface-100 text-sm appearance-none',
-          'focus:outline-none focus:ring-1 transition-all cursor-pointer',
-          error
-            ? 'border-error focus:border-error focus:ring-error/30'
-            : 'border-surface-300 dark:border-surface-700 focus:border-primary/50 focus:ring-primary/20',
-          disabled && 'opacity-50 cursor-not-allowed'
-        ]"
+        class="w-full px-4 py-2.5 rounded-xl text-sm appearance-none shadow-sm transition-all focus:outline-none focus:ring-2"
+        :style="{
+          background: disabled ? 'var(--ctrl-bg-disabled)' : 'var(--ctrl-bg)',
+          color: disabled ? 'var(--text-muted)' : 'var(--ctrl-text)',
+          border: '1px solid',
+          borderColor: error ? '#fb7185' : 'var(--ctrl-border)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? '0.6' : '1',
+        }"
         @change="handleChange"
       >
         <option v-for="option in options" :key="option.value" :value="option.value">

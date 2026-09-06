@@ -21,14 +21,19 @@
       <form @submit.prevent="handleLogin" class="space-y-5">
         <!-- API Key input -->
         <div>
-          <label for="api-key" class="block text-sm text-surface-700 dark:text-surface-400 mb-2 font-medium">{{ t('auth.apiKey') }}</label>
+          <label for="api-key" class="block text-sm text-surface-800 dark:text-surface-300 mb-2 font-medium">{{ t('auth.apiKey') }}</label>
           <div class="relative group mt-1">
-            <KeyRound class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-500 dark:text-surface-400 group-focus-within:text-primary transition-colors duration-300" />
+            <KeyRound class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-400 group-focus-within:text-primary transition-colors duration-300" />
             <input
               id="api-key"
               v-model="apiKey"
               type="password"
-              class="w-full pl-11 pr-4 py-3 bg-surface-50 border border-surface-200 rounded-xl text-surface-700 dark:text-surface-100 placeholder-surface-500 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300 shadow-inner"
+              class="w-full pl-11 pr-4 py-3 rounded-xl shadow-sm transition-all duration-300 focus:outline-none focus:ring-2"
+              :style="{
+                background: 'var(--ctrl-bg)',
+                border: '1px solid var(--ctrl-border)',
+                color: 'var(--ctrl-text)',
+              }"
               :placeholder="t('auth.apiKeyPlaceholder')"
               required
             />

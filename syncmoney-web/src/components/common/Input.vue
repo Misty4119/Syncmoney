@@ -9,12 +9,19 @@
       :value="modelValue"
       :placeholder="placeholder"
       :disabled="disabled"
+      class="w-full px-4 py-2.5 rounded-xl text-sm shadow-sm transition-all focus:outline-none focus:ring-2"
+      :style="[
+        {
+          background: disabled ? 'var(--ctrl-bg-disabled)' : 'var(--ctrl-bg)',
+          color: 'var(--ctrl-text)',
+          borderColor: error ? '#fb7185' : 'var(--ctrl-border)',
+          border: '1px solid',
+        },
+        disabled ? { cursor: 'not-allowed', opacity: '0.6' } : {}
+      ]"
       :class="[
-        'w-full px-4 py-2.5 bg-surface-50 dark:bg-surface-800 border rounded-xl text-surface-900 dark:text-surface-100 placeholder-surface-400 dark:placeholder-surface-500 text-sm',
-        'focus:outline-none focus:ring-1 transition-all',
-        error
-          ? 'border-error focus:border-error focus:ring-error/30'
-          : 'border-surface-300 dark:border-surface-700 focus:border-primary/50 focus:ring-primary/20',
+        'focus:ring-[var(--color-primary-glow)]',
+        error ? 'border-error focus:border-error focus:ring-error/30' : ''
       ]"
       @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
       @blur="$emit('blur', $event)"

@@ -44,18 +44,18 @@
         </template>
         <div class="space-y-4">
           <div class="flex items-center justify-between text-sm">
-            <span class="text-surface-400">{{ t('system.redis') }}</span>
+            <span class="text-surface-700 dark:text-surface-300 font-medium">{{ t('system.redis') }}</span>
             <StatusDot :status="status.redis?.connected ? 'connected' : 'disconnected'" :label="status.redis?.connected ? t('system.status.connected') : t('system.status.disconnected')" />
           </div>
           <div class="flex items-center justify-between text-sm">
-            <span class="text-surface-400">{{ t('system.database') }}</span>
+            <span class="text-surface-700 dark:text-surface-300 font-medium">{{ t('system.database') }}</span>
             <div class="flex items-center gap-2">
               <StatusDot :status="status.database?.connected ? 'connected' : 'disconnected'" :label="status.database?.connected ? t('system.status.connected') : t('system.status.disconnected')" />
               <Badge v-if="status.database?.type" variant="default" size="sm">{{ status.database.type }}</Badge>
             </div>
           </div>
           <div class="flex items-center justify-between text-sm">
-            <span class="text-surface-400">{{ t('system.sseStream') }}</span>
+            <span class="text-surface-700 dark:text-surface-300 font-medium">{{ t('system.sseStream') }}</span>
             <StatusDot :status="ws.isConnected ? 'connected' : 'disconnected'" :label="ws.isConnected ? t('system.status.connected') : t('system.status.disconnected')" />
           </div>
         </div>
@@ -105,7 +105,7 @@
         <p class="text-2xl font-bold font-mono text-surface-900 dark:text-white mb-3 group-hover:text-primary transition-colors">
           {{ formatBytes(metrics.memory?.used) }} <span class="text-surface-400 dark:text-surface-500">/</span> {{ formatBytes(metrics.memory?.total) }}
         </p>
-        <div class="w-full bg-surface-950/50 rounded-full h-2 border border-surface-700/50 overflow-hidden shadow-inner relative">
+        <div class="w-full bg-surface-200 dark:bg-surface-950/50 rounded-full h-2.5 border border-surface-300 dark:border-surface-700/50 overflow-hidden shadow-inner relative">
           <div
             class="h-full rounded-full transition-all duration-1000 ease-out relative"
             :class="memoryUsagePercent > 80 ? 'bg-error shadow-glow-error' : memoryUsagePercent > 60 ? 'bg-warning' : 'bg-primary shadow-glow-primary'"
@@ -114,7 +114,7 @@
             <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
           </div>
         </div>
-        <p class="text-xs text-surface-500 dark:text-surface-400 mt-2 font-mono">{{ memoryUsagePercent }}% {{ t('system.memoryUsage') }}</p>
+        <p class="text-xs text-surface-600 dark:text-surface-400 mt-2 font-mono">{{ memoryUsagePercent }}% {{ t('system.memoryUsage') }}</p>
       </Card>
 
       <!-- Threads -->

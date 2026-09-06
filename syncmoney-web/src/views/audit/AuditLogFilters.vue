@@ -4,29 +4,15 @@
       <!-- Row 1: Primary filters -->
       <div class="flex flex-wrap items-center gap-3">
         <!-- Real-time toggle and connection status -->
-        <div class="flex items-center gap-2">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              :checked="realtime"
-              class="sr-only peer"
-              :aria-label="t('audit.realtime')"
-              @change="onRealtimeChange"
-            />
-            <div :class="[
-              'relative w-11 h-6 rounded-full transition-colors duration-300',
-              'peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full',
-              'peer-checked:after:border-white after:content-[\'\'] after:absolute after:top-[2px]',
-              'after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all',
-              realtime ? 'bg-success' : 'bg-error'
-            ]"></div>
-            <span :class="['text-sm font-medium transition-colors duration-300', realtime ? 'text-success' : 'text-error']">
-              {{ t('audit.realtime') }}
-            </span>
-          </label>
+        <div class="flex items-center gap-3">
+          <Switch
+            :model-value="realtime"
+            :label="t('audit.realtime')"
+            @update:model-value="onRealtimeToggle"
+          />
 
           <!-- Connection status indicator -->
-          <div class="flex items-center gap-1.5">
+          <div class="flex items-center gap-1.5 ml-1">
             <span
               :class="[
                 'w-2 h-2 rounded-full transition-all duration-300',
@@ -35,7 +21,7 @@
                 'bg-error shadow-[0_0_8px_rgba(239,68,68,0.6)]'
               ]"
             ></span>
-            <span class="text-xs text-surface-500">
+            <span class="text-xs text-surface-500 dark:text-surface-400">
               {{ connectionStatusText }}
             </span>
           </div>
@@ -52,14 +38,19 @@
         <!-- Type filter -->
         <select
           :value="type"
-          class="px-3 py-2 bg-surface-50/50 dark:bg-surface-950/50 backdrop-blur-md border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-surface-200 focus:outline-none focus:border-primary focus:shadow-glow-sm transition-all duration-300 appearance-none cursor-pointer"
+          class="px-3 py-2 rounded-lg text-sm focus:outline-none shadow-sm transition-all duration-300 appearance-none cursor-pointer"
+          :style="{
+            background: 'var(--ctrl-bg)',
+            border: '1px solid var(--ctrl-border)',
+            color: 'var(--ctrl-text)',
+          }"
           :aria-label="t('audit.filters.type')"
           @change="type = ($event.target as HTMLSelectElement).value"
         >
-          <option value="" class="bg-surface-50 dark:bg-surface-900">{{ t('audit.typeOptions.all') }}</option>
-          <option value="DEPOSIT" class="bg-surface-50 dark:bg-surface-900">{{ t('audit.typeOptions.deposit') }}</option>
-          <option value="WITHDRAW" class="bg-surface-50 dark:bg-surface-900">{{ t('audit.typeOptions.withdraw') }}</option>
-          <option value="TRANSFER" class="bg-surface-50 dark:bg-surface-900">{{ t('audit.typeOptions.transfer') }}</option>
+          <option value="" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('audit.typeOptions.all') }}</option>
+          <option value="DEPOSIT" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('audit.typeOptions.deposit') }}</option>
+          <option value="WITHDRAW" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('audit.typeOptions.withdraw') }}</option>
+          <option value="TRANSFER" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('audit.typeOptions.transfer') }}</option>
         </select>
 
         <!-- Action buttons -->
@@ -86,10 +77,10 @@
             :key="shortcut.key"
             @click="setDateShortcut(shortcut.key)"
             :class="[
-              'px-2 py-1.5 text-xs rounded-md transition-all duration-200 border',
+              'px-2.5 py-1.5 text-xs rounded-md transition-all duration-200 border font-medium',
               activeShortcut === shortcut.key
                 ? 'bg-primary text-white border-primary shadow-glow-sm'
-                : 'bg-surface-50/50 dark:bg-surface-950/50 border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:border-primary hover:text-primary'
+                : 'bg-white dark:bg-surface-800/80 border-surface-300 dark:border-surface-700 text-surface-700 dark:text-surface-300 hover:border-primary hover:text-primary'
             ]"
           >
             {{ t(`audit.dateShortcut.${shortcut.key}`) }}
@@ -102,18 +93,20 @@
             type="datetime-local"
             v-model="startDateTimeLocal"
             @change="onDateTimeChange"
-            class="px-2 py-1.5 w-[150px] bg-surface-50/50 dark:bg-surface-950/50 backdrop-blur-md border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-surface-200 focus:outline-none focus:border-primary transition-all duration-300"
+            class="px-2.5 py-1.5 w-[160px] rounded-lg text-xs focus:outline-none shadow-sm transition-all duration-300"
+            :style="{ background: 'var(--ctrl-bg)', border: '1px solid var(--ctrl-border)', color: 'var(--ctrl-text)' }"
             :aria-label="t('audit.filters.startTime')"
           />
 
-          <span class="text-surface-400 text-sm select-none">—</span>
+          <span class="text-sm select-none" :style="{ color: 'var(--text-muted)' }">—</span>
 
           <!-- End datetime input -->
           <input
             type="datetime-local"
             v-model="endDateTimeLocal"
             @change="onDateTimeChange"
-            class="px-2 py-1.5 w-[150px] bg-surface-50/50 dark:bg-surface-950/50 backdrop-blur-md border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-surface-200 focus:outline-none focus:border-primary transition-all duration-300"
+            class="px-2.5 py-1.5 w-[160px] rounded-lg text-xs focus:outline-none shadow-sm transition-all duration-300"
+            :style="{ background: 'var(--ctrl-bg)', border: '1px solid var(--ctrl-border)', color: 'var(--ctrl-text)' }"
             :aria-label="t('audit.filters.endTime')"
           />
 
@@ -142,6 +135,7 @@ import { normalizeTimezone } from '@/utils/timezone'
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
 import Card from '@/components/common/Card.vue'
 import Button from '@/components/common/Button.vue'
+import Switch from '@/components/common/Switch.vue'
 import AuditLogSearchBar from './AuditLogSearchBar.vue'
 
 const { t } = useI18n()
@@ -164,10 +158,9 @@ const emit = defineEmits<{
   'toggle-realtime': [enabled: boolean]
 }>()
 
-function onRealtimeChange(e: Event) {
-  const checked = (e.target as HTMLInputElement).checked
-  realtime.value = checked
-  emit('toggle-realtime', checked)
+function onRealtimeToggle(val: boolean) {
+  realtime.value = val
+  emit('toggle-realtime', val)
 }
 
 function toLocalDateTimeStrFull(d: Date): string {

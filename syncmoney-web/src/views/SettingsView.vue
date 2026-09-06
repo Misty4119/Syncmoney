@@ -50,10 +50,11 @@
       </template>
       <select
         v-model="language"
-        class="w-full max-w-xs px-4 py-3 bg-surface-50/50 dark:bg-surface-950/50 backdrop-blur-md border border-surface-200 dark:border-surface-700 rounded-xl text-surface-900 dark:text-surface-200 focus:outline-none focus:border-primary focus:shadow-glow-sm transition-all duration-300 appearance-none cursor-pointer"
+        class="w-full max-w-xs px-4 py-3 rounded-xl font-medium focus:outline-none shadow-sm transition-all duration-300 appearance-none cursor-pointer"
+        :style="{ background: 'var(--ctrl-bg)', border: '1px solid var(--ctrl-border)', color: 'var(--ctrl-text)' }"
       >
-        <option value="zh-TW" class="bg-surface-bg dark:bg-surface-900">{{ t('settings.languageOptions.zh-TW') }}</option>
-        <option value="en-US" class="bg-surface-bg dark:bg-surface-900">{{ t('settings.languageOptions.en-US') }}</option>
+        <option value="zh-TW" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('settings.languageOptions.zh-TW') }}</option>
+        <option value="en-US" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ t('settings.languageOptions.en-US') }}</option>
       </select>
     </Card>
 
@@ -69,9 +70,10 @@
       </template>
       <select
         v-model="timezone"
-        class="w-full max-w-xs px-4 py-3 bg-surface-50/50 dark:bg-surface-950/50 backdrop-blur-md border border-surface-200 dark:border-surface-700 rounded-xl text-surface-900 dark:text-surface-200 focus:outline-none focus:border-primary focus:shadow-glow-sm transition-all duration-300 appearance-none cursor-pointer"
+        class="w-full max-w-xs px-4 py-3 rounded-xl font-medium focus:outline-none shadow-sm transition-all duration-300 appearance-none cursor-pointer"
+        :style="{ background: 'var(--ctrl-bg)', border: '1px solid var(--ctrl-border)', color: 'var(--ctrl-text)' }"
       >
-        <option v-for="tz in timezoneOptions" :key="tz" :value="tz" class="bg-surface-bg dark:bg-surface-900">{{ tz }}</option>
+        <option v-for="tz in timezoneOptions" :key="tz" :value="tz" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">{{ tz }}</option>
       </select>
     </Card>
 

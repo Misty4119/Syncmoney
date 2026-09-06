@@ -36,11 +36,14 @@ const cardClasses = computed(() => {
         ? 'glass-card-hoverable'
         : 'glass-card'
       : props.variant === 'solid'
-        ? 'bg-surface-800 rounded-xl border border-surface-700'
-        : 'rounded-xl border border-surface-700'
+        ? 'rounded-xl shadow-sm'
+        : 'rounded-xl'
+
 
   return [
     base,
+    props.variant === 'solid' ? 'bg-white dark:bg-surface-800 border border-surface-300 dark:border-surface-700' : '',
+    props.variant === 'outline' ? 'border border-surface-300 dark:border-surface-700 bg-white/40 dark:bg-surface-900/40' : '',
     { 'shadow-glow-sm border-primary/20 shadow-glow-primary': props.glow },
     { 'hoverable': props.hoverable && props.variant !== 'glass' },
   ]

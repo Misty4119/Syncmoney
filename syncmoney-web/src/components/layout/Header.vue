@@ -1,5 +1,8 @@
 <template>
-  <header class="h-16 glass-card border border-surface-200 dark:border-white/[0.08] flex items-center justify-between px-4 md:px-6 sticky top-4 z-20 mx-4 md:mx-6 lg:mx-8 rounded-2xl mb-6 backdrop-blur-xl bg-surface-50/70 dark:bg-surface-base/70 shadow-[0_8px_32px_var(--glass-shadow-color)] transition-all duration-300">
+  <header
+    class="h-16 glass-card flex items-center justify-between px-4 md:px-6 sticky top-4 z-20 mx-4 md:mx-6 lg:mx-8 rounded-2xl mb-6 backdrop-blur-xl shadow-[0_8px_32px_var(--glass-shadow-color)] transition-all duration-300"
+    :style="{ background: 'var(--header-bg)', borderColor: 'var(--surface-border)' }"
+  >
     <!-- Left: hamburger + page title -->
     <div class="flex items-center gap-3">
       <button
@@ -21,7 +24,7 @@
 
       <!-- Theme Toggle -->
       <button
-        class="p-2 rounded-lg hover:bg-primary/10 hover:text-primary text-surface-400 transition-all duration-300 relative group"
+        class="p-2 rounded-lg hover:bg-primary/10 hover:text-primary text-surface-600 dark:text-surface-400 transition-all duration-300 relative group"
         @click="toggleTheme"
         :title="t('nav.toggleTheme')"
       >
@@ -32,7 +35,7 @@
       <!-- Notifications Bell - always visible -->
       <div class="relative">
         <button
-          class="p-2 rounded-lg hover:bg-primary/10 hover:text-primary text-surface-400 transition-all duration-300 relative group"
+          class="p-2 rounded-lg hover:bg-primary/10 hover:text-primary text-surface-600 dark:text-surface-400 transition-all duration-300 relative group"
           @click="showNotifications = !showNotifications"
           :title="t('nav.notifications')"
         >
@@ -53,11 +56,16 @@
 
       <select
         v-model="currentLocale"
-        class="px-3 py-1.5 bg-surface-50/50 dark:bg-surface-950/50 border border-surface-200 dark:border-surface-700 hover:border-primary/50 rounded-lg text-surface-600 dark:text-surface-200 text-sm focus:outline-none focus:border-primary focus:shadow-glow-sm transition-all duration-300 appearance-none cursor-pointer [&::-ms-expand]:hidden [&::-webkit-appearance]:none"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium focus:outline-none shadow-sm transition-all duration-300 appearance-none cursor-pointer"
+        :style="{
+          background: 'var(--ctrl-bg)',
+          border: '1px solid var(--ctrl-border)',
+          color: 'var(--ctrl-text)'
+        }"
         @change="handleLocaleChange"
       >
-        <option value="zh-TW" class="bg-surface-50 dark:bg-surface-900 text-surface-900 dark:text-surface-100">TW</option>
-        <option value="en-US" class="bg-surface-50 dark:bg-surface-900 text-surface-900 dark:text-surface-100">EN</option>
+        <option value="zh-TW" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">TW</option>
+        <option value="en-US" :style="{ background: 'var(--ctrl-bg)', color: 'var(--ctrl-text)' }">EN</option>
       </select>
     </div>
   </header>

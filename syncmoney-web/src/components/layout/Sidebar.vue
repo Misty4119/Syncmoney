@@ -2,7 +2,8 @@
   <!-- Desktop sidebar -->
   <aside
     v-if="!isMobile"
-    class="fixed left-0 top-0 h-full z-40 flex flex-col border-r border-surface-200 dark:border-white/[0.08] bg-surface-50/85 dark:bg-surface-base/90 backdrop-blur-xl transition-all duration-300 ease-out"
+    class="fixed left-0 top-0 h-full z-40 flex flex-col backdrop-blur-xl transition-all duration-300 ease-out"
+    :style="{ background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)' }"
     :class="collapsed ? 'w-20' : 'w-64'"
   >
     <!-- Brand -->
@@ -49,7 +50,8 @@
   <Transition name="sidebar-slide">
     <aside
       v-if="isMobile && mobileOpen"
-      class="fixed left-0 top-0 h-full w-64 z-50 flex flex-col border-r border-surface-200 dark:border-surface-700 bg-surface-50/95 dark:bg-surface-950/95 backdrop-blur-xl"
+      class="fixed left-0 top-0 h-full w-64 z-50 flex flex-col backdrop-blur-xl"
+      :style="{ background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)' }"
     >
       <!-- Brand -->
       <div class="flex items-center justify-between px-4 h-16 border-b border-surface-200/50 dark:border-surface-700/50">
@@ -155,7 +157,7 @@ function handleLogout() {
 
 <style scoped>
 .nav-link {
-  @apply flex items-center gap-3 px-3 py-3 rounded-xl text-sm text-surface-600 dark:text-surface-400 font-medium;
+  @apply flex items-center gap-3 px-3 py-3 rounded-xl text-sm text-surface-700 dark:text-surface-300 font-medium;
   @apply transition-all duration-300 ease-out no-underline relative overflow-hidden;
   will-change: transform, color, background-color;
 }

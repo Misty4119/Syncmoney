@@ -4,65 +4,124 @@
 
 /* ============================================================
    Design System — Syncmoney Web Admin
+   Light  : 天空藍 (#9CC3FF) → 淡紫色 (#D9B3FF) palette
+   Dark   : 微光藍 (#709FFF) → 發光淡紫 (#C58FFF) palette
    ============================================================ */
 
 @layer base {
   :root {
-    /* Light Theme (Default / .light) */
-    --color-primary: theme('colors.violet.500');
-    --color-primary-hover: theme('colors.violet.600');
-    --color-primary-glow: rgba(139, 92, 246, 0.3);
-    --color-secondary: theme('colors.indigo.500');
+    /* ── Light Theme ──────────────────────────────────────
+       天空藍   : #9CC3FF   深天空藍 : #6FA8FF
+       淡紫色   : #D9B3FF   柔和紫   : #B89BE8
+       板岩灰   : #8C8FA3   微語白   : #D6DAEA
+    ────────────────────────────────────────────────────── */
 
-    /* Surfaces (Light) */
-    --surface-bg: theme('colors.surface.50');
-    --surface-base: theme('colors.surface.200');
-    --surface-elevated: theme('colors.white');
-    --surface-overlay: rgba(255, 255, 255, 0.85);
-    --surface-border: theme('colors.surface.200');
+    /* Primary / Secondary */
+    --color-primary:        #6FA8FF;
+    --color-primary-hover:  #5A96F0;
+    --color-primary-light:  #9CC3FF;
+    --color-primary-glow:   rgba(111, 168, 255, 0.28);
+    --color-secondary:      #B89BE8;
+    --color-secondary-glow: rgba(184, 155, 232, 0.22);
 
-    /* Text (Light) */
-    --text-primary: theme('colors.surface.900');
-    --text-secondary: theme('colors.surface.600');
-    --text-muted: theme('colors.surface.400');
+    /* Surfaces — 頁面用淡藍灰，卡片用白，層次明確 */
+    --surface-bg:            #E8EDFB;
+    --surface-base:          #FFFFFF;
+    --surface-elevated:      #F4F7FF;
+    --surface-overlay:       rgba(255, 255, 255, 0.90);
+    --surface-border:        #B8C5E0;
+    --surface-border-subtle: #D4DCF0;
 
-    /* Glassmorphism (Light) */
-    --glass-bg: rgba(255, 255, 255, 0.3);;
-    --glass-border: rgba(148, 163, 184, 0.2);
-    --glass-blur: 24px;
-    --glass-shadow-color: rgba(31, 38, 135, 0.07);
+    /* Text — 高對比深藍黑 */
+    --text-primary:   #131829;
+    --text-secondary: #364060;
+    --text-muted:     #8C8FA3;
+    --text-inverted:  #FFFFFF;
 
-    /* Grid (Light) */
-    --grid-color: rgba(139, 92, 246, 0.05);
+    /* Form Controls */
+    --ctrl-bg:           #FFFFFF;
+    --ctrl-bg-disabled:  #EEF2FB;
+    --ctrl-bg-off:       #C8D2EA;
+    --ctrl-border:       #B8C5E0;
+    --ctrl-border-focus: #5A96F0;
+    --ctrl-text:         #131829;
+    --ctrl-placeholder:  #8C8FA3;
+
+    /* Glassmorphism */
+    --glass-bg:           rgba(255, 255, 255, 0.80);
+    --glass-border:       rgba(90, 150, 240, 0.18);
+    --glass-blur:         18px;
+    --glass-shadow-color: rgba(60, 80, 150, 0.09);
+
+    /* Grid */
+    --grid-color: rgba(90, 150, 240, 0.05);
+
+    /* Sidebar / Header */
+    --sidebar-bg:     rgba(255, 255, 255, 0.92);
+    --sidebar-border: #B8C5E0;
+    --header-bg:      rgba(255, 255, 255, 0.88);
+
+    /* Scrollbar */
+    --scrollbar-thumb: #C0CCE4;
+    --scrollbar-hover: #9CC3FF;
   }
 
   .dark {
-    /* Dark Theme — Cyber-financial HUD & Obsidian palette */
-    --color-primary: theme('colors.cyan.400');
-    --color-primary-hover: theme('colors.cyan.300');
-    --color-primary-glow: rgba(34, 211, 238, 0.25);
-    --color-secondary: theme('colors.lavender.500');
+    /* ── Dark Theme ───────────────────────────────────────
+       深邃板岩   : #121520   暗夜紫   : #1E2030
+       霓虹天空藍 : #4A8CFF   微光藍   : #709FFF
+       霓虹紫     : #A078E6   發光淡紫 : #C58FFF
+       夜語白     : #E6EAFA   靜謐灰   : #8D93AB
+    ────────────────────────────────────────────────────── */
 
-    /* Surfaces (Dark / Deep Obsidian) */
-    --surface-bg: #06080e;
-    --surface-base: #0a0d16;
-    --surface-elevated: #101522;
-    --surface-overlay: rgba(6, 8, 14, 0.88);
-    --surface-border: rgba(255, 255, 255, 0.08);
+    /* Primary / Secondary */
+    --color-primary:        #709FFF;
+    --color-primary-hover:  #4A8CFF;
+    --color-primary-light:  #4A8CFF;
+    --color-primary-glow:   rgba(112, 159, 255, 0.30);
+    --color-secondary:      #C58FFF;
+    --color-secondary-glow: rgba(197, 143, 255, 0.25);
 
-    /* Text (Dark) */
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    /* Surfaces */
+    --surface-bg:            #121520;
+    --surface-base:          #1E2030;
+    --surface-elevated:      #262840;
+    --surface-overlay:       rgba(18, 21, 32, 0.90);
+    --surface-border:        rgba(112, 159, 255, 0.16);
+    --surface-border-subtle: rgba(141, 147, 171, 0.12);
 
-    /* Glassmorphism (Dark) */
-    --glass-bg: rgba(10, 13, 22, 0.75);
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --glass-blur: 20px;
-    --glass-shadow-color: rgba(0, 0, 0, 0.4);
+    /* Text */
+    --text-primary:   #E6EAFA;
+    --text-secondary: #A8B2D2;
+    --text-muted:     #8D93AB;
+    --text-inverted:  #121520;
 
-    /* Grid (Dark) */
-    --grid-color: rgba(34, 211, 238, 0.035);
+    /* Form Controls */
+    --ctrl-bg:           #1E2030;
+    --ctrl-bg-disabled:  #191C2C;
+    --ctrl-bg-off:       #2A2E48;
+    --ctrl-border:       rgba(112, 159, 255, 0.28);
+    --ctrl-border-focus: #709FFF;
+    --ctrl-text:         #E6EAFA;
+    --ctrl-placeholder:  #8D93AB;
+
+    /* Glassmorphism */
+    --glass-bg:           rgba(30, 32, 48, 0.74);
+    --glass-border:       rgba(112, 159, 255, 0.15);
+    --glass-blur:         22px;
+    --glass-shadow-color: rgba(0, 0, 0, 0.45);
+
+    /* Grid */
+    --grid-color: rgba(112, 159, 255, 0.04);
+
+    /* Sidebar / Header */
+    --sidebar-bg:     rgba(18, 21, 32, 0.94);
+    --sidebar-border: rgba(112, 159, 255, 0.12);
+    --header-bg:      rgba(18, 21, 32, 0.88);
+
+    /* Scrollbar */
+    --scrollbar-thumb: rgba(112, 159, 255, 0.26);
+    --scrollbar-hover: rgba(112, 159, 255, 0.52);
   }
 
   body {
@@ -97,11 +156,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-surface-700 rounded-full;
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-surface-600;
+    background: var(--scrollbar-hover);
   }
 
   /* Selection */
@@ -135,7 +195,7 @@
   }
 
   .glass-card-hoverable:hover {
-    border-color: rgba(148, 163, 184, 0.25);
+    border-color: var(--color-primary-light);
     transform: translateY(-2px) scale(1.01);
     box-shadow: 0 12px 40px var(--glass-shadow-color), 0 0 15px var(--color-primary-glow);
   }
@@ -181,7 +241,7 @@
 
   /* ---- Skeleton shimmer ---- */
   .skeleton {
-    background-color: var(--surface-border);
+    background-color: var(--surface-border-subtle);
     @apply rounded relative overflow-hidden;
     animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
@@ -228,7 +288,8 @@
   }
 
   .status-dot.loading {
-    @apply bg-surface-400 animate-pulse;
+    background-color: var(--surface-border);
+    @apply animate-pulse;
   }
 
   /* ---- Page transitions ---- */

@@ -37,20 +37,28 @@
             <div
               v-for="field in section.fields"
               :key="field.key"
-              class="flex justify-between items-center py-2 border-b border-surface-200/50 dark:border-surface-700/50 last:border-0"
+              class="flex justify-between items-center py-2.5 border-b border-surface-200/70 dark:border-surface-700/50 last:border-0"
             >
               <div class="flex-1 mr-4">
-                <div class="text-sm text-surface-700 dark:text-surface-300">{{ getFieldLabel(section.key, field.key, field.fullKey) }}</div>
-                <div v-if="getFieldDescription(section.key, field.key, field.fullKey)" class="text-xs text-surface-500">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium text-surface-900 dark:text-surface-100">
+                    {{ getFieldLabel(section.key, field.key, field.fullKey) }}
+                  </span>
+                  <Badge v-if="!field.editable" variant="default" size="sm" class="text-[10px] px-1.5 py-0">
+                    {{ t('config.readOnly') || '唯讀' }}
+                  </Badge>
+                </div>
+                <div v-if="getFieldDescription(section.key, field.key, field.fullKey)" class="text-xs text-surface-500 dark:text-surface-400 mt-0.5">
                   {{ getFieldDescription(section.key, field.key, field.fullKey) }}
                 </div>
               </div>
-              <div class="w-64">
+              <div class="w-64 flex justify-end">
                 <!-- Boolean field -->
                 <Switch
                   v-if="field.type === 'boolean'"
                   :model-value="Boolean(getFieldValue(section.key, field.key, field.fullKey))"
                   :disabled="!field.editable"
+                  :disabled-reason="t('config.readOnlyFieldHint') || '此設定為系統鎖定唯讀項目'"
                   @update:model-value="updateField(section.key, field.key, $event, field.fullKey)"
                 />
 
