@@ -47,8 +47,9 @@ dependencies {
     implementation("org.postgresql:postgresql:42.7.5")
     implementation("org.xerial:sqlite-jdbc:3.49.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
-    implementation("net.kyori:adventure-text-minimessage:4.20.0")
-    implementation("net.kyori:adventure-text-serializer-ansi:4.20.0")
+    // Must link against the Adventure API supplied by the oldest supported Paper (1.20.4).
+    implementation("net.kyori:adventure-text-minimessage:4.16.0")
+    implementation("net.kyori:adventure-text-serializer-ansi:4.16.0")
     implementation("org.bstats:bstats-bukkit:3.1.0")
 
     implementation 'io.undertow:undertow-core:2.3.18.Final'
@@ -106,9 +107,29 @@ tasks {
 
 def targetJavaVersion = 21
 java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
+}
+
+// A separate acceptance plugin, never included in the distributable Syncmoney JAR.
+sourceSets {
+    acceptance {
+        compileClasspath += sourceSets.main.output + configurations.compileClasspath
+    }
+}
+tasks.register('acceptanceJar', Jar) {
+    dependsOn acceptanceClasses
+    archiveFileName = 'SyncmoneyAcceptance.jar'
+    destinationDirectory = layout.buildDirectory.dir('acceptance')
+    from sourceSets.acceptance.output
+}
+tasks.register('preparePlugdev', Copy) {
+    dependsOn shadowJar
+    from(tasks.shadowJar.archiveFile)
+    into(layout.buildDirectory.dir('plugdev'))
+    rename { 'Syncmoney.jar' }
 }
 
 tasks.withType(JavaCompile).configureEach {

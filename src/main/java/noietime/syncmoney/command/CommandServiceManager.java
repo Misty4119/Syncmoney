@@ -182,7 +182,7 @@ public class CommandServiceManager {
         BaltopCommand baltopCommand = new BaltopCommand(plugin, config, baltopManager, economyFacade);
         register("baltop", baltopCommand);
 
-        if (config.circuitBreaker().isCircuitBreakerEnabled() && circuitBreaker != null) {
+        {
             BreakerCommand breakerCommand = new BreakerCommand(plugin, circuitBreaker);
             syncmoneyRouter.register("breaker", breakerCommand);
         }

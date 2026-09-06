@@ -61,6 +61,10 @@ replay_pid*.log
 # Runtime & Configuration (Sensitive)
 # =============================================
 # Runtime generated plugin directories (if any)
+.plugdev/
+.plugdev-test/
+plugdev-run/
+forwarding.secret
 plugins/
 world/
 world_nether/

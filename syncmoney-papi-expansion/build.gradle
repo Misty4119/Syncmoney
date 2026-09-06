@@ -43,6 +43,7 @@ test {
 
 def targetJavaVersion = 21
 java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
