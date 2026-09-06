@@ -19,7 +19,7 @@ target/
 # =============================================
 syncmoney-web/node_modules/
 syncmoney-web/dist/
-Syncmoney-web.tar.gz
+syncmoney-web.tar.gz
 playwright-report/
 test-results/
 playwright/.cache/
@@ -35,6 +35,8 @@ coverage/
 *.iws
 .vscode/
 .cursor/
+.agents/
+.codex/
 .vs/
 *.swp
 *.swo
@@ -75,6 +77,9 @@ local_*.yml
 local_*.properties
 secrets.yml
 credentials.yml
+.env
+.env.*
+!.env.example
 *.auth
 *.key
 *.pem
@@ -118,13 +123,16 @@ bukkit.yml
 paper.yml
 purpur.yml
 
-# Private notes
-*.md
+# Local planning and private notes (public Markdown remains trackable)
+Objective.md
+crash-reports/
+test-output/
 
 # =============================================
 # Files to keep
 # =============================================
 !README.md
+!AGENTS.md
 !CHANGELOG.md
 !docs/*.md
 !gradle/wrapper/*.jar
