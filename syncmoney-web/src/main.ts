@@ -12,6 +12,10 @@ app.use(createPinia())
 app.use(router)
 app.use(i18n)
 
+app.config.errorHandler = (err, _instance, info) => {
+  console.error('[Syncmoney Global Error]:', err, info)
+}
+
 
 if (import.meta.env.DEV) {
   async function startMSW() {

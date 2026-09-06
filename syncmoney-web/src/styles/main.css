@@ -37,32 +37,32 @@
   }
 
   .dark {
-    /* Dark Theme */
-    --color-primary: theme('colors.cyan.500');
-    --color-primary-hover: theme('colors.cyan.400');
-    --color-primary-glow: rgba(6, 182, 212, 0.25);
+    /* Dark Theme — Cyber-financial HUD & Obsidian palette */
+    --color-primary: theme('colors.cyan.400');
+    --color-primary-hover: theme('colors.cyan.300');
+    --color-primary-glow: rgba(34, 211, 238, 0.25);
     --color-secondary: theme('colors.lavender.500');
 
-    /* Surfaces (Dark / Slate 900) */
-    --surface-bg: theme('colors.surface.950');
-    --surface-base: theme('colors.surface.900');
-    --surface-elevated: theme('colors.surface.800');
-    --surface-overlay: rgba(15, 23, 42, 0.85);
-    --surface-border: theme('colors.surface.700');
+    /* Surfaces (Dark / Deep Obsidian) */
+    --surface-bg: #06080e;
+    --surface-base: #0a0d16;
+    --surface-elevated: #101522;
+    --surface-overlay: rgba(6, 8, 14, 0.88);
+    --surface-border: rgba(255, 255, 255, 0.08);
 
     /* Text (Dark) */
-    --text-primary: theme('colors.surface.100');
-    --text-secondary: theme('colors.surface.400');
-    --text-muted: theme('colors.surface.500');
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
 
     /* Glassmorphism (Dark) */
-    --glass-bg: rgba(15, 23, 42, 0.65);
-    --glass-border: rgba(148, 163, 184, 0.1);
-    --glass-blur: 24px;
-    --glass-shadow-color: rgba(0, 0, 0, 0.25);
+    --glass-bg: rgba(10, 13, 22, 0.75);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-blur: 20px;
+    --glass-shadow-color: rgba(0, 0, 0, 0.4);
 
     /* Grid (Dark) */
-    --grid-color: rgba(6, 182, 212, 0.04);
+    --grid-color: rgba(34, 211, 238, 0.035);
   }
 
   body {
@@ -80,9 +80,9 @@
     background-image:
       linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
       linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
-    background-size: 40px 40px;
-    mask-image: radial-gradient(circle at center, black, transparent 80%);
-    -webkit-mask-image: radial-gradient(circle at center, black, transparent 80%);
+    background-size: 36px 36px;
+    mask-image: radial-gradient(circle at center, black 40%, transparent 85%);
+    -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 85%);
     transition: background-image 0.5s ease;
   }
 

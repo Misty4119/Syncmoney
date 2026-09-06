@@ -110,6 +110,18 @@ watch(theme, (newTheme) => {
   applyThemePreview(newTheme)
 })
 
+watch(() => settingsStore.theme, (newTheme) => {
+  if (theme.value !== newTheme) {
+    theme.value = newTheme
+  }
+})
+
+watch(() => settingsStore.locale, (newLocale) => {
+  if (language.value !== newLocale) {
+    language.value = newLocale
+  }
+})
+
 const themeOptions = [
   { value: 'light', label: 'settings.themeOptions.light', icon: Sun },
   { value: 'dark', label: 'settings.themeOptions.dark', icon: Moon }

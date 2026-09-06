@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X } from 'lucide-vue-next'
 import type { AuditRecord } from '@/api/client'
@@ -61,13 +61,27 @@ const props = defineProps<{
   open: boolean
 }>()
 
-defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: [] }>()
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
 
 const dialogRef = ref<HTMLElement | null>(null)
 const closeRef = ref<HTMLElement | null>(null)
+
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (props.open && e.key === 'Escape') {
+    emit('close')
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 
 watch(
   () => props.open,
@@ -108,15 +122,18 @@ const rows = computed<DetailRow[]>(() => {
   const r = props.record
   if (!r) return []
 
-  const amountNum = parseFloat(String(r.amount))
+  const rawAmount = String(r.amount ?? '').trim()
+  const isPositive = !rawAmount.startsWith('-')
+  const formattedAmount = !rawAmount.startsWith('-') && !rawAmount.startsWith('+') ? `+${rawAmount}` : rawAmount
+
   const list: DetailRow[] = [
     { label: t('audit.time'), value: formatDate(Number(r.timestamp)) },
     { label: t('audit.player'), value: r.playerName || r.playerUuid },
     { label: t('audit.type'), value: t(`audit.typeOptions.${String(r.type).toLowerCase()}`), badge: true },
     {
       label: t('audit.amount'),
-      value: `${amountNum >= 0 ? '+' : ''}${r.amount}`,
-      class: amountNum >= 0 ? 'text-success font-bold' : 'text-error font-bold',
+      value: formattedAmount,
+      class: isPositive ? 'text-success font-bold font-mono' : 'text-error font-bold font-mono',
     },
     { label: t('audit.detail.balanceBefore'), value: r.balanceBefore },
     { label: t('audit.balance'), value: r.balanceAfter },

@@ -1,5 +1,5 @@
 <template>
-  <header class="h-16 glass-card border border-surface-200 dark:border-surface-700 flex items-center justify-between px-4 md:px-6 sticky top-4 z-20 mx-4 md:mx-6 lg:mx-8 rounded-2xl mb-6 backdrop-blur-xl bg-surface-50/70 dark:bg-surface-950/70 shadow-[0_8px_32px_var(--glass-shadow-color)] transition-all duration-300">
+  <header class="h-16 glass-card border border-surface-200 dark:border-white/[0.08] flex items-center justify-between px-4 md:px-6 sticky top-4 z-20 mx-4 md:mx-6 lg:mx-8 rounded-2xl mb-6 backdrop-blur-xl bg-surface-50/70 dark:bg-surface-base/70 shadow-[0_8px_32px_var(--glass-shadow-color)] transition-all duration-300">
     <!-- Left: hamburger + page title -->
     <div class="flex items-center gap-3">
       <button

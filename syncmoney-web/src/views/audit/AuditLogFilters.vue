@@ -137,11 +137,15 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Search, Download, X } from 'lucide-vue-next'
+import { useSettingsStore } from '@/stores/settings'
+import { normalizeTimezone } from '@/utils/timezone'
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
 import Card from '@/components/common/Card.vue'
 import Button from '@/components/common/Button.vue'
 import AuditLogSearchBar from './AuditLogSearchBar.vue'
 
 const { t } = useI18n()
+const settingsStore = useSettingsStore()
 
 const player = defineModel<string>('player', { default: '' })
 const type = defineModel<string>('type', { default: '' })
@@ -191,12 +195,36 @@ const endDateTimeLocal = ref<string>('')
 
 const hasDateFilter = computed(() => startTime.value !== null || endTime.value !== null)
 
-/** [SYNC-WEB-031] Parse datetime-local string to timestamp */
+function getNormalizedTz(): string {
+  try {
+    return normalizeTimezone(settingsStore.timezone)
+  } catch {
+    return 'UTC'
+  }
+}
+
+function formatToInputStr(date: Date): string {
+  try {
+    const tz = getNormalizedTz()
+    return formatInTimeZone(date, tz, "yyyy-MM-dd'T'HH:mm:ss")
+  } catch {
+    return toLocalDateTimeStrFull(date)
+  }
+}
+
+/** [SYNC-WEB-031] Parse datetime-local string to timestamp with timezone */
 function parseDateTimeLocal(str: string): number | null {
   if (!str) return null
-  const d = new Date(str)
-  if (isNaN(d.getTime())) return null
-  return d.getTime()
+  try {
+    const tz = getNormalizedTz()
+    // If user entered YYYY-MM-DDTHH:mm, append :00 if needed
+    const normalizedStr = str.length === 16 ? `${str}:00` : str
+    const date = fromZonedTime(normalizedStr, tz)
+    return isNaN(date.getTime()) ? null : date.getTime()
+  } catch {
+    const d = new Date(str)
+    return isNaN(d.getTime()) ? null : d.getTime()
+  }
 }
 
 /** [SYNC-WEB-032] Called when user manually edits either datetime input */
@@ -218,15 +246,6 @@ function clearDateFilter() {
 function applyDateRange() {
   startTime.value = parseDateTimeLocal(startDateTimeLocal.value)
   endTime.value = parseDateTimeLocal(endDateTimeLocal.value)
-
-  if (startDateTimeLocal.value && !startDateTimeLocal.value.includes('T')) {
-    const d = new Date(startDateTimeLocal.value + 'T00:00:00')
-    startTime.value = d.getTime()
-  }
-  if (endDateTimeLocal.value && !endDateTimeLocal.value.includes('T')) {
-    const d = new Date(endDateTimeLocal.value + 'T23:59:59.999')
-    endTime.value = d.getTime()
-  }
 }
 
 /** [SYNC-WEB-035] Apply a quick shortcut and immediately search. */
@@ -236,43 +255,35 @@ function setDateShortcut(key: string) {
   const now = new Date()
 
   if (key === 'today') {
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    startOfDay.setHours(0, 0, 0, 0)
-    startDateTimeLocal.value = toLocalDateTimeStrFull(startOfDay)
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+    startDateTimeLocal.value = formatToInputStr(startOfDay)
 
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    endOfDay.setHours(23, 59, 59, 999)
-    endDateTimeLocal.value = toLocalDateTimeStrFull(endOfDay)
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    endDateTimeLocal.value = formatToInputStr(endOfDay)
   } else if (key === 'yesterday') {
     const yesterday = new Date(now)
     yesterday.setDate(yesterday.getDate() - 1)
-    const startOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate())
-    startOfYesterday.setHours(0, 0, 0, 0)
-    startDateTimeLocal.value = toLocalDateTimeStrFull(startOfYesterday)
+    const startOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0, 0)
+    startDateTimeLocal.value = formatToInputStr(startOfYesterday)
 
-    const endOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate())
-    endOfYesterday.setHours(23, 59, 59, 999)
-    endDateTimeLocal.value = toLocalDateTimeStrFull(endOfYesterday)
+    const endOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999)
+    endDateTimeLocal.value = formatToInputStr(endOfYesterday)
   } else if (key === 'last7') {
     const d = new Date(now)
     d.setDate(d.getDate() - 6)
-    const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-    startOfDay.setHours(0, 0, 0, 0)
-    startDateTimeLocal.value = toLocalDateTimeStrFull(startOfDay)
+    const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0)
+    startDateTimeLocal.value = formatToInputStr(startOfDay)
 
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    endOfToday.setHours(23, 59, 59, 999)
-    endDateTimeLocal.value = toLocalDateTimeStrFull(endOfToday)
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    endDateTimeLocal.value = formatToInputStr(endOfToday)
   } else if (key === 'last30') {
     const d = new Date(now)
     d.setDate(d.getDate() - 29)
-    const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-    startOfDay.setHours(0, 0, 0, 0)
-    startDateTimeLocal.value = toLocalDateTimeStrFull(startOfDay)
+    const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0)
+    startDateTimeLocal.value = formatToInputStr(startOfDay)
 
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    endOfToday.setHours(23, 59, 59, 999)
-    endDateTimeLocal.value = toLocalDateTimeStrFull(endOfToday)
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    endDateTimeLocal.value = formatToInputStr(endOfToday)
   } else if (key === 'all') {
     startDateTimeLocal.value = ''
     endDateTimeLocal.value = ''

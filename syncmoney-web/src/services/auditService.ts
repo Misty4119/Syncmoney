@@ -25,7 +25,11 @@ export async function getAuditRecords(params: AuditQuery): Promise<ApiResponse<P
 export function exportAuditCSV(records: AuditRecord[]): string {
     const headers = ['Time', 'Player', 'Type', 'Amount', 'Balance After', 'Source', 'Server']
     const escape = (val: string | number | undefined): string => {
-        const str = String(val ?? '')
+        let str = String(val ?? '')
+        // Sanitize for CSV Formula Injection (CWE-1236)
+        if (/^[=+\-@\t\r]/.test(str)) {
+            str = `'${str}`
+        }
         return `"${str.replace(/"/g, '""')}"`
     }
     const rows = records.map(r => [

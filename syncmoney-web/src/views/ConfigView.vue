@@ -7,14 +7,14 @@
       class="animate-fade-slide-up opacity-0"
       :style="{ animationDelay: `${index * 80}ms` }"
     >
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <button class="flex items-center justify-between w-full px-2 py-1 outline-none" @click="toggleSection(section.key)">
             <div class="flex items-center gap-3">
-              <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-                <component :is="section.icon" class="w-5 h-5 text-cyan-400" />
+              <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+                <component :is="section.icon" class="w-5 h-5 text-primary" />
               </div>
-              <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ getSectionTitle(section.key) }}</span>
+              <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ getSectionTitle(section.key) }}</span>
             </div>
             <div class="flex items-center gap-4">
               <Badge v-if="hasChanges(section.key)" variant="warning" size="sm" class="shadow-sm">
@@ -24,7 +24,7 @@
                 {{ section.status === 'enabled' ? t('config.enabled') : t('config.disabled') }}
               </Badge>
               <ChevronDown
-                class="w-5 h-5 text-surface-500 group-hover:text-cyan-400 transition-all duration-300"
+                class="w-5 h-5 text-surface-500 group-hover:text-primary transition-all duration-300"
                 :class="{ 'rotate-180': expanded[section.key] }"
               />
             </div>
@@ -37,7 +37,7 @@
             <div
               v-for="field in section.fields"
               :key="field.key"
-              class="flex justify-between items-center py-2 border-b border-surface-700/50 last:border-0"
+              class="flex justify-between items-center py-2 border-b border-surface-200/50 dark:border-surface-700/50 last:border-0"
             >
               <div class="flex-1 mr-4">
                 <div class="text-sm text-surface-700 dark:text-surface-300">{{ getFieldLabel(section.key, field.key, field.fullKey) }}</div>
@@ -100,7 +100,7 @@
               variant="outline"
               :icon="Globe"
               :loading="syncing"
-              class="border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10"
+              class="border-primary/50 text-primary hover:bg-primary/10"
               @click="syncToNodes(section.key)"
             >
               {{ t('config.syncToNodes') }}
@@ -112,7 +112,7 @@
 
     <!-- Global Reload -->
     <div class="flex justify-end pt-4">
-      <Button variant="outline" :icon="RefreshCw" :loading="reloading" class="hover:bg-cyan-500/10 hover:text-cyan-400 hover:border-cyan-500/50 transition-all duration-300 shadow-glow-sm" @click="reloadConfig">
+      <Button variant="outline" :icon="RefreshCw" :loading="reloading" class="hover:bg-primary/10 hover:text-primary hover:border-primary/50 transition-all duration-300 shadow-glow-sm" @click="reloadConfig">
         {{ t('config.reload') }}
       </Button>
     </div>
@@ -404,14 +404,37 @@ const canSyncToNodes = computed(() => {
   return nodesStore.centralMode && nodesStore.enabledNodes.length > 0
 })
 
-async function loadConfig() {
+import { onBeforeRouteLeave } from 'vue-router'
+
+const totalChangesCount = computed(() =>
+  Object.values(changes).reduce((acc, sec) => acc + Object.keys(sec).length, 0)
+)
+
+onBeforeRouteLeave((_to, _from, next) => {
+  if (totalChangesCount.value > 0) {
+    const answer = window.confirm(
+      t('config.unsavedChangesLeaveConfirm') ||
+      'You have unsaved configuration changes. Are you sure you want to discard them and leave?'
+    )
+    if (answer) {
+      next()
+    } else {
+      next(false)
+    }
+  } else {
+    next()
+  }
+})
+
+async function loadConfig(clearUnsaved = true) {
   try {
     const data = await configService.getConfig()
     config.value = data
     originalConfig.value = JSON.parse(JSON.stringify(data))
 
-
-    Object.keys(changes).forEach(key => delete changes[key])
+    if (clearUnsaved) {
+      Object.keys(changes).forEach(key => delete changes[key])
+    }
   } catch (error) {
     console.error('Failed to load config:', error)
     notificationStore.addNotification('error', t('config.loadError'), t('config.loadErrorDesc'))
@@ -433,11 +456,10 @@ async function saveSection(section: string) {
 
     notificationStore.addNotification('success', t('config.saveSuccess'), t('config.saveSuccessDesc'))
 
-
     delete changes[section]
 
-
-    await loadConfig()
+    // Reload but keep other sections' unsaved edits intact!
+    await loadConfig(false)
   } catch (error) {
     console.error('Failed to save config:', error)
     notificationStore.addNotification('error', t('config.saveError'), t('config.saveErrorDesc'))
@@ -447,11 +469,19 @@ async function saveSection(section: string) {
 }
 
 async function reloadConfig() {
+  if (totalChangesCount.value > 0) {
+    const confirmReload = window.confirm(
+      t('config.unsavedChangesReloadConfirm') ||
+      'Reloading will discard all unsaved changes. Proceed?'
+    )
+    if (!confirmReload) return
+  }
+
   reloading.value = true
   try {
     await configService.reloadConfig()
     notificationStore.addNotification('success', t('config.reloadSuccess'), t('config.reloadSuccessDesc'))
-    await loadConfig()
+    await loadConfig(true)
   } catch (error) {
     notificationStore.addNotification('error', t('config.reloadError'), t('config.reloadErrorDesc'))
   } finally {
@@ -480,7 +510,7 @@ async function syncToNodes(section: string) {
     notificationStore.addNotification(type, message, '')
 
     delete changes[section]
-    await loadConfig()
+    await loadConfig(false)
   } catch (error) {
     console.error('Failed to sync config:', error)
     notificationStore.addNotification('error', t('config.syncError'), t('config.syncErrorDesc'))
@@ -490,17 +520,16 @@ async function syncToNodes(section: string) {
 }
 
 onMounted(async () => {
-  
   await nodesStore.fetchNodes().catch(() => {})
-  loadConfig()
+  loadConfig(true)
 })
 </script>
 
 <style scoped>
 .collapse-enter-active,
-.collapse-leave-active { transition: all 0.2s ease; overflow: hidden; }
+.collapse-leave-active { transition: all 0.3s cubic-bezier(0.2, 0, 0, 1); overflow: hidden; }
 .collapse-enter-from,
-.collapse-leave-to { opacity: 0; max-height: 0; }
+.collapse-leave-to { opacity: 0; max-height: 0; transform: translateY(-4px); }
 .collapse-enter-to,
-.collapse-leave-from { opacity: 1; max-height: 500px; }
+.collapse-leave-from { opacity: 1; max-height: 3000px; transform: translateY(0); }
 </style>

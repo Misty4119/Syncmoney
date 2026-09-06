@@ -14,7 +14,7 @@
         'focus:outline-none focus:ring-1 transition-all',
         error
           ? 'border-error focus:border-error focus:ring-error/30'
-          : 'border-surface-300 dark:border-surface-700 focus:border-cyan-500/50 focus:ring-cyan-500/20',
+          : 'border-surface-300 dark:border-surface-700 focus:border-primary/50 focus:ring-primary/20',
       ]"
       @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
       @blur="$emit('blur', $event)"

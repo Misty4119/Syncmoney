@@ -140,11 +140,16 @@ export const useNodesStore = defineStore('nodes', () => {
   function startHealthCheck(intervalMs: number = 30000): void {
     stopHealthCheck()
     healthCheckInterval = setInterval(async () => {
-      for (let i = 0; i < nodes.value.length; i++) {
-        const node = nodes.value[i]
+      const currentNodes = [...nodes.value]
+      for (const node of currentNodes) {
+        if (!node.enabled) continue
         const status = await checkNodeHealth(node)
         setNodeStatus(node.url, status)
-        updateNodeStatus(i, status)
+        // Find current live index in case array mutated during async calls
+        const liveIndex = nodes.value.findIndex(n => n.url === node.url)
+        if (liveIndex !== -1) {
+          updateNodeStatus(liveIndex, status)
+        }
       }
     }, intervalMs)
   }
@@ -154,6 +159,15 @@ export const useNodesStore = defineStore('nodes', () => {
       clearInterval(healthCheckInterval)
       healthCheckInterval = null
     }
+  }
+
+  function reset(): void {
+    stopHealthCheck()
+    nodes.value = []
+    nodeStatuses.value.clear()
+    isLoading.value = false
+    error.value = ''
+    centralMode.value = false
   }
 
   return {
@@ -173,6 +187,7 @@ export const useNodesStore = defineStore('nodes', () => {
     syncConfigToNodes,
     syncConfigToNode,
     startHealthCheck,
-    stopHealthCheck
+    stopHealthCheck,
+    reset
   }
 })

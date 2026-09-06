@@ -2,7 +2,7 @@
   <!-- Desktop sidebar -->
   <aside
     v-if="!isMobile"
-    class="fixed left-0 top-0 h-full z-40 flex flex-col border-r border-surface-200 dark:border-surface-700 bg-surface-50/85 dark:bg-surface-950/85 backdrop-blur-xl transition-all duration-300 ease-out"
+    class="fixed left-0 top-0 h-full z-40 flex flex-col border-r border-surface-200 dark:border-white/[0.08] bg-surface-50/85 dark:bg-surface-base/90 backdrop-blur-xl transition-all duration-300 ease-out"
     :class="collapsed ? 'w-20' : 'w-64'"
   >
     <!-- Brand -->

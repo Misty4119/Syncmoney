@@ -7,8 +7,8 @@
       :disabled="disabled"
       :class="[
         'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent',
-        'transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500/30',
-        modelValue ? 'bg-cyan-500' : 'bg-surface-600',
+        'transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/30',
+        modelValue ? 'bg-primary' : 'bg-surface-300 dark:bg-surface-600',
         disabled && 'opacity-50 cursor-not-allowed'
       ]"
       @click="toggle"

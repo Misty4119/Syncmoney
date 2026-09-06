@@ -62,7 +62,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNodesStore } from '@/stores/nodes'
 import { Zap, KeyRound, AlertCircle } from 'lucide-vue-next'
@@ -72,6 +72,7 @@ declare const __APP_VERSION__: string
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const nodesStore = useNodesStore()
 const appVersion = __APP_VERSION__
@@ -81,12 +82,14 @@ const loading = computed(() => authStore.isLoading)
 const error = computed(() => authStore.error)
 
 async function handleLogin() {
-  const success = await authStore.login(apiKey.value)
+  const trimmedKey = apiKey.value.trim()
+  if (!trimmedKey) return
+
+  const success = await authStore.login(trimmedKey)
   if (success) {
-    
-    
     await nodesStore.fetchNodes().catch(() => {})
-    router.push('/dashboard')
+    const redirectPath = (route.query.redirect as string) || '/dashboard'
+    router.push(redirectPath)
   }
 }
 </script>

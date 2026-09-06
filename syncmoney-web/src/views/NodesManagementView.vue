@@ -124,7 +124,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Server } from 'lucide-vue-next'
 import { useNodesStore } from '@/stores/nodes'
@@ -221,6 +221,10 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+})
+
+onUnmounted(() => {
+  nodesStore.stopHealthCheck()
 })
 </script>
 

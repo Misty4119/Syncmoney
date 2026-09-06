@@ -3,13 +3,13 @@
     <!-- Plugin & Connectivity -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- Plugin Info -->
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <div class="flex items-center gap-3 px-2">
-            <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-              <Package class="w-5 h-5 text-cyan-400" />
+            <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+              <Package class="w-5 h-5 text-primary" />
             </div>
-            <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.plugin') }}</span>
+            <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.plugin') }}</span>
           </div>
         </template>
         <div class="space-y-3">
@@ -33,13 +33,13 @@
       </Card>
 
       <!-- Connectivity -->
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <div class="flex items-center gap-3 px-2">
-            <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-              <Wifi class="w-5 h-5 text-cyan-400" />
+            <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+              <Wifi class="w-5 h-5 text-primary" />
             </div>
-            <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.connectivity') }}</span>
+            <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.connectivity') }}</span>
           </div>
         </template>
         <div class="space-y-4">
@@ -63,13 +63,13 @@
     </div>
 
     <!-- Circuit Breaker -->
-    <Card variant="glass" glow hoverable class="group hover:border-cyan-500/50 hover:shadow-glow-lg transition-all duration-300">
+    <Card variant="glass" glow hoverable class="group hover:border-primary/50 hover:shadow-glow-lg transition-all duration-300">
       <template #header>
         <div class="flex items-center gap-3 px-2">
-          <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-            <Shield class="w-5 h-5 text-cyan-400" />
+          <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+            <Shield class="w-5 h-5 text-primary" />
           </div>
-          <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.circuitBreaker') }}</span>
+          <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.circuitBreaker') }}</span>
         </div>
       </template>
       <div class="flex items-center justify-between">
@@ -93,22 +93,22 @@
     <!-- Resources -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Memory -->
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <div class="flex items-center gap-3 px-2">
-            <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-              <HardDrive class="w-5 h-5 text-cyan-400 relative z-10" />
+            <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+              <HardDrive class="w-5 h-5 text-primary relative z-10" />
             </div>
-            <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.memory') }}</span>
+            <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.memory') }}</span>
           </div>
         </template>
-        <p class="text-2xl font-bold font-mono text-surface-900 dark:text-white mb-3 group-hover:text-cyan-400 transition-colors">
+        <p class="text-2xl font-bold font-mono text-surface-900 dark:text-white mb-3 group-hover:text-primary transition-colors">
           {{ formatBytes(metrics.memory?.used) }} <span class="text-surface-400 dark:text-surface-500">/</span> {{ formatBytes(metrics.memory?.total) }}
         </p>
         <div class="w-full bg-surface-950/50 rounded-full h-2 border border-surface-700/50 overflow-hidden shadow-inner relative">
           <div
             class="h-full rounded-full transition-all duration-1000 ease-out relative"
-            :class="memoryUsagePercent > 80 ? 'bg-error shadow-glow-error' : memoryUsagePercent > 60 ? 'bg-warning' : 'bg-cyan-500 shadow-glow-cyan'"
+            :class="memoryUsagePercent > 80 ? 'bg-error shadow-glow-error' : memoryUsagePercent > 60 ? 'bg-warning' : 'bg-primary shadow-glow-primary'"
             :style="{ width: memoryUsagePercent + '%' }"
           >
             <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
@@ -118,26 +118,26 @@
       </Card>
 
       <!-- Threads -->
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <div class="flex items-center gap-3 px-2">
-            <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-              <Cpu class="w-5 h-5 text-cyan-400 group-hover:animate-pulse" />
+            <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+              <Cpu class="w-5 h-5 text-primary group-hover:animate-pulse" />
             </div>
-            <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.threads') }}</span>
+            <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.threads') }}</span>
           </div>
         </template>
-        <p class="text-4xl font-bold font-mono text-surface-900 dark:text-white mt-2 group-hover:text-cyan-400 transition-colors">{{ metrics.threads || 0 }}</p>
+        <p class="text-4xl font-bold font-mono text-surface-900 dark:text-white mt-2 group-hover:text-primary transition-colors">{{ metrics.threads || 0 }}</p>
       </Card>
 
       <!-- TPS -->
-      <Card variant="glass" hoverable class="group hover:border-cyan-500/40 hover:shadow-glow-cyan transition-all duration-300">
+      <Card variant="glass" hoverable class="group hover:border-primary/40 hover:shadow-glow-primary transition-all duration-300">
         <template #header>
           <div class="flex items-center gap-3 px-2">
-            <div class="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
-              <Zap class="w-5 h-5 text-cyan-400 group-hover:animate-pulse" />
+            <div class="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+              <Zap class="w-5 h-5 text-primary group-hover:animate-pulse" />
             </div>
-            <span class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-lavender-400 uppercase tracking-wide">{{ t('system.tps') }}</span>
+            <span class="text-base font-bold gradient-text uppercase tracking-wide">{{ t('system.tps') }}</span>
           </div>
         </template>
         <p class="text-3xl font-bold font-mono" :class="tpsClass">{{ metrics.tps?.toFixed(1) || '20.0' }}</p>
@@ -260,27 +260,29 @@ async function loadSystemStatus() {
   }
 }
 
+const onCircuitBreak = () => {
+  notificationStore.addBreakerNotification('WARNING', t('notification.circuitBreakerAlert'))
+  loadSystemStatus()
+}
+
+const onSystemAlert = (data: unknown) => {
+  const evt = data as SystemAlertEvent
+  notificationStore.addSystemAlertNotification(evt.message || t('notification.systemError'))
+  loadSystemStatus()
+}
+
 onMounted(async () => {
-  
   await nodesStore.fetchNodes().catch(() => {})
   loadSystemStatus()
-
   refreshInterval = setInterval(loadSystemStatus, 10000)
-  
 
-  ws.on('circuit_break', () => {
-    notificationStore.addBreakerNotification('WARNING', t('notification.circuitBreakerAlert'))
-    loadSystemStatus()
-  })
-  ws.on('system_alert', (data: unknown) => {
-    const evt = data as SystemAlertEvent
-    notificationStore.addSystemAlertNotification(evt.message || t('notification.systemError'))
-    loadSystemStatus()
-  })
+  ws.on('circuit_break', onCircuitBreak)
+  ws.on('system_alert', onSystemAlert)
 })
 
 onUnmounted(() => { 
   if (refreshInterval) clearInterval(refreshInterval)
-
+  ws.off('circuit_break', onCircuitBreak)
+  ws.off('system_alert', onSystemAlert)
 })
 </script>

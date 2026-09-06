@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import { apiClient, type ApiResponse } from '@/api/client'
 import type { SystemStatus } from '@/api/types'
 import { handleError } from '@/types/errors'
+import { useSSEStore } from './sse'
+import { useNodesStore } from './nodes'
 
 export const useAuthStore = defineStore('auth', () => {
   const apiKey = ref<string>(localStorage.getItem('apiKey') || '')
@@ -43,6 +45,18 @@ export const useAuthStore = defineStore('auth', () => {
     apiKey.value = ''
     localStorage.removeItem('apiKey')
     isAuthenticated.value = false
+
+    try {
+      useSSEStore().destroy()
+    } catch {
+      // fallback
+    }
+
+    try {
+      useNodesStore().reset()
+    } catch {
+      // fallback
+    }
   }
 
   async function checkAuth() {
@@ -53,12 +67,9 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-
   async function validateToken(key: string): Promise<boolean> {
     try {
-
-      const tempApiClient = apiClient.create()
-      const response = await tempApiClient.get<ApiResponse<SystemStatus>>('/api/system/status', {
+      const response = await apiClient.get<ApiResponse<SystemStatus>>('/api/system/status', {
         headers: { Authorization: `Bearer ${key}` }
       })
 
@@ -66,12 +77,10 @@ export const useAuthStore = defineStore('auth', () => {
         isAuthenticated.value = true
         return true
       } else {
-
         logout()
         return false
       }
     } catch {
-
       logout()
       return false
     }

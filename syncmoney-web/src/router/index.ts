@@ -70,7 +70,7 @@ router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next('/login')
+    next({ path: '/login', query: { redirect: to.fullPath } })
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     next('/dashboard')
   } else {
