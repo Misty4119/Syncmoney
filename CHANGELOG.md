@@ -9,34 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Route player/CMI updates and notifications through entity schedulers; use common Paper async/global schedulers instead of legacy Bukkit fallbacks.
-- Preserve pending economic events on logout and teleport timeout; cancel obsolete deferred teleports and use `teleportAsync`.
-- Keep one player Guard owner and gate optional breaker, Shadow, audit and notifier resources before initialization. Disabled commands explain their state.
-- Run audit cleanup/export asynchronously with cancellable handles; correct the cleanup interval's hours-to-ticks error.
-- Reject restart-only configuration changes before publishing the runtime snapshot; ordinary reload no longer stops cross-server notifications.
-- Prevent SSE token callbacks from reopening a disconnected session; isolate and await frontend authentication tests.
-- Align MiniMessage/ANSI with the Paper 1.20.4 Adventure baseline to prevent a runtime `ShadowColorTag` linkage failure.
-- Warm placeholder balance/name caches asynchronously instead of issuing cold lookups on the caller's region thread.
-- Fix resource leaks and exception handling in `WebAdminServer`; resolve SSE/WebSocket connection lifecycle races and auth-store conflicts.
-- Correct color-token and CSS variable inconsistencies across web UI components (`Button`, `Card`, `Input`, `Select`, `Switch`, `Sidebar`, `Header`).
+#### Scheduler Correctness (Folia / Paper / Canvas)
+- **Entity Scheduler Routing**: All per-player work — CMI updates, payment notifications, breaker alerts, CMI Pub/Sub callbacks — now runs on the owning player's entity scheduler. Global and plugin-level operations use the global region scheduler. Legacy `BukkitScheduler` calls have been removed throughout.
+- **Teleport Safety**: `PlayerTransferGuard` rewrites the deferred-teleport loop to use `player.getScheduler().runAtFixedRate()` and `teleportAsync()`. A newer teleport supersedes any stale deferred destination immediately. Pending economic writes are never silently discarded on logout or kick; only the deferred teleport task is cancelled.
+- **Placeholder Hot Path**: `EconomyFacade.getBalanceForPlaceholder()` and `NameResolver.resolveUUIDForPlaceholder()` check in-memory state first and warm the cache asynchronously on a miss. PlaceholderAPI callers on any region thread never block on a cold Redis, database, or Mojang lookup.
+- **Audit Cleanup Interval**: `AuditLogCleanup` was scheduling its repeating task with a tick value where hours were expected, causing the cleanup to fire every ~1 second instead of the configured interval. The task now uses `AsyncScheduler.runAtFixedRate()` with `TimeUnit.HOURS`. Cleanup and export tasks hold cancellable handles and stop cleanly on shutdown.
 
-### Added / Changed
+#### Module Lifecycle & Reload
+- **Single Guard Owner**: `BreakerManager` is the sole owner of `PlayerTransactionGuard`. The duplicate construction path inside `EconomyServiceManager` has been removed.
+- **Gated Optional Resources**: Breaker, Shadow, audit, and notifier modules check configuration before constructing executors, schedules, or subscriptions. Each failed or disabled module leaves the others unaffected.
+- **Restart-Required Reload Gate**: `ConfigReloadPolicy` rejects changes to storage, connection, or service settings before the runtime snapshot is published. Only display, command, and permission keys are live-reloadable. A plain `/syncmoney reload` no longer tears down cross-server notifications.
+- **Disabled Command Messages**: Commands for disabled modules (`audit`, `shadow`, `breaker`) return an explanatory message instead of throwing a null-pointer exception.
+- **`OnlinePlayerRegistry` Reload**: The Redis subscription now closes cleanly during a reload without dropping the cross-server notification channel.
 
-- External PlugDev profiles, an isolated acceptance probe and generated-state ignore rules; no server JARs, worlds or secrets are vendored.
-- Java 21 API/bytecode baseline with a Java 21 toolchain; Gradle 9.1 can run on Java 25 for newer server testing. Runtime 26.2 acceptance remains a release gate, not an assumed compatibility claim.
-- Unified core/PAPI/API version metadata at 1.3.0; refreshed frontend source metadata.
-- Removed unused deprecated `WebModuleConfig` and duplicated `EconomyFacade` construction; retained reflection-facing compatibility wrappers and runtime frontend assets.
-- Replaced stale agent inventory with durable maintenance rules and rewrote user installation, configuration, security and compatibility documentation.
-- Refactored web admin Vue components (`Badge`, `Button`, `Card`, `Input`, `Select`, `Switch`, `Header`, `Sidebar`), views (`ConfigView`, `LoginView`, `SettingsView`, `SystemStatusView`, `AuditLogFilters`), and added `config` mock handler for offline development.
-- Validated full acceptance matrix: Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2; multi-backend (PostgreSQL + Redis) two-server network; all unit and integration tests passing.
+#### Web Admin
+- **SSE Reconnect Race**: Token-refresh callbacks in `useSSE.ts` no longer attempt to reopen a session after `disconnect()` has been called.
+- **`WebAdminServer` Resource Leaks**: Exception handling improved in the server lifecycle; the SSE session map is cleared on stop, preventing zombie callbacks from writing into closed channels.
+- **Adventure / MiniMessage Linkage**: The Adventure dependency is pinned to `4.16.0`, matching the Paper 1.20.4 bundle. This prevents a `ShadowColorTag` `NoClassDefFoundError` at runtime.
+- **Web UI Token Inconsistencies**: Color token and CSS variable mismatches corrected across `Button`, `Card`, `Input`, `Select`, `Switch`, `Sidebar`, and `Header` components and related views.
 
-### Previously unlisted 1.2.x changes (included here)
+### Changed
 
-- **1.2.1** (`1f816df`): dependency updates, PAPI formatting/reflection enhancements, schema identifier fixes and independent expansion packaging adjustments.
+#### Toolchain & Version Metadata
+- Java 21 API and bytecode baseline; Gradle wrapper updated to 9.1 (supports running on Java 25 for newer server environments).
+- `BuildVersion` reads version from a build-time-expanded `syncmoney-version.properties` resource, replacing the runtime `plugin.getDescription()` call.
+- `ServerPlatformDetector` adds Canvas detection alongside Paper and Folia.
+- PAPI expansion version is now derived from the root Gradle version; no more manual syncing.
+- Core, PAPI, and web frontend metadata unified at 1.3.0.
+
+#### Cleanup
+- `WebModuleConfig` removed; its functionality was already covered by `WebAdminConfig`. The duplicate `EconomyFacade` construction it guarded is also gone. Reflection-facing PAPI wrappers are unchanged.
+
+#### Web Admin Frontend
+- `Badge`, `Button`, `Card`, `Input`, `Select`, `Switch`, `Header`, `Sidebar` components refactored for consistency.
+- `ConfigView`, `LoginView`, `SettingsView`, `SystemStatusView`, `AuditLogFilters` views updated.
+- Added `config` MSW mock handler for offline development and frontend unit tests.
+- Frontend dist rebuilt at 1.3.0.
+
+### Added
+
+- **PlugDev Acceptance Tooling**: `tools/plugdev/` scripts and config for running an isolated multi-server development network. `AcceptanceProbe` is a standalone plugin triggered via RCON that exercises the full `EconomyFacade` API end-to-end.
+- **New Unit Tests**: `ConfigReloadPolicyTest`, `PlayerTransferGuardTest`, `ConsumerShutdownTest`, `PlayerLookupUtilTest`, `DisabledAuditTest`, `DisabledBreakerTest`, `ResourceMonitorTest`, `RedisOnlyBaltopTest`.
+
+### Validated Acceptance Matrix
+
+Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2 — multi-backend (PostgreSQL + Redis), two-server network, all unit and integration tests passing.
+
+### Previously Unlisted 1.2.x Changes
+
+- **1.2.1** (`1f816df`): dependency updates, PAPI formatting/reflection enhancements, schema identifier fixes, independent expansion packaging.
 - **1.2.2** (`cb641ad`): VaultUnlocked/Vault2 runtime detection, isolated integration loader, provider/registrar and compatibility tests.
 - **1.2.3** (`10d914b`): Vault provider/transfer handling consolidation and redundant logic removal.
 
-These entries summarize the existing tagged Git history; they are not newly reimplemented features. Earlier changelog entries remain historical descriptions and may be superseded by the fixes above.
+These entries summarize tagged Git history and are not newly reimplemented features.
 
 ## [1.2.0] - 2026-06-26
 
