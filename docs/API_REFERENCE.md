@@ -1,8 +1,8 @@
 # Syncmoney API Reference
 
-Complete API reference for Syncmoney v1.1.2
+Complete API reference for Syncmoney v1.3.0
 
-> **Last Updated**: 2026-03-22
+> **Last Updated**: 2026-09-06
 
 ---
 

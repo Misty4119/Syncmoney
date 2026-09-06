@@ -17,14 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prevent SSE token callbacks from reopening a disconnected session; isolate and await frontend authentication tests.
 - Align MiniMessage/ANSI with the Paper 1.20.4 Adventure baseline to prevent a runtime `ShadowColorTag` linkage failure.
 - Warm placeholder balance/name caches asynchronously instead of issuing cold lookups on the caller's region thread.
+- Fix resource leaks and exception handling in `WebAdminServer`; resolve SSE/WebSocket connection lifecycle races and auth-store conflicts.
+- Correct color-token and CSS variable inconsistencies across web UI components (`Button`, `Card`, `Input`, `Select`, `Switch`, `Sidebar`, `Header`).
 
 ### Added / Changed
 
 - External PlugDev profiles, an isolated acceptance probe and generated-state ignore rules; no server JARs, worlds or secrets are vendored.
 - Java 21 API/bytecode baseline with a Java 21 toolchain; Gradle 9.1 can run on Java 25 for newer server testing. Runtime 26.2 acceptance remains a release gate, not an assumed compatibility claim.
 - Unified core/PAPI/API version metadata at 1.3.0; refreshed frontend source metadata.
-- Removed unused deprecated WebModuleConfig and duplicated EconomyFacade construction; retained reflection-facing compatibility wrappers and runtime frontend assets.
+- Removed unused deprecated `WebModuleConfig` and duplicated `EconomyFacade` construction; retained reflection-facing compatibility wrappers and runtime frontend assets.
 - Replaced stale agent inventory with durable maintenance rules and rewrote user installation, configuration, security and compatibility documentation.
+- Refactored web admin Vue components (`Badge`, `Button`, `Card`, `Input`, `Select`, `Switch`, `Header`, `Sidebar`), views (`ConfigView`, `LoginView`, `SettingsView`, `SystemStatusView`, `AuditLogFilters`), and added `config` mock handler for offline development.
+- Validated full acceptance matrix: Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2; multi-backend (PostgreSQL + Redis) two-server network; all unit and integration tests passing.
 
 ### Previously unlisted 1.2.x changes (included here)
 
