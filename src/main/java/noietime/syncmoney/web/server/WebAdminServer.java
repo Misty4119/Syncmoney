@@ -170,29 +170,29 @@ public final class WebAdminServer {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-                "AuditLogView-CDka0WzL.js", "AuditLogView-CDka0WzL.js.map", "AuditLogView-DSvYadoU.css",
+                "AuditLogView-BTMZJMtV.js", "AuditLogView-BTMZJMtV.js.map", "AuditLogView-wQc_AOrE.css",
                 "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js",
                 "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js.map",
-                "Button.vue_vue_type_script_setup_true_lang-XDsdg4_2.js",
-                "Button.vue_vue_type_script_setup_true_lang-XDsdg4_2.js.map", "Card-T3c5PiAk.js",
-                "Card-T3c5PiAk.js.map", "Card-XdX29y7v.css", "CentralDashboardView-piiFgUPz.js",
-                "CentralDashboardView-piiFgUPz.js.map", "ConfigView-CK2Za0KX.js", "ConfigView-CK2Za0KX.js.map",
-                "ConfigView-nxIbKMd_.css", "DashboardView-TLOk4xnY.js", "DashboardView-TLOk4xnY.js.map",
-                "EmptyState.vue_vue_type_script_setup_true_lang-BEVqqON3.js",
-                "EmptyState.vue_vue_type_script_setup_true_lang-BEVqqON3.js.map", "globe-6q1ubD0R.js",
-                "globe-6q1ubD0R.js.map", "index-BrNP_EjM.css", "index-CsOu-9F1.js", "index-CsOu-9F1.js.map",
-                "LoginView-BzMfBKyV.js", "LoginView-BzMfBKyV.js.map", "NodesManagementView-CcXcUn_j.js",
-                "NodesManagementView-CcXcUn_j.js.map", "NodesManagementView-IuUDUfJE.css", "NotFoundView-BvfRyRzZ.css",
-                "NotFoundView-NEFg-0dz.js", "NotFoundView-NEFg-0dz.js.map", "SettingsView-Raeb2BqA.js",
-                "SettingsView-Raeb2BqA.js.map", "shield-D4Z-ILjl.js", "shield-D4Z-ILjl.js.map",
+                "Button.vue_vue_type_script_setup_true_lang-C-H8SwYl.js",
+                "Button.vue_vue_type_script_setup_true_lang-C-H8SwYl.js.map", "Card-Dx6t7UCI.css", "Card-Y34loNmr.js",
+                "Card-Y34loNmr.js.map", "CentralDashboardView-HWzkVBC1.js", "CentralDashboardView-HWzkVBC1.js.map",
+                "ConfigView-CDTXbh8v.js", "ConfigView-CDTXbh8v.js.map", "ConfigView-D3cmixov.css",
+                "DashboardView-Bf5J5UdR.js", "DashboardView-Bf5J5UdR.js.map",
+                "EmptyState.vue_vue_type_script_setup_true_lang-CMf6Ar83.js",
+                "EmptyState.vue_vue_type_script_setup_true_lang-CMf6Ar83.js.map", "globe-BQ6zg0mb.js",
+                "globe-BQ6zg0mb.js.map", "index-CwYPYTzx.js", "index-CwYPYTzx.js.map", "index-WrxCvQni.css",
+                "LoginView-BiXiaito.js", "LoginView-BiXiaito.js.map", "NodesManagementView-eQ7Iebhe.css",
+                "NodesManagementView-J47wJ3KF.js", "NodesManagementView-J47wJ3KF.js.map", "NotFoundView-BQOwohuq.js",
+                "NotFoundView-BQOwohuq.js.map", "NotFoundView-BvfRyRzZ.css", "SettingsView-DejGSIv5.js",
+                "SettingsView-DejGSIv5.js.map", "shield-Dh1fhLl-.js", "shield-Dh1fhLl-.js.map",
                 "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js",
                 "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js.map",
-                "StatCard.vue_vue_type_script_setup_true_lang-D6R_a49w.js",
-                "StatCard.vue_vue_type_script_setup_true_lang-D6R_a49w.js.map",
-                "Switch.vue_vue_type_script_setup_true_lang-B_21kxDS.js",
-                "Switch.vue_vue_type_script_setup_true_lang-B_21kxDS.js.map", "SystemStatusView-Bj-o0M0Q.js",
-                "SystemStatusView-Bj-o0M0Q.js.map", "ui-vendor-C7Hq5Kfe.js", "ui-vendor-C7Hq5Kfe.js.map",
-                "users-BQO0BSkJ.js", "users-BQO0BSkJ.js.map", "vue-vendor-BdqzwXPG.js", "vue-vendor-BdqzwXPG.js.map"
+                "StatCard.vue_vue_type_script_setup_true_lang-BpfL4ijg.js",
+                "StatCard.vue_vue_type_script_setup_true_lang-BpfL4ijg.js.map",
+                "Switch.vue_vue_type_script_setup_true_lang-BgcmOIaQ.js",
+                "Switch.vue_vue_type_script_setup_true_lang-BgcmOIaQ.js.map", "SystemStatusView-nNpkK4gu.js",
+                "SystemStatusView-nNpkK4gu.js.map", "ui-vendor-C7Hq5Kfe.js", "ui-vendor-C7Hq5Kfe.js.map",
+                "users-DgjmLfE2.js", "users-DgjmLfE2.js.map", "vue-vendor-BdqzwXPG.js", "vue-vendor-BdqzwXPG.js.map"
         };
 
         for (String fileName : assetFiles) {

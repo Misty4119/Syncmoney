@@ -71,7 +71,8 @@ plugins/
 world/
 world_nether/
 world_the_end/
-
+tools/plugdev/chaos.mjs
+META-INF/
 # Local configuration files (may contain sensitive information)
 local_*.yml
 local_*.properties
