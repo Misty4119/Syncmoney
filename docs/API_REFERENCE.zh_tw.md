@@ -1,6 +1,6 @@
 # Syncmoney API 參考文檔
 
-Syncmoney v1.3.0 完整 API 參考文檔
+Syncmoney v1.3.1 完整 API 參考文檔
 
 > **最後更新**：2026-09-06
 

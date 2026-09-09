@@ -107,6 +107,7 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.migrate"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.web"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.test"));
+        MessageHelper.sendMessage(sender, plugin.getMessage("router.help.version"));
     }
 
     @Override

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-09-09
+
+### Fixed
+
+- **Adventure Runtime Compatibility**: Adventure and MiniMessage are now supplied by the server runtime instead of being partially relocated into the plugin JAR. This prevents the Adventure 4.x/5.x `ClickEvent` binary mismatch on Canvas 26.2 while retaining Paper 1.20.4 compatibility.
+- **Message Safety**: Interactive MiniMessage tags are removed while colors and decorations remain available; message parsing now falls back safely on parse/linkage failures.
+
+### Added
+
+- **Support Reports**: Added `/syncmoney version`, `/syncmoney version full`, and `/syncmoney version save`. Full reports collect sanitized server, Java, dependency, module, Redis, and database diagnostics without exposing credentials or endpoints. Redis and database probes are read-only, run asynchronously, time out after three seconds, and report three latency samples.
+
 ## [1.3.0] - 2026-09-06
 
 ### Fixed

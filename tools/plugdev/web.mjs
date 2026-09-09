@@ -11,8 +11,8 @@ for (const path of ['/health', '/api/system/status', '/api/economy/stats', '/ver
   const response = await fetch(base + path, { headers: { Authorization: `Bearer ${key}` } })
   if (!response.ok) throw Error(`${path}: ${response.status}`)
   const body = await response.text()
-  if (path === '/version.json' && JSON.parse(body).version !== '1.3.0') throw Error('Stale embedded frontend')
+  if (path === '/version.json' && JSON.parse(body).version !== '1.3.1') throw Error('Stale embedded frontend')
   if (path === '/' && !body.includes('<html')) throw Error('Missing frontend HTML')
   console.log(`WEB PASS ${path}: ${response.status}`)
 }
-console.log('WEB ACCEPTANCE PASS: authentication, health, system/economy API, bundled 1.3.0 frontend')
+console.log('WEB ACCEPTANCE PASS: authentication, health, system/economy API, bundled 1.3.1 frontend')

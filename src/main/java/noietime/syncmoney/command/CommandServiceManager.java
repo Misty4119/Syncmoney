@@ -243,6 +243,9 @@ public class CommandServiceManager {
         ReloadCommand reloadCommand = new ReloadCommand(plugin);
         syncmoneyRouter.register("reload", reloadCommand);
 
+        VersionCommand versionCommand = new VersionCommand(plugin);
+        syncmoneyRouter.register("version", versionCommand);
+
         syncmoneyRouter.setDefaultHandler((sender, cmd, label, args) -> {
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.header"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.migrate"));
@@ -256,6 +259,7 @@ public class CommandServiceManager {
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.admin"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.web"));
             noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.test"));
+            noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.version"));
             if (config.shadowSync().isShadowSyncEnabled()) {
                 noietime.syncmoney.util.MessageHelper.sendMessage(sender, plugin.getMessage("router.help.shadow"));
             }

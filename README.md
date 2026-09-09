@@ -5,7 +5,7 @@
     <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney" alt="Stars">
     <img src="https://img.shields.io/github/downloads/Misty4119/Syncmoney/total" alt="Downloads">
   </a>
-  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.0-blue.svg" alt="Release"></a>
+  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.1-blue.svg" alt="Release"></a>
   <a href="https://github.com/Misty4119/Syncmoney/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
 </p>
 <p align="center">
@@ -59,21 +59,21 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 > [!NOTE]
 > Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
 
-The 1.3.0 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. This is a tested compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
+The 1.3.1 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. This is a tested compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
 
 ---
 
 ## Installation & Setup
 
 1. **Backup**: Stop your server and take a full backup of existing plugin configs, economy databases, and Redis persistence.
-2. **Install Plugin**: Place `Syncmoney-1.3.0.jar` and your preferred Vault provider in the server's `plugins/` directory. Remove any older Syncmoney JAR versions.
+2. **Install Plugin**: Place `Syncmoney-1.3.1.jar` and your preferred Vault provider in the server's `plugins/` directory. Remove any older Syncmoney JAR versions.
 3. **Initialize Configuration**: Start the server once to generate default configuration files, then stop it.
 4. **Configure Node**: In `plugins/Syncmoney/config.yml`:
    - Assign a unique `server-name` (e.g., `survival-01`, `lobby-01`).
    - Select your target `economy.mode`.
    - Configure Redis and SQL database connection credentials if using synchronized modes.
 5. **Start & Verify**: Start the server. Confirm in the console logs that Syncmoney and Vault have registered successfully. Verify basic transactions with `/money` and `/pay`.
-6. **Placeholders (Optional)**: If using PlaceholderAPI, copy `SyncmoneyExpansion-1.3.0.jar` into `plugins/PlaceholderAPI/expansions/` and run `/papi reload`.
+6. **Placeholders (Optional)**: If using PlaceholderAPI, copy `SyncmoneyExpansion-1.3.1.jar` into `plugins/PlaceholderAPI/expansions/` and run `/papi reload`.
 
 ---
 
@@ -159,6 +159,7 @@ All optional modules can be toggled in `plugins/Syncmoney/config.yml`.
 | `/syncmoney monitor [redis\|cache\|db]` | View real-time system and resource health | `syncmoney.admin.monitor` |
 | `/syncmoney econstats [supply\|players]` | Inspect total supply and distribution | `syncmoney.admin.econstats` |
 | `/syncmoney debug <player\|system>` | Multi-tier balance inspection across layers | `syncmoney.admin` |
+| `/syncmoney version [full\|save]` | Generate basic or administrator support diagnostics | Basic: public; full/save: `syncmoney.admin` |
 | `/syncmoney sync-balance <player>` | Force push memory balance to Redis and SQL | `syncmoney.admin` |
 | `/syncmoney shadow [status\|now\|logs]` | Monitor and trigger Shadow Sync tasks | `syncmoney.admin` |
 | `/syncmoney web [status\|open\|reload]` | Manage embedded web service | `syncmoney.admin` |
@@ -285,7 +286,7 @@ Compiled JAR files are produced in `build/libs/` and `syncmoney-papi-expansion/b
 - **Balances Not Synchronizing**: Ensure all nodes have identical Redis server settings and databases. Verify that each node has a unique `server-name` in `config.yml` and `pubsub-enabled: true`.
 - **Account Locked**: If a player account trips rate or anomaly limits, inspect `/syncmoney audit <player>` to diagnose the trigger, then unlock with `/syncmoney breaker unlock <player>`.
 - **Configuration Reload Incomplete**: Check the console output when executing `/syncmoney reload`. Settings requiring service reconstruction require a full server restart.
-- **Reporting Issues**: Include plugin version (`/syncmoney version`), server software build (`/version`), Java version, and sanitized logs/configs (redact passwords, API keys, and webhook URLs).
+- **Reporting Issues**: Include the basic report from `/syncmoney version`. Administrators can use `/syncmoney version full` for read-only Redis/database probes, or `/syncmoney version save` to save a sanitized report under `plugins/Syncmoney/reports/`. Also include server software build (`/version`), Java version, and sanitized logs/configs (redact passwords, API keys, and webhook URLs).
 
 - **GitHub Issues**: [Issues Tracker](https://github.com/Misty4119/Syncmoney/issues)
 - **Community Discord**: [Join Discord](https://official.noie.fun)

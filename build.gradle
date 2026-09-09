@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'noietime'
-version = '1.3.0'
+version = '1.3.1'
 
 repositories {
     mavenCentral()
@@ -47,9 +47,11 @@ dependencies {
     implementation("org.postgresql:postgresql:42.7.5")
     implementation("org.xerial:sqlite-jdbc:3.49.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
-    // Must link against the Adventure API supplied by the oldest supported Paper (1.20.4).
-    implementation("net.kyori:adventure-text-minimessage:4.16.0")
-    implementation("net.kyori:adventure-text-serializer-ansi:4.16.0")
+    // Paper, Folia and Canvas provide their matching native Adventure runtime.
+    // Keeping these compile-only prevents a MiniMessage 4.x implementation from
+    // being paired with a server Adventure 5.x API at runtime.
+    compileOnly("net.kyori:adventure-text-minimessage:4.16.0")
+    compileOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
     implementation("org.bstats:bstats-bukkit:3.1.0")
 
     implementation 'io.undertow:undertow-core:2.3.18.Final'
@@ -63,6 +65,9 @@ dependencies {
     testImplementation("net.milkbowl.vault:VaultUnlockedAPI:2.20")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
+    // The server supplies Adventure in production; tests need a concrete native-like runtime.
+    testRuntimeOnly("net.kyori:adventure-text-minimessage:4.16.0")
+    testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -83,8 +88,6 @@ shadowJar {
     relocate('com.fasterxml.jackson', 'noietime.libs.jackson')
     relocate('redis.clients.jedis', 'noietime.libs.jedis')
     relocate('org.bstats', 'noietime.libs.bstats')
-    relocate('net.kyori.adventure.text.minimessage', 'noietime.libs.adventure.text.minimessage')
-    relocate('net.kyori.adventure.text.serializer.ansi', 'noietime.libs.adventure.text.serializer.ansi')
     relocate('io.undertow', 'noietime.libs.undertow')
     relocate('io.undertow.websockets', 'noietime.libs.undertow.websockets')
     relocate('org.xnio', 'noietime.libs.xnio')

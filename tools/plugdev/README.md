@@ -5,13 +5,16 @@ Install/use the external PlugDev CLI. A sibling `plugdev-main` checkout is the d
 ```powershell
 .\gradlew.bat test shadowJar acceptanceJar :syncmoney-papi-expansion:jar
 node tools/plugdev/prepare.mjs paper 1.20.4 local off
-plugdev --config .plugdev/profile.yml server start
+plugdev server start --config .plugdev/profile.yml
 plugdev server command "version"
 plugdev server command "plugins"
 plugdev server command "smaccept"
 plugdev server command "syncmoney breaker status"
 plugdev server command "syncmoney shadow status"
 plugdev server command "syncmoney audit stats"
+plugdev server command "syncmoney version"
+plugdev server command "syncmoney version full"
+plugdev server command "syncmoney version save"
 plugdev server stop
 ```
 

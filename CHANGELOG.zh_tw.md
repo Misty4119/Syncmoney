@@ -4,6 +4,17 @@
 
 本變更日誌格式基於 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，且本專案遵循 [語意化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.3.1] - 2026-09-09
+
+### 已修復 (Fixed)
+
+- **Adventure 執行期相容性**：Adventure 與 MiniMessage 改由伺服器執行期提供，不再將其部分重定位至插件 JAR。修復 Canvas 26.2 上 Adventure 4.x/5.x `ClickEvent` 的二進位相容性錯誤，同時保留 Paper 1.20.4 相容性。
+- **訊息安全性**：移除互動式 MiniMessage 標籤，保留顏色與裝飾；解析或連結錯誤時會安全降級。
+
+### 已新增 (Added)
+
+- **支援報告**：新增 `/syncmoney version`、`/syncmoney version full` 與 `/syncmoney version save`。完整報告會收集已清理的伺服器、Java、依賴、模組、Redis 與資料庫診斷，不會暴露憑證或端點。Redis 與資料庫探測為唯讀、非同步、三秒逾時，並記錄三次延遲樣本。
+
 ## [1.3.0] - 2026-09-06
 
 ### 已修復 (Fixed)

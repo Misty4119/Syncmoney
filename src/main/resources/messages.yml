@@ -86,6 +86,7 @@ router:
     migrate: ' <#38BDF8>▪ <click:suggest_command:/syncmoney migrate><#F8FAFC>/syncmoney migrate</click> <#475569>⦊ <#94A3B8>Legacy Data Migration Tool'
     web: ' <#38BDF8>▪ <click:suggest_command:/syncmoney web><#F8FAFC>/syncmoney web</click> <#475569>⦊ <#94A3B8>Web Frontend Management'
     test: ' <#38BDF8>▪ <click:suggest_command:/syncmoney test><#F8FAFC>/syncmoney test</click> <#475569>⦊ <#94A3B8>System Stress Test'
+    version: ' <#38BDF8>▪ <#F8FAFC>/syncmoney version [full|save] <#475569>⦊ <#94A3B8>Generate a sanitized support report'
 
 # Config upgrade notification (shown when config is upgraded)
 config-upgraded:

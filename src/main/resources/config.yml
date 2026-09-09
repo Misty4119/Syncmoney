@@ -503,7 +503,7 @@ web-admin:
   central-mode: false
 
   # Bundled web version in JAR (update this when releasing new version)
-  bundled-version: "1.3.0" # Informational; bundled version is read from build metadata.
+  bundled-version: "1.3.1" # Informational; bundled version is read from build metadata.
 
   # HTTP server configuration
   server:

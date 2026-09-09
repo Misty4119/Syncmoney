@@ -51,4 +51,4 @@ const settings = {
 await writeFile(join(run, 'plugins/Syncmoney/config.yml'), YAML.stringify(settings))
 await access(join(root, 'build/acceptance/SyncmoneyAcceptance.jar'))
 await copyFile(join(root, 'build/acceptance/SyncmoneyAcceptance.jar'), join(run, 'plugins/SyncmoneyAcceptance.jar'))
-console.log(`Prepared ${software} ${version}, ${mode}, features=${features}. Verify the actual version: some PlugDev releases ignore --config for server start.`)
+console.log(`Prepared ${software} ${version}, ${mode}, features=${features}. Start with: plugdev server start --config .plugdev/profile.yml, then verify the actual server version in the acceptance log.`)

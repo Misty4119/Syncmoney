@@ -24,7 +24,7 @@ commands:
     usage: /<command> [page]
   syncmoney:
     description: Plugin main command
-    usage: /<command> <subcommand>
+    usage: /<command> <subcommand> [args]
 
 permissions:
   syncmoney.money:

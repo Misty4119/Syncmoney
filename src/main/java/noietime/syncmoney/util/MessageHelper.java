@@ -2,7 +2,6 @@ package noietime.syncmoney.util;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.minimessage.tag.standard.StandardTags;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.ansi.ANSIComponentSerializer;
 import org.bukkit.command.CommandSender;
@@ -19,9 +18,10 @@ import java.util.regex.Pattern;
  * Message helper utility class.
  * Full support for MiniMessage format, compatible with legacy &/§ color codes.
  * <p>
- * Supported MiniMessage tags (StandardTags): color &lt;#RRGGBB&gt;, &lt;gradient&gt;, &lt;rainbow&gt;,
- * &lt;transition&gt;, &lt;bold&gt;/&lt;b&gt;, &lt;italic&gt;/&lt;i&gt;, &lt;hover&gt;, &lt;click&gt;,
- * &lt;keybind&gt;, &lt;insertion&gt;, etc. To display literal angle brackets use escape: {@code \&lt;} and {@code \&gt;}.
+ * Supported MiniMessage tags include colors, gradients, rainbows, transitions,
+ * decorations, keybinds, and other non-interactive tags. Interactive
+ * {@code click}, {@code hover}, and {@code insertion} tags are intentionally
+ * stripped. To display literal angle brackets use escape: {@code \&lt;} and {@code \&gt;}.
  * </p>
  *
  * [ThreadSafe] This class is thread-safe utility class.
@@ -30,9 +30,12 @@ public final class MessageHelper {
 
     private static final Logger LOGGER = Logger.getLogger(MessageHelper.class.getName());
 
-    private static final MiniMessage MINI_MESSAGE = MiniMessage.builder()
-            .tags(StandardTags.defaults())
-            .build();
+    /**
+     * Uses the platform's native MiniMessage implementation. Do not shade this
+     * implementation: Canvas 26.2 provides Adventure 5.x while Paper 1.20.4
+     * provides Adventure 4.x.
+     */
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
     private static final LegacyComponentSerializer LEGACY_SERIALIZER =
             LegacyComponentSerializer.builder()
@@ -45,6 +48,10 @@ public final class MessageHelper {
     private static final Pattern LEGACY_PATTERN = Pattern.compile("[&§][0-9a-fk-or]");
 
     private static final Pattern BARE_HEX_COLOR_PATTERN = Pattern.compile("(?<![:<])#([0-9A-Fa-f]{6})(?![a-zA-Z0-9])");
+
+    /** Interactive tags are deliberately disabled for predictable cross-platform output. */
+    private static final Pattern INTERACTIVE_TAG_PATTERN = Pattern.compile(
+            "(?i)</?(?:click|hover|insertion)(?::[^>]*)?>");
 
     private static final ConcurrentHashMap<String, Component> componentCache = new ConcurrentHashMap<>();
     private static final int MAX_CACHE_SIZE = 500;
@@ -59,13 +66,19 @@ public final class MessageHelper {
      * Only for cache callbacks, avoids creating duplicate parsing results.
      */
     private static Component parseMessageInternal(String normalized) {
+        String safeMessage = INTERACTIVE_TAG_PATTERN.matcher(normalized).replaceAll("");
         try {
-            Component result = MINI_MESSAGE.deserialize(normalized);
+            Component result = MINI_MESSAGE.deserialize(safeMessage);
             return result != null ? result : Component.empty();
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             LOGGER.log(Level.FINE, "MiniMessage parse failed, using legacy fallback", e);
         }
-        return LEGACY_SERIALIZER.deserialize(normalized);
+        try {
+            return LEGACY_SERIALIZER.deserialize(safeMessage);
+        } catch (Exception | LinkageError e) {
+            LOGGER.log(Level.FINE, "Legacy message parse failed, using plain fallback", e);
+            return Component.text(stripColor(safeMessage));
+        }
     }
 
     /**

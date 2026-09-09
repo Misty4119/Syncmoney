@@ -18,9 +18,31 @@ public final class AcceptanceProbe extends JavaPlugin {
             boolean networkBot = sender instanceof org.bukkit.entity.Player player
                     && player.getName().startsWith("Acceptance");
             if (!console && !networkBot) return true;
+            if (args.length > 0 && args[0].startsWith("version")) {
+                getServer().getGlobalRegionScheduler().run(this, task -> runVersionChecks(args[0]));
+                return true;
+            }
             getServer().getAsyncScheduler().runNow(this, task -> runChecks(args));
             return true;
         });
+    }
+
+    private void runVersionChecks(String command) {
+        try {
+            Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
+            require(plugin != null && plugin.isEnabled(), "plugin enabled");
+            String suffix = switch (command.toLowerCase(java.util.Locale.ROOT)) {
+                case "version" -> "";
+                case "version-full" -> " full";
+                case "version-save" -> " save";
+                default -> throw new IllegalArgumentException("unknown version acceptance command: " + command);
+            };
+            require(getServer().dispatchCommand(getServer().getConsoleSender(), "syncmoney version" + suffix),
+                    "version command dispatched");
+            getLogger().info("ACCEPTANCE VERSION PASS command=" + command);
+        } catch (Throwable e) {
+            getLogger().log(java.util.logging.Level.SEVERE, "ACCEPTANCE VERSION FAIL", e);
+        }
     }
 
     private void runChecks(String[] args) {
@@ -56,7 +78,7 @@ public final class AcceptanceProbe extends JavaPlugin {
             require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
             Economy vault = registration.getProvider();
             require(vault.isEnabled(), "Vault provider enabled");
-            require(plugin.getDescription().getVersion().equals("1.3.0"), "plugin version");
+            require(plugin.getDescription().getVersion().equals("1.3.1"), "plugin version");
             require(facade.getBalanceForPlaceholder(a).compareTo(new BigDecimal("1000")) == 0, "cached placeholder");
             getLogger().info("ACCEPTANCE PASS platform=" + getServer().getName()
                     + " server=" + getServer().getVersion() + " mode=" + plugin.getSyncmoneyConfig().getEconomyMode()
