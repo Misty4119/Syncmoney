@@ -30,7 +30,7 @@ jobs:
           cache: gradle
 
       - name: Test and build
-        run: ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+        run: bash ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
