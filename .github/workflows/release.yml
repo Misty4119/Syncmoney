@@ -79,7 +79,12 @@ jobs:
           pnpm build:embedded
 
       - name: Verify embedded Web Admin is current
-        run: git diff --exit-code -- src/main/resources/syncmoney-web/dist
+        run: |
+          if [[ -n "$(git status --porcelain --untracked-files=all -- src/main/resources/syncmoney-web/dist)" ]]; then
+            git status --short --untracked-files=all -- src/main/resources/syncmoney-web/dist
+            git diff -- src/main/resources/syncmoney-web/dist
+            exit 1
+          fi
 
       - name: Install Playwright Chromium
         working-directory: syncmoney-web

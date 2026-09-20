@@ -170,19 +170,19 @@ public final class WebAdminServer {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-                "AuditLogView-BTMZJMtV.js", "AuditLogView-wQc_AOrE.css",
+                "AuditLogView-DCAh9Jnk.js", "AuditLogView-DSvYadoU.css",
                 "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js",
-                "Button.vue_vue_type_script_setup_true_lang-C-H8SwYl.js",
-                "Card-Dx6t7UCI.css", "Card-Y34loNmr.js", "CentralDashboardView-HWzkVBC1.js",
-                "ConfigView-CDTXbh8v.js", "ConfigView-D3cmixov.css", "DashboardView-Bf5J5UdR.js",
-                "EmptyState.vue_vue_type_script_setup_true_lang-CMf6Ar83.js",
-                "globe-BQ6zg0mb.js", "index-CwYPYTzx.js", "index-WrxCvQni.css", "LoginView-BiXiaito.js",
-                "NodesManagementView-eQ7Iebhe.css", "NodesManagementView-J47wJ3KF.js", "NotFoundView-BQOwohuq.js",
-                "NotFoundView-BvfRyRzZ.css", "SettingsView-DejGSIv5.js", "shield-Dh1fhLl-.js",
+                "Button.vue_vue_type_script_setup_true_lang-b7dK3PRk.js",
+                "Card-CUfHECkD.js", "Card-XdX29y7v.css", "CentralDashboardView-CLitA275.js",
+                "ConfigView-CC2NQlYW.js", "ConfigView-nxIbKMd_.css", "DashboardView-D753_MSY.js",
+                "EmptyState.vue_vue_type_script_setup_true_lang-CI4fbJBP.js",
+                "globe-BGeqY8Mh.js", "index-D4b_KEqu.css", "index-DLDy6HvF.js", "LoginView-BZHxoufF.js",
+                "NodesManagementView-DnYuA6TG.js", "NodesManagementView-IuUDUfJE.css", "NotFoundView-CaNf-shm.js",
+                "NotFoundView-ChI-bezx.css", "SettingsView-B9oraPXn.js", "shield-DKyCFCkd.js",
                 "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js",
-                "StatCard.vue_vue_type_script_setup_true_lang-BpfL4ijg.js",
-                "Switch.vue_vue_type_script_setup_true_lang-BgcmOIaQ.js",
-                "SystemStatusView-nNpkK4gu.js", "ui-vendor-C7Hq5Kfe.js", "users-DgjmLfE2.js",
+                "StatCard.vue_vue_type_script_setup_true_lang-DfaXx4NZ.js",
+                "Switch.vue_vue_type_script_setup_true_lang-DpPhvZ0b.js",
+                "SystemStatusView-xGExDOk3.js", "ui-vendor-C7Hq5Kfe.js", "users-2mfpiVHB.js",
                 "vue-vendor-BdqzwXPG.js"
         };
 
