@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Release
+    if: github.repository == 'Misty4119/Syncmoney'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.22.0
+          run_install: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: syncmoney-web/pnpm-lock.yaml
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$GITHUB_REF_NAME"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use the form 1.2.3, got: $version" >&2
+            exit 1
+          fi
+
+          gradle_version="$(sed -n "s/^version = '\([^']*\)'/\1/p" build.gradle)"
+          web_version="$(node -p "require('./syncmoney-web/package.json').version")"
+
+          if [[ "$gradle_version" != "$version" ]]; then
+            echo "build.gradle version $gradle_version does not match tag $version" >&2
+            exit 1
+          fi
+          if [[ "$web_version" != "$version" ]]; then
+            echo "syncmoney-web/package.json version $web_version does not match tag $version" >&2
+            exit 1
+          fi
+          if ! grep -Fq "## [$version] - " CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+
+      - name: Install frontend dependencies
+        working-directory: syncmoney-web
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend checks
+        working-directory: syncmoney-web
+        run: |
+          pnpm typecheck
+          pnpm test:coverage
+          pnpm build:embedded
+
+      - name: Verify embedded Web Admin is current
+        run: git diff --exit-code -- src/main/resources/syncmoney-web/dist
+
+      - name: Install Playwright Chromium
+        working-directory: syncmoney-web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        working-directory: syncmoney-web
+        run: pnpm test:e2e
+
+      - name: Test and build Java artifacts
+        run: ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+
+      - name: Create SHA-256 checksums
+        shell: bash
+        run: |
+          sha256sum \
+            "build/libs/Syncmoney-${GITHUB_REF_NAME}.jar" \
+            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${GITHUB_REF_NAME}.jar" \
+            > CHECKSUMS.txt
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/libs/Syncmoney-${{ github.ref_name }}.jar
+            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ github.ref_name }}.jar
+            CHECKSUMS.txt
+
+      - name: Prepare release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/extract-changelog.py "$GITHUB_REF_NAME" CHANGELOG.md > release-notes.md
+          printf '\n\n## GitHub changes\n\n' >> release-notes.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=${GITHUB_REF_NAME}" \
+            --jq .body >> release-notes.md
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/libs/Syncmoney-${GITHUB_REF_NAME}.jar" \
+            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${GITHUB_REF_NAME}.jar" \
+            CHECKSUMS.txt \
+            --verify-tag \
+            --title "Syncmoney ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md

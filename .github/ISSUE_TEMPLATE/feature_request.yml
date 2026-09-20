@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose an improvement or new capability for Syncmoney.
+title: "[Feature]: "
+labels:
+  - "type: enhancement"
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe the concrete problem this would solve.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe what you would like Syncmoney to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention existing workarounds or alternative designs if applicable.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, screenshots, API sketches, or compatibility constraints that help explain the request.
