@@ -1,6 +1,6 @@
 # Syncmoney Architecture
 
-> Project version: `1.3.1`
+> Project version: `1.3.2`
 > Configuration schema: `12`
 > Build toolchain: Java 21
 > This document describes the implementation in the current repository. Code and executable configuration remain authoritative.
@@ -255,7 +255,7 @@ This is a known implementation limitation and a security-sensitive area for futu
 
 `syncmoney-web` uses Vue 3, Vite, Pinia, `vue-i18n`, and PWA tooling. The built production bundle is copied/embedded into `src/main/resources/syncmoney-web/dist`.
 
-Frontend release metadata and the embedded bundle should move with the root release when frontend assets are part of that release. The current frontend package version is `1.3.1`.
+Frontend release metadata and the embedded bundle should move with the root release when frontend assets are part of that release. The current frontend package version is `1.3.2`.
 
 ## 11. PlaceholderAPI expansion
 

@@ -95,7 +95,7 @@ For scheduler/storage/lifecycle/cross-server changes, use PlugDev and report the
 
 ## Release facts
 
-Root Gradle currently resolves to `1.3.1`; Java compilation uses toolchain 21. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
+Root Gradle currently resolves to `1.3.2`; Java compilation uses toolchain 21. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
 
 Frontend release metadata and embedded `src/main/resources/syncmoney-web/dist` assets must move together when web release assets change.
 

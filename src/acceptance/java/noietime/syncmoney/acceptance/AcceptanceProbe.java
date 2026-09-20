@@ -78,7 +78,7 @@ public final class AcceptanceProbe extends JavaPlugin {
             require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
             Economy vault = registration.getProvider();
             require(vault.isEnabled(), "Vault provider enabled");
-            require(plugin.getDescription().getVersion().equals("1.3.1"), "plugin version");
+            require(plugin.getDescription().getVersion().equals("1.3.2"), "plugin version");
             require(facade.getBalanceForPlaceholder(a).compareTo(new BigDecimal("1000")) == 0, "cached placeholder");
             getLogger().info("ACCEPTANCE PASS platform=" + getServer().getName()
                     + " server=" + getServer().getVersion() + " mode=" + plugin.getSyncmoneyConfig().getEconomyMode()

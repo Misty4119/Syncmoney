@@ -6,7 +6,7 @@ This file is the operating guide for coding agents and automated contributors wo
 
 Syncmoney is a Minecraft economy plugin that provides a Vault-compatible economy, optional VaultUnlocked/CMI integration, Redis-backed cross-server synchronization, relational persistence, audit/guard features, an embedded web administration service, and an optional PlaceholderAPI expansion. It does not replicate arbitrary permissions or arbitrary third-party commands.
 
-Current release metadata is owned by root `build.gradle`. At this update the release is `1.3.1`, configuration schema is `12`, and the build toolchain is Java 21. These are separate version domains.
+Current release metadata is owned by root `build.gradle`. At this update the release is `1.3.2`, configuration schema is `12`, and the build toolchain is Java 21. These are separate version domains.
 
 - Core plugin: `src/main/java/noietime/syncmoney`
 - Runtime defaults/descriptors: `src/main/resources`

@@ -1,6 +1,6 @@
 # Syncmoney Developer Guide
 
-> Current release: `1.3.1`
+> Current release: `1.3.2`
 > Java build toolchain: 21
 > Configuration schema: `12`
 

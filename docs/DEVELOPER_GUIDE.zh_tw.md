@@ -1,6 +1,6 @@
 # Syncmoney 開發者指南
 
-> 專案版本：`1.3.1`
+> 專案版本：`1.3.2`
 > Config schema：`12`
 > Build toolchain：Java 21
 

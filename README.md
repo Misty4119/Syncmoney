@@ -5,7 +5,7 @@
     <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney" alt="Stars">
     <img src="https://img.shields.io/github/downloads/Misty4119/Syncmoney/total" alt="Downloads">
   </a>
-  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.1-blue.svg" alt="Release"></a>
+  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.2-blue.svg" alt="Release"></a>
   <a href="https://github.com/Misty4119/Syncmoney/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
   <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
@@ -68,14 +68,14 @@ The 1.3.1 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Ca
 ## Installation & Setup
 
 1. **Backup**: Stop your server and take a full backup of existing plugin configs, economy databases, and Redis persistence.
-2. **Install Plugin**: Place `Syncmoney-1.3.1.jar` and your preferred Vault provider in the server's `plugins/` directory. Remove any older Syncmoney JAR versions.
+2. **Install Plugin**: Place `Syncmoney-1.3.2.jar` and your preferred Vault provider in the server's `plugins/` directory. Remove any older Syncmoney JAR versions.
 3. **Initialize Configuration**: Start the server once to generate default configuration files, then stop it.
 4. **Configure Node**: In `plugins/Syncmoney/config.yml`:
    - Assign a unique `server-name` (e.g., `survival-01`, `lobby-01`).
    - Select your target `economy.mode`.
    - Configure Redis and SQL database connection credentials if using synchronized modes.
 5. **Start & Verify**: Start the server. Confirm in the console logs that Syncmoney and Vault have registered successfully. Verify basic transactions with `/money` and `/pay`.
-6. **Placeholders (Optional)**: If using PlaceholderAPI, copy `SyncmoneyExpansion-1.3.1.jar` into `plugins/PlaceholderAPI/expansions/` and run `/papi reload`.
+6. **Placeholders (Optional)**: If using PlaceholderAPI, copy `SyncmoneyExpansion-1.3.2.jar` into `plugins/PlaceholderAPI/expansions/` and run `/papi reload`.
 
 ---
 
