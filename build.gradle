@@ -51,8 +51,8 @@ dependencies {
     // Paper, Folia and Canvas provide their matching native Adventure runtime.
     // Keeping these compile-only prevents a MiniMessage 4.x implementation from
     // being paired with a server Adventure 5.x API at runtime.
-    compileOnly("net.kyori:adventure-text-minimessage:4.16.0")
-    compileOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
+    compileOnly("net.kyori:adventure-text-minimessage:5.2.0")
+    compileOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     implementation("org.bstats:bstats-bukkit:3.1.0")
 
     implementation 'io.undertow:undertow-core:2.3.18.Final'
@@ -67,8 +67,8 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
     // The server supplies Adventure in production; tests need a concrete native-like runtime.
-    testRuntimeOnly("net.kyori:adventure-text-minimessage:4.16.0")
-    testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
+    testRuntimeOnly("net.kyori:adventure-text-minimessage:5.2.0")
+    testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
