@@ -35,7 +35,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:26.2.build.124-stable")
 
     // VaultUnlockedAPI contains both the legacy Vault 1.7 contracts and the
     // modern net.milkbowl.vault2 API. The server runtime supplies these classes.
@@ -64,7 +64,7 @@ dependencies {
     // YAML configuration
     implementation 'org.yaml:snakeyaml:2.4'
 
-    testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    testImplementation("io.papermc.paper:paper-api:26.2.build.124-stable")
     testImplementation("net.milkbowl.vault:VaultUnlockedAPI:2.20")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
