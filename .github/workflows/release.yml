@@ -90,7 +90,7 @@ jobs:
         run: pnpm test:e2e
 
       - name: Test and build Java artifacts
-        run: ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+        run: bash ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
 
       - name: Create SHA-256 checksums
         shell: bash
