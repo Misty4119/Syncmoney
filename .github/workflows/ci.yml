@@ -123,9 +123,13 @@ jobs:
       - name: Verify extractIndividualFiles stayed synchronized
         working-directory: .
         run: |
-          if [[ -n "$(git status --porcelain -- src/main/java/noietime/syncmoney/web/server/WebAdminServer.java)" ]]; then
-            git status --short -- src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
-            git diff -- src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          set -euo pipefail
+          java_file=src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          before="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          node syncmoney-web/scripts/sync-embedded-web.mjs
+          after="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          if [[ "$before" != "$after" ]]; then
+            git diff -- "$java_file"
             echo "WebAdminServer.extractIndividualFiles is out of sync with the generated bundle." >&2
             exit 1
           fi

@@ -259,6 +259,14 @@ jobs:
         run: |
           set -euo pipefail
           java_file=src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          java_before="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          node syncmoney-web/scripts/sync-embedded-web.mjs
+          java_after="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          if [[ "$java_before" != "$java_after" ]]; then
+            git diff -- "$java_file"
+            echo "WebAdminServer.extractIndividualFiles is not stable after regeneration." >&2
+            exit 1
+          fi
           if [[ "${{ needs.prepare.outputs.channel }}" == "stable" ]]; then
             if [[ -n "$(git status --porcelain -- "$java_file" src/main/resources/syncmoney-web/dist)" ]]; then
               git status --short -- "$java_file" src/main/resources/syncmoney-web/dist
