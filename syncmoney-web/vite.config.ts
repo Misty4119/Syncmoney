@@ -41,6 +41,14 @@ export default defineConfig({
       workbox: {
         sourcemap: false,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
+        manifestTransforms: [
+          async (entries) => ({
+            manifest: [...entries].sort((left, right) =>
+              left.url < right.url ? -1 : left.url > right.url ? 1 : 0
+            ),
+            warnings: []
+          })
+        ],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

@@ -80,9 +80,13 @@ jobs:
 
       - name: Verify embedded Web Admin is current
         run: |
-          if [[ -n "$(git status --porcelain --untracked-files=all -- src/main/resources/syncmoney-web/dist)" ]]; then
-            git status --short --untracked-files=all -- src/main/resources/syncmoney-web/dist
-            git diff -- src/main/resources/syncmoney-web/dist
+          web_paths=(
+            src/main/resources/syncmoney-web/dist
+            src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          )
+          if [[ -n "$(git status --porcelain --untracked-files=all -- "${web_paths[@]}")" ]]; then
+            git status --short --untracked-files=all -- "${web_paths[@]}"
+            git diff -- "${web_paths[@]}"
             exit 1
           fi
 

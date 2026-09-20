@@ -150,8 +150,15 @@ public final class WebAdminServer {
     private void extractIndividualFiles(ClassLoader classLoader, Path webRoot) throws IOException {
 
         String[] rootFiles = {
-                "favicon.png", "index.html", "manifest.json", "manifest.webmanifest", "mockServiceWorker.js",
-                "registerSW.js", "sw.js", "version.json", "workbox-daba6f28.js"
+                "favicon.png",
+                "index.html",
+                "manifest.json",
+                "manifest.webmanifest",
+                "mockServiceWorker.js",
+                "registerSW.js",
+                "sw.js",
+                "version.json",
+                "workbox-daba6f28.js"
         };
 
         for (String fileName : rootFiles) {
@@ -170,19 +177,33 @@ public final class WebAdminServer {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-                "AuditLogView-DCAh9Jnk.js", "AuditLogView-DSvYadoU.css",
+                "AuditLogView-DCAh9Jnk.js",
+                "AuditLogView-DSvYadoU.css",
                 "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js",
                 "Button.vue_vue_type_script_setup_true_lang-b7dK3PRk.js",
-                "Card-CUfHECkD.js", "Card-XdX29y7v.css", "CentralDashboardView-CLitA275.js",
-                "ConfigView-CC2NQlYW.js", "ConfigView-nxIbKMd_.css", "DashboardView-D753_MSY.js",
+                "Card-CUfHECkD.js",
+                "Card-XdX29y7v.css",
+                "CentralDashboardView-CLitA275.js",
+                "ConfigView-CC2NQlYW.js",
+                "ConfigView-nxIbKMd_.css",
+                "DashboardView-D753_MSY.js",
                 "EmptyState.vue_vue_type_script_setup_true_lang-CI4fbJBP.js",
-                "globe-BGeqY8Mh.js", "index-D4b_KEqu.css", "index-DLDy6HvF.js", "LoginView-BZHxoufF.js",
-                "NodesManagementView-DnYuA6TG.js", "NodesManagementView-IuUDUfJE.css", "NotFoundView-CaNf-shm.js",
-                "NotFoundView-ChI-bezx.css", "SettingsView-B9oraPXn.js", "shield-DKyCFCkd.js",
+                "LoginView-BZHxoufF.js",
+                "NodesManagementView-DnYuA6TG.js",
+                "NodesManagementView-IuUDUfJE.css",
+                "NotFoundView-CaNf-shm.js",
+                "NotFoundView-ChI-bezx.css",
+                "SettingsView-B9oraPXn.js",
                 "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js",
                 "StatCard.vue_vue_type_script_setup_true_lang-DfaXx4NZ.js",
                 "Switch.vue_vue_type_script_setup_true_lang-DpPhvZ0b.js",
-                "SystemStatusView-xGExDOk3.js", "ui-vendor-C7Hq5Kfe.js", "users-2mfpiVHB.js",
+                "SystemStatusView-xGExDOk3.js",
+                "globe-BGeqY8Mh.js",
+                "index-D4b_KEqu.css",
+                "index-DLDy6HvF.js",
+                "shield-DKyCFCkd.js",
+                "ui-vendor-C7Hq5Kfe.js",
+                "users-2mfpiVHB.js",
                 "vue-vendor-BdqzwXPG.js"
         };
 
@@ -202,7 +223,10 @@ public final class WebAdminServer {
             Files.createDirectories(iconsDir);
         }
 
-        String[] iconFiles = { "icon-192x192.png", "icon-512x512.png" };
+        String[] iconFiles = {
+                "icon-192x192.png",
+                "icon-512x512.png"
+        };
         for (String fileName : iconFiles) {
             Path targetFile = iconsDir.resolve(fileName);
             if (!Files.exists(targetFile)) {
