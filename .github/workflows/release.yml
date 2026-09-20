@@ -361,8 +361,8 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$RELEASE_VERSION" \
-            release-artifacts/Syncmoney-${RELEASE_VERSION}.jar \
-            release-artifacts/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
+            release-artifacts/build/libs/Syncmoney-${RELEASE_VERSION}.jar \
+            release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
             release-artifacts/CHECKSUMS.txt \
             --verify-tag \
             --title "Syncmoney $RELEASE_VERSION" \
@@ -405,8 +405,8 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$RELEASE_VERSION" \
-            release-artifacts/Syncmoney-${RELEASE_VERSION}.jar \
-            release-artifacts/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
+            release-artifacts/build/libs/Syncmoney-${RELEASE_VERSION}.jar \
+            release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
             release-artifacts/CHECKSUMS.txt \
             --verify-tag \
             --prerelease \
