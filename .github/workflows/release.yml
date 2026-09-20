@@ -113,6 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           gh repo clone Misty4119/Syncmoney-web web-release -- --branch main --depth 1
+          gh auth setup-git
 
           copy_path() {
             local path="$1"
