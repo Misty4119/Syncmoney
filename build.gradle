@@ -46,7 +46,7 @@ dependencies {
     implementation("redis.clients:jedis:5.2.0")
     implementation("org.apache.commons:commons-pool2:2.12.1")
     implementation("com.zaxxer:HikariCP:6.2.1")
-    implementation("com.mysql:mysql-connector-j:9.2.0")
+    implementation("com.mysql:mysql-connector-j:26.7.0")
     implementation("org.postgresql:postgresql:42.7.5")
     implementation("org.xerial:sqlite-jdbc:3.49.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
