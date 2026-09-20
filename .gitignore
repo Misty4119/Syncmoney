@@ -20,6 +20,9 @@ target/
 syncmoney-web/node_modules/
 syncmoney-web/dist/
 syncmoney-web.tar.gz
+.pnpm-store/
+.vite/
+*.tsbuildinfo
 playwright-report/
 test-results/
 playwright/.cache/
@@ -38,10 +41,13 @@ coverage/
 .agents/
 .codex/
 .vs/
+.fleet/
+.zed/
 *.swp
 *.swo
 *~
 .DS_Store
+Desktop.ini
 Thumbs.db
 .settings/
 .classpath
@@ -56,6 +62,7 @@ bin/
 *.war
 *.ear
 *.log
+*.hprof
 hs_err_pid*.log
 replay_pid*.log
 
@@ -71,7 +78,6 @@ plugins/
 world/
 world_nether/
 world_the_end/
-tools/plugdev/chaos.mjs
 META-INF/
 # Local configuration files (may contain sensitive information)
 local_*.yml
@@ -81,9 +87,15 @@ credentials.yml
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
 *.auth
 *.key
 *.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
 
 # Database files
 *.sqlite
@@ -100,12 +112,26 @@ logs/
 *.bak
 *.backup
 *.old
+*.orig
+*.rej
+*.tmp
+*.temp
 
 # =============================================
-# Files not needed during development
+# Internal development material and local reference data
 # =============================================
+AGENTS.md
+Objective.md
 Proposal/
 reference/
+tools/plugdev/
+plugdev.yml
+
+# Accidental archive/JAR extraction and scratch output
+/$tmp/
+/META-INF/
+
+# General scratch/cache directories
 tmp/
 temp/
 cache/
@@ -124,8 +150,7 @@ bukkit.yml
 paper.yml
 purpur.yml
 
-# Local planning and private notes (public Markdown remains trackable)
-Objective.md
+# Local runtime reports
 crash-reports/
 test-output/
 
@@ -133,7 +158,6 @@ test-output/
 # Files to keep
 # =============================================
 !README.md
-!AGENTS.md
 !CHANGELOG.md
 !docs/*.md
 !gradle/wrapper/*.jar
