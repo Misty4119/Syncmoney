@@ -7,6 +7,8 @@
   </a>
   <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.1-blue.svg" alt="Release"></a>
   <a href="https://github.com/Misty4119/Syncmoney/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
+  <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
 </p>
 <p align="center">
   <a href="https://docs.papermc.io/paper/getting-started/"><img src="https://img.shields.io/badge/Platform-Paper%20%7C%20Folia%20%7C%20Canvas-orange.svg" alt="Platform"></a>

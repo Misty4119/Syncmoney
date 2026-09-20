@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and support
+    url: https://github.com/Misty4119/Syncmoney/discussions
+    about: Use GitHub Discussions for setup questions and general support.
+  - name: Security vulnerability
+    url: https://github.com/Misty4119/Syncmoney/security/policy
+    about: Follow the security policy instead of opening a public issue.
