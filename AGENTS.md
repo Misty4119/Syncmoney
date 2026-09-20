@@ -163,6 +163,10 @@ Before finalizing run `git diff --check`, inspect `git status --short` and the d
 
 Root `build.gradle` owns the release version; PAPI inherits it. Web package/public metadata and `src/main/resources/syncmoney-web/dist` must match when a release changes frontend assets/metadata.
 
+The core repository is the canonical Web Admin source. Core release tags are unprefixed; the public Web mirror uses the corresponding `v`-prefixed tag and publishes the deterministic source archive consumed by `WebDownloader`. Preview builds may use the `releaseVersion` Gradle property, while stable source metadata remains committed.
+
+Run `pnpm build:embedded` from `syncmoney-web` after frontend changes. It clears/replaces the embedded `dist` tree and updates `WebAdminServer.extractIndividualFiles` in the same operation. Review the generated bundle and Java file together.
+
 Expected artifacts:
 
 - `Syncmoney-<version>.jar` from `shadowJar`

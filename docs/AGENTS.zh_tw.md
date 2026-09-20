@@ -147,6 +147,10 @@ scheduler/storage/lifecycle/CMI/cross-server 變更要執行相關 PlugDev matri
 
 Root `build.gradle` 擁有 release version，PAPI 繼承它。涉及 web asset 的 release 要同步更新 frontend metadata 與 `src/main/resources/syncmoney-web/dist`。
 
+Core repository 是 Web Admin 的 canonical source。Core release tag 不帶前綴；公開 Web mirror 使用對應的 `v` 前綴 tag，並發佈由 `WebDownloader` 使用的 deterministic source archive。Preview build 可以使用 `releaseVersion` Gradle property；stable source metadata 則保留在 committed source。
+
+Frontend 變更後在 `syncmoney-web` 執行 `pnpm build:embedded`。它會清空/覆蓋 embedded `dist` tree，並在同一操作更新 `WebAdminServer.extractIndividualFiles`。Generated bundle 與 Java file 必須一起 review。
+
 預期 artifact：
 
 - `build/libs/Syncmoney-<version>.jar`

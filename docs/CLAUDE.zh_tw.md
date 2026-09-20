@@ -97,7 +97,7 @@ scheduler、storage、lifecycle、cross-server 變更要用 PlugDev，並只報�
 
 根目錄 Gradle 目前版本為 `1.3.2`，編譯 toolchain 為 Java 21。PAPI 繼承根版本。主要產物為 `Syncmoney-<version>.jar`、`SyncmoneyExpansion-<version>.jar`、`SyncmoneyAcceptance.jar`。
 
-涉及 web 資產的 release，frontend release metadata 與 `src/main/resources/syncmoney-web/dist` 必須一起更新。
+涉及 web 資產的 release，frontend release metadata 與 `src/main/resources/syncmoney-web/dist` 必須一起更新。Core repository 是 canonical frontend source；Core tag 不帶 `v`，公開 Web mirror 使用 `v` tag 並先發佈 deterministic source archive。Frontend 變更使用 `pnpm build:embedded`，確保 embedded bundle 與 `WebAdminServer.extractIndividualFiles` 同步。
 
 ## 文件語言
 

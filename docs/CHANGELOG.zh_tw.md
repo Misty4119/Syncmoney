@@ -15,6 +15,12 @@
 
 - **版本中繼資料**：根專案、PlaceholderAPI、Web Admin、文件、設定中繼資料與 acceptance 版本檢查統一為 `1.3.2`。
 - **內嵌 Web Bundle**：重新建置 Web Admin 內嵌資產，並同步 `WebAdminServer.extractIndividualFiles` 與產生的 bundle。
+- **Release 自動化**：新增 GitHub Actions CI artifact、alpha/beta preview、受保護的 stable release、provenance attestation，以及同步 `Syncmoney-web` release 的 workflow。
+- **Web Release 契約**：Web repository 發佈帶有 `v` 前綴的 deterministic source archive；core downloader 同時接受帶前綴與不帶前綴的 Web release tag。
+
+### 驗證 (Validation)
+
+- PlugDev acceptance 通過 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及雙後端 Paper 26.2 network。Folia 覆蓋範圍特指實際測試的 beta build。
 
 ## [1.3.1] - 2026-09-09
 

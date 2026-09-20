@@ -235,7 +235,7 @@ When web source changes, reconcile the built frontend with the embedded distribu
 
 ## Acceptance baseline
 
-The current PlugDev documentation covers Paper 1.20.4, Paper 26.2, Folia 26.2, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure.
+The current PlugDev documentation covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure. Folia 26.2 Beta was exercised successfully; this is observed coverage for that beta build, not a guarantee for future Folia releases.
 
 Licensed CMI is not bundled; CMI acceptance requires a locally supplied licensed plugin. Do not turn this observed matrix into guarantees for future server releases.
 

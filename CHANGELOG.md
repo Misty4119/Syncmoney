@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Release Metadata**: Unified root, PlaceholderAPI, Web Admin, documentation, configuration metadata, and acceptance version checks on `1.3.2`.
 - **Embedded Web Bundle**: Rebuilt the embedded Web Admin assets and synchronized `WebAdminServer.extractIndividualFiles` with the generated bundle.
+- **Release Automation**: Added GitHub Actions workflows for CI artifacts, alpha/beta previews, protected stable releases, provenance attestations, and the synchronized `Syncmoney-web` release.
+- **Web Release Contract**: The Web repository now publishes `v`-prefixed deterministic source archives; the core downloader accepts both prefixed and unprefixed Web release tags.
+
+### Validation
+
+- PlugDev acceptance passed on Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network. Folia coverage is specifically for the tested beta build.
 
 ## [1.3.1] - 2026-09-09
 

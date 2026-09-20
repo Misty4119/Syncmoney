@@ -78,7 +78,13 @@ public final class AcceptanceProbe extends JavaPlugin {
             require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
             Economy vault = registration.getProvider();
             require(vault.isEnabled(), "Vault provider enabled");
-            require(plugin.getDescription().getVersion().equals("1.3.2"), "plugin version");
+            String expectedVersion = expectedVersion();
+            String actualVersion = plugin.getDescription().getVersion();
+            require(!actualVersion.isBlank(), "plugin version is present");
+            if (expectedVersion != null) {
+                require(actualVersion.equals(expectedVersion), "plugin version expected=" + expectedVersion
+                        + " actual=" + actualVersion);
+            }
             require(facade.getBalanceForPlaceholder(a).compareTo(new BigDecimal("1000")) == 0, "cached placeholder");
             getLogger().info("ACCEPTANCE PASS platform=" + getServer().getName()
                     + " server=" + getServer().getVersion() + " mode=" + plugin.getSyncmoneyConfig().getEconomyMode()
@@ -90,5 +96,13 @@ public final class AcceptanceProbe extends JavaPlugin {
 
     private static void require(boolean condition, String check) {
         if (!condition) throw new IllegalStateException(check);
+    }
+
+    private static String expectedVersion() {
+        String configured = System.getProperty("syncmoney.acceptance.version");
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv("SYNCMONEY_EXPECTED_VERSION");
+        }
+        return configured == null || configured.isBlank() ? null : configured.trim();
     }
 }

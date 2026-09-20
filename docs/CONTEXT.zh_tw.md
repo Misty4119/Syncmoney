@@ -235,7 +235,7 @@ web source 變更時，要同步處理 build output 與 embedded distribution。
 
 ## 驗收基線
 
-目前 PlugDev 文件涵蓋 Paper 1.20.4、Paper 26.2、Folia 26.2、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。
+目前 PlugDev 文件涵蓋 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。Folia 26.2 Beta 已實際通過測試；這是該 beta build 的觀察結果，不是對未來 Folia release 的保證。
 
 CMI 為授權軟體且不隨儲存庫提供；CMI acceptance 需要本機另備合法 plugin。不能把目前觀察到的 matrix 當成未來 server release 的保證。
 

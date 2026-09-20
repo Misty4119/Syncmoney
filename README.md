@@ -5,7 +5,7 @@
     <img src="https://img.shields.io/github/stars/Misty4119/Syncmoney" alt="Stars">
     <img src="https://img.shields.io/github/downloads/Misty4119/Syncmoney/total" alt="Downloads">
   </a>
-  <a href="https://github.com/Misty4119/Syncmoney"><img src="https://img.shields.io/badge/Release-v1.3.2-blue.svg" alt="Release"></a>
+  <a href="https://github.com/Misty4119/Syncmoney/releases/latest"><img src="https://img.shields.io/github/v/release/Misty4119/Syncmoney" alt="Release"></a>
   <a href="https://github.com/Misty4119/Syncmoney/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
   <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml"><img src="https://github.com/Misty4119/Syncmoney/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
@@ -42,7 +42,7 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 - **Comprehensive Auditing & Analytics**: High-throughput asynchronous audit log pipeline with search, stats, automated cleanup, and external export.
 - **Shadow Backups**: Independent background account synchronization designed for cold-standby snapshots and state tracking.
 - **Embedded Web Admin Dashboard**: Modern web interface (Vue 3 / Undertow) for health telemetry, configuration inspection, audit viewing, and economy monitoring.
-- **Region Scheduler Safe**: Validated on Paper 1.20.4/26.2, Folia 26.2 BETA, and Canvas 26.2; scheduler boundaries are designed for region-threaded architectures.
+- **Region Scheduler Safe**: Validated on Paper 1.20.4/26.2, Folia `26.2.build.7-beta`, and Canvas 26.2; scheduler boundaries are designed for region-threaded architectures.
 - **Extensible Ecosystem**: Official PlaceholderAPI expansion and Bukkit transaction events (`PostTransactionEvent`).
 
 ---
@@ -61,7 +61,7 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 > [!NOTE]
 > Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
 
-The 1.3.1 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia 26.2 BETA, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. This is a tested compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
+The 1.3.2 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. Folia was tested successfully on that beta server build; this remains an observed compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
 
 ---
 
@@ -280,6 +280,16 @@ pnpm build
 ```
 
 Compiled JAR files are produced in `build/libs/` and `syncmoney-papi-expansion/build/libs/`.
+
+## Release and CI workflow
+
+Every pull request and `main` push runs Java and Web checks and retains build artifacts in GitHub Actions. CI preview artifacts use the repository variable `NEXT_VERSION` as their base and are named `1.3.3-alpha.<run-number>` by default. They are test artifacts, not public GitHub Releases.
+
+The core repository is the canonical Web Admin source. A release tag in the core repository has no `v` prefix (`1.3.2`, `1.3.3-beta.1`); the automation synchronizes the frontend to [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), where the corresponding tag has a `v` prefix (`v1.3.2`, `v1.3.3-beta.1`). The Web release publishes `syncmoney-web.tar.gz`, a deterministic source archive. The plugin downloads that archive, installs dependencies, and builds locally before loading it.
+
+To publish a preview, push an explicit core tag such as `1.3.3-beta.1`. The Web release is published first, then the core release. A stable tag such as `1.3.2` additionally requires the `production-release` environment approval and a matching `CHANGELOG.md` section. The cross-repository job uses the `SYNC_WEB_RELEASE_TOKEN` secret, which must be a fine-grained token limited to the `Misty4119/Syncmoney-web` repository.
+
+When Web source changes, run `pnpm build:embedded` from `syncmoney-web`. The command clears and replaces `src/main/resources/syncmoney-web/dist` and updates `WebAdminServer.extractIndividualFiles` in the same operation. Commit the generated bundle and the Java extraction lists together.
 
 ---
 

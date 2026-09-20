@@ -99,6 +99,8 @@ Root Gradle currently resolves to `1.3.2`; Java compilation uses toolchain 21. P
 
 Frontend release metadata and embedded `src/main/resources/syncmoney-web/dist` assets must move together when web release assets change.
 
+The core repository is the canonical frontend source. Core tags do not use `v`; the public Web mirror uses `v` tags and publishes the deterministic source archive first. Use `pnpm build:embedded` for frontend changes so the embedded bundle and `WebAdminServer.extractIndividualFiles` remain synchronized.
+
 ## Documentation language
 
 Root operational/community documents are canonical English. Traditional Chinese counterparts live in `docs/` with `.zh_tw.md`. Keep semantic parity and do not add promises only in one language.

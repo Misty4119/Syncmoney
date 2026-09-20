@@ -223,7 +223,7 @@ SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEven
 
 `syncmoney-web` 使用 Vue 3、Vite、Pinia、`vue-i18n` 與 PWA tooling。Production build 會嵌入 `src/main/resources/syncmoney-web/dist`。
 
-目前 frontend package version 為 `1.3.2`。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新。
+Core repository 是 frontend 的 canonical source。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新；公開的 `Syncmoney-web` mirror 會接收相同 source，並發佈帶 `v` 前綴的 deterministic source archive。Core tag 不帶前綴，Web tag 使用 `v`。目前 frontend package version 為 `1.3.2`。
 
 ## 11. PlaceholderAPI expansion
 
@@ -266,6 +266,8 @@ pnpm build
 ```
 
 Project compile toolchain 是 Java 21；runtime Java 依 server，PlugDev 對較新 Paper 26.1+ environment 記載 Java 25。
+
+Release automation 透過 Gradle property 建置 preview version，先發佈 Web archive 再發佈 core JAR，stable publication 則由 `production-release` environment gate。Web archive 排除 generated `dist`、dependency、coverage、Playwright 與 editor directory，因為 plugin 下載後會自行建置 frontend。
 
 Scheduler、storage、lifecycle、CMI、cross-server 變更不能只靠 build success，需依 `tools/plugdev/README.md` 執行適用 matrix 並精確紀錄實際測試範圍。
 

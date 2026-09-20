@@ -9,6 +9,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.time.Duration;
 import java.util.zip.GZIPInputStream;
 
@@ -64,9 +66,32 @@ public class WebDownloader {
      * @param extractDir directory to extract into (strip first component)
      */
     public boolean downloadVersion(String version, Path tarGzPath, Path extractDir) throws IOException, InterruptedException {
-        String normalizedVersion = version.startsWith("v") ? version : "v" + version;
-        String downloadUrl = "https://github.com/" + githubRepo + "/releases/download/" + normalizedVersion + "/syncmoney-web.tar.gz";
-        return download(downloadUrl, tarGzPath, extractDir);
+        String requestedVersion = version == null ? "" : version.trim();
+        if (requestedVersion.isEmpty()) {
+            throw new IllegalArgumentException("Web release version must not be blank");
+        }
+
+        List<String> candidateTags = new ArrayList<>();
+        candidateTags.add(requestedVersion);
+        if (requestedVersion.startsWith("v") && requestedVersion.length() > 1) {
+            candidateTags.add(requestedVersion.substring(1));
+        } else if (!requestedVersion.startsWith("v")) {
+            candidateTags.add("v" + requestedVersion);
+        }
+
+        for (int index = 0; index < candidateTags.size(); index++) {
+            String tag = candidateTags.get(index);
+            String downloadUrl = "https://github.com/" + githubRepo + "/releases/download/" + tag
+                    + "/syncmoney-web.tar.gz";
+            if (download(downloadUrl, tarGzPath, extractDir)) {
+                if (index > 0) {
+                    plugin.getLogger().fine("Web release tag fallback succeeded with: " + tag);
+                }
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -98,7 +123,7 @@ public class WebDownloader {
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
         if (response.statusCode() != 200) {
-            plugin.getLogger().severe("Download failed: HTTP " + response.statusCode());
+            plugin.getLogger().warning("Download failed: HTTP " + response.statusCode() + " for " + url);
             return false;
         }
 
