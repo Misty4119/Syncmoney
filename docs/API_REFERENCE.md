@@ -1,6 +1,6 @@
 # Syncmoney Web API Reference
 
-> Project version: `1.3.1`
+> Project version: `1.3.2`
 > Backend: Undertow
 > Default bind in shipped configuration: `localhost:8080`
 > This reference documents routes and behavior verified in the current source tree.
@@ -33,7 +33,7 @@ Most successful JSON endpoints use:
   "data": {},
   "meta": {
     "timestamp": 0,
-    "version": "1.3.1"
+    "version": "1.3.2"
   }
 }
 ```
@@ -49,7 +49,7 @@ Errors normally use:
   },
   "meta": {
     "timestamp": 0,
-    "version": "1.3.1"
+    "version": "1.3.2"
   }
 }
 ```

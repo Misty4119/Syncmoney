@@ -6,7 +6,7 @@ Syncmoney 是經濟插件；安全問題可能影響餘額、憑證、跨服同�
 
 ## 支援版本
 
-安全修正以目前儲存庫 release line 為主要開發目標。本文件更新時，根目錄 `build.gradle` 的版本為 `1.3.1`。
+安全修正以目前儲存庫 release line 為主要開發目標。本文件更新時，根目錄 `build.gradle` 的版本為 `1.3.2`。
 
 舊版可能不再收到修正。若問題只在舊 build 發生，實務可行時請也在目前 release 或 current `main` 重現，並附上實際測試版本。
 

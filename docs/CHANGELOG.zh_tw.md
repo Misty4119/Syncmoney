@@ -4,6 +4,18 @@
 
 本變更日誌格式基於 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，且本專案遵循 [語意化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.3.2] - 2026-09-20
+
+### 安全性 (Security)
+
+- **前端依賴修復**：將 Web Admin 依賴圖更新至已修補的 Axios、Vite 6、Vitest 4.1.11、Happy DOM、PostCSS 與 Sharp 版本。對仍有漏洞的間接依賴採用精準 pnpm override，避免為安全修復一併導入無關的 Java／執行期大版本升級。
+- **稽核基準**：解析完成的 Web Admin 依賴圖目前以 `pnpm audit` 檢查為零已知漏洞。
+
+### 已變更 (Changed)
+
+- **版本中繼資料**：根專案、PlaceholderAPI、Web Admin、文件、設定中繼資料與 acceptance 版本檢查統一為 `1.3.2`。
+- **內嵌 Web Bundle**：重新建置 Web Admin 內嵌資產，並同步 `WebAdminServer.extractIndividualFiles` 與產生的 bundle。
+
 ## [1.3.1] - 2026-09-09
 
 ### 已修復 (Fixed)

@@ -8,7 +8,7 @@
 
 Syncmoney 是 Minecraft 經濟插件，提供 Vault-compatible economy、選用 VaultUnlocked/CMI、Redis 跨服 balance synchronization、relational persistence、audit/guard、embedded Web Admin 與 PlaceholderAPI expansion；不負責同步任意 permission 或第三方 command。
 
-目前 root `build.gradle` release 為 `1.3.1`，config schema `12`，build toolchain Java 21；三者是不同版本領域。
+目前 root `build.gradle` release 為 `1.3.2`，config schema `12`，build toolchain Java 21；三者是不同版本領域。
 
 - Core：`src/main/java/noietime/syncmoney`
 - Runtime defaults：`src/main/resources`

@@ -1,6 +1,6 @@
 # Syncmoney Web API 參考
 
-> 專案版本：`1.3.1`
+> 專案版本：`1.3.2`
 > Backend：Undertow
 > shipped config 預設綁定：`localhost:8080`
 > 本文件描述目前 source tree 中已驗證的 route 與行為。
@@ -33,7 +33,7 @@ Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limi
   "data": {},
   "meta": {
     "timestamp": 0,
-    "version": "1.3.1"
+    "version": "1.3.2"
   }
 }
 ```
@@ -49,7 +49,7 @@ Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limi
   },
   "meta": {
     "timestamp": 0,
-    "version": "1.3.1"
+    "version": "1.3.2"
   }
 }
 ```

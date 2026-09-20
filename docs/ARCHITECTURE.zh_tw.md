@@ -1,6 +1,6 @@
 # Syncmoney 架構
 
-> 專案版本：`1.3.1`
+> 專案版本：`1.3.2`
 > Config schema：`12`
 > Build toolchain：Java 21
 
@@ -223,7 +223,7 @@ SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEven
 
 `syncmoney-web` 使用 Vue 3、Vite、Pinia、`vue-i18n` 與 PWA tooling。Production build 會嵌入 `src/main/resources/syncmoney-web/dist`。
 
-目前 frontend package version 為 `1.3.1`。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新。
+目前 frontend package version 為 `1.3.2`。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新。
 
 ## 11. PlaceholderAPI expansion
 
