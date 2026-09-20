@@ -20,6 +20,8 @@ target/
 syncmoney-web/node_modules/
 syncmoney-web/dist/
 syncmoney-web.tar.gz
+syncmoney-web.sha256
+syncmoney-web/release-package/
 .pnpm-store/
 .vite/
 *.tsbuildinfo

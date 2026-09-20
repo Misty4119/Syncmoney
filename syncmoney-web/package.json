@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "build:embedded": "pnpm run build && node scripts/sync-embedded-web.mjs",
+    "build:embedded": "node scripts/build-embedded.mjs",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "test:unit": "vitest run",

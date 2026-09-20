@@ -151,6 +151,21 @@ Expected artifacts are:
 - `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
 - `build/acceptance/SyncmoneyAcceptance.jar`
 
+## Release workflow
+
+The core repository is the canonical source for the Web Admin. The committed stable version lives in root `build.gradle`; preview builds pass `-PreleaseVersion` from CI so alpha and beta versions do not need to be committed as source metadata. The repository variable `NEXT_VERSION` currently selects the next preview line (`1.3.3`).
+
+CI runs on pull requests and `main`, builds Java and Web artifacts, and labels preview artifacts as `1.3.3-alpha.<run-number>`. These artifacts are retained by GitHub Actions and do not create public Releases.
+
+Release tags use no prefix in this repository:
+
+- `1.3.3-alpha.1` or `1.3.3-beta.1` publishes a prerelease;
+- `1.3.3` publishes a stable release after the `production-release` environment approval and a `CHANGELOG.md` section.
+
+The release workflow synchronizes the canonical `syncmoney-web` source to [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), applies the release version, and pushes the corresponding `v`-prefixed tag there first. The Web workflow publishes the deterministic `syncmoney-web.tar.gz` source archive and checksum; only after that release exists does the core workflow publish the plugin and PlaceholderAPI JARs. The cross-repository job requires the fine-grained `SYNC_WEB_RELEASE_TOKEN` secret with write access limited to the Web repository.
+
+For a frontend change, run `pnpm build:embedded` in `syncmoney-web`. It clears and replaces `src/main/resources/syncmoney-web/dist` and regenerates the `rootFiles`, `assetFiles`, and `iconFiles` arrays in `WebAdminServer.extractIndividualFiles`. Review and commit those generated changes together.
+
 For scheduler, storage, lifecycle, cross-server, CMI, or server-version compatibility changes, run the applicable PlugDev matrix and report exactly which runtime checks were completed. A green compile/unit test does not establish Folia safety or distributed durability.
 
 ## Pull requests

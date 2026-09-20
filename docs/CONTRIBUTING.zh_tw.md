@@ -151,6 +151,21 @@ pnpm build
 - `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
 - `build/acceptance/SyncmoneyAcceptance.jar`
 
+## Release 流程
+
+Core repository 是 Web Admin 的 canonical source。穩定版本保存在 root `build.gradle`；preview build 由 CI 傳入 `-PreleaseVersion`，因此不需要把 alpha/beta 版本提交到 source metadata。目前 repository variable `NEXT_VERSION` 選擇下一條 preview line：`1.3.3`。
+
+Pull request 與 `main` 都會執行 Java/Web checks 並產生 CI artifact；preview artifact 預設命名為 `1.3.3-alpha.<run-number>`，只保留在 GitHub Actions，不會建立公開 Release。
+
+Core repository tag 不帶前綴：
+
+- `1.3.3-alpha.1` 或 `1.3.3-beta.1` 發佈 prerelease；
+- `1.3.3` 在 `production-release` environment 審核通過且 `CHANGELOG.md` 有對應 section 後發佈 stable release。
+
+Release workflow 會把 canonical `syncmoney-web` source 同步到 [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)，套用 release version，先推送對應的 `v` 前綴 tag。Web workflow 先發佈 deterministic `syncmoney-web.tar.gz` 與 checksum；Web release 存在後，core workflow 才發佈 plugin 與 PlaceholderAPI JAR。跨 repository job 需要 fine-grained `SYNC_WEB_RELEASE_TOKEN` secret，且 write access 限定在 Web repository。
+
+Frontend 有變更時，在 `syncmoney-web` 執行 `pnpm build:embedded`。它會清空並覆蓋 `src/main/resources/syncmoney-web/dist`，同時重生 `WebAdminServer.extractIndividualFiles` 的 `rootFiles`、`assetFiles`、`iconFiles` arrays。這些產生檔必須一起 review 與 commit。
+
 scheduler、storage、lifecycle、cross-server、CMI 或 server-version compatibility 變更，應執行適用的 PlugDev matrix，並只報告實際完成的 runtime check。Compile/unit test 綠燈不能證明 Folia safety 或 distributed durability。
 
 ## Pull request

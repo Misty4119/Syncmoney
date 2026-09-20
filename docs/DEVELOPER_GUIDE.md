@@ -321,3 +321,13 @@ Before a release:
 6. run `git diff --check`, inspect `git status --short`, and review the final diff for secrets, stale versions, stale endpoints, and unrelated changes.
 
 Expected artifacts are `build/libs/Syncmoney-<version>.jar`, `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`, and `build/acceptance/SyncmoneyAcceptance.jar`.
+
+## 19. Release automation and frontend mirroring
+
+The root repository is the canonical source for the Web Admin. Stable source metadata stays at the committed version in `build.gradle`; preview jobs pass `-PreleaseVersion` so CI can build `1.3.3-alpha.<run-number>` without committing preview metadata. `NEXT_VERSION` is the repository variable that selects the next stable base.
+
+The core repository uses unprefixed tags. A beta or alpha tag publishes a prerelease after the Web repository is updated. A stable tag requires the `production-release` environment approval and a matching changelog section. The release workflow updates [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web) first, pushes its corresponding `v`-prefixed tag, waits for its Web Release, and then publishes the core and PlaceholderAPI JARs. The Web Release contains a deterministic source archive and checksum; it intentionally does not publish `dist`, `node_modules`, coverage, Playwright output, or editor files. Syncmoney downloads the archive and builds it on the target server.
+
+The cross-repository update uses the `SYNC_WEB_RELEASE_TOKEN` secret. It must be a fine-grained token limited to the Web repository. Do not copy that value into files, logs, release notes, or runtime configuration.
+
+When the frontend changes, run `pnpm build:embedded` from the core `syncmoney-web` directory. The script temporarily applies `SYNCMONEY_VERSION`, runs the production build, clears and replaces `src/main/resources/syncmoney-web/dist`, and rewrites the `rootFiles`, `assetFiles`, and `iconFiles` arrays in `WebAdminServer.extractIndividualFiles`. The generated bundle and Java lists are one review unit. The Web mirror receives source and public metadata from the core release workflow; do not edit the mirror independently for release content.

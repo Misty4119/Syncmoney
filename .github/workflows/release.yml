@@ -4,25 +4,225 @@ on:
   push:
     tags:
       - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing core tag to publish'
+        required: true
+        type: string
 
 permissions:
   contents: write
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Release
+  prepare:
+    name: Validate release metadata
     if: github.repository == 'Misty4119/Syncmoney'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      channel: ${{ steps.metadata.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Validate tag and source metadata
+        id: metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "Core release tag must use 1.2.3, 1.2.3-alpha.1, or 1.2.3-beta.1; got: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          source_version="$(sed -n "s/^version = providers.gradleProperty('releaseVersion').orElse('\([^']*\)').get()/\1/p" build.gradle)"
+          web_version="$(node -p "JSON.parse(require('fs').readFileSync('syncmoney-web/package.json', 'utf8')).version")"
+          channel=stable
+          if [[ "$RELEASE_TAG" == *-alpha.* || "$RELEASE_TAG" == *-beta.* ]]; then
+            channel=preview
+          else
+            if [[ "$source_version" != "$RELEASE_TAG" ]]; then
+              echo "Stable release tag $RELEASE_TAG does not match build.gradle source version $source_version" >&2
+              exit 1
+            fi
+            if [[ "$web_version" != "$RELEASE_TAG" ]]; then
+              echo "Stable release tag $RELEASE_TAG does not match frontend package version $web_version" >&2
+              exit 1
+            fi
+            if ! grep -Fq "## [$RELEASE_TAG] - " CHANGELOG.md; then
+              echo "CHANGELOG.md has no section for stable release $RELEASE_TAG" >&2
+              exit 1
+            fi
+          fi
+
+          echo "version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  sync-web:
+    name: Sync frontend and publish Web tag
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check frontend release credential
+        id: credential
+        shell: bash
+        env:
+          SYNC_WEB_TOKEN: ${{ secrets.SYNC_WEB_RELEASE_TOKEN }}
+        run: |
+          if [[ -n "${SYNC_WEB_TOKEN:-}" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "SYNC_WEB_RELEASE_TOKEN is not configured; an existing Web release will be verified instead."
+          fi
+
+      - name: Checkout core release
+        if: steps.credential.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.version }}
+          fetch-depth: 1
+
+      - name: Set up Node.js 24
+        if: steps.credential.outputs.available == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Sync canonical frontend into the Web repository
+        if: steps.credential.outputs.available == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_WEB_RELEASE_TOKEN }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh repo clone Misty4119/Syncmoney-web web-release -- --branch main --depth 1
+
+          copy_path() {
+            local path="$1"
+            rm -rf "web-release/$path"
+            mkdir -p "web-release/$(dirname "$path")"
+            cp -a "syncmoney-web/$path" "web-release/$path"
+          }
+
+          for path in \
+            index.html \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            playwright.config.ts \
+            postcss.config.js \
+            public \
+            src \
+            e2e \
+            mocks \
+            tailwind.config.js \
+            tsconfig.json \
+            tsconfig.node.json \
+            vite.config.ts \
+            vitest.config.ts; do
+            copy_path "$path"
+          done
+
+          rm -rf web-release/scripts
+          mkdir -p web-release/scripts
+          cp -a syncmoney-web/scripts/build-embedded.mjs web-release/scripts/build-embedded.mjs
+          cp -a syncmoney-web/scripts/package-release.sh web-release/scripts/package-release.sh
+
+          RELEASE_VERSION="$RELEASE_VERSION" node <<'NODE'
+          const fs = require('node:fs')
+          const version = process.env.RELEASE_VERSION
+          const packagePath = 'web-release/package.json'
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+
+          const versionPath = 'web-release/public/version.json'
+          const versionJson = JSON.parse(fs.readFileSync(versionPath, 'utf8'))
+          versionJson.version = version
+          fs.writeFileSync(versionPath, `${JSON.stringify(versionJson, null, 2)}\n`)
+          NODE
+
+          cd web-release
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -- ':!README.md' ':!LICENSE' ':!.gitignore'
+          if ! git diff --cached --quiet; then
+            git commit -m "release: sync frontend $RELEASE_VERSION"
+            git push origin main
+          fi
+
+          git fetch --tags origin
+          web_tag="v$RELEASE_VERSION"
+          if ! git show-ref --verify --quiet "refs/tags/$web_tag"; then
+            git tag -a "$web_tag" -m "Syncmoney Web $RELEASE_VERSION"
+            git push origin "refs/tags/$web_tag"
+          fi
+
+  verify-web-release:
+    name: Wait for Web release
+    needs: [prepare, sync-web]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify sync job and wait for Web release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          SYNC_JOB_RESULT: ${{ needs.sync-web.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$SYNC_JOB_RESULT" == "failure" || "$SYNC_JOB_RESULT" == "cancelled" ]]; then
+            echo "The frontend synchronization job failed." >&2
+            exit 1
+          fi
+
+          web_tag="v$RELEASE_VERSION"
+          for attempt in $(seq 1 60); do
+            if gh release view "$web_tag" --repo Misty4119/Syncmoney-web >/dev/null 2>&1; then
+              echo "Web release $web_tag is available."
+              exit 0
+            fi
+            echo "Waiting for Web release $web_tag ($attempt/60)..."
+            sleep 15
+          done
+
+          echo "Timed out waiting for Web release $web_tag" >&2
+          exit 1
+
+  build:
+    name: Build and attest core artifacts
+    needs: [prepare, verify-web-release]
+    if: needs.prepare.result == 'success' && needs.verify-web-release.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.version }}
 
       - name: Set up Java 21
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2 # v6.0.1
         with:
           distribution: temurin
           java-version: '21'
@@ -41,52 +241,35 @@ jobs:
           cache: pnpm
           cache-dependency-path: syncmoney-web/pnpm-lock.yaml
 
-      - name: Validate release version
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$GITHUB_REF_NAME"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must use the form 1.2.3, got: $version" >&2
-            exit 1
-          fi
-
-          gradle_version="$(sed -n "s/^version = '\([^']*\)'/\1/p" build.gradle)"
-          web_version="$(node -p "require('./syncmoney-web/package.json').version")"
-
-          if [[ "$gradle_version" != "$version" ]]; then
-            echo "build.gradle version $gradle_version does not match tag $version" >&2
-            exit 1
-          fi
-          if [[ "$web_version" != "$version" ]]; then
-            echo "syncmoney-web/package.json version $web_version does not match tag $version" >&2
-            exit 1
-          fi
-          if ! grep -Fq "## [$version] - " CHANGELOG.md; then
-            echo "CHANGELOG.md has no section for $version" >&2
-            exit 1
-          fi
-
       - name: Install frontend dependencies
         working-directory: syncmoney-web
         run: pnpm install --frozen-lockfile
 
-      - name: Frontend checks
+      - name: Frontend checks and embedded build
         working-directory: syncmoney-web
+        env:
+          SYNCMONEY_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           pnpm typecheck
           pnpm test:coverage
           pnpm build:embedded
 
-      - name: Verify embedded Web Admin is current
+      - name: Verify embedded bundle and extract list
+        shell: bash
         run: |
-          web_paths=(
-            src/main/resources/syncmoney-web/dist
-            src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
-          )
-          if [[ -n "$(git status --porcelain --untracked-files=all -- "${web_paths[@]}")" ]]; then
-            git status --short --untracked-files=all -- "${web_paths[@]}"
-            git diff -- "${web_paths[@]}"
+          set -euo pipefail
+          java_file=src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          if [[ "${{ needs.prepare.outputs.channel }}" == "stable" ]]; then
+            if [[ -n "$(git status --porcelain -- "$java_file" src/main/resources/syncmoney-web/dist)" ]]; then
+              git status --short -- "$java_file" src/main/resources/syncmoney-web/dist
+              git diff -- "$java_file" src/main/resources/syncmoney-web/dist
+              echo "The stable release source does not contain the generated frontend bundle." >&2
+              exit 1
+            fi
+          elif [[ -n "$(git status --porcelain -- "$java_file")" ]]; then
+            git status --short -- "$java_file"
+            git diff -- "$java_file"
+            echo "WebAdminServer.extractIndividualFiles is out of sync with the preview bundle." >&2
             exit 1
           fi
 
@@ -99,44 +282,124 @@ jobs:
         run: pnpm test:e2e
 
       - name: Test and build Java artifacts
-        run: bash ./gradlew test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+        run: bash ./gradlew -PreleaseVersion="$RELEASE_VERSION" test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
 
       - name: Create SHA-256 checksums
         shell: bash
         run: |
           sha256sum \
-            "build/libs/Syncmoney-${GITHUB_REF_NAME}.jar" \
-            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${GITHUB_REF_NAME}.jar" \
+            "build/libs/Syncmoney-${RELEASE_VERSION}.jar" \
+            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar" \
             > CHECKSUMS.txt
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            build/libs/Syncmoney-${{ github.ref_name }}.jar
-            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ github.ref_name }}.jar
+            build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
+            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
             CHECKSUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: |
+            build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
+            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
+            CHECKSUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-stable:
+    name: Publish stable Core release
+    needs: [prepare, build]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.prepare.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    environment:
+      name: production-release
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.version }}
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v7.0.0
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: release-artifacts
 
       - name: Prepare release notes
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          python .github/scripts/extract-changelog.py "$GITHUB_REF_NAME" CHANGELOG.md > release-notes.md
+          set -euo pipefail
+          python .github/scripts/extract-changelog.py "$RELEASE_VERSION" CHANGELOG.md > release-notes.md
           printf '\n\n## GitHub changes\n\n' >> release-notes.md
           gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f "tag_name=${GITHUB_REF_NAME}" \
+            -f "tag_name=$RELEASE_VERSION" \
             --jq .body >> release-notes.md
 
-      - name: Publish GitHub Release
+      - name: Publish stable GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "build/libs/Syncmoney-${GITHUB_REF_NAME}.jar" \
-            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${GITHUB_REF_NAME}.jar" \
-            CHECKSUMS.txt \
+          set -euo pipefail
+          gh release create "$RELEASE_VERSION" \
+            release-artifacts/Syncmoney-${RELEASE_VERSION}.jar \
+            release-artifacts/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
+            release-artifacts/CHECKSUMS.txt \
             --verify-tag \
-            --title "Syncmoney ${GITHUB_REF_NAME}" \
+            --title "Syncmoney $RELEASE_VERSION" \
+            --notes-file release-notes.md
+
+  publish-preview:
+    name: Publish preview Core release
+    needs: [prepare, build]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.prepare.outputs.channel == 'preview'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.version }}
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v7.0.0
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: release-artifacts
+
+      - name: Prepare preview release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=$RELEASE_VERSION" \
+            --jq .body > release-notes.md
+
+      - name: Publish preview GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_VERSION" \
+            release-artifacts/Syncmoney-${RELEASE_VERSION}.jar \
+            release-artifacts/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
+            release-artifacts/CHECKSUMS.txt \
+            --verify-tag \
+            --prerelease \
+            --title "Syncmoney $RELEASE_VERSION" \
             --notes-file release-notes.md

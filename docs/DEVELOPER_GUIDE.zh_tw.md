@@ -295,3 +295,13 @@ Release 前：
 6. 執行 `git diff --check`、檢查 `git status --short`，並 review 最終 diff 是否有 secrets、stale versions、stale endpoints 或 unrelated changes。
 
 預期 artifacts 為 `build/libs/Syncmoney-<version>.jar`、`syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`、`build/acceptance/SyncmoneyAcceptance.jar`。
+
+## 19. Release 自動化與 frontend mirror
+
+Root repository 是 Web Admin 的 canonical source。穩定 source metadata 保留在 `build.gradle` 的 committed version；preview job 傳入 `-PreleaseVersion`，因此 CI 可以產生 `1.3.3-alpha.<run-number>` 而不必把 preview metadata commit 進去。`NEXT_VERSION` repository variable 用來選擇下一個 stable base。
+
+Core repository 使用不帶前綴的 tag。Alpha/beta tag 會在 Web repository 更新後發佈 prerelease；stable tag 必須先通過 `production-release` environment approval，且有對應 changelog section。Release workflow 先更新 [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)，推送對應的 `v` 前綴 tag，等待 Web Release 完成，再發佈 core 與 PlaceholderAPI JAR。Web Release 內容是 deterministic source archive 與 checksum；刻意不包含 `dist`、`node_modules`、coverage、Playwright output 或 editor files。Syncmoney 下載 archive 後在目標 server 本機建置。
+
+跨 repository update 使用 `SYNC_WEB_RELEASE_TOKEN` secret。它必須是權限限定在 Web repository 的 fine-grained token，不得把值寫入檔案、log、release notes 或 runtime config。
+
+Frontend 有變更時，在 core 的 `syncmoney-web` 目錄執行 `pnpm build:embedded`。script 會暫時套用 `SYNCMONEY_VERSION`、執行 production build、清空並覆蓋 `src/main/resources/syncmoney-web/dist`，並重寫 `WebAdminServer.extractIndividualFiles` 的 `rootFiles`、`assetFiles`、`iconFiles` arrays。Generated bundle 與 Java lists 是同一個 review unit。Web mirror 的 source 與 public metadata 由 core release workflow 接收；不要在 mirror 內獨立修改 release content。

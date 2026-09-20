@@ -255,7 +255,7 @@ This is a known implementation limitation and a security-sensitive area for futu
 
 `syncmoney-web` uses Vue 3, Vite, Pinia, `vue-i18n`, and PWA tooling. The built production bundle is copied/embedded into `src/main/resources/syncmoney-web/dist`.
 
-Frontend release metadata and the embedded bundle should move with the root release when frontend assets are part of that release. The current frontend package version is `1.3.2`.
+The core repository is the canonical frontend source. Frontend release metadata and the embedded bundle move with the root release when frontend assets are part of that release; the public `Syncmoney-web` mirror receives the same source and publishes a `v`-prefixed deterministic source archive. Core tags are unprefixed, while Web tags use `v`. The current frontend package version is `1.3.2`.
 
 ## 11. PlaceholderAPI expansion
 
@@ -298,6 +298,8 @@ pnpm build
 ```
 
 The project compiles with Java 21. Runtime Java follows the Minecraft server; current PlugDev guidance notes Java 25 for newer Paper 26.1+ acceptance environments.
+
+Release automation builds preview versions through a Gradle property, publishes the Web archive before the core JARs, and gates stable publication through the `production-release` environment. The Web archive excludes generated `dist`, dependency, coverage, Playwright, and editor directories because the plugin builds the frontend after downloading it.
 
 For scheduler, storage, lifecycle, CMI, or cross-server changes, unit/build success is insufficient. Use the applicable PlugDev matrix and report exactly which real server, dependency, player, and network paths were exercised.
 
