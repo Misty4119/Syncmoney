@@ -1,766 +1,297 @@
 # Syncmoney 開發者指南
 
-為想要與 Syncmoney 整合或擴展其功能的開發者提供的綜合指南。
+> 專案版本：`1.3.1`
+> Config schema：`12`
+> Build toolchain：Java 21
 
-> **另請參閱：**[架構概覽](ARCHITECTURE.zh_tw.md) 以了解系統層級設計和資料流程圖。
->
-> **版本**：v1.3.1
+英文版：[`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md)
 
----
+本文件供 core plugin、PlaceholderAPI expansion、Web Admin backend/frontend 與 acceptance tooling 的貢獻者使用。開始修改前先閱讀 root [`AGENTS.md`](../AGENTS.md)；其中的 correctness 與 lifecycle rules 適用於所有 code change。
 
-## 目錄
+本文件說明目前 source tree 的開發流程與不變條件。若文件與 implementation 不一致，以程式、default config、descriptor 與 executable test 為準。
 
-1. [事件系統](#事件系統)
-2. [REST API](#rest-api)
-3. [設定](#設定)
-4. [Vault API 整合](#vault-api-整合)
-5. [PlaceholderAPI 擴展](#placeholderapi-擴展)
-6. [SSE API](#sse-api)
-7. [指令](#指令)
-8. [從原始碼建構](#從原始碼建構)
-9. [編碼標準](#編碼標準)
-10. [已知限制](#已知限制)
+## 1. Prerequisites
 
----
+- Git
+- JDK 21，供 Gradle toolchain/build
+- repository Gradle wrapper
+- Node.js + pnpm，供 `syncmoney-web`
+- 依測試範圍準備 Paper/Folia/Canvas
+- 需要對應 mode/feature 時才啟動 Redis/SQL
+- CMI acceptance 需自行提供合法授權 CMI
 
-## 事件系統
+Runtime Java 由 server 版本決定；PlugDev 對較新 Paper 26.1+ acceptance environment 記載 Java 25。
 
-Syncmoney 提供了多個事件，開發者可以監聽這些事件以與其他插件整合。
+## 2. Repository map
 
-### 可用事件
+| Path | 用途 |
+|---|---|
+| `src/main/java/noietime/syncmoney` | Core plugin |
+| `src/main/resources/config.yml` | Shipped configuration |
+| `src/main/resources/plugin.yml` | Plugin descriptor、commands、permissions |
+| `src/main/resources/syncmoney-web/dist` | Embedded built frontend |
+| `syncmoney-papi-expansion` | PlaceholderAPI expansion |
+| `syncmoney-web` | Vue/Vite Web Admin |
+| `src/acceptance` | acceptance plugin source |
+| `tools/plugdev` | real-server acceptance tooling |
+| `docs` | architecture/API/developer/zh_tw docs |
 
-| 事件類別 | 說明 |
-|------------|-------------|
-| `AsyncPreTransactionEvent` | 在交易處理前觸發（可取消） |
-| `PostTransactionEvent` | 在交易完成後觸發 |
-| `ShadowSyncEvent` | 在背景同步操作發生時觸發 |
-| `TransactionCircuitBreakEvent` | 在斷路器觸發時觸發 |
+Root `build.gradle` 擁有 release version；PAPI 繼承它。涉及 web asset 的 release 要同步 frontend metadata 與 embedded bundle。
 
-### 監聽事件
+## 3. 每個變更先從證據開始
 
-```java
-import noietime.syncmoney.event.AsyncPreTransactionEvent;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
+1. 執行 `git status --short --branch`。
+2. 保留不相關 worktree change。
+3. 閱讀 implementation 與 callers。
+4. 閱讀相關 default config 與 tests。
+5. 檢查 public documentation 中依賴該行為的承諾。
+6. rename/remove API seam 前追蹤 reflection users。
+7. 移動 initialization/shutdown code 前追蹤 lifecycle ownership。
+8. 碰 Bukkit/CMI entity 前追蹤 scheduler ownership。
 
-public class MyPluginListener implements Listener {
+不要在調查過程輸出 credentials。
 
-    @EventHandler
-    public void onPreTransaction(AsyncPreTransactionEvent event) {
-        // 取得交易詳情
-        String playerName = event.getPlayerName();
-        java.math.BigDecimal amount = event.getAmount();
-        AsyncPreTransactionEvent.TransactionType type = event.getType();
+## 4. Build 與 test commands
 
-        // 在此放置你的自訂邏輯
-        getLogger().info("Transaction pending: " + playerName + " - " + amount);
+Core/backend：
 
-        // 如有需要可取消交易
-        // event.setCancelled(true);
-    }
-}
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar
 ```
 
-### 事件類別參考
+Frontend：
 
-#### AsyncPreTransactionEvent
-
-> **⚠️ v1.1.2 已知限制：** `AsyncPreTransactionEvent` 已定義但**尚未由 `EconomyFacade` 觸發**。呼叫 `event.setCancelled(true)` **對實際交易沒有影響**。此事件將在未來版本中完全連接。使用 `PostTransactionEvent` 進行可靠的交易監控。
-
-```java
-// 欄位
-UUID getPlayerUuid();
-String getPlayerName();
-TransactionType getType(); // DEPOSIT, WITHDRAW, SET_BALANCE, TRANSFER
-java.math.BigDecimal getAmount();
-java.math.BigDecimal getCurrentBalance();
-String getSource();
-UUID getTargetUuid();
-String getTargetName();
-String getReason();
-
-// 取消（目前無操作 — 見上方警告）
-boolean isCancelled();
-void setCancelled(boolean cancelled);
-void setCancelled(boolean cancelled, String reason);
-String getCancelReason();
-```
-
-#### PostTransactionEvent
-
-```java
-// 欄位
-UUID getPlayerUuid();
-String getPlayerName();
-TransactionType getType();
-java.math.BigDecimal getAmount();
-java.math.BigDecimal getBalanceBefore();
-java.math.BigDecimal getBalanceAfter();
-String getSource(); // 見下方 EconomyEvent.EventSource 值
-UUID getTargetUuid();
-String getTargetName();
-String getReason();
-boolean isSuccess();
-String getErrorMessage();
-
-// 工具方法
-java.math.BigDecimal getBalanceChange(); // 淨變化（可為負）
-```
-
-**`EconomyEvent.EventSource` 值**（作為 `source` 字串傳遞）：
-
-| 值 | 說明 |
-|-------|-------------|
-| `VAULT_DEPOSIT` | 透過 Vault API `depositPlayer()` 觸發 |
-| `VAULT_WITHDRAW` | 透過 Vault API `withdrawPlayer()` 觸發 |
-| `COMMAND_PAY` | 玩家 `/pay` 指令 |
-| `COMMAND_ADMIN` | 管理員指令（`/syncmoney admin`） |
-| `ADMIN_SET` | 管理員設定餘額 |
-| `ADMIN_GIVE` | 管理員給予貨幣 |
-| `ADMIN_TAKE` | 管理員收取貨幣 |
-| `PLAYER_TRANSFER` | 直接 EconomyFacade 轉帳 |
-| `MIGRATION` | 資料遷移過程 |
-| `SHADOW_SYNC` | 背景影子同步 |
-| `TEST` | 壓力測試指令 |
-| `PLUGIN_DEPOSIT` | 第三方插件明確歸因的存款 |
-| `PLUGIN_WITHDRAW` | 第三方插件明確歸因的取款 |
-
-#### ShadowSyncEvent
-
-在執行影子同步操作時呼叫。
-
-**事件方法：**
-
-| 方法 | 回傳類型 | 說明 |
-|--------|-------------|-------------|
-| `getSyncType()` | `SyncType` | 同步操作類型（FULL、INCREMENTAL、MANUAL） |
-| `getStatus()` | `SyncStatus` | 同步狀態（STARTED、IN_PROGRESS、COMPLETED、FAILED） |
-| `getPlayersProcessed()` | `int` | 已處理的玩家數量 |
-| `getTotalPlayers()` | `int` | 要同步的總玩家數量 |
-| `getProgressPercentage()` | `int` | 進度百分比（0-100） |
-| `getServerName()` | `String` | 來源/目標伺服器名稱 |
-| `getErrorMessage()` | `String` | 如果失敗則為錯誤訊息，否則為 null |
-| `getDuration()` | `Duration` | 同步操作的持續時間 |
-| `getAffectedPlayers()` | `Set<UUID>` | 受影響玩家 UUID 的集合 |
-| `isFinalStatus()` | `boolean` | 是否為最終狀態（COMPLETED 或 FAILED） |
-| `isSuccessful()` | `boolean` | 同步是否成功完成 |
-
-**範例：**
-
-```java
-@EventHandler
-public void onShadowSync(ShadowSyncEvent event) {
-    if (event.getStatus() == SyncStatus.COMPLETED) {
-        plugin.getLogger().info("Sync completed: " +
-            event.getPlayersProcessed() + "/" + event.getTotalPlayers());
-    }
-}
-```
-
-#### TransactionCircuitBreakEvent
-
-在經濟斷路器觸發或改變狀態時呼叫。
-
-**事件方法：**
-
-| 方法 | 回傳類型 | 說明 |
-|--------|-------------|-------------|
-| `getPreviousState()` | `CircuitState` | 轉換前的狀態 |
-| `getCurrentState()` | `CircuitState` | 轉換後的狀態 |
-| `getReason()` | `TriggerReason` | 電路改變的原因（`SINGLE_TRANSACTION_LIMIT`、`RATE_LIMIT`、`INFLATION_DETECTED`、`SUDDEN_CHANGE`、`MANUAL_LOCK`） |
-| `getMessage()` | `String` | 人類可讀的描述 |
-| `getAffectedPlayers()` | `Set<UUID>` | 受影響玩家 UUID 的集合 |
-| `getThreshold()` | `BigDecimal` | 超出的閾值 |
-| `getActualValue()` | `BigDecimal` | 觸發事件的實際值 |
-| `isStateTransition()` | `boolean` | previousState 是否不等於 currentState |
-| `isLocked()` | `boolean` | 目前狀態是否為 LOCKED |
-| `isUnlocked()` | `boolean` | 是否從 LOCKED 轉換離開 |
-
-**CircuitState 值：** `NORMAL`、`WARNING`、`LOCKED`
-
----
-
-## REST API
-
-Syncmoney 透過內建的 Undertow 網頁伺服器暴露 REST API。
-
-### 認證
-
-大多數 API 端點需要在 Authorization 請求頭中提供 API 金鑰：
-
-```
-Authorization: Bearer <your-api-key>
-```
-
-`/health` 端點不需要認證。
-
-### 端點
-
-#### 健康檢查（無需認證）
-
-```
-GET /health
-```
-
-回應：
-```json
-{"success":true,"data":{"status":"ok","version":"1.1.2"}}
-```
-
-#### 系統 API
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/system/status` | 插件狀態、運行時間、玩家數量、資料庫狀態 |
-| GET | `/api/system/redis` | Redis 連線狀態 |
-| GET | `/api/system/breaker` | 斷路器狀態 |
-| GET | `/api/system/metrics` | 記憶體使用量、執行緒數量、TPS |
-
-#### 經濟 API
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/economy/stats` | 總供應量、玩家數量、今日交易、貨幣名稱 |
-| GET | `/api/economy/player/{uuid}/balance` | 透過 UUID 取得指定玩家的餘額 |
-| GET | `/api/economy/top` | 餘額排名前 10 的玩家 |
-
-#### 審計 API
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/audit/player/{playerName}` | 取得玩家的審計記錄（分頁） |
-| GET | `/api/audit/search` | 使用篩選條件搜尋審計記錄 |
-| GET | `/api/audit/stats` | 審計模組緩衝區大小和啟用狀態 |
-
-搜尋的查詢參數：`player`、`type`、`startTime`、`endTime`、`page`、`pageSize`
-
-#### 節點 API（中央模式）
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/nodes` | 列出所有已設定的節點 |
-| POST | `/api/nodes` | 建立新節點 |
-| PUT | `/api/nodes/{index}` | 更新節點 |
-| DELETE | `/api/nodes/{index}` | 刪除節點 |
-| POST | `/api/nodes/{index}/ping` | 手動 ping 節點 |
-| GET | `/api/nodes/status` | 取得所有節點的詳細狀態 |
-| POST | `/api/nodes/{index}/proxy` | 向遠端節點代理 HTTP 請求 |
-| POST | `/api/nodes/sync` | 推送設定至所有節點（中央模式） |
-| POST | `/api/nodes/{index}/sync` | 推送設定至單一節點（中央模式） |
-| POST | `/api/config/sync` | 接收來自中央的設定（節點端） |
-
-#### 跨伺服器統計 API（中央模式）
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/economy/cross-server-stats` | 來自所有節點的聚合統計 |
-| GET | `/api/economy/cross-server-top` | 跨節點的聚合排行榜 |
-
-#### 設定 API
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/config` | 取得目前設定（密碼已隱藏） |
-| POST | `/api/config/reload` | 從磁碟重載設定 |
-
-#### 設定值 API
-
-| 方法 | 端點 | 說明 |
-|--------|----------|-------------|
-| GET | `/api/settings` | 取得主題和語言偏好 |
-| POST | `/api/settings/theme` | 更新主題（`dark` 或 `light`） |
-| POST | `/api/settings/language` | 更新語言（`zh-TW` 或 `en-US`） |
-
-### 回應格式
-
-所有回應都包含 `meta` 欄位：
-
-```json
-{
-  "success": true,
-  "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.2" }
-}
-```
-
-完整的請求/回應範例，請參閱 [API_REFERENCE.md](API_REFERENCE.md)。
-
----
-
-## 設定
-
-### 主設定（config.yml）
-
-```yaml
-# ==========================================
-# 1. 核心和基本設定
-# ==========================================
-server-name: ""              # 多伺服器識別
-queue-capacity: 50000        # 事件佇列容量
-pubsub-enabled: true         # 啟用發布/訂閱
-db-enabled: true            # 啟用資料庫
-debug: false                # 偵錯模式
-
-# ==========================================
-# 2. 資料庫和 Redis
-# ==========================================
-redis:
-  enabled: true
-  host: "localhost"
-  port: 6379
-  password: ""
-  database: 0
-  pool-size: 30
-
-database:
-  enabled: true
-  type: "mysql"             # MySQL、PostgreSQL
-  host: "localhost"
-  port: 3306
-  username: "root"
-  password: ""
-  database: "syncmoney"
-
-# ==========================================
-# 3. 經濟和交易設定
-# ==========================================
-economy:
-  mode: "auto"              # auto、local、local_redis、sync、cmi
-  sync:
-    vault-intercept: true
-  cmi:
-    balance-mode: "internal"
-    debounce-ticks: 5
-
-display:
-  currency-name: "$"
-  decimal-places: 2
-
-pay:
-  cooldown-seconds: 30
-  min-amount: 1
-  max-amount: 1000000
-  confirm-threshold: 100000
-
-baltop:
-  enabled: true
-  cache-seconds: 30
-  format: "smart"
-
-# ==========================================
-# 4. 安全和保護
-# ==========================================
-circuit-breaker:
-  enabled: true
-  max-single-transaction: 100000000
-  max-transactions-per-second: 10
-  rapid-inflation-threshold: 0.2
-  sudden-change-threshold: 100
-  redis-disconnect-lock-seconds: 5
-  memory-warning-threshold: 80
-
-player-protection:
-  enabled: true
-  rate-limit:
-    max-transactions-per-second: 5
-    max-transactions-per-minute: 50
-    max-amount-per-minute: 1000000
-
-# Discord Webhook
-discord-webhook:
-  enabled: false
-  webhooks:
-    - name: "admin-alerts"
-      url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
-      type: "private"
-      events:
-        - "player_warning"
-        - "player_locked"
-        - "player_unlocked"
-        - "global_lock"
-
-# 審計日誌系統
-audit:
-  enabled: true
-  batch-size: 1
-  retention-days: 90
-
-# ==========================================
-# 8. 網頁管理面板
-# ==========================================
-web-admin:
-  enabled: false
-  central-mode: false
-  nodes: []
-  bundled-version: "1.1.2"
-  server:
-    host: "localhost"
-    port: 8080
-  web:
-    path: "syncmoney-web"
-    auto-update: false
-    github-repo: "Misty4119/Syncmoney"
-  security:
-    api-key: "change-me-in-production"
-    rate-limit:
-      enabled: true
-      requests-per-minute: 60
-  ui:
-    theme: "dark"
-    language: "zh-TW"
-```
-
-### 訊息設定（messages.yml）
-
-所有面向玩家的訊息都可透過 `messages.yml` 設定。使用 MiniMessage 格式：
-
-```yaml
-# 範例：自訂付款成功訊息
-pay:
-  success-sender: '<prefix>你已發送 {amount} 給 {player}'
-```
-
----
-
-## Vault API 整合
-
-Syncmoney 註冊為 Vault Economy 提供者。其他插件可以使用：
-
-```java
-// 取得經濟服務
-Economy economy = VaultAPI.getEconomy();
-
-// 檢查餘額
-if (economy.hasAccount(player)) {
-    double balance = economy.getBalance(player);
-}
-
-// 存款
-economy.depositPlayer(player, amount);
-
-// 提款
-economy.withdrawPlayer(player, amount);
-```
-
-#### 插件 API（推薦給第三方插件）
-
-需要來源歸因或玩家間轉帳的第三方插件，建議直接使用 `SyncmoneyVaultProvider` 擴展 API。標準 Vault 呼叫一律是獨立操作；Syncmoney 不會依相同金額與時間推論為轉帳。
-
-```java
-import net.milkbowl.vault.economy.Economy;
-import noietime.syncmoney.vault.SyncmoneyVaultProvider;
-import org.bukkit.plugin.RegisteredServiceProvider;
-
-// 取得經濟服務
-Economy economy = VaultAPI.getEconomy();
-if (!(economy instanceof SyncmoneyVaultProvider)) {
-    // 不是 Syncmoney
-    return;
-}
-SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
-
-// 帶插件來源歸因的存款
-EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
-
-// 帶插件來源歸因的提款
-EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
-
-// 玩家之間原子轉帳（插件級歸因）
-EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "MyPlugin");
-```
-
-**何時使用插件 API vs 標準 Vault API：**
-
-| 情境 | 推薦 API | 原因 |
-|------|----------|------|
-| 箱子商店買賣 | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | 明確插件來源歸因 |
-| 拍賣行轉帳 | `pluginTransfer` | 明確雙方的原子操作 |
-| 標準經濟操作 | 標準 Vault API | 完整相容性 |
-
-### Vault 權限
-
-#### 玩家權限
-
-| 權限 | 預設 | 說明 |
-|------------|---------|-------------|
-| `syncmoney.money` | `true`（全部） | 檢視自己的餘額 |
-| `syncmoney.money.others` | `op` | 檢視其他玩家的餘額 |
-| `syncmoney.pay` | `true`（全部） | 轉帳給其他人 |
-| `syncmoney.baltop` | `true`（全部） | 檢視財富排行榜 |
-
-#### 管理員權限（基本）
-
-| 權限 | 預設 | 說明 |
-|------------|---------|-------------|
-| `syncmoney.admin` | `op` | 一般管理員指令（頂層） |
-| `syncmoney.admin.set` | `op` | 設定玩家餘額 |
-| `syncmoney.admin.give` | `op` | 給予玩家貨幣 |
-| `syncmoney.admin.take` | `op` | 收取玩家貨幣 |
-| `syncmoney.admin.audit` | `op` | 檢視審計日誌 |
-| `syncmoney.admin.monitor` | `op` | 檢視系統監控 |
-| `syncmoney.admin.econstats` | `op` | 檢視經濟統計 |
-| `syncmoney.admin.reload` | `op` | 重載設定 |
-| `syncmoney.admin.test` | `op` | 執行壓力測試指令 |
-
-#### 管理員分級權限（每日限額）
-
-| 權限 | 預設 | 說明 | 每日給予限額 | 每日收取限額 |
-|------------|---------|-------------|-----------------|-----------------|
-| `syncmoney.admin.observe` | `false` | 唯讀觀察者（無經濟操作） | 0 | 0 |
-| `syncmoney.admin.reward` | `false` | 獎勵管理員 | 100,000 | 0 |
-| `syncmoney.admin.general` | `false` | 一般管理員 | 1,000,000 | 1,000,000 |
-| `syncmoney.admin.full` | `op` | 完整管理員（無限制） | 無限 | 無限 |
-
-> **注意：** 四個分級權限（`observe`、`reward`、`general`、`full`）控制 `give` 和 `take` 操作的每日交易限額。`syncmoney.admin` 節點是一個頂層便利節點（預設相當於 `op`）。
-
----
-
-## PlaceholderAPI 擴展
-
-Syncmoney 提供以下佔位符：
-
-### 玩家佔位符
-
-| 佔位符 | 說明 |
-|-------------|-------------|
-| `%syncmoney_balance%` | 玩家餘額（原始數字） |
-| `%syncmoney_balance_formatted%` | 玩家餘額（智慧格式化） |
-| `%syncmoney_balance_abbreviated%` | 玩家餘額（縮寫，例如 1.5K） |
-| `%syncmoney_rank%` | 玩家財富排名 |
-| `%syncmoney_my_rank%` | 玩家財富排名（別名） |
-| `%syncmoney_balance_<player>%` | 取得指定玩家的餘額 |
-
-### 伺服器佔位符
-
-| 佔位符 | 說明 |
-|-------------|-------------|
-| `%syncmoney_total_supply%` | 經濟中的總貨幣量 |
-| `%syncmoney_total_players%` | 排行榜中的總玩家數 |
-| `%syncmoney_online_players%` | 目前線上的玩家 |
-| `%syncmoney_version%` | 插件版本 |
-| `%syncmoney_top_<n>%` | 排名第 n 的玩家餘額 |
-
-### 使用範例
-
-```
-# 玩家餘額
-%syncmoney_balance%
-
-# 玩家排名
-%syncmoney_rank%
-
-# 伺服器總供應量
-%syncmoney_total_supply%
-
-# 第 5 名玩家
-%syncmoney_top_5%
-
-# 檢查玩家餘額
-%syncmoney_balance_Steve%
-```
-
----
-
-## WebSocket API
-
-**注意：** 完整的 WebSocket 支援目前尚未實作。以下文件描述了計劃中的 API。
-
-如需即時更新，請改用 SSE（Server-Sent Events）API。
-
-### SSE API
-
-Server-Sent Events 提供單向伺服器推送通知。
-
-### 連線
-
-```
-GET http://<host>:<port>/sse
-```
-
-透過 API 金鑰查詢參數或 Authorization 請求頭進行認證。
-
-### 範例
-
-```javascript
-const eventSource = new EventSource('http://localhost:8080/sse?apiKey=your-key');
-
-eventSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    console.log('SSE event:', data);
-};
-
-eventSource.onerror = (error) => {
-    console.error('SSE error:', error);
-    // 注意：內建前端使用指數退避加抖動進行重連
-    // 以防止伺服器重啟時的驚群效應。
-};
-```
-
-### SSE 事件類型
-
-| `type` 值 | 觸發時機 | 主要 `data` 欄位 |
-|---|---|---|
-| `connected` | 客戶端連線 | `message` |
-| `transaction` | `PostTransactionEvent` 觸發 | `playerName`、`type`、`amount`、`balanceBefore`、`balanceAfter`、`success`、`timestamp`（epoch ms） |
-| `circuit_break` | `TransactionCircuitBreakEvent` 觸發 | `previousState`、`currentState`、`reason`、`message` |
-| `system_alert` | 手動廣播 / 內部警報 | `level`、`message` |
-
-**交易事件範例：**
-```json
-{
-  "type": "transaction",
-  "event": "PostTransactionEvent",
-  "data": {
-    "playerName": "Steve",
-    "type": "DEPOSIT",
-    "amount": "1000",
-    "balanceBefore": "5000",
-    "balanceAfter": "6000",
-    "success": true,
-    "timestamp": 1709337000000
-  }
-}
-```
-
----
-
-## 指令
-
-### 玩家指令
-
-| 指令 | 說明 | 權限 |
-|---------|-------------|------------|
-| `/money [player]` | 檢視自己或其他玩家的餘額 | `syncmoney.money` |
-| `/pay <player> <amount>` | 轉帳給其他玩家 | `syncmoney.pay` |
-| `/baltop [page\|me]` | 財富排行榜（`me` 顯示你的排名） | `syncmoney.money` |
-
-### 管理員指令
-
-| 指令 | 說明 | 權限 |
-|---------|-------------|------------|
-| `/syncmoney admin set <player> <amount>` | 設定玩家餘額 | `syncmoney.admin` + `canExecute(set)` |
-| `/syncmoney admin give <player> <amount>` | 給予玩家貨幣 | `syncmoney.admin` + `canExecute(give)` |
-| `/syncmoney admin take <player> <amount>` | 收取玩家貨幣 | `syncmoney.admin` + `canExecute(take)` |
-| `/syncmoney admin reset <player>` | 將玩家餘額重設為零 | `syncmoney.admin` + `canExecute(set)` |
-| `/syncmoney admin view <player>` | 檢視玩家餘額 | `syncmoney.money.others` |
-| `/syncmoney admin confirm` | 確認大型管理員操作 | `syncmoney.admin` |
-| `/syncmoney breaker status` | 檢視斷路器狀態 | `syncmoney.admin` |
-| `/syncmoney breaker reset` | 重置斷路器 | `syncmoney.admin` |
-| `/syncmoney breaker info` | 檢視斷路器詳細資訊 | `syncmoney.admin` |
-| `/syncmoney breaker resources` | 檢視資源狀態 | `syncmoney.admin` |
-| `/syncmoney breaker player <player>` | 檢視玩家保護狀態 | `syncmoney.admin` |
-| `/syncmoney breaker unlock <player>` | 手動解鎖玩家 | `syncmoney.admin` |
-| `/syncmoney audit <player> [page]` | 檢視玩家審計日誌 | `syncmoney.admin.audit` |
-| `/syncmoney audit search [--player <name>] [--type <type>] [--start <time>] [--end <time>] [--limit <n>]` | 進階審計搜尋 | `syncmoney.admin.audit` |
-| `/syncmoney audit stats` | 檢視審計統計 | `syncmoney.admin.audit` |
-| `/syncmoney audit cleanup` | 清理舊審計日誌 | `syncmoney.admin.full` |
-| `/syncmoney monitor [overview]` | 系統概覽 | `syncmoney.admin` |
-| `/syncmoney monitor redis` | Redis 詳細狀態 | `syncmoney.admin` |
-| `/syncmoney monitor cache` | 快取狀態 | `syncmoney.admin` |
-| `/syncmoney monitor db` | 資料庫狀態 | `syncmoney.admin` |
-| `/syncmoney monitor memory` | 記憶體狀態 | `syncmoney.admin` |
-| `/syncmoney monitor messages` | 訊息快取狀態 | `syncmoney.admin` |
-| `/syncmoney econstats [overview]` | 經濟統計概覽 | `syncmoney.admin.econstats` |
-| `/syncmoney econstats supply` | 貨幣供應統計 | `syncmoney.admin.econstats` |
-| `/syncmoney econstats players` | 玩家統計 | `syncmoney.admin.econstats` |
-| `/syncmoney econstats transactions` | 交易統計 | `syncmoney.admin.econstats` |
-| `/syncmoney reload [all]` | 重載設定 | `syncmoney.admin.reload` |
-| `/syncmoney reload config` | 重載 config.yml | `syncmoney.admin.reload` |
-| `/syncmoney reload messages` | 重載 messages.yml | `syncmoney.admin.reload` |
-| `/syncmoney reload permissions` | 重載權限 | `syncmoney.admin.reload` |
-| `/syncmoney web download [latest]` | 下載網頁前端 | `syncmoney.admin` |
-| `/syncmoney web build` | 建構網頁前端（需要 Node.js + pnpm） | `syncmoney.admin` |
-| `/syncmoney web reload` | 重載網頁伺服器 | `syncmoney.admin` |
-| `/syncmoney web open` | 在瀏覽器中開啟網頁管理 | `syncmoney.admin` |
-| `/syncmoney web status` | 檢視網頁前端狀態 | `syncmoney.admin` |
-| `/syncmoney web check` | 檢查更新 | `syncmoney.admin` |
-| `/syncmoney web version` | `web check` 的別名 | `syncmoney.admin` |
-| `/syncmoney migrate cmi [-force] [-no-backup] [-preview]` | 遷移 CMI 經濟資料 | `syncmoney.admin` |
-| `/syncmoney migrate local-to-sync [-force] [-no-backup]` | 從 LOCAL 模式遷移到 SYNC | `syncmoney.admin` |
-| `/syncmoney migrate status` | 檢視遷移狀態 | `syncmoney.admin` |
-| `/syncmoney migrate stop` | 停止正在執行的遷移 | `syncmoney.admin` |
-| `/syncmoney migrate resume` | 恢復中斷的遷移 | `syncmoney.admin` |
-| `/syncmoney migrate clear` | 清除遷移斷點 | `syncmoney.admin` |
-| `/syncmoney shadow status` | 檢視影子同步狀態 | `syncmoney.admin` |
-| `/syncmoney shadow now` | 觸發立即同步 | `syncmoney.admin` |
-| `/syncmoney shadow logs` | 檢視最近的同步日誌 | `syncmoney.admin` |
-| `/syncmoney shadow history <player> [page]` | 檢視玩家的同步歷史 | `syncmoney.admin` |
-| `/syncmoney shadow export <player> [startDate] [endDate]` | 將同步記錄匯出為 JSONL | `syncmoney.admin` |
-| `/syncmoney debug player <player>` | 診斷玩家在所有層級的餘額 | `syncmoney.admin` |
-| `/syncmoney debug system` | 診斷系統狀態 | `syncmoney.admin` |
-| `/syncmoney sync-balance <player>` | 強制將玩家餘額同步至 Redis/DB | `syncmoney.admin` |
-| `/syncmoney test concurrent-pay <threads> <iterations>` | 壓力測試（需要非 LOCAL 模式） | `syncmoney.admin.test` |
-| `/syncmoney test total-supply` | 驗證總供應量一致性 | `syncmoney.admin.test` |
-
----
-
-## 從原始碼建構
-
-### 前提條件
-
-- Java 21+
-- Gradle（包含 wrapper）
-- Node.js 20+ 和 pnpm（用於網頁前端）
-
-### 建構指令
-
-```bash
-# 克隆
-git clone https://github.com/Misty4119/Syncmoney.git
-cd Syncmoney
-
-# 建構插件 JAR（包含陰影重定位）
-./gradlew shadowJar
-# 輸出：build/libs/Syncmoney-1.1.2.jar
-
-# 建構 PAPI 擴展
-cd syncmoney-papi-expansion && ../gradlew jar
-# 輸出：build/libs/SyncmoneyExpansion-1.1.2.jar
-
-# 建構網頁前端
+```powershell
 cd syncmoney-web
-npm install
-npm run build
-# 輸出：syncmoney-web/dist/
-
-# 執行測試
-./gradlew test              # Java 單元測試
-cd syncmoney-web && npm run test:unit   # 前端單元測試
-cd syncmoney-web && npm run test:e2e    # 前端 E2E 測試
+pnpm typecheck
+pnpm test:unit --run
+pnpm build
 ```
 
-### Shadow JAR 重定位
+Expected artifact：
 
-所有執行期依賴都在 `build.gradle` 中重定位到 `noietime.libs.*`，以防止與其他 Minecraft 插件的類別路徑衝突。添加新的執行期依賴時，你**必須**添加相應的 `relocate()` 規則。
+- `build/libs/Syncmoney-<version>.jar`
+- `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
+- `build/acceptance/SyncmoneyAcceptance.jar`
 
----
+依變更範圍選擇適當測試。Documentation-only change 不需要完整 server matrix；scheduler/storage/lifecycle/cross-server/CMI 變更則需要 PlugDev runtime evidence。Compile success 不能證明 distributed consistency、queue durability 或 Folia safety。
 
-## 編碼標準
+## 5. Economy 開發規則
 
-### 註解標準
+### 5.1 Money type
 
-為維護高品質、專業且全球可存取的程式碼庫，Syncmoney 嚴格執行以下註解規則：
-- **區塊註解（`/** */`）**：所有類別、介面和重要方法都必須有以獨特標籤開頭的區塊註解：
-  - 後端層：`[SYNC-<CATEGORY>-<NUM>]`（例如 `[SYNC-CMD-001]`、`[SYNC-CONFIG-005]`）
-  - 網頁前端層：`[SYNC-WEB-<NUM>]`
-  - PAPI 擴展：`[SYNC-PAPI-<NUM>]`
-- **行內註解（`//`）**：強烈不鼓勵使用行內註解。程式碼應該是自說明的。僅在解釋高度複雜的演算法、競態條件預防或非明顯的數學公式時使用行內註解。
-- **語言**：所有註解、變數名稱和文件都必須使用**英文**。程式碼庫中嚴格禁止中文或其他非英文註解（翻譯locale檔案如 `zh-TW.json` 除外）。
-- **語氣**：註解必須簡潔、準確且嚴謹。避免冗餘的陈述只是重複程式碼所做的操作。
+Money 使用 `BigDecimal` 與既有 normalization。失敗/拒絕 transaction 不得建立或消滅資金。
 
----
+Failure path 也必須測試，至少涵蓋：
 
-## 已知限制
+- insufficient funds；
+- concurrent writes；
+- stale versions；
+- queue saturation/backpressure；
+- persistence failure/recovery；
+- shutdown 時仍有 accepted writes queued。
 
-| 限制 | 狀態 | 解決方法 |
-|------------|--------|------------|
-| `AsyncPreTransactionEvent` 未觸發 | v1.1.2 | 事件已定義但尚未在 `EconomyFacade` 中連接。改用 `PostTransactionEvent`。 |
-| WebSocket 未完全實作 | v1.1.2 | `/ws` 接受連線但分派不完整。生產環境使用 SSE（`/sse`）。 |
-| `event.setCancelled(true)` 無操作 | v1.1.2 | 交易前取消沒有效果，將在未來版本中連接。 |
+### 5.2 Respect the existing transaction boundaries
 
----
+依既有 boundary 工作：`EconomyFacade`、`MemoryStateManager`、`TransactionWriter`、`TransferOrchestrator` 與 mode router。不要為了方便直接改 Redis/SQL。
 
-## 支援
+`AsyncPreTransactionEvent` **目前會由 transaction path 觸發，而且 cancellation 會生效**。`PostTransactionEvent` 在 result processing 後發出並供 telemetry 使用。
 
-- GitHub Issues：回報錯誤和功能請求
-- Discord：加入我們的社群以獲得支援
+### 5.3 Synchronous callers need memory-backed behavior
+
+Vault 是 synchronous，因此 Vault-facing read 必須保持 memory-backed；cache miss 走既有 async warm/reconcile。Vault、placeholder、tab completion、entity task 不得加入 blocking Redis/SQL/Mojang/HTTP/file I/O。
+
+### 5.4 Versions and cross-server state
+
+保留 monotonic version。Delayed Pub/Sub/async callback 套用前重新比對 freshness。主要 channel：
+
+- `syncmoney:balance:update`
+- `syncmoney:cmi:balance:update`
+
+CMI remote apply 要 suppress outbound echo。
+
+## 6. Scheduler 規則
+
+- Pure I/O/data：async scheduler 或 owned executor。
+- Plugin/global operation：global region scheduler。
+- Player/entity state、message、CMI mutation：player entity scheduler。
+- Teleport：`teleportAsync`。
+- Global collection 先 snapshot，再把各 player work 派到 owner。
+- Async callback 碰 entity 前重新進入正確 scheduler。
+- 不得讓 region 互相阻塞。
+
+`folia-supported: true` 是 descriptor metadata，不是 thread-safety proof。
+
+## 7. Lifecycle 與 optional module
+
+每個 executor、listener、queue、subscription、storage connection、scheduled task、HTTP server 與 optional feature 都要有單一 owner。
+
+Feature disabled 時不要建立屬於它的 heavy resource；保存 cancellation/close handle，partial initialization failure 也要 cleanup。
+
+目前 shutdown order 刻意讓 accepted economic work 在 economy/audit/storage dependency 存活時排空。變更 shutdown ownership/order 時要說明 dependency reason 並測 failure/stop path。
+
+## 8. Configuration changes
+
+`SyncmoneyConfig` 是 runtime snapshot。`ConfigReloadPolicy` 目前只允許：
+
+- `display`
+- `pay`
+- `permissions`
+- `admin-permissions`
+- `debug`
+
+新增 setting 若會建立 connection、executor、schema、subscription、listener、HTTP service 或改變 economy authority，在 reload lifecycle 未明確實作前應視為 restart-required。
+
+Config change 應依序：
+
+1. 更新 `src/main/resources/config.yml`；
+2. 更新 parsing/default/validation code；
+3. 判斷 config schema version 是否真的需要變更；
+4. 僅在 lifecycle 確實支援時更新 reload policy；
+5. 同步 README/docs 與雙語文件；
+6. 對非 trivial 行為加入 focused validation/reload tests。
+
+Release version 與 config schema version 分離。`server-name` 空白會阻止正常 operation。
+
+## 9. CMI integration
+
+`cmi` mode 中 CMI 維持 economy authority。
+
+CMI API 的 player mutation 必須在 owning entity scheduler 執行；Redis/network work 留在 entity scheduler 外。
+
+Cross-server CMI update 要比較 version/freshness、套用時 suppress echo，async work 後重新確認 player availability/ownership。Migration 與 Shadow Sync 要與 live authority 分開。
+
+CMI 為授權軟體，不隨 repository 分發；acceptance 需要本機合法 plugin。
+
+## 10. Web Admin backend development
+
+Backend 是 Undertow。
+
+### Authentication
+
+一般 `/api/*` request 使用 `Authorization: Bearer <api-key>`。`/health` 不需 authentication。修改 auth path 時要保留 constant-time key comparison 與 rate limiting。
+
+Shipped key 是 `change-me-in-production`。Validation 會對此值提出警告，但目前 auto-disable logic 只檢查精確的 `change-me`；文件與實作都不可把預設值描述成會自動安全停用。
+
+### Route registration
+
+修改 route 時同時檢查 route-specific handler 與 registry。`HttpHandlerRegistry` 對相同 method/path key 使用 replacement semantics。
+
+目前 `GET /api/nodes` 和 `GET /api/nodes/status` 有 duplicate registration；`NodesApiHandler` 較晚註冊，因此實際生效。
+
+### SSE and WebSocket
+
+Frontend live stream 是 `/api/sse`。One-time token 由 `POST /api/auth/ws-token` 發出，有效 60 秒，validation 成功後 consume。
+
+`/ws` 目前不完整。Upgrade-shaped request 只要求 query token 非空，manager 沒有呼叫 `WsTokenHandler.validateToken`，message transport 也尚未完整。Backend transport 與 token validation 完成並測試前，不要新增依賴 `/ws` 的 client code。
+
+### API changes
+
+修改 endpoint 時：
+
+1. 更新 handler validation 與 response model；
+2. 維持 shared error convention；
+3. 確保 blocking work 被 dispatch 離開 Undertow I/O thread；
+4. 驗證 authentication、CORS、rate limit、proxy trust 與 node-to-node auth；
+5. 同步更新 `docs/API_REFERENCE.md` 與 `docs/API_REFERENCE.zh_tw.md`；
+6. 更新 frontend API client、types 與 tests；
+7. 若 frontend source 有改動，rebuild embedded frontend。
+
+## 11. Web frontend development
+
+`syncmoney-web` 使用 Vue 3、Vite、Pinia、`vue-i18n`、PWA tooling。沿用既有 API client/store，不要繞過 shared auth、dedup 與 response handling。
+
+Live path 維持 `/api/sse`；在 backend transport 與 token validation 完成並測試前，不要讓 UI 依賴 `/ws`。
+
+驗證：
+
+```powershell
+cd syncmoney-web
+pnpm typecheck
+pnpm test:unit --run
+pnpm build
+```
+
+Production build 嵌入 `src/main/resources/syncmoney-web/dist`。Frontend source 或 public release metadata 改變時要 rebuild，並確認 packaged JAR 內包含最新 output。Web asset 隨 release 發佈時，frontend package version 要和 root release 對齊。
+
+## 12. PlaceholderAPI expansion development
+
+`syncmoney-papi-expansion` 是獨立 artifact，identifier `syncmoney`，persistent，以 lazy reflection 連到 core。Reflection 是 compatibility seam，rename/remove API 前要追蹤兩側。
+
+Placeholder resolution 保持 non-blocking；昂貴/全域值使用 async refresh 與 bounded cache，目前 expiry 約 5 秒、cached/pending bound 約 10,000。
+
+支援的 placeholder family 包含 balance variants、rank/my-rank、total supply/players、version、online players、`top_<n>` 與 target-player balance variants。Placeholder behavior 有變更時，expansion tests 與 public documentation 必須一起更新。
+
+## 13. REST response 與 error conventions
+
+大多數成功 JSON response 使用 `success`、`data`、`meta`；`meta` 包含 timestamp 與 plugin version。錯誤通常使用 `success: false`、含 code/message 的 `error` object，以及相同 metadata。Cursor pagination 是已知例外，不包含一般 `meta` envelope。
+
+`HttpHandlerRegistry` 將 `IllegalArgumentException`、`IllegalStateException` 映射為 HTTP 400，`SecurityException` 為 403，`NoSuchElementException` 為 404，`UnsupportedOperationException` 為 405，未預期失敗為 500。未知 route 回傳 `404 NOT_FOUND`。
+
+沿用既有 `ApiResponse` helper 與 shared exception path，讓 frontend 與外部 client 能一致處理錯誤。
+
+## 14. Storage 與 schema changes
+
+共享 `players` table 以 UUID 為 primary key，保存 player name、`DECIMAL(20,2)` balance、monotonic version、last server 與 update time。Redis 保存 balance/version、online-player、baltop、audit 與 bank-related state。
+
+Schema 或 persistence 變更時：
+
+1. 維持金額 precision 與 version ordering；
+2. migration 對既有 installation 必須安全；
+3. local、shared、audit、Shadow 與 migration workflow 必須保持區分；
+4. 只有對應 schema contract 真正改變時才更新 schema-version metadata；
+5. 測試 failure/recovery path，而不只成功寫入；
+6. 記錄 upgrade/rollback 所需的 operator action。
+
+不要直接修改 storage 來繞過 `EconomyFacade`、`MemoryStateManager`、`TransactionWriter`、`TransferOrchestrator` 或 mode router。
+
+## 15. Commands 與 permissions
+
+Top-level commands 為 `/money`、`/pay`、`/baltop`、`/syncmoney`。
+
+`/syncmoney` 依目前 registration 與 enabled feature 提供 administrative/diagnostic subcommands，包括 migration、audit、admin、web、monitoring、debug、balance sync、test、reload、version，以及 optional breaker、Shadow 與 economy-stat 功能。
+
+Permission behavior 同時由 `plugin.yml` 與 command router/subcommand checks 決定。重要 nodes 包括 `syncmoney.money`、`syncmoney.money.others`、`syncmoney.pay`、`syncmoney.admin` 與專用 `syncmoney.admin.*` permissions。
+
+新增或修改 command 時，要驗證 permission denial、console/player restriction、player action 的 scheduler ownership、tab-completion cost、user-facing message，以及兩種語言/config default。
+
+## 16. Events 與 third-party integration
+
+`AsyncPreTransactionEvent` 會由 `TransactionWriter` 在適用的 transaction path 觸發，且 cancellation 會被遵守。`PostTransactionEvent` 會在 transaction result processing 後發出，並供 telemetry 使用，包含 Web Admin live update。
+
+`SyncmoneyEventBus` 是 internal event bus，不是 Bukkit event bus。不要在未閱讀 dispatcher 前假設它具有 Bukkit main-thread semantics。
+
+整合 Vault、CMI、PlaceholderAPI 或其他 optional dependency 時：
+
+- 保持 hard/soft dependency declaration 正確；
+- dependency 不存在時不要載入 optional API；
+- CMI/player mutation 維持 entity-thread ownership；
+- 有意使用 reflection 的 compatibility contract 必須維持相容；
+- 文件只描述實際測試過的 compatibility，不擴大宣稱。
+
+## 17. Real-server acceptance
+
+實機驗收依 `tools/plugdev/README.md` 執行。PlugDev 是 development tooling，不是 production dependency。
+
+Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不能只靠 compilation 驗證。需分別記錄實際 Minecraft/Paper/Folia/Canvas version、runtime Java version、Syncmoney artifact/version、實際存在的 optional dependency versions、player-side behavior、startup/shutdown logs、適用時的 cross-server propagation，以及無法測試的 scenario。
+
+Gradle toolchain 使用 Java 21。Runtime Java 依選用 server 而定；目前 PlugDev 指引指出較新的 Paper 26.1+ environment 使用 Java 25。
+
+## 18. Documentation、security 與 release hygiene
+
+Canonical operational/community 文件以 repository root 的英文版為準；繁體中文版統一放在 `docs/`，檔名使用 `.zh_tw.md`。Behavior 改變時兩種語言需維持語意一致。
+
+不得公開 credentials、runtime API keys、database secrets、RCON secrets、private server data、worlds、logs 或 generated local test state。Public example 必須使用 placeholder。
+
+Security issue 請私下寄至 `security@noie.fun`。除非專案明確採用 SLA，否則不要承諾 response/remediation 時程。
+
+Release 前：
+
+1. 驗證 root `build.gradle` version 與 frontend package/public metadata；
+2. web assets 有變更時重建 embedded frontend；
+3. build core、PAPI expansion 與 acceptance artifacts；
+4. 驗證 JAR contents 與 runtime descriptors；
+5. 更新 changelog 與雙語文件；
+6. 執行 `git diff --check`、檢查 `git status --short`，並 review 最終 diff 是否有 secrets、stale versions、stale endpoints 或 unrelated changes。
+
+預期 artifacts 為 `build/libs/Syncmoney-<version>.jar`、`syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`、`build/acceptance/SyncmoneyAcceptance.jar`。

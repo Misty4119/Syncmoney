@@ -1,457 +1,315 @@
-# Syncmoney Architecture Overview
+# Syncmoney Architecture
 
-> **Audience**: Developers contributing to or extending Syncmoney
-> **Version**: 1.3.1
-> **Last Updated**: 2026-09-06
+> Project version: `1.3.1`
+> Configuration schema: `12`
+> Build toolchain: Java 21
+> This document describes the implementation in the current repository. Code and executable configuration remain authoritative.
 
----
+Traditional Chinese: [`ARCHITECTURE.zh_tw.md`](ARCHITECTURE.zh_tw.md)
 
-## Table of Contents
+## 1. System boundary
 
-1. [System Architecture](#system-architecture)
-2. [Module Structure](#module-structure)
-3. [Data Flow](#data-flow)
-4. [Thread Model](#thread-model)
-5. [Storage Architecture](#storage-architecture)
-6. [Web Backend Architecture](#web-backend-architecture)
-7. [Frontend Architecture](#frontend-architecture)
+Syncmoney is a Minecraft economy plugin with a synchronous Vault-facing API and asynchronous persistence/synchronization. Its core responsibility is money state and the infrastructure required to keep that state safe across server threads, Redis, SQL, optional CMI authority, auditing, protection, and Web Admin.
 
----
+The repository has three runtime deliverables:
 
-## System Architecture
+- the core plugin from `src/main/java/noietime/syncmoney`;
+- the separate PlaceholderAPI expansion from `syncmoney-papi-expansion`;
+- the Vue Web Admin frontend from `syncmoney-web`, embedded into the core JAR at `src/main/resources/syncmoney-web/dist`.
 
-Syncmoney follows an **event-driven, optimistic-update** architecture inspired by the LMAX Disruptor pattern. The core design principle is **never block the main server thread** for Redis/DB operations.
+`tools/plugdev` is acceptance tooling and is not a production dependency.
 
-### High-Level Architecture
+## 2. Architectural priorities
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Minecraft Server                          │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Vault API Layer                                      │   │
-│  │  ┌──────────────────────────────────────────────┐    │   │
-│  │  │  SyncmoneyVaultProvider (1276 lines)          │    │   │
-│  │  │  - Implements net.milkbowl.vault.Economy      │    │   │
-│  │  │  - Name → UUID resolution via NameResolver    │    │   │
-│  │  │  - Bank account support (Redis-backed)        │    │   │
-│  │  └─────────────────────┬────────────────────────┘    │   │
-│  └────────────────────────┼──────────────────────────────┘   │
-│                           ▼                                   │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  Economy Core                                          │  │
-│  │  ┌────────────────┐  ┌──────────────────────────────┐ │  │
-│  │  │ EconomyMode    │  │ EconomyModeRouter (216 lines)│ │  │
-│  │  │ Router         │──│ LOCAL → LocalEconomyHandler   │ │  │
-│  │  │                │  │ SYNC  → EconomyFacade         │ │  │
-│  │  │                │  │ CMI   → CMIEconomyHandler     │ │  │
-│  │  │                │  │ LOCAL_REDIS → EconomyFacade   │ │  │
-│  │  └────────────────┘  └──────────────┬───────────────┘ │  │
-│  │                                      │                 │  │
-│  │  ┌──────────────────────────────────▼───────────────┐ │  │
-│  │  │ EconomyFacade (1064 lines)                        │ │  │
-│  │  │ - ConcurrentHashMap<UUID, EconomyState>          │ │  │
-│  │  │ - Optimistic locking (version-based)             │ │  │
-│  │  │ - Memory-first read/write                        │ │  │
-│  │  │ - Event queue (BlockingQueue, cap=50000)         │ │  │
-│  │  └──────────────────────────────────┬───────────────┘ │  │
-│  └─────────────────────────────────────┼─────────────────┘  │
-│                                        │ async events        │
-│  ┌─────────────────────────────────────▼─────────────────┐  │
-│  │  Async Persistence Layer                               │  │
-│  │  ┌────────────────┐  ┌────────────────────────────┐   │  │
-│  │  │ EconomyEvent   │  │ CrossServerSyncManager     │   │  │
-│  │  │ Consumer       │  │ - Redis Pub/Sub publish    │   │  │
-│  │  │ (single thread)│  │ - Notify other servers     │   │  │
-│  │  └───────┬────────┘  └────────────────────────────┘   │  │
-│  │          │                                             │  │
-│  │  ┌───────▼────────┐  ┌────────────────────────────┐   │  │
-│  │  │ Redis (Jedis)  │  │ Database (HikariCP)        │   │  │
-│  │  │ - Balance cache│  │ - MySQL/PostgreSQL/SQLite  │   │  │
-│  │  │ - Pub/Sub      │  │ - DbWriteQueue + Consumer  │   │  │
-│  │  │ - Lua scripts  │  │ - Batch writes             │   │  │
-│  │  │ - ZSET baltop  │  │ - Audit log persistence    │   │  │
-│  │  └────────────────┘  └────────────────────────────┘   │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                               │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  Web Admin (Undertow)                                  │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐│  │
-│  │  │ REST API │  │ SSE      │  │ Static File Server   ││  │
-│  │  │ Handlers │  │ Manager  │  │ (Vue 3 SPA)          ││  │
-│  │  └──────────┘  └──────────┘  └──────────────────────┘│  │
-│  └────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+The implementation is shaped by five constraints:
+
+1. **Vault calls are synchronous.** Balance reads used by Vault must normally complete from memory. Redis/SQL/network work must not be inserted into hot server or entity paths.
+2. **Money must not be lost or duplicated.** Accepted mutations have an explicit asynchronous persistence path and shutdown drain semantics.
+3. **Distributed state is versioned.** Balance updates carry monotonic versions; stale remote work must not overwrite newer local state.
+4. **Folia ownership matters.** Player/entity work runs on the owning entity scheduler, while pure I/O can run asynchronously.
+5. **Optional modules have explicit owners.** Disabled features should not start unrelated executors, schemas, listeners, subscriptions, or HTTP services.
+
+## 3. Major runtime layers
+
+```text
+Vault / commands / PAPI / Web Admin
+              |
+              v
+      Economy mode routing
+              |
+     +--------+---------+
+     |                  |
+     v                  v
+Syncmoney economy      CMI authority
+     |
+     v
+MemoryStateManager
+     |
+     v
+TransactionWriter / TransferOrchestrator
+     |
+     +----------+-------------+----------------+
+     |          |             |                |
+     v          v             v                v
+ accepted   Redis/Lua     SQL/local        Pub/Sub /
+ events     operations    persistence      audit/events
 ```
 
----
+### 3.1 Plugin lifecycle
 
-## Module Structure
+`Syncmoney` is the Bukkit/Paper entry point and composes the runtime managers. Lifecycle order is important because accepted economy writes can still depend on audit, storage, and synchronization components during shutdown.
 
-The Java codebase (`noietime.syncmoney`) is organized into **27 packages** with **167 Java classes** (~36,480 lines):
+The observed shutdown sequence is:
 
-### Core Layer (Plugin Entry)
+1. Web service manager
+2. Command service manager
+3. Permission manager
+4. Listener service manager
+5. Sync manager
+6. Event consumer manager, including draining accepted writes while dependencies are alive
+7. Economy service manager
+8. Audit service manager
+9. Breaker manager
+10. Baltop save
+11. Storage manager
+12. `SyncmoneyEventBus.clearAll()`
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `(root)` | 2 | `Syncmoney.java` (876 lines), `PluginContext.java` (356 lines) |
-| `config` | 19 | `SyncmoneyConfig` (Facade), 18 sub-config classes, 4 manager classes |
-| `initialization` | 2 | `PluginInitializationManager`, `Initializable` |
+Changes to this ordering require a dependency analysis, not just a compile check.
 
-**Config Class Architecture:**
-```
-SyncmoneyConfig (Facade)
-├── RedisConfig
-├── DatabaseConfig
-├── MigrationConfig
-├── ShadowSyncConfig
-├── CircuitBreakerConfig
-├── PlayerProtectionConfig
-├── DiscordWebhookConfig
-├── AuditConfig
-├── CMIConfig
-├── BaltopConfig
-├── AdminPermissionConfig
-├── PayConfig
-├── DisplayConfig
-├── TransferGuardConfig
-├── VaultConfig
-├── LocalConfig
-├── CrossServerConfig
-└── WebAdminConfig
-```
+### 3.2 Economy mode routing
 
-### Economy Layer
+`economy.mode` accepts:
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `economy` | 15 | Core economic operations, mode routing, event processing |
-| `vault` | 6 | VaultProviderCore, VaultPlayerHandler, VaultTransferHandler, VaultBankHandler, VaultLuaScriptManager, VaultPluginDetector |
+- `auto`
+- `local`
+- `local_redis`
+- `sync`
+- `cmi`
 
-### Storage Layer
+The internal router selects the active implementation. In Syncmoney-owned modes, the economy facade, memory state, writer, persistence, and synchronization paths cooperate. In `cmi` mode, CMI remains the economy authority; Syncmoney observes/synchronizes it rather than silently becoming the source of truth.
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `storage` | 5 | Redis, cache, storage coordination, transfer locks |
-| `storage.db` | 3 | Database management, write queue, batch writer |
+Migration and Shadow Sync are separate explicit workflows. They are not live authority switches.
 
-### Sync & Events
+## 4. Economy state and transaction flow
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `sync` | 5 | Cross-server sync, Pub/Sub, debounce |
-| `event` | 7 | Bukkit events, internal event bus (`SyncmoneyEventBus`) |
+### 4.1 Money representation
 
-### Security
+Money is represented with `BigDecimal` and existing normalization rules. New code must preserve precision, configured decimal behavior, non-negative/insufficient-funds constraints, and the current response semantics.
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `breaker` | 9 | Circuit breaker, player guard, Discord webhook, resource monitor |
-| `guard` | 1 | `PlayerTransferGuard` — server transfer protection |
-| `permission` | 2 | Permission management, admin tier service |
+### 4.2 Read path
 
-### Audit & Shadow Sync
+Vault-facing balance reads are designed to be memory-first. Cache warming and slower persistence lookups belong on asynchronous paths. Placeholder evaluation follows the same rule: a cold lookup must not turn a player/entity scheduler path into a blocking Redis, SQL, Mojang, or filesystem call.
 
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `audit` | 10 | Audit logging, cleanup, export, Lua scripts, hybrid manager |
-| `shadow` | 6 | Background sync, CMI writer, rollback protection |
-| `shadow.storage` | 6 | Multi-database shadow storage implementations |
+Conceptually:
 
-### Commands
-
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `command` | 19 | All commands, cooldown, pay confirmation/execution |
-| `baltop` | 3 | Leaderboard command, manager, data model |
-
-### Web Admin
-
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `web` | 3 | Service management, module config, web admin config |
-| `web.server` | 2 | Undertow server (`WebAdminServer` 682 lines), route registry |
-| `web.security` | 4 | Auth filter, rate limiter, permission checker, node API key store |
-| `web.api.*` | 14 | REST API handlers (see [Web Backend Architecture](#web-backend-architecture)) |
-| `web.builder` | 3 | Frontend auto-download/build/version check |
-| `web.websocket` | 2 | WebSocket + SSE managers |
-
-### Utilities
-
-| Package | Files | Purpose |
-|---------|-------|---------|
-| `util` | 10 | Formatting, messages, JSON, platform detection, config merger |
-| `uuid` | 1 | Name → UUID resolution |
-| `listener` | 5 | Player join/quit, CMI economy, event listener management |
-| `exception` | 3 | Custom exception hierarchy |
-| `schema` | 1 | Database schema management |
-| `migration` | 9 | CMI migration, backup, checkpoint resume, local-to-sync |
-
----
-
-## Data Flow
-
-### Read Path (Balance Query)
-
-```
-VaultAPI.getBalance(player)
-  → SyncmoneyVaultProvider.getBalance()
-    → NameResolver: playerName → UUID
-    → EconomyFacade.getBalance(uuid)
-      → 1. Check ConcurrentHashMap (O(1)) → HIT → return
-      → 2. Check Redis (GET syncmoney:balance:{uuid}) → HIT → cache + return
-      → 3. Query Database (SELECT balance FROM players) → HIT → cache + return
-      → 4. Check LocalSQLite (fallback) → return 0 if not found
+```text
+caller -> mode router -> memory state -> immediate result
+                         |
+                         +-> asynchronous warm/reconcile when required
 ```
 
-*Note: Internally, balance queries from player commands (e.g., `/money`) wrap this Read Path in an asynchronous task (`AsyncScheduler`) to ensure that cache misses (which fallback to Redis/Database) absolutely never block the main server thread.*
+### 4.3 Mutation path
 
-### Write Path (Deposit/Withdraw)
+Syncmoney-owned deposits, withdrawals, sets, and transfers flow through the existing economy facade/state/writer/orchestrator boundaries rather than mutating persistence directly.
 
-```
-VaultAPI.depositPlayer(player, amount)
-  → SyncmoneyVaultProvider.depositPlayer()
-    → EconomyFacade.deposit(uuid, amount, source)
-      → 1. Check circuit breaker → LOCKED → reject
-      → 2. Check player protection → LOCKED → reject  
-      → 3. Update ConcurrentHashMap (optimistic lock + version increment)
-      → 4. Return SUCCESS immediately (no blocking!)
-      → 5. Queue EconomyEvent to BlockingQueue
-        → EconomyEventConsumer (background thread):
-          → Redis: EVAL atomic_add_balance.lua
-          → Database: INSERT/UPDATE via DbWriteQueue (Fallback: direct DB write → WAL overflow log)
-          → Pub/Sub: Publish balance update to other servers
-          → Audit: Record transaction
-          → EventBus: Fire PostTransactionEvent
-```
+Important semantics:
 
-### Plugin API (Third-Party Integration)
+- `AsyncPreTransactionEvent` is fired by `TransactionWriter` for supported mutations and cancellation is honored.
+- Accepted writes become queued economic work; they must not be silently discarded on ordinary logout, teleport timeout, or shutdown.
+- `PostTransactionEvent` is emitted after the result is known and is also used by live telemetry.
+- Transfers must preserve both sides of the operation under failure; insufficient funds and partial persistence failure are correctness cases.
+- Queue saturation/backpressure and recovery paths are part of the money-safety contract.
 
-Third-party plugins that need an atomic player-to-player transfer should use the `SyncmoneyVaultProvider` extended API.
+## 5. Distributed synchronization
 
-**Standard Vault flow (independent operations):**
-```
-Plugin withdrawPlayer() → SyncmoneyVaultProvider.withdrawPlayer()
-  → Immediate independent withdrawal (VAULT_WITHDRAW)
-Plugin depositPlayer() → SyncmoneyVaultProvider.depositPlayer()
-  → Immediate independent deposit (VAULT_DEPOSIT)
-```
+### 5.1 Versions
 
-Standard Vault calls do not expose a transaction identifier or counterparty, so Syncmoney never infers a transfer from matching amount and timing. If a plugin needs transfer semantics, it must provide both participants through the extended API.
+Balance state carries a monotonically increasing version. Remote or delayed updates must compare versions before replacing state. This prevents an older Pub/Sub delivery or asynchronous callback from overwriting newer data.
 
-**Plugin API flow (explicit operation):**
-```
-Plugin depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
-  → EconomyEvent.EventSource = PLUGIN_DEPOSIT
-  → Direct attributed deposit
-Plugin pluginTransfer(from, to, amount, pluginName) → EconomyFacade.pluginAtomicTransfer()
-  → Uses atomic_plugin_transfer.lua with plugin attribution metadata
-```
+### 5.2 Redis
 
-**New EventSource values:**
+Representative keys include:
 
-| Value | Purpose |
-|-------|---------|
-| `PLUGIN_DEPOSIT` | Explicitly attributed third-party plugin deposit |
-| `PLUGIN_WITHDRAW` | Explicitly attributed third-party plugin withdrawal |
+| Key | Purpose |
+|---|---|
+| `syncmoney:balance:{uuid}` | Player balance |
+| `syncmoney:version:{uuid}` | Balance version |
+| `syncmoney:online:players` | Cross-server online-player set/state |
+| `syncmoney:online:player:*` | Per-player online metadata |
+| `syncmoney:baltop` | Ranking data |
+| audit-related keys | Recent/index/dedup state |
+| bank / bank-owner / bank-version keys | Vault bank state |
 
-`PLUGIN_DEPOSIT` and `PLUGIN_WITHDRAW` are reserved for the explicit plugin methods. A standard Vault deposit is always recorded as `VAULT_DEPOSIT`.
+Primary Pub/Sub channels are:
 
-### Cross-Server Sync
+- `syncmoney:balance:update`
+- `syncmoney:cmi:balance:update`
 
-```
-Server A: Player deposits 1000
-  → Pub/Sub publish: {uuid, newBalance, version, source}
-    → Server B receives via PubsubSubscriber
-      → EconomyFacade.updateMemoryState(uuid, balance, version)
-        → Version check: only update if newVersion > currentVersion
-        → ConcurrentHashMap updated
-        → Player UI refresh (via EntityScheduler)
-```
+The second channel belongs to CMI authority synchronization. Echo suppression is required when a remote CMI balance is applied locally.
 
----
+### 5.3 SQL
 
-## Thread Model
+The shared `players` table contains the core durable player record:
 
-### Folia Compatibility
+| Column | Shape |
+|---|---|
+| `uuid` | `VARCHAR(36)`, primary key |
+| `player_name` | `VARCHAR(16)` |
+| `balance` | `DECIMAL(20,2)` |
+| `version` | `BIGINT` |
+| `last_server` | `VARCHAR(64)` |
+| `updated_at` | timestamp |
 
-Syncmoney is fully compatible with Folia's region-based threading. **`Bukkit.getScheduler()` is strictly forbidden.**
+Audit, local persistence, schema migration, Shadow Sync, and other features use additional tables/workflows. Do not infer those contracts solely from the `players` table.
 
-| Scheduler | Usage |
-|-----------|-------|
-| `AsyncScheduler` | Redis/DB communication, write queue processing, Pub/Sub subscription |
-| `EntityScheduler` | Player UI updates (scoreboard, ActionBar) — must run on player's region thread |
-| `GlobalRegionScheduler` | Periodic tasks (cleanup, shadow sync, heartbeat) |
+## 6. Scheduler and concurrency model
 
-### Key Thread Safety
+Syncmoney targets Paper-compatible scheduler APIs and declares `folia-supported: true`, but the declaration does not itself prove thread safety.
 
-- `EconomyFacade.economyStates` — `ConcurrentHashMap<UUID, EconomyState>`
-- `EconomyState.balance` — Updated via optimistic locking (version comparison)
-- `EconomyEventConsumer` — Single background thread (single-writer pattern). Replays overflow events on startup.
-- `PluginContext` — Immutable after construction
+Use these ownership rules:
 
----
+- **Pure I/O and data work:** Paper async scheduler or a clearly owned background executor.
+- **Plugin/global operations:** global region scheduler.
+- **Player messages, teleports, CMI player mutations, entity access:** the player's entity scheduler.
+- **Teleports:** use `teleportAsync`.
+- **Cross-player/global iteration:** snapshot global data first, then dispatch each player operation to that player's owner.
+- **Async callbacks:** re-enter the correct scheduler before touching Bukkit entities.
 
-## Storage Architecture
+Never block one region while waiting for another region.
 
-### Redis Keys
+## 7. Optional modules and protection
 
-| Key Pattern | Type | Purpose |
-|-------------|------|---------|
-| `syncmoney:balance:{uuid}` | STRING | Player balance |
-| `syncmoney:version:{uuid}` | STRING | Version counter (for optimistic locking) |
-| `syncmoney:baltop` | ZSET | Leaderboard sorted set |
-| `syncmoney:bank:{name}` | STRING | Bank account balance |
-| `syncmoney:bank:version:{name}` | STRING | Bank version counter |
-| `syncmoney:audit:{uuid}` | LIST | Audit log entries |
+### 7.1 Breaker and player protection
 
-### Database Tables
+`BreakerManager` owns the single `PlayerTransactionGuard`. Economy services receive the guard instead of creating independent copies.
 
-| Table | Purpose |
-|-------|---------|
-| `players` | Player balances (UUID → DECIMAL(20,2)) |
-| `syncmoney_audit_log` | Transaction audit trail (with millisecond sequence ordering) |
+Global breaker state and per-player protection are related safeguards but are not the same enable switch. Resource monitoring, player transaction limits, webhook notifications, and breaker state must keep their existing ownership and configuration boundaries.
 
-### Lua Scripts (8 scripts)
+### 7.2 Audit
 
-| Script | Purpose |
-|--------|---------|
-| `atomic_add_balance.lua` | Atomic deposit/withdraw with version increment |
-| `atomic_set_balance.lua` | Atomic balance set |
-| `atomic_transfer.lua` | Atomic player-to-player transfer |
-| `atomic_audit.lua` | Atomic audit log entry |
-| `atomic_bank_deposit.lua` | Atomic bank deposit |
-| `atomic_bank_withdraw.lua` | Atomic bank withdrawal |
-| `atomic_bank_transfer.lua` | Atomic bank-to-bank transfer |
-| `atomic_plugin_transfer.lua` | Atomic plugin-initiated transfer (with plugin attribution metadata) |
+Audit is optional. Cleanup/export behavior depends on the parent audit switch. When audit is disabled, the Web API reports `503 FEATURE_DISABLED` for audit operations instead of pretending data exists.
 
----
+### 7.3 Shadow Sync and migration
 
-## Web Backend Architecture
+Shadow Sync, CMI migration, and local-to-sync migration are explicit maintenance/data workflows. They must keep separate lifecycle, storage, and authority semantics from live economy routing.
 
-### Undertow Server
+## 8. Configuration model
 
-The web admin runs an embedded Undertow HTTP server (non-blocking, XNIO-based).
+`SyncmoneyConfig` represents a runtime configuration snapshot. `ConfigReloadPolicy` currently permits live reload only under:
 
-```
-WebAdminServer (682 lines)
-├── Static File Serving (Vue 3 SPA from dist/)
-├── REST API Routes (/api/*)
-│   ├── SystemApiHandler         → /api/system/*
-│   ├── EconomyApiHandler        → /api/economy/*
-│   ├── AuditApiHandler          → /api/audit/*
-│   ├── ConfigApiHandler         → /api/config/*
-│   ├── SettingsApiHandler       → /api/settings/*
-│   ├── WsTokenHandler          → /api/auth/ws-token
-│   ├── NodesApiHandler         → /api/nodes/* (Central Mode)
-│   ├── CrossServerStatsApiHandler → /api/economy/cross-server-*
-│   └── ApiExtensionManager      → /api/extensions/{name}/*
-├── SSE Manager (/sse)
-├── WebSocket Manager (/ws) [partial in v1.1.2]
-└── Health Endpoint (/health)
-```
+- `display`
+- `pay`
+- `permissions`
+- `admin-permissions`
+- `debug`
 
-### REST API Handler Packages
+Changes that require new connections, owners, listeners, executors, schemas, subscriptions, or economy authority are restart-required unless the reload policy and lifecycle implementation are deliberately expanded.
 
-| Package | Handler | Routes |
-|---------|---------|--------|
-| `web.api.system` | `SystemApiHandler` | `/api/system/status`, `/api/system/redis`, `/api/system/breaker`, `/api/system/metrics` |
-| `web.api.economy` | `EconomyApiHandler` | `/api/economy/stats`, `/api/economy/player/{uuid}/balance`, `/api/economy/top` |
-| `web.api.audit` | `AuditApiHandler` | `/api/audit/player/{name}`, `/api/audit/search`, `/api/audit/search-cursor`, `/api/audit/stats` |
-| `web.api.config` | `ConfigApiHandler` | `/api/config`, `/api/config/reload`, `/api/config/validate` |
-| `web.api.settings` | `SettingsApiHandler` | `/api/settings`, `/api/settings/theme`, `/api/settings/language`, `/api/settings/timezone` |
-| `web.api.auth` | `WsTokenHandler` | `/api/auth/ws-token` |
-| `web.api.nodes` | `NodesApiHandler` + 4 sub-handlers | `/api/nodes`, `/api/nodes/status`, `/api/nodes/{index}`, `/api/nodes/{index}/ping`, `/api/nodes/{index}/proxy`, `/api/nodes/sync`, `/api/nodes/{index}/sync`, `/api/config/sync` |
-| `web.api.crossserver` | `CrossServerStatsApiHandler` | `/api/economy/cross-server-stats`, `/api/economy/cross-server-top` |
-| `web.api.extension` | `ApiExtensionManager` | `/api/extensions/{name}/*` (dynamic) |
+`server-name` must be configured. A blank server name prevents normal operation.
 
-#### Nodes API Sub-Handlers Architecture
+## 9. Web Admin backend
 
-The `NodesApiHandler` coordinates four specialized sub-handlers:
+The embedded backend uses Undertow.
 
-| Handler | Responsibility |
-|---------|---------------|
-| `NodeOperationsHandler` | CRUD operations for nodes (create, read, update, delete, ping) |
-| `NodeStatusHandler` | Parallel fetching of detailed node status |
-| `NodeProxyHandler` | HTTP request proxying to remote nodes |
-| `ConfigSyncHandler` | Bidirectional configuration sync (push from central, receive on nodes) |
+### 9.1 HTTP pipeline
 
-All sub-handlers inherit from `NodesApiContext` which provides common utilities (JSON parsing, SSRF validation, API key masking, permission checking).
-```
+- `/health` is unauthenticated.
+- Normal `/api/*` routes require `Authorization: Bearer <api-key>`.
+- `ApiKeyAuthFilter` uses constant-time key comparison and can return `429 RATE_LIMITED`.
+- `X-Forwarded-For` is only trusted when `web-admin.security.trust-proxy=true`.
+- Route exceptions are normalized by `HttpHandlerRegistry`.
+- Static frontend assets are served from the embedded distribution.
 
-### Security Layers
+The shipped YAML keeps Web Admin disabled and binds to `localhost:8080`. It ships `change-me-in-production` as the API key placeholder. Validation warns about that value, but the current auto-disable check compares only exact `change-me`; operators must replace the shipped placeholder before exposing Web Admin.
 
-1. **ApiKeyAuthFilter** — Bearer token validation
-2. **RateLimiter** — Per-IP request limiting (default: 60/min)
-3. **PermissionChecker** — Endpoint-level permission validation
+### 9.2 Route registration
 
----
+Handlers register into `HttpHandlerRegistry`. Registration uses replacement semantics for the same method/path. Both `SystemApiHandler` and `NodesApiHandler` register `GET /api/nodes` and `GET /api/nodes/status`; `NodesApiHandler` is registered later and therefore provides the effective handlers.
 
-## Frontend Architecture
+### 9.3 SSE
 
-### Tech Stack
+The implemented frontend live channel is **`/api/sse`**.
 
-- **Vue 3** (Composition API, `<script setup>`)
-- **Pinia 3** (state management)
-- **Vue Router 5** (SPA routing with auth guards)
-- **Axios** (HTTP client with interceptors)
-- **TailwindCSS 3** (utility-first CSS)
-- **vue-i18n 11** (internationalization)
-- **Vite 6** (build tool with PWA plugin)
+The frontend first obtains a one-time token from `POST /api/auth/ws-token`. The token is a UUID, is valid for 60,000 ms, and is consumed on successful validation. `SseManager` accepts either:
 
-### State Management (Pinia Stores)
+- Bearer API key;
+- Bearer one-time token; or
+- `?token=<one-time-token>`.
 
-| Store | Purpose |
-|-------|---------|
-| `auth` | Authentication state (API key in localStorage) |
-| `notification` | Dual-track notifications: Toast (temporary, 5s auto-dismiss) + Alert (persistent, localStorage-backed) |
-| `settings` | Theme, language, timezone preferences |
-| `sse` | SSE connection lifecycle management |
+The SSE manager sends keepalive activity approximately every 15 seconds and broadcasts transaction telemetry from `PostTransactionEvent`.
 
-#### Notification System Architecture
+### 9.4 WebSocket limitation
 
-The notification system implements a **dual-track** architecture:
+`/ws` exists but the current `WebSocketManager` is incomplete and must not be treated as a production WebSocket transport.
 
-- **Toast**: Temporary notifications displayed in the top-right corner, auto-dismiss after 5 seconds
-- **Alert**: Persistent notifications stored in localStorage, displayed in a dropdown panel from the header bell icon
+Current behavior is materially different from SSE:
 
-Notifications are categorized as: `system`, `security`, `transaction`, `audit`, `general`.
+- ordinary non-upgrade requests receive `503 WEBSOCKET_UNAVAILABLE`;
+- upgrade-shaped requests only check for a non-empty query token;
+- the current handler does **not** validate that token through `WsTokenHandler.validateToken`;
+- it performs 101-shaped response/bookkeeping/logging, but the broadcast methods do not implement full working Undertow message transport.
 
-Key store methods:
-- `addToast(type, title, message, category)` — Add temporary notification
-- `addAlert(type, title, message, category)` — Add persistent alert
-- `addBreakerNotification(state)` — Circuit breaker alerts (both Toast + Alert)
-- `addSystemAlertNotification(message)` — System alerts (both Toast + Alert)
-- `success/error/info/warning(title, message)` — Convenience shortcut methods
+This is a known implementation limitation and a security-sensitive area for future work.
 
-### API Integration
+## 10. Web Admin frontend
 
-```
-api/client.ts (Axios instance)
-├── Request interceptor: Add Bearer token
-├── Response interceptor: 401→login, 403/429/500→notification
-│
-services/
-├── systemService.ts    → /api/system/*
-├── economyService.ts   → /api/economy/*
-├── auditService.ts     → /api/audit/*
-└── configService.ts    → /api/config/*
-│
-composables/
-├── useSystem.ts        → System status polling
-├── useAudit.ts         → Audit log pagination
-├── useSSE.ts           → SSE event handling (with exponential backoff & jitter)
-└── useWebSocket.ts     → WebSocket connection (with exponential backoff & jitter)
-```
+`syncmoney-web` uses Vue 3, Vite, Pinia, `vue-i18n`, and PWA tooling. The built production bundle is copied/embedded into `src/main/resources/syncmoney-web/dist`.
 
-### Build & Deploy
+Frontend release metadata and the embedded bundle should move with the root release when frontend assets are part of that release. The current frontend package version is `1.3.1`.
 
-```bash
-# Development (with HMR + API proxy to :8080)
-pnpm dev
+## 11. PlaceholderAPI expansion
 
-# Production build (outputs to dist/)
+The expansion is a separate JAR with identifier `syncmoney`. It is persistent and discovers the core plugin lazily through reflection, which is an intentional compatibility boundary.
+
+Supported placeholder families include:
+
+- `balance`
+- `balance_formatted`
+- `balance_abbreviated`
+- `rank`
+- `my_rank`
+- `total_supply`
+- `total_players`
+- `version`
+- `online_players`
+- `top_<n>`
+- `balance_<player>`
+- `balance_formatted_<player>`
+- `balance_abbreviated_<player>`
+
+The expansion keeps expensive/global work off the hot path with asynchronous refresh and bounded caching. The current cache uses a five-second expiry and a roughly 10,000-entry/pending-work bound.
+
+## 12. Build and acceptance architecture
+
+Primary artifacts are:
+
+- `build/libs/Syncmoney-<version>.jar`
+- `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
+- `build/acceptance/SyncmoneyAcceptance.jar`
+
+Standard build validation:
+
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar
+cd syncmoney-web
+pnpm typecheck
+pnpm test:unit --run
 pnpm build
-
-# dist/ is copied to src/main/resources/syncmoney-web/
-# and embedded into the JAR via Gradle processResources
 ```
+
+The project compiles with Java 21. Runtime Java follows the Minecraft server; current PlugDev guidance notes Java 25 for newer Paper 26.1+ acceptance environments.
+
+For scheduler, storage, lifecycle, CMI, or cross-server changes, unit/build success is insufficient. Use the applicable PlugDev matrix and report exactly which real server, dependency, player, and network paths were exercised.
+
+## 13. Change checklist
+
+Architecture-affecting changes should answer:
+
+1. Who owns the resource and closes it?
+2. Which scheduler owns every Bukkit/CMI entity mutation?
+3. Can this introduce blocking I/O into a synchronous/hot path?
+4. Where is the accepted-write boundary and how is it drained?
+5. How are monotonic versions and stale work handled?
+6. Is the feature optional, and is disabled state cheap?
+7. Does a configuration change require restart?
+8. Do the English and Traditional Chinese docs, REST contract, frontend client, and tests still agree?

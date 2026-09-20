@@ -1,765 +1,323 @@
 # Syncmoney Developer Guide
 
-A comprehensive guide for developers who want to integrate with Syncmoney or extend its functionality.
+> Current release: `1.3.1`
+> Java build toolchain: 21
+> Configuration schema: `12`
 
-> **See also:** [Architecture Overview](ARCHITECTURE.md) for system-level design and data flow diagrams.
->
-> **Version**: v1.3.1
+Traditional Chinese: [`DEVELOPER_GUIDE.zh_tw.md`](DEVELOPER_GUIDE.zh_tw.md)
 
----
+This guide is for contributors working on the core plugin, PlaceholderAPI expansion, Web Admin backend/frontend, or acceptance tooling. Read the root [`AGENTS.md`](../AGENTS.md) first; it contains correctness and lifecycle rules that apply to all code changes.
 
-## Table of Contents
+## 1. Prerequisites
 
-1. [Event System](#event-system)
-2. [REST API](#rest-api)
-3. [Configuration](#configuration)
-4. [Vault API Integration](#vault-api-integration)
-5. [PlaceholderAPI Expansion](#placeholderapi-expansion)
-6. [SSE API](#sse-api)
-7. [Commands](#commands)
-8. [Building from Source](#building-from-source)
-9. [Coding Standards](#coding-standards)
-10. [Known Limitations](#known-limitations)
+Use:
 
----
+- Git;
+- JDK 21 for Gradle compilation/toolchains;
+- the repository Gradle wrapper;
+- Node.js + pnpm for `syncmoney-web`;
+- an appropriate Paper/Folia/Canvas server for runtime acceptance;
+- Redis and SQL only for the modes/features being tested;
+- a locally supplied licensed CMI build when testing CMI integration.
 
-## Event System
+The Minecraft server may require a newer JVM than the project compiler. Current PlugDev notes use Java 25 for newer Paper 26.1+ environments.
 
-Syncmoney provides several events that developers can listen to for integrating with other plugins.
+## 2. Repository map
 
-### Available Events
+| Path | Responsibility |
+|---|---|
+| `src/main/java/noietime/syncmoney` | Core plugin |
+| `src/main/resources/config.yml` | Shipped configuration |
+| `src/main/resources/plugin.yml` | Plugin descriptor, commands, permissions |
+| `src/main/resources/syncmoney-web/dist` | Embedded built frontend |
+| `syncmoney-papi-expansion` | Separate PlaceholderAPI JAR |
+| `syncmoney-web` | Vue/Vite frontend |
+| `src/acceptance` | Acceptance probe plugin source |
+| `tools/plugdev` | External real-server test harness |
+| `docs` | Public architecture/API/developer docs and Traditional Chinese companions |
 
-| Event Class | Description |
-|------------|-------------|
-| `AsyncPreTransactionEvent` | Fired before a transaction is processed (cancellable) |
-| `PostTransactionEvent` | Fired after a transaction completes |
-| `ShadowSyncEvent` | Fired when background sync operations occur |
-| `TransactionCircuitBreakEvent` | Fired when circuit breaker triggers |
+Root `build.gradle` owns the release version. The PAPI module inherits it. The frontend package/public metadata and embedded distribution need to stay aligned when web assets are part of a release.
 
-### Listening to Events
+## 3. Start every change from evidence
 
-```java
-import noietime.syncmoney.event.AsyncPreTransactionEvent;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
+Before editing:
 
-public class MyPluginListener implements Listener {
+1. run `git status --short --branch`;
+2. preserve unrelated worktree changes;
+3. read the implementation and callers;
+4. read the relevant default config and tests;
+5. check public documentation for promises that depend on the behavior;
+6. trace reflection users before renaming/removing API seams;
+7. trace lifecycle ownership before moving initialization/shutdown code;
+8. trace scheduler ownership before touching Bukkit/CMI entities.
 
-    @EventHandler
-    public void onPreTransaction(AsyncPreTransactionEvent event) {
-        // Get transaction details
-        String playerName = event.getPlayerName();
-        java.math.BigDecimal amount = event.getAmount();
-        AsyncPreTransactionEvent.TransactionType type = event.getType();
-        
-        // Your custom logic here
-        getLogger().info("Transaction pending: " + playerName + " - " + amount);
-        
-        // Cancel transaction if needed
-        // event.setCancelled(true);
-    }
-}
+Do not print secrets while inspecting runtime configuration.
+
+## 4. Build and test commands
+
+Core, PAPI, shaded JAR, and acceptance JAR:
+
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar
 ```
 
-### Event Class Reference
+Web frontend:
 
-#### AsyncPreTransactionEvent
-
-> **⚠️ v1.1.2 Known Limitation:** `AsyncPreTransactionEvent` is defined but **not yet fired** by `EconomyFacade` in v1.1.2. Calling `event.setCancelled(true)` has **no effect** on actual transactions. This event will be fully wired in a future release. Use `PostTransactionEvent` for reliable transaction monitoring.
-
-```java
-// Fields
-UUID getPlayerUuid();
-String getPlayerName();
-TransactionType getType(); // DEPOSIT, WITHDRAW, SET_BALANCE, TRANSFER
-java.math.BigDecimal getAmount();
-java.math.BigDecimal getCurrentBalance();
-String getSource();
-UUID getTargetUuid();
-String getTargetName();
-String getReason();
-
-// Cancellation (currently no-op — see warning above)
-boolean isCancelled();
-void setCancelled(boolean cancelled);
-void setCancelled(boolean cancelled, String reason);
-String getCancelReason();
+```powershell
+cd syncmoney-web
+pnpm typecheck
+pnpm test:unit --run
+pnpm build
 ```
 
-#### PostTransactionEvent
+Expected artifacts:
 
-```java
-// Fields
-UUID getPlayerUuid();
-String getPlayerName();
-TransactionType getType();
-java.math.BigDecimal getAmount();
-java.math.BigDecimal getBalanceBefore();
-java.math.BigDecimal getBalanceAfter();
-String getSource(); // See EconomyEvent.EventSource values below
-UUID getTargetUuid();
-String getTargetName();
-String getReason();
-boolean isSuccess();
-String getErrorMessage();
+- `build/libs/Syncmoney-<version>.jar`
+- `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
+- `build/acceptance/SyncmoneyAcceptance.jar`
 
-// Utility
-java.math.BigDecimal getBalanceChange(); // Net change (can be negative)
-```
+Use tests appropriate to the change. Documentation-only changes do not require a full server matrix, while scheduler/storage/lifecycle/cross-server/CMI changes do.
 
-**`EconomyEvent.EventSource` values** (passed as `source` string):
+## 5. Economy development rules
 
-| Value | Description |
-|-------|-------------|
-| `VAULT_DEPOSIT` | Triggered via Vault API `depositPlayer()` |
-| `VAULT_WITHDRAW` | Triggered via Vault API `withdrawPlayer()` |
-| `COMMAND_PAY` | Player `/pay` command |
-| `COMMAND_ADMIN` | Admin command (`/syncmoney admin`) |
-| `ADMIN_SET` | Admin set balance |
-| `ADMIN_GIVE` | Admin give currency |
-| `ADMIN_TAKE` | Admin take currency |
-| `PLAYER_TRANSFER` | Direct EconomyFacade transfer |
-| `MIGRATION` | Data migration process |
-| `SHADOW_SYNC` | Background shadow sync |
-| `TEST` | Stress test command |
-| `PLUGIN_DEPOSIT` | Explicitly attributed third-party plugin deposit |
-| `PLUGIN_WITHDRAW` | Explicitly attributed third-party plugin withdrawal |
+### 5.1 Money type
 
-#### ShadowSyncEvent
+Use `BigDecimal` and the existing normalization path. Do not introduce floating-point money calculations.
 
-Called when shadow sync operations are performed.
+Test failure paths, not only success:
 
-**Event Methods:**
+- insufficient funds;
+- concurrent writes;
+- stale versions;
+- queue saturation/backpressure;
+- persistence failure and recovery;
+- shutdown with accepted writes still queued.
 
-| Method | Return Type | Description |
-|--------|-------------|-------------|
-| `getSyncType()` | `SyncType` | The type of sync operation (FULL, INCREMENTAL, MANUAL) |
-| `getStatus()` | `SyncStatus` | The status of the sync (STARTED, IN_PROGRESS, COMPLETED, FAILED) |
-| `getPlayersProcessed()` | `int` | Number of players processed |
-| `getTotalPlayers()` | `int` | Total number of players to sync |
-| `getProgressPercentage()` | `int` | Progress percentage (0-100) |
-| `getServerName()` | `String` | Source/destination server name |
-| `getErrorMessage()` | `String` | Error message if failed, null otherwise |
-| `getDuration()` | `Duration` | Duration of the sync operation |
-| `getAffectedPlayers()` | `Set<UUID>` | Set of affected player UUIDs |
-| `isFinalStatus()` | `boolean` | Whether this is a final status (COMPLETED or FAILED) |
-| `isSuccessful()` | `boolean` | Whether the sync completed successfully |
+### 5.2 Respect the existing transaction boundaries
 
-**Example:**
+Use the established components:
 
-```java
-@EventHandler
-public void onShadowSync(ShadowSyncEvent event) {
-    if (event.getStatus() == SyncStatus.COMPLETED) {
-        plugin.getLogger().info("Sync completed: " +
-            event.getPlayersProcessed() + "/" + event.getTotalPlayers());
-    }
-}
-```
+- `EconomyFacade`
+- `MemoryStateManager`
+- `TransactionWriter`
+- `TransferOrchestrator`
+- economy mode router/strategies
 
-#### TransactionCircuitBreakEvent
+Do not bypass them with direct Redis/SQL mutation for convenience.
 
-Called when the economic circuit breaker triggers or changes state.
+`AsyncPreTransactionEvent` is currently fired and cancellable behavior is honored. `PostTransactionEvent` is emitted after transaction result processing and feeds telemetry. Changes to these semantics need regression coverage.
 
-**Event Methods:**
+### 5.3 Synchronous callers need memory-backed behavior
 
-| Method | Return Type | Description |
-|--------|-------------|-------------|
-| `getPreviousState()` | `CircuitState` | State before the transition |
-| `getCurrentState()` | `CircuitState` | State after the transition |
-| `getReason()` | `TriggerReason` | Why the circuit changed (`SINGLE_TRANSACTION_LIMIT`, `RATE_LIMIT`, `INFLATION_DETECTED`, `SUDDEN_CHANGE`, `MANUAL_LOCK`) |
-| `getMessage()` | `String` | Human-readable description |
-| `getAffectedPlayers()` | `Set<UUID>` | Set of affected player UUIDs |
-| `getThreshold()` | `BigDecimal` | Threshold value that was exceeded |
-| `getActualValue()` | `BigDecimal` | Actual value that triggered the event |
-| `isStateTransition()` | `boolean` | Whether previousState ≠ currentState |
-| `isLocked()` | `boolean` | Whether current state is LOCKED |
-| `isUnlocked()` | `boolean` | Whether transitioning away from LOCKED |
+Vault is synchronous. Placeholder and command/entity paths can also run on latency-sensitive schedulers. Never add blocking Redis, SQL, Mojang, filesystem, or HTTP lookups to these hot paths.
 
-**CircuitState values:** `NORMAL`, `WARNING`, `LOCKED`
+On a cache miss, use the existing asynchronous warm/reconcile approach and return behavior appropriate to the current API.
 
----
+### 5.4 Versions and cross-server state
 
-## REST API
+Preserve monotonic versions. A delayed Pub/Sub message or async callback must not replace a newer balance.
 
-Syncmoney exposes a REST API via the built-in Undertow web server.
+Primary channels:
+
+- `syncmoney:balance:update`
+- `syncmoney:cmi:balance:update`
+
+CMI remote application needs echo suppression so applying a received state does not create an endless publish loop.
+
+## 6. Scheduler rules
+
+Use Paper common scheduler APIs so ownership remains valid on Paper, Folia, and Canvas.
+
+- Pure I/O/data work: async scheduler or an owned executor.
+- Plugin/global operations: global region scheduler.
+- Player/entity state, player messages, CMI mutations: player's entity scheduler.
+- Teleports: `teleportAsync`.
+- Global player iteration: snapshot first, then schedule per-player work on each owner.
+- Async callback touching an entity: re-enter that entity's scheduler.
+- Never block a region while waiting for another region.
+
+`folia-supported: true` is descriptor metadata; it is not a substitute for auditing ownership.
+
+## 7. Lifecycle and optional modules
+
+Each executor, listener, queue, subscription, storage connection, scheduled task, HTTP server, and optional feature needs one owner.
+
+Check feature configuration before allocating expensive resources. Disabled modules should not silently create schemas, directories, executors, subscriptions, or listeners that belong only to that feature.
+
+Store cancellation/close handles and make partial initialization failure clean up what it created.
+
+The current shutdown order intentionally drains accepted economic work before closing economy/audit/storage dependencies. If you change shutdown ownership, document the dependency reason and test the failure/stop path.
+
+## 8. Configuration changes
+
+`SyncmoneyConfig` is a runtime snapshot. `ConfigReloadPolicy` currently allows live reload only under:
+
+- `display`
+- `pay`
+- `permissions`
+- `admin-permissions`
+- `debug`
+
+A new setting that creates a connection, executor, schema, subscription, listener, HTTP service, or authority change should default to restart-required unless the reload lifecycle is explicitly implemented.
+
+For a config change:
+
+1. update `src/main/resources/config.yml`;
+2. update parsing/default/validation code;
+3. decide whether config schema version changes;
+4. update reload policy where justified;
+5. update README/docs and both languages;
+6. add focused validation/reload tests when behavior is non-trivial.
+
+Release version and config schema version are separate.
+
+A blank `server-name` prevents normal operation, so test startup validation when changing identity/network configuration.
+
+## 9. CMI integration
+
+In `cmi` mode, CMI remains the economy authority.
+
+CMI API mutations that touch a player must run on that player's entity scheduler. Redis/network work stays off that scheduler.
+
+When applying cross-server CMI updates:
+
+- compare versions/freshness;
+- suppress outbound echo while applying remote state;
+- re-check player availability/ownership after asynchronous work;
+- keep migration and Shadow Sync separate from live authority.
+
+CMI is licensed and not distributed by this repository. Acceptance depends on a locally supplied plugin.
+
+## 10. Web Admin backend development
+
+The backend is Undertow.
 
 ### Authentication
 
-Most API endpoints require an API key in the Authorization header:
+Normal `/api/*` calls use `Authorization: Bearer <api-key>`. `/health` is unauthenticated. Keep constant-time key comparison and rate limiting intact.
 
-```
-Authorization: Bearer <your-api-key>
-```
+The shipped key is `change-me-in-production`. Validation warns about it, but current auto-disable logic checks only exact `change-me`; do not describe the default as automatically safe.
 
-The `/health` endpoint does not require authentication.
+### Route registration
 
-### Endpoints
+Check both the route-specific handler and the registry. `HttpHandlerRegistry` replaces an existing handler on the same method/path key.
 
-#### Health Check (No Auth Required)
+The current code has duplicate registrations for `GET /api/nodes` and `GET /api/nodes/status`; `NodesApiHandler` registers later and is effective.
 
-```
-GET /health
-```
+### SSE and WebSocket
 
-Response:
-```json
-{"success":true,"data":{"status":"ok","version":"1.1.2"}}
-```
+The frontend live stream is `/api/sse`. One-time tokens come from `POST /api/auth/ws-token`, are valid for 60 seconds, and are consumed on validation.
 
-#### System API
+`/ws` is currently incomplete. Upgrade-shaped requests only require a non-empty query token and the manager does not call `WsTokenHandler.validateToken`; message transport is also incomplete. Do not write new client code that depends on `/ws` until the implementation is completed and tested.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/system/status` | Plugin status, uptime, player counts, database status |
-| GET | `/api/system/redis` | Redis connection status |
-| GET | `/api/system/breaker` | Circuit breaker state |
-| GET | `/api/system/metrics` | Memory usage, thread count, TPS |
+### API changes
 
-#### Economy API
+When changing an endpoint:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/economy/stats` | Total supply, player counts, today's transactions, currency name |
-| GET | `/api/economy/player/{uuid}/balance` | Get a specific player's balance by UUID |
-| GET | `/api/economy/top` | Top 10 players by balance |
+1. update handler validation and response model;
+2. preserve shared error conventions;
+3. ensure blocking work is dispatched off Undertow I/O threads;
+4. verify authentication, CORS, rate limits, proxy trust, and node-to-node auth;
+5. update `docs/API_REFERENCE.md` and `docs/API_REFERENCE.zh_tw.md`;
+6. update frontend API client/types/tests;
+7. rebuild the embedded frontend if frontend source changed.
 
-#### Audit API
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/audit/player/{playerName}` | Get audit records for a player (paginated) |
-| GET | `/api/audit/search` | Search audit records with filters |
-| GET | `/api/audit/stats` | Audit module buffer size and enabled status |
+## 11. Web frontend development
 
-Query parameters for search: `player`, `type`, `startTime`, `endTime`, `page`, `pageSize`
+The Web Admin frontend lives in `syncmoney-web` and uses Vue 3, Vite, Pinia, `vue-i18n`, and PWA tooling.
 
-#### Nodes API (Central Mode)
+Use the existing API client and stores so authentication, deduplication, and shared response handling stay consistent. Keep the implemented live path on `/api/sse`; do not make the UI depend on `/ws` until the backend transport and token validation are completed and tested.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/nodes` | List all configured nodes |
-| POST | `/api/nodes` | Create a new node |
-| PUT | `/api/nodes/{index}` | Update a node |
-| DELETE | `/api/nodes/{index}` | Delete a node |
-| POST | `/api/nodes/{index}/ping` | Manually ping a node |
-| GET | `/api/nodes/status` | Get detailed status of all nodes |
-| POST | `/api/nodes/{index}/proxy` | Proxy HTTP request to remote node |
-| POST | `/api/nodes/sync` | Push config to all nodes (Central Mode) |
-| POST | `/api/nodes/{index}/sync` | Push config to single node (Central Mode) |
-| POST | `/api/config/sync` | Receive config from central (Node-side) |
+Validate frontend changes with:
 
-#### Cross-Server Statistics API (Central Mode)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/economy/cross-server-stats` | Aggregated stats from all nodes |
-| GET | `/api/economy/cross-server-top` | Aggregated leaderboard across nodes |
-
-#### Config API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/config` | Get current configuration (passwords hidden) |
-| POST | `/api/config/reload` | Reload configuration from disk |
-
-#### Settings API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/settings` | Get theme and language preferences |
-| POST | `/api/settings/theme` | Update theme (`dark` or `light`) |
-| POST | `/api/settings/language` | Update language (`zh-TW` or `en-US`) |
-
-### Response Format
-
-All responses include a `meta` field:
-
-```json
-{
-  "success": true,
-  "data": { ... },
-  "meta": { "timestamp": 1709337000000, "version": "1.1.2" }
-}
-```
-
-For complete request/response examples, see [API_REFERENCE.md](API_REFERENCE.md).
-
----
-
-## Configuration
-
-### Main Configuration (config.yml)
-
-```yaml
-# ==========================================
-# 1. Core and Basic Settings
-# ==========================================
-server-name: ""              # Multi-server identification
-queue-capacity: 50000        # Event queue capacity
-pubsub-enabled: true         # Enable pub/sub
-db-enabled: true            # Enable database
-debug: false                # Debug mode
-
-# ==========================================
-# 2. Database and Redis
-# ==========================================
-redis:
-  enabled: true
-  host: "localhost"
-  port: 6379
-  password: ""
-  database: 0
-  pool-size: 30
-
-database:
-  enabled: true
-  type: "mysql"             # MySQL, PostgreSQL
-  host: "localhost"
-  port: 3306
-  username: "root"
-  password: ""
-  database: "syncmoney"
-
-# ==========================================
-# 3. Economy and Transaction Settings
-# ==========================================
-economy:
-  mode: "auto"              # auto, local, local_redis, sync, cmi
-  sync:
-    vault-intercept: true
-  cmi:
-    balance-mode: "internal"
-    debounce-ticks: 5
-
-display:
-  currency-name: "$"
-  decimal-places: 2
-
-pay:
-  cooldown-seconds: 30
-  min-amount: 1
-  max-amount: 1000000
-  confirm-threshold: 100000
-
-baltop:
-  enabled: true
-  cache-seconds: 30
-  format: "smart"
-
-# ==========================================
-# 4. Security and Protection
-# ==========================================
-circuit-breaker:
-  enabled: true
-  max-single-transaction: 100000000
-  max-transactions-per-second: 10
-  rapid-inflation-threshold: 0.2
-  sudden-change-threshold: 100
-  redis-disconnect-lock-seconds: 5
-  memory-warning-threshold: 80
-
-player-protection:
-  enabled: true
-  rate-limit:
-    max-transactions-per-second: 5
-    max-transactions-per-minute: 50
-    max-amount-per-minute: 1000000
-
-# Discord Webhook
-discord-webhook:
-  enabled: false
-  webhooks:
-    - name: "admin-alerts"
-      url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
-      type: "private"
-      events:
-        - "player_warning"
-        - "player_locked"
-        - "player_unlocked"
-        - "global_lock"
-
-# Audit log system
-audit:
-  enabled: true
-  batch-size: 1
-  retention-days: 90
-
-# ==========================================
-# 8. Web Admin Dashboard
-# ==========================================
-web-admin:
-  enabled: false
-  central-mode: false
-  nodes: []
-  bundled-version: "1.1.2"
-  server:
-    host: "localhost"
-    port: 8080
-  web:
-    path: "syncmoney-web"
-    auto-update: false
-    github-repo: "Misty4119/Syncmoney"
-  security:
-    api-key: "change-me-in-production"
-    rate-limit:
-      enabled: true
-      requests-per-minute: 60
-  ui:
-    theme: "dark"
-    language: "zh-TW"
-```
-
-### Messages Configuration (messages.yml)
-
-All player-facing messages are configurable via `messages.yml`. Use MiniMessage format:
-
-```yaml
-# Example: Customizing payment success message
-pay:
-  success-sender: '<prefix>You sent {amount} to {player}'
-```
-
----
-
-## Vault API Integration
-
-Syncmoney registers as a Vault Economy provider. Other plugins can use:
-
-```java
-// Get economy service
-Economy economy = VaultAPI.getEconomy();
-
-// Check balance
-if (economy.hasAccount(player)) {
-    double balance = economy.getBalance(player);
-}
-
-// Deposit money
-economy.depositPlayer(player, amount);
-
-// Withdraw money
-economy.withdrawPlayer(player, amount);
-```
-
-#### Plugin API (Recommended for Third-Party Plugins)
-
-For third-party plugins that need attributed operations or a player-to-player transfer, use the `SyncmoneyVaultProvider` extended API directly. Standard Vault calls are always independent operations; Syncmoney never infers a transfer from matching amount and timing.
-
-```java
-import net.milkbowl.vault.economy.Economy;
-import noietime.syncmoney.vault.SyncmoneyVaultProvider;
-import org.bukkit.plugin.RegisteredServiceProvider;
-
-// Get economy service
-Economy economy = VaultAPI.getEconomy();
-if (!(economy instanceof SyncmoneyVaultProvider)) {
-    // Not Syncmoney
-    return;
-}
-SyncmoneyVaultProvider syncmoney = (SyncmoneyVaultProvider) economy;
-
-// Attributed deposit for a plugin
-EconomyResponse resp = syncmoney.depositPlayerForPlugin(player, amount, "MyPlugin");
-
-// Attributed withdrawal for a plugin
-EconomyResponse resp = syncmoney.withdrawPlayerForPlugin(player, amount, "MyPlugin");
-
-// Atomic transfer between players (plugin-level attribution)
-EconomyResponse resp = syncmoney.pluginTransfer(fromPlayer, toPlayer, amount, "MyPlugin");
-```
-
-**When to use Plugin API vs Standard Vault API:**
-
-| Scenario | Recommended API | Reason |
-|----------|-----------------|--------|
-| Chest shop buy/sell | `depositPlayerForPlugin` / `withdrawPlayerForPlugin` | Explicit plugin attribution |
-| Auction house transfers | `pluginTransfer` | Atomic operation with explicit participants |
-| Standard economy operations | Standard Vault API | Full compatibility |
-
-### Vault Permissions
-
-#### Player Permissions
-
-| Permission | Default | Description |
-|------------|---------|-------------|
-| `syncmoney.money` | `true` (all) | View own balance |
-| `syncmoney.money.others` | `op` | View other players' balance |
-| `syncmoney.pay` | `true` (all) | Transfer money to others |
-| `syncmoney.baltop` | `true` (all) | View wealth rankings |
-
-#### Admin Permissions (Basic)
-
-| Permission | Default | Description |
-|------------|---------|-------------|
-| `syncmoney.admin` | `op` | General admin commands (top-level) |
-| `syncmoney.admin.set` | `op` | Set player balance |
-| `syncmoney.admin.give` | `op` | Give money to players |
-| `syncmoney.admin.take` | `op` | Take money from players |
-| `syncmoney.admin.audit` | `op` | View audit logs |
-| `syncmoney.admin.monitor` | `op` | View system monitoring |
-| `syncmoney.admin.econstats` | `op` | View economic statistics |
-| `syncmoney.admin.reload` | `op` | Reload configuration |
-| `syncmoney.admin.test` | `op` | Execute stress test commands |
-
-#### Admin Tier Permissions (Daily Limits)
-
-| Permission | Default | Description | Daily Give Limit | Daily Take Limit |
-|------------|---------|-------------|-----------------|-----------------|
-| `syncmoney.admin.observe` | `false` | Read-only observer (no economic operations) | 0 | 0 |
-| `syncmoney.admin.reward` | `false` | Reward manager | 100,000 | 0 |
-| `syncmoney.admin.general` | `false` | General admin | 1,000,000 | 1,000,000 |
-| `syncmoney.admin.full` | `op` | Full admin (unlimited) | Unlimited | Unlimited |
-
-> **Note:** The four tier permissions (`observe`, `reward`, `general`, `full`) control daily transaction limits for `give` and `take` operations. The `syncmoney.admin` node is a top-level convenience node (equivalent to `op` by default).
-
----
-
-## PlaceholderAPI Expansion
-
-Syncmoney provides the following placeholders:
-
-### Player Placeholders
-
-| Placeholder | Description |
-|-------------|-------------|
-| `%syncmoney_balance%` | Player's balance (raw number) |
-| `%syncmoney_balance_formatted%` | Player's balance (smart formatting) |
-| `%syncmoney_balance_abbreviated%` | Player's balance (abbreviated, e.g., 1.5K) |
-| `%syncmoney_rank%` | Player's wealth rank |
-| `%syncmoney_my_rank%` | Player's wealth rank (alias) |
-| `%syncmoney_balance_<player>%` | Get specified player's balance |
-
-### Server Placeholders
-
-| Placeholder | Description |
-|-------------|-------------|
-| `%syncmoney_total_supply%` | Total money in economy |
-| `%syncmoney_total_players%` | Total players in leaderboard |
-| `%syncmoney_online_players%` | Currently online players |
-| `%syncmoney_version%` | Plugin version |
-| `%syncmoney_top_<n>%` | Balance of player at rank n |
-
-### Example Usage
-
-```
-# Player's balance
-%syncmoney_balance%
-
-# Player's rank
-%syncmoney_rank%
-
-# Server total supply
-%syncmoney_total_supply%
-
-# Top 5 player
-%syncmoney_top_5%
-
-# Check player's balance
-%syncmoney_balance_Steve%
-```
-
----
-
-## WebSocket API
-
-**Note:** Full WebSocket support is not currently implemented. The documentation below describes the planned API.
-
-For real-time updates, please use the SSE (Server-Sent Events) API instead.
-
-### SSE API
-
-Server-Sent Events provide one-way server-push notifications.
-
-### Connection
-
-```
-GET http://<host>:<port>/sse
-```
-
-Authentication via API key query parameter or Authorization header.
-
-### Example
-
-```javascript
-const eventSource = new EventSource('http://localhost:8080/sse?apiKey=your-key');
-
-eventSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    console.log('SSE event:', data);
-};
-
-eventSource.onerror = (error) => {
-    console.error('SSE error:', error);
-    // Note: The built-in frontend uses Exponential Backoff with Jitter for reconnections
-    // to prevent thundering herd upon server restarts.
-};
-```
-
-### SSE Event Types
-
-| `type` value | Triggered by | Key `data` fields |
-|---|---|---|
-| `connected` | Client connects | `message` |
-| `transaction` | `PostTransactionEvent` fires | `playerName`, `type`, `amount`, `balanceBefore`, `balanceAfter`, `success`, `timestamp` (epoch ms) |
-| `circuit_break` | `TransactionCircuitBreakEvent` fires | `previousState`, `currentState`, `reason`, `message` |
-| `system_alert` | Manual broadcast / internal alerts | `level`, `message` |
-
-**Transaction event example:**
-```json
-{
-  "type": "transaction",
-  "event": "PostTransactionEvent",
-  "data": {
-    "playerName": "Steve",
-    "type": "DEPOSIT",
-    "amount": "1000",
-    "balanceBefore": "5000",
-    "balanceAfter": "6000",
-    "success": true,
-    "timestamp": 1709337000000
-  }
-}
-```
-
----
-
-## Commands
-
-### Player Commands
-
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/money [player]` | Check own or other player's balance | `syncmoney.money` |
-| `/pay <player> <amount>` | Transfer money to another player | `syncmoney.pay` |
-| `/baltop [page\|me]` | Wealth ranking (`me` shows your own rank) | `syncmoney.money` |
-
-### Admin Commands
-
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/syncmoney admin set <player> <amount>` | Set player's balance | `syncmoney.admin` + `canExecute(set)` |
-| `/syncmoney admin give <player> <amount>` | Give money to player | `syncmoney.admin` + `canExecute(give)` |
-| `/syncmoney admin take <player> <amount>` | Take money from player | `syncmoney.admin` + `canExecute(take)` |
-| `/syncmoney admin reset <player>` | Reset player's balance to zero | `syncmoney.admin` + `canExecute(set)` |
-| `/syncmoney admin view <player>` | View player's balance | `syncmoney.money.others` |
-| `/syncmoney admin confirm` | Confirm large admin operation | `syncmoney.admin` |
-| `/syncmoney breaker status` | View circuit breaker status | `syncmoney.admin` |
-| `/syncmoney breaker reset` | Reset circuit breaker | `syncmoney.admin` |
-| `/syncmoney breaker info` | View circuit breaker detailed info | `syncmoney.admin` |
-| `/syncmoney breaker resources` | View resource status | `syncmoney.admin` |
-| `/syncmoney breaker player <player>` | View player's protection status | `syncmoney.admin` |
-| `/syncmoney breaker unlock <player>` | Manually unlock a player | `syncmoney.admin` |
-| `/syncmoney audit <player> [page]` | View player's audit log | `syncmoney.admin.audit` |
-| `/syncmoney audit search [--player <name>] [--type <type>] [--start <time>] [--end <time>] [--limit <n>]` | Advanced audit search | `syncmoney.admin.audit` |
-| `/syncmoney audit stats` | View audit statistics | `syncmoney.admin.audit` |
-| `/syncmoney audit cleanup` | Clean up old audit logs | `syncmoney.admin.full` |
-| `/syncmoney monitor [overview]` | System overview | `syncmoney.admin` |
-| `/syncmoney monitor redis` | Redis detailed status | `syncmoney.admin` |
-| `/syncmoney monitor cache` | Cache status | `syncmoney.admin` |
-| `/syncmoney monitor db` | Database status | `syncmoney.admin` |
-| `/syncmoney monitor memory` | Memory status | `syncmoney.admin` |
-| `/syncmoney monitor messages` | Message cache status | `syncmoney.admin` |
-| `/syncmoney econstats [overview]` | Economy statistics overview | `syncmoney.admin.econstats` |
-| `/syncmoney econstats supply` | Currency supply statistics | `syncmoney.admin.econstats` |
-| `/syncmoney econstats players` | Player statistics | `syncmoney.admin.econstats` |
-| `/syncmoney econstats transactions` | Transaction statistics | `syncmoney.admin.econstats` |
-| `/syncmoney reload [all]` | Reload configuration | `syncmoney.admin.reload` |
-| `/syncmoney reload config` | Reload config.yml | `syncmoney.admin.reload` |
-| `/syncmoney reload messages` | Reload messages.yml | `syncmoney.admin.reload` |
-| `/syncmoney reload permissions` | Reload permissions | `syncmoney.admin.reload` |
-| `/syncmoney web download [latest]` | Download web frontend | `syncmoney.admin` |
-| `/syncmoney web build` | Build web frontend (requires Node.js + pnpm) | `syncmoney.admin` |
-| `/syncmoney web reload` | Reload web server | `syncmoney.admin` |
-| `/syncmoney web open` | Open web admin in browser | `syncmoney.admin` |
-| `/syncmoney web status` | View web frontend status | `syncmoney.admin` |
-| `/syncmoney web check` | Check for updates | `syncmoney.admin` |
-| `/syncmoney web version` | Alias for `web check` | `syncmoney.admin` |
-| `/syncmoney migrate cmi [-force] [-no-backup] [-preview]` | Migrate CMI economy data | `syncmoney.admin` |
-| `/syncmoney migrate local-to-sync [-force] [-no-backup]` | Migrate LOCAL mode to SYNC | `syncmoney.admin` |
-| `/syncmoney migrate status` | View migration status | `syncmoney.admin` |
-| `/syncmoney migrate stop` | Stop running migration | `syncmoney.admin` |
-| `/syncmoney migrate resume` | Resume interrupted migration | `syncmoney.admin` |
-| `/syncmoney migrate clear` | Clear migration checkpoint | `syncmoney.admin` |
-| `/syncmoney shadow status` | View shadow sync status | `syncmoney.admin` |
-| `/syncmoney shadow now` | Trigger immediate sync | `syncmoney.admin` |
-| `/syncmoney shadow logs` | View recent sync logs | `syncmoney.admin` |
-| `/syncmoney shadow history <player> [page]` | View player's sync history | `syncmoney.admin` |
-| `/syncmoney shadow export <player> [startDate] [endDate]` | Export sync records to JSONL | `syncmoney.admin` |
-| `/syncmoney debug player <player>` | Diagnose player's balance across all layers | `syncmoney.admin` |
-| `/syncmoney debug system` | Diagnose system state | `syncmoney.admin` |
-| `/syncmoney sync-balance <player>` | Force sync player's balance to Redis/DB | `syncmoney.admin` |
-| `/syncmoney test concurrent-pay <threads> <iterations>` | Stress test (requires non-LOCAL mode) | `syncmoney.admin.test` |
-| `/syncmoney test total-supply` | Verify total supply consistency | `syncmoney.admin.test` |
-
----
-
-## Building from Source
-
-### Prerequisites
-
-- Java 21+
-- Gradle (wrapper included)
-- Node.js 20+ & pnpm (for web frontend)
-
-### Build Commands
-
-```bash
-# Clone
-git clone https://github.com/Misty4119/Syncmoney.git
-cd Syncmoney
-
-# Build plugin JAR (includes shadow relocation)
-./gradlew shadowJar
-# Output: build/libs/Syncmoney-1.1.2.jar
-
-# Build PAPI expansion
-cd syncmoney-papi-expansion && ../gradlew jar
-# Output: build/libs/SyncmoneyExpansion-1.1.2.jar
-
-# Build web frontend
+```powershell
 cd syncmoney-web
-npm install
-npm run build
-# Output: syncmoney-web/dist/
-
-# Run tests
-./gradlew test              # Java unit tests
-cd syncmoney-web && npm run test:unit   # Frontend unit tests
-cd syncmoney-web && npm run test:e2e    # Frontend E2E tests
+pnpm typecheck
+pnpm test:unit --run
+pnpm build
 ```
 
-### Shadow JAR Relocation
+The production build is embedded under `src/main/resources/syncmoney-web/dist`. If frontend source or public release metadata changes, rebuild the bundle and verify the packaged JAR contains the current output. Keep the frontend package version aligned with the root release when web assets ship as part of that release.
 
-All runtime dependencies are relocated to `noietime.libs.*` in `build.gradle` to prevent classpath conflicts with other Minecraft plugins. When adding new runtime dependencies, you **must** add a corresponding `relocate()` rule.
+## 12. PlaceholderAPI expansion development
 
----
+`syncmoney-papi-expansion` is a separate artifact. It identifies as `syncmoney`, persists across PlaceholderAPI reloads, and lazily reaches the core plugin through reflection. Treat that reflection boundary as a compatibility seam: trace both the expansion and the reflected core methods before renaming or removing APIs.
 
-## Coding Standards
+Placeholder resolution must remain non-blocking. Expensive or global values are refreshed asynchronously and cached. The current cache expires entries after about five seconds and bounds cached/pending work at roughly 10,000 entries.
 
-### Commenting Standard
-To maintain a high-quality, professional, and globally accessible codebase, Syncmoney strictly enforces the following commenting rules:
-- **Block Comments (`/** */`)**: All classes, interfaces, and significant methods must have a block comment starting with a unique tag:
-  - Backend Layer: `[SYNC-<CATEGORY>-<NUM>]` (e.g., `[SYNC-CMD-001]`, `[SYNC-CONFIG-005]`)
-  - Web Frontend Layer: `[SYNC-WEB-<NUM>]`
-  - PAPI Expansion: `[SYNC-PAPI-<NUM>]`
-- **Inline Comments (`//`)**: The use of inline comments is strongly discouraged. Code should be self-documenting. Use inline comments only for explaining highly complex algorithms, race-condition preventions, or non-obvious mathematical formulas.
-- **Language**: All comments, variable names, and documentation must be in **English**. Chinese or other non-English comments are strictly forbidden in the codebase (except for translation locale files like `zh-TW.json`).
-- **Tone**: Comments must be concise, accurate, and rigorous. Avoid redundant statements that simply repeat what the code does.
+Supported families include balance variants, rank/my-rank, total supply/players, version, online players, `top_<n>`, and target-player balance variants. When changing placeholder behavior, update the expansion tests and public documentation together.
 
----
+## 13. REST response and error conventions
 
-## Known Limitations
+Most successful JSON responses use `success`, `data`, and `meta` fields; `meta` contains a timestamp and plugin version. Errors normally use `success: false`, an `error` object with code/message, and the same metadata. Cursor-paginated responses are a known exception and omit the normal `meta` envelope.
 
-| Limitation | Status | Workaround |
-|------------|--------|------------|
-| `AsyncPreTransactionEvent` not fired | v1.1.2 | Event defined but not yet wired in `EconomyFacade`. Use `PostTransactionEvent` instead. |
-| WebSocket not fully implemented | v1.1.2 | `/ws` accepts connections but dispatch is incomplete. Use SSE (`/sse`) for production. |
-| `event.setCancelled(true)` no-op | v1.1.2 | Pre-transaction cancellation has no effect. Will be wired in future release. |
+`HttpHandlerRegistry` maps `IllegalArgumentException` and `IllegalStateException` to HTTP 400, `SecurityException` to 403, `NoSuchElementException` to 404, `UnsupportedOperationException` to 405, and unexpected failures to 500. Unknown routes return `404 NOT_FOUND`.
 
----
+Reuse the existing `ApiResponse` helpers and shared exception path so frontend and external clients can handle errors consistently.
 
-## Support
+## 14. Storage and schema changes
 
-- GitHub Issues: Report bugs and feature requests
-- Discord: Join our community for support
+The shared `players` table uses UUID as the primary key and stores player name, `DECIMAL(20,2)` balance, monotonic version, last server, and update time. Redis contains balance/version, online-player, baltop, audit, and bank-related state.
+
+For schema or persistence changes:
+
+1. preserve money precision and version ordering;
+2. make migrations safe for existing installations;
+3. keep local, shared, audit, Shadow, and migration workflows distinct;
+4. update schema-version metadata only when the corresponding schema contract changes;
+5. test failure and recovery paths, not only the successful write;
+6. document any operator action needed for upgrade or rollback.
+
+Do not use direct storage mutation to bypass `EconomyFacade`, `MemoryStateManager`, `TransactionWriter`, `TransferOrchestrator`, or the mode router.
+
+## 15. Commands and permissions
+
+Top-level commands are `/money`, `/pay`, `/baltop`, and `/syncmoney`.
+
+`/syncmoney` provides administrative and diagnostic subcommands including migration, audit, admin, web, monitoring, debug, balance sync, test, reload, version, and optional breaker, Shadow, and economy-stat functions according to current registration and enabled features.
+
+Permission behavior comes from both `plugin.yml` and command-router/subcommand checks. Important nodes include `syncmoney.money`, `syncmoney.money.others`, `syncmoney.pay`, `syncmoney.admin`, and specialized `syncmoney.admin.*` permissions.
+
+When adding or changing a command, verify permission denial, console/player restrictions, scheduler ownership for player actions, tab-completion cost, user-facing messages, and both language/config defaults.
+
+## 16. Events and third-party integration
+
+`AsyncPreTransactionEvent` is fired by `TransactionWriter` for the applicable transaction path and cancellation is honored. `PostTransactionEvent` is emitted after transaction result processing and feeds telemetry including live Web Admin updates.
+
+`SyncmoneyEventBus` is an internal event bus, not Bukkit's event bus. Read its dispatcher before assuming Bukkit main-thread semantics.
+
+For Vault, CMI, PlaceholderAPI, or other optional integrations:
+
+- keep hard/soft dependency declarations accurate;
+- avoid loading optional APIs when the dependency is absent;
+- preserve entity-thread ownership for CMI/player mutations;
+- keep reflection contracts compatible where reflection is intentionally used;
+- document what is actually tested rather than implying broader compatibility.
+
+## 17. Real-server acceptance
+
+Use `tools/plugdev/README.md` for real-server acceptance. PlugDev is development tooling and is not a production dependency.
+
+Scheduler, lifecycle, storage, CMI, and cross-server synchronization changes require more than compilation. Record separately the exact Minecraft/Paper/Folia/Canvas version, runtime Java version, Syncmoney artifact/version, optional dependency versions actually present, player-side behavior, startup/shutdown logs, cross-server propagation where applicable, and scenarios that could not be tested.
+
+The Gradle toolchain is Java 21. Runtime Java follows the selected server; current PlugDev guidance notes Java 25 for newer Paper 26.1+ environments.
+
+## 18. Documentation, security, and release hygiene
+
+Canonical operational/community documents are English at repository root. Traditional Chinese companions live in `docs/` and use `.zh_tw.md`. Keep both languages semantically aligned when behavior changes.
+
+Do not publish credentials, runtime API keys, database secrets, RCON secrets, private server data, worlds, logs, or generated local test state. Public examples must use placeholders.
+
+Report security issues privately to `security@noie.fun`. Do not promise a response or remediation SLA unless the project explicitly adopts one.
+
+Before a release:
+
+1. verify root `build.gradle` version and frontend package/public metadata;
+2. rebuild the embedded frontend when web assets changed;
+3. build the core, PAPI expansion, and acceptance artifacts;
+4. verify JAR contents and runtime descriptors;
+5. update changelog and both documentation languages;
+6. run `git diff --check`, inspect `git status --short`, and review the final diff for secrets, stale versions, stale endpoints, and unrelated changes.
+
+Expected artifacts are `build/libs/Syncmoney-<version>.jar`, `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`, and `build/acceptance/SyncmoneyAcceptance.jar`.

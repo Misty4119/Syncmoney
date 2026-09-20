@@ -1,456 +1,283 @@
-# Syncmoney 架構概覽
+# Syncmoney 架構
 
-> **目標受眾**：為 Syncmoney 貢獻或擴展的開發者
-> **版本**：1.3.1
-> **最後更新**：2026-09-06
+> 專案版本：`1.3.1`
+> Config schema：`12`
+> Build toolchain：Java 21
 
----
+英文版：[`ARCHITECTURE.md`](ARCHITECTURE.md)
 
-## 目錄
+## 1. 系統邊界
 
-1. [系統架構](#系統架構)
-2. [模組結構](#模組結構)
-3. [資料流程](#資料流程)
-4. [執行緒模型](#執行緒模型)
-5. [儲存架構](#儲存架構)
-6. [網頁後端架構](#網頁後端架構)
-7. [前端架構](#前端架構)
+Syncmoney 是 Vault-compatible Minecraft economy，對 Vault 提供同步 API，並以非同步方式處理 persistence 與 synchronization。
 
----
+本儲存庫有三個 runtime deliverable：core plugin `src/main/java/noietime/syncmoney`、獨立 PlaceholderAPI expansion `syncmoney-papi-expansion`，以及 Vue/Vite Web Admin frontend `syncmoney-web`；frontend build 會嵌入 `src/main/resources/syncmoney-web/dist`。
 
-## 系統架構
+`tools/plugdev` 是外部 acceptance tooling，不是 production dependency。
 
-Syncmoney 遵循 **事件驅動、樂觀更新** 的架構，靈感來自 LMAX Disruptor 模式。核心設計原則是**永遠不在主伺服器執行緒上阻塞 Redis/DB 操作**。
+它不是通用 permission/command replication system。CMI mode 下 CMI 保持 economy authority；migration 與 Shadow Sync 也不是隱式 authority switch。
 
-### 高層架構
+## 2. 架構優先順序
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Minecraft 伺服器                          │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Vault API 層                                        │   │
-│  │  ┌──────────────────────────────────────────────┐    │   │
-│  │  │  SyncmoneyVaultProvider (1276 行)            │    │   │
-│  │  │  - 實作 net.milkbowl.vault.Economy           │    │   │
-│  │  │  - 透過 NameResolver 解析名稱 → UUID         │    │   │
-│  │  │  - 銀行帳戶支援（Redis 備份）                │    │   │
-│  │  └─────────────────────┬────────────────────────┘    │   │
-│  └────────────────────────┼──────────────────────────────┘   │
-│                           ▼                                   │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  經濟核心                                            │  │
-│  │  ┌────────────────┐  ┌──────────────────────────────┐ │  │
-│  │  │ EconomyMode    │  │ EconomyModeRouter (216 行)   │ │  │
-│  │  │ Router         │──│ LOCAL → LocalEconomyHandler   │ │  │
-│  │  │                │  │ SYNC  → EconomyFacade        │ │  │
-│  │  │                │  │ CMI   → CMIEconomyHandler    │ │  │
-│  │  │                │  │ LOCAL_REDIS → EconomyFacade  │ │  │
-│  │  └────────────────┘  └──────────────┬───────────────┘ │  │
-│  │                                      │                  │  │
-│  │  ┌──────────────────────────────────▼───────────────┐ │  │
-│  │  │ EconomyFacade (1064 行)                          │ │  │
-│  │  │ - ConcurrentHashMap<UUID, EconomyState>         │ │  │
-│  │  │ - 樂觀鎖定（基於版本）                           │ │  │
-│  │  │ - 記憶體優先讀取/寫入                           │ │  │
-│  │  │ - 事件佇列（BlockingQueue，容量=50000）         │ │  │
-│  │  └──────────────────────────────────┬───────────────┘ │  │
-│  └─────────────────────────────────────┼─────────────────┘  │
-│                                        │ 非同步事件         │
-│  ┌─────────────────────────────────────▼─────────────────┐  │
-│  │  非同步持久化層                                       │  │
-│  │  ┌────────────────┐  ┌────────────────────────────┐   │  │
-│  │  │ EconomyEvent   │  │ CrossServerSyncManager      │   │  │
-│  │  │ Consumer       │  │ - Redis Pub/Sub 發布        │   │  │
-│  │  │（單一執行緒）   │  │ - 通知其他伺服器           │   │  │
-│  │  └───────┬────────┘  └────────────────────────────┘   │  │
-│  │          │                                            │  │
-│  │  ┌───────▼────────┐  ┌────────────────────────────┐   │  │
-│  │  │ Redis (Jedis)  │  │ 資料庫 (HikariCP)           │   │  │
-│  │  │ - 餘額快取     │  │ - MySQL/PostgreSQL/SQLite  │   │  │
-│  │  │ - Pub/Sub      │  │ - DbWriteQueue + Consumer  │   │  │
-│  │  │ - Lua 腳本     │  │ - 批次寫入                  │   │  │
-│  │  │ - ZSET 排行榜  │  │ - 審計日誌持久化            │   │  │
-│  │  └────────────────┘  └────────────────────────────┘   │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                               │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  網頁管理後端 (Undertow)                               │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐│  │
-│  │  │ REST API │  │ SSE      │  │ 靜態檔案伺服器        ││  │
-│  │  │ Handlers │  │ Manager  │  │ (Vue 3 SPA)          ││  │
-│  │  └──────────┘  └──────────┘  └──────────────────────┘│  │
-│  └────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+目前實作由五個核心限制塑造：
+
+1. **Vault call 是同步的。** Vault balance read 通常必須直接由 memory 完成；Redis、SQL 或其他 network I/O 不得插入 hot server/entity path。
+2. **資金不能遺失或重複。** 已接受的 mutation 有明確的 async persistence path 與 shutdown drain semantics。
+3. **分散式 state 有版本。** Balance update 攜帶 monotonic version；較舊的 remote work 不得覆蓋較新的 local state。
+4. **Folia ownership 必須正確。** Player/entity work 要在 owning entity scheduler 執行；純 I/O 才能直接放到 async path。
+5. **Optional module 有明確 owner。** Disabled feature 不應啟動只屬於該功能的 executor、schema、listener、subscription 或 HTTP service。
+
+## 3. 主要 Runtime Layer
+
+```text
+Vault / commands / PAPI / Web Admin
+              |
+              v
+      Economy mode routing
+              |
+     +--------+---------+
+     |                  |
+     v                  v
+Syncmoney economy      CMI authority
+     |
+     v
+MemoryStateManager
+     |
+     v
+TransactionWriter / TransferOrchestrator
+     |
+     +----------+-------------+----------------+
+     |          |             |                |
+     v          v             v                v
+ accepted   Redis/Lua     SQL/local        Pub/Sub /
+ events     operations    persistence      audit/events
 ```
 
----
-
-## 模組結構
-
-Java 程式碼庫（`noietime.syncmoney`）組織成 **27 個套件**，包含 **167 個 Java 類別**（約 36,480 行）：
-
-### 核心層（插件入口）
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `(root)` | 2 | `Syncmoney.java`（876 行）、`PluginContext.java`（356 行） |
-| `config` | 19 | `SyncmoneyConfig`（Facade）、18 個子設定類、4 個管理類 |
-| `initialization` | 2 | `PluginInitializationManager`、`Initializable` |
-
-**設定類架構**：
-```
-SyncmoneyConfig (Facade)
-├── RedisConfig
-├── DatabaseConfig
-├── MigrationConfig
-├── ShadowSyncConfig
-├── CircuitBreakerConfig
-├── PlayerProtectionConfig
-├── DiscordWebhookConfig
-├── AuditConfig
-├── CMIConfig
-├── BaltopConfig
-├── AdminPermissionConfig
-├── PayConfig
-├── DisplayConfig
-├── TransferGuardConfig
-├── VaultConfig
-├── LocalConfig
-├── CrossServerConfig
-└── WebAdminConfig
-```
-
-### 經濟層
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `economy` | 15 | 核心經濟操作、模式路由、事件處理 |
-| `vault` | 6 | VaultProviderCore、VaultPlayerHandler、VaultTransferHandler、VaultBankHandler、VaultLuaScriptManager、VaultPluginDetector |
-
-### 儲存層
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `storage` | 5 | Redis、快取、儲存協調、轉帳鎖 |
-| `storage.db` | 3 | 資料庫管理、寫入佇列、批次寫入器 |
-
-### 同步與事件
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `sync` | 5 | 跨伺服器同步、Pub/Sub、防抖 |
-| `event` | 7 | Bukkit 事件、內部事件匯流排（`SyncmoneyEventBus`） |
-
-### 安全
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `breaker` | 9 | 斷路器、玩家守衛、Discord Webhook、資源監控 |
-| `guard` | 1 | `PlayerTransferGuard` — 伺服器傳送保護 |
-| `permission` | 2 | 權限管理、管理員分級服務 |
-
-### 審計與影子同步
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `audit` | 10 | 審計日誌記錄、清理、匯出、Lua 腳本、混合管理器 |
-| `shadow` | 6 | 背景同步、CMI 寫入器、回滾保護 |
-| `shadow.storage` | 6 | 多資料庫影子儲存實作 |
-
-### 指令
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `command` | 19 | 所有指令、冷卻、付款確認/執行 |
-| `baltop` | 3 | 排行榜指令、管理器、資料模型 |
-
-### 網頁管理
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `web` | 3 | 服務管理、模組設定、網頁管理設定 |
-| `web.server` | 2 | Undertow 伺服器（`WebAdminServer` 682 行）、路由註冊 |
-| `web.security` | 4 | 認證過濾器、速率限制器、權限檢查器、節點 API 金鑰儲存 |
-| `web.api.*` | 14 | REST API 處理器（見[網頁後端架構](#網頁後端架構)） |
-| `web.builder` | 3 | 前端自動下載/建構/版本檢查 |
-| `web.websocket` | 2 | WebSocket + SSE 管理器 |
-
-### 工具
-
-| 套件 | 檔案 | 用途 |
-|---------|-------|---------|
-| `util` | 10 | 格式化、訊息、JSON、平台偵測、設定合併 |
-| `uuid` | 1 | 名稱 → UUID 解析 |
-| `listener` | 5 | 玩家加入/離開、CMI 經濟、事件監聽器管理 |
-| `exception` | 3 | 自訂例外階層 |
-| `schema` | 1 | 資料庫結構管理 |
-| `migration` | 9 | CMI 遷移、備份、斷點續傳、local-to-sync |
-
----
-
-## 資料流程
-
-### 讀取路徑（餘額查詢）
-
-```
-VaultAPI.getBalance(player)
-  → SyncmoneyVaultProvider.getBalance()
-    → NameResolver: playerName → UUID
-    → EconomyFacade.getBalance(uuid)
-      → 1. 檢查 ConcurrentHashMap（O(1)）→ 命中 → 返回
-      → 2. 檢查 Redis（GET syncmoney:balance:{uuid}）→ 命中 → 快取 + 返回
-      → 3. 查詢資料庫（SELECT balance FROM players）→ 命中 → 快取 + 返回
-      → 4. 檢查 LocalSQLite（回退）→ 如果找不到返回 0
-```
-
-*注意：內部來自玩家指令的餘額查詢（例如 `/money`）會將此讀取路徑包裝在非同步任務（`AsyncScheduler`）中，以確保快取未命中（回退到 Redis/資料庫）絕對不會阻塞主伺服器執行緒。*
-
-### 寫入路徑（存款/提款）
-
-```
-VaultAPI.depositPlayer(player, amount)
-  → SyncmoneyVaultProvider.depositPlayer()
-    → EconomyFacade.deposit(uuid, amount, source)
-      → 1. 檢查斷路器 → 已鎖定 → 拒絕
-      → 2. 檢查玩家保護 → 已鎖定 → 拒絕
-      → 3. 更新 ConcurrentHashMap（樂觀鎖定 + 版本遞增）
-      → 4. 立即返回 SUCCESS（不阻塞！）
-      → 5. 將 EconomyEvent 加入 BlockingQueue
-        → EconomyEventConsumer（背景執行緒）：
-          → Redis: EVAL atomic_add_balance.lua
-          → 資料庫: 透過 DbWriteQueue 插入/更新（回退：直接 DB 寫入 → WAL 溢位日誌）
-          → Pub/Sub: 向其他伺服器發布餘額更新
-          → 審計: 記錄交易
-          → EventBus: 觸發 PostTransactionEvent
-```
-
-### 插件 API（第三方整合）
-
-需要原子玩家轉帳的第三方插件，應使用 `SyncmoneyVaultProvider` 擴展 API。
-
-**標準 Vault 流程（獨立操作）：**
-```
-插件 withdrawPlayer() → SyncmoneyVaultProvider.withdrawPlayer()
-  → 立即獨立提款（VAULT_WITHDRAW）
-插件 depositPlayer() → SyncmoneyVaultProvider.depositPlayer()
-  → 立即獨立存款（VAULT_DEPOSIT）
-```
-
-標準 Vault 呼叫不提供交易 ID 或對手方，因此 Syncmoney 不會根據相同金額與時間推論轉帳。需要轉帳語義時，插件必須透過擴展 API 明確提供雙方玩家。
-
-**插件 API 流程（明確操作）：**
-```
-插件 depositPlayerForPlugin() → EconomyFacade.pluginDeposit()
-  → EconomyEvent.EventSource = PLUGIN_DEPOSIT
-  → 直接執行帶來源歸因的存款
-插件 pluginTransfer(from, to, amount, pluginName) → EconomyFacade.pluginAtomicTransfer()
-  → 使用 atomic_plugin_transfer.lua 並附帶插件歸因元資料
-```
-
-**新增 EventSource 值：**
-
-| 值 | 用途 |
-|-------|------|
-| `PLUGIN_DEPOSIT` | 第三方插件明確歸因的存款 |
-| `PLUGIN_WITHDRAW` | 第三方插件明確歸因的取款 |
-
-`PLUGIN_DEPOSIT` 與 `PLUGIN_WITHDRAW` 僅供明確的插件方法使用；標準 Vault 存款一律記錄為 `VAULT_DEPOSIT`。
-
-### 跨伺服器同步
-
-```
-伺服器 A：玩家存款 1000
-  → Pub/Sub 發布：{uuid, newBalance, version, source}
-    → 伺服器 B 透過 PubsubSubscriber 接收
-      → EconomyFacade.updateMemoryState(uuid, balance, version)
-        → 版本檢查：僅在新版本 > 目前版本時更新
-        → 更新 ConcurrentHashMap
-        → 玩家 UI 刷新（透過 EntityScheduler）
-```
-
----
-
-## 執行緒模型
-
-### Folia 相容性
-
-Syncmoney 完全相容於 Folia 的區域化執行緒模型。**嚴格禁止使用 `Bukkit.getScheduler()`。**
-
-| 排程器 | 用途 |
-|-----------|-------|
-| `AsyncScheduler` | Redis/DB 通訊、寫入佇列處理、Pub/Sub 訂閱 |
-| `EntityScheduler` | 玩家 UI 更新（計分板、ActionBar）— 必須在玩家的區域執行緒上執行 |
-| `GlobalRegionScheduler` | 定期任務（清理、影子同步、心跳） |
-
-### 關鍵執行緒安全
-
-- `EconomyFacade.economyStates` — `ConcurrentHashMap<UUID, EconomyState>`
-- `EconomyState.balance` — 透過樂觀鎖定（版本比較）更新
-- `EconomyEventConsumer` — 單一背景執行緒（單一寫入者模式）。啟動時重播溢位事件。
-- `PluginContext` — 建構後不可變
-
----
-
-## 儲存架構
-
-### Redis 鍵
-
-| 鍵模式 | 類型 | 用途 |
-|-------------|------|---------|
-| `syncmoney:balance:{uuid}` | STRING | 玩家餘額 |
-| `syncmoney:version:{uuid}` | STRING | 版本計數器（用於樂觀鎖定） |
-| `syncmoney:baltop` | ZSET | 排行榜有序集合 |
-| `syncmoney:bank:{name}` | STRING | 銀行帳戶餘額 |
-| `syncmoney:bank:version:{name}` | STRING | 銀行版本計數器 |
-| `syncmoney:audit:{uuid}` | LIST | 審計日誌條目 |
-
-### 資料庫資料表
-
-| 資料表 | 用途 |
-|-------|---------|
-| `players` | 玩家餘額（UUID → DECIMAL(20,2)） |
-| `syncmoney_audit_log` | 交易審計軌跡（帶毫秒序列排序） |
-
-### Lua 腳本（8 個腳本）
-
-| 腳本 | 用途 |
-|--------|---------|
-| `atomic_add_balance.lua` | 帶版本遞增的原子存款/提款 |
-| `atomic_set_balance.lua` | 原子餘額設定 |
-| `atomic_transfer.lua` | 原子玩家對玩家轉帳 |
-| `atomic_audit.lua` | 原子審計日誌條目 |
-| `atomic_bank_deposit.lua` | 原子銀行存款 |
-| `atomic_bank_withdraw.lua` | 原子銀行提款 |
-| `atomic_bank_transfer.lua` | 原子銀行對銀行轉帳 |
-| `atomic_plugin_transfer.lua` | 原子插件發起轉帳（帶插件歸因元資料） |
-
----
-
-## 網頁後端架構
-
-### Undertow 伺服器
-
-網頁管理執行嵌入式 Undertow HTTP 伺服器（非阻塞、基於 XNIO）。
-
-```
-WebAdminServer (682 行)
-├── 靜態檔案服務（從 dist/ 提供 Vue 3 SPA）
-├── REST API 路由 (/api/*)
-│   ├── SystemApiHandler         → /api/system/*
-│   ├── EconomyApiHandler        → /api/economy/*
-│   ├── AuditApiHandler          → /api/audit/*
-│   ├── ConfigApiHandler         → /api/config/*
-│   ├── SettingsApiHandler       → /api/settings/*
-│   ├── WsTokenHandler          → /api/auth/ws-token
-│   ├── NodesApiHandler         → /api/nodes/*（中央模式）
-│   ├── CrossServerStatsApiHandler → /api/economy/cross-server-*
-│   └── ApiExtensionManager      → /api/extensions/{name}/*
-├── SSE 管理器 (/sse)
-├── WebSocket 管理器 (/ws)（v1.1.2 部分實作）
-└── 健康端點 (/health)
-```
-
-### REST API 處理器套件
-
-| 套件 | 處理器 | 路由 |
-|---------|---------|--------|
-| `web.api.system` | `SystemApiHandler` | `/api/system/status`、`/api/system/redis`、`/api/system/breaker`、`/api/system/metrics` |
-| `web.api.economy` | `EconomyApiHandler` | `/api/economy/stats`、`/api/economy/player/{uuid}/balance`、`/api/economy/top` |
-| `web.api.audit` | `AuditApiHandler` | `/api/audit/player/{name}`、`/api/audit/search`、`/api/audit/search-cursor`、`/api/audit/stats` |
-| `web.api.config` | `ConfigApiHandler` | `/api/config`、`/api/config/reload`、`/api/config/validate` |
-| `web.api.settings` | `SettingsApiHandler` | `/api/settings`、`/api/settings/theme`、`/api/settings/language`、`/api/settings/timezone` |
-| `web.api.auth` | `WsTokenHandler` | `/api/auth/ws-token` |
-| `web.api.nodes` | `NodesApiHandler` + 4 個子處理器 | `/api/nodes`、`/api/nodes/status`、`/api/nodes/{index}`、`/api/nodes/{index}/ping`、`/api/nodes/{index}/proxy`、`/api/nodes/sync`、`/api/nodes/{index}/sync`、`/api/config/sync` |
-| `web.api.crossserver` | `CrossServerStatsApiHandler` | `/api/economy/cross-server-stats`、`/api/economy/cross-server-top` |
-| `web.api.extension` | `ApiExtensionManager` | `/api/extensions/{name}/*`（動態） |
-
-#### Nodes API 子處理器架構
-
-`NodesApiHandler` 協調四個專門的子處理器：
-
-| 處理器 | 職責 |
-|---------|------|
-| `NodeOperationsHandler` | 節點的 CRUD 操作（建立、讀取、更新、刪除、ping） |
-| `NodeStatusHandler` | 並行獲取詳細節點狀態 |
-| `NodeProxyHandler` | 向遠端節點代理 HTTP 請求 |
-| `ConfigSyncHandler` | 雙向設定同步（從中央推送、節點接收） |
-
-所有子處理器都繼承自 `NodesApiContext`，該類別提供共用工具方法（JSON 解析、SSRF 驗證、API Key 遮蔽、權限檢查）。
-
-### 安全層
-
-1. **ApiKeyAuthFilter** — Bearer 權杖驗證
-2. **RateLimiter** — 每 IP 請求限制（預設：60/分鐘）
-3. **PermissionChecker** — 端點層級權限驗證
-
----
-
-## 前端架構
-
-### 技術棧
-
-- **Vue 3**（Composition API，`<script setup>`）
-- **Pinia 3**（狀態管理）
-- **Vue Router 5**（帶認證守衛的 SPA 路由）
-- **Axios**（帶攔截器的 HTTP 客戶端）
-- **TailwindCSS 3**（工具優先 CSS）
-- **vue-i18n 11**（國際化）
-- **Vite 6**（建構工具，帶 PWA 插件）
-
-### 狀態管理（Pinia Stores）
-
-| Store | 用途 |
-|-------|---------|
-| `auth` | 認證狀態（localStorage 中的 API 金鑰） |
-| `notification` | 雙軌通知：Toast（暫時，5 秒自動消失）+ Alert（持久，localStorage 備份） |
-| `settings` | 主題、語言、時區偏好 |
-| `sse` | SSE 連線生命週期管理 |
-
-#### 通知系統架構
-
-通知系統實作了**雙軌**架構：
-
-- **Toast**：暫時通知，顯示在右上角，5 秒後自動消失
-- **Alert**：持久通知，儲存在 localStorage，顯示在頁首鈴鐺下拉面板
-
-通知分類為：`system`、`security`、`transaction`、`audit`、`general`。
-
-關鍵 store 方法：
-- `addToast(type, title, message, category)` — 新增暫時通知
-- `addAlert(type, title, message, category)` — 新增持久通知
-- `addBreakerNotification(state)` — 熔斷器通知（同時 Toast + Alert）
-- `addSystemAlertNotification(message)` — 系統通知（同時 Toast + Alert）
-- `success/error/info/warning(title, message)` — 便利快捷方法
-
-### API 整合
-
-```
-api/client.ts（Axios 實例）
-├── 請求攔截器：添加 Bearer 權杖
-├── 回應攔截器：401→登入、403/429/500→通知
-│
-services/
-├── systemService.ts    → /api/system/*
-├── economyService.ts   → /api/economy/*
-├── auditService.ts     → /api/audit/*
-└── configService.ts    → /api/config/*
-│
-composables/
-├── useSystem.ts        → 系統狀態輪詢
-├── useAudit.ts         → 審計日誌分頁
-├── useSSE.ts           → SSE 事件處理（帶指數退避和抖動）
-└── useWebSocket.ts      → WebSocket 連線（帶指數退避和抖動）
-```
-
-### 建構與部署
-
-```bash
-# 開發（帶 HMR + API 代理至 :8080）
-pnpm dev
-
-# 生產建構（輸出至 dist/）
+### 3.1 Plugin lifecycle
+
+`Syncmoney` 建立並協調 config、storage、economy、sync、listener、permission、command、audit、breaker 與 web service manager。Optional feature 應在 config enabled 後才建立重型 executor、schema、subscription、folder、HTTP listener。
+
+目前觀察到的 shutdown sequence 是：
+
+1. Web service manager
+2. Command service manager
+3. Permission manager
+4. Listener service manager
+5. Sync manager
+6. Event consumer manager，包含在 dependency 仍存活時 drain 已接受的 writes
+7. Economy service manager
+8. Audit service manager
+9. Breaker manager
+10. Baltop save
+11. Storage manager
+12. `SyncmoneyEventBus.clearAll()`
+
+此順序先停止 producer，讓已接受 transaction work 在 dependency 尚存活時完成。修改順序需要 dependency analysis，不能只看 compile success。
+
+### 3.2 Economy mode routing
+
+設定接受 `auto`、`local`、`local_redis`、`sync`、`cmi`；內部 enum 為 `LOCAL`、`LOCAL_REDIS`、`SYNC`、`CMI`。
+
+- `local`：本機 SQLite authority/persistence。
+- `local_redis`：Redis synchronized economy，不使用 shared SQL persistence。
+- `sync`：Redis synchronization 加 shared relational persistence。
+- `cmi`：CMI 為 economy authority，Syncmoney 負責周邊 synchronization。
+- `auto`：依 environment/detection 選擇。
+
+Mode strategy/router 決定 authority 與 persistence，caller 不應自行繞過。
+
+## 4. Economy state 與 transaction flow
+
+### 4.1 金額表示
+
+Money 使用 `BigDecimal` 與既有 normalization。Shared SQL balance 使用 `DECIMAL(20,2)`。所有 mutation 必須維持 insufficient-funds 與資金守恆。
+
+### 4.2 Read path
+
+Vault API 是同步的，因此 `EconomyFacade` 的正常 read 由 `MemoryStateManager` 提供。Redis/SQL/Mojang/HTTP/file I/O 不得加入同步 hot path。
+
+Cache miss 或 reconcile 依既有 async 路徑處理。
+
+### 4.3 Mutation path
+
+一般 accepted mutation：
+
+1. 驗證 input 與 breaker/guard；
+2. 適用時觸發 `AsyncPreTransactionEvent`，cancellation 會被尊重；
+3. 更新 accepted memory state 與 version；
+4. enqueue persistence/synchronization；
+5. async persist/publish；
+6. result 可用後發出 `PostTransactionEvent`；
+7. remote side 僅套用較新 version 並抑制 echo/duplicate。
+
+`TransferOrchestrator` 協調 multi-account transfer；不可把兩側獨立更新而破壞 atomic/ordered semantics。
+
+## 5. 分散式同步
+
+### 5.1 Versions
+
+Balance state 帶 monotonic version；remote/delayed update 套用前必須比較 version，避免舊 Pub/Sub delivery 或 async callback 覆蓋新狀態。
+
+### 5.2 Redis
+
+代表性 Redis keys：`syncmoney:balance:{uuid}`、`syncmoney:version:{uuid}`、`syncmoney:online:players`、`syncmoney:online:player:*`、`syncmoney:baltop`，以及 audit/bank 相關 keys。
+
+主要 Pub/Sub channel：
+
+- `syncmoney:balance:update`
+- `syncmoney:cmi:balance:update`
+
+CMI remote state 套用時必須 suppress echo。
+
+### 5.3 SQL
+
+Shared `players` table：
+
+| Column | Shape |
+|---|---|
+| `uuid` | `VARCHAR(36)`, primary key |
+| `player_name` | `VARCHAR(16)` |
+| `balance` | `DECIMAL(20,2)` |
+| `version` | `BIGINT` |
+| `last_server` | `VARCHAR(64)` |
+| `updated_at` | timestamp |
+
+Audit、local persistence、schema migration、Shadow Sync 另有 workflow，不要由 `players` table 推測全部 storage contract。
+
+## 6. Scheduler 與 concurrency
+
+Syncmoney 使用 Paper common scheduler API；`folia-supported: true` 本身不能證明 thread safety。
+
+- I/O/data：async scheduler 或 owned executor。
+- Plugin/global：global region scheduler。
+- Player message、teleport、CMI mutation、entity access：entity scheduler。
+- Teleport 使用 `teleportAsync`。
+- Global iteration 先 snapshot，再派到各 player owner。
+- Async callback 碰 entity 前重新進入正確 scheduler。
+- 不得讓 region 互相阻塞。
+
+## 7. Optional module 與 protection
+
+### 7.1 Breaker and player protection
+
+`BreakerManager` 擁有唯一 `PlayerTransactionGuard`，economy service 透過 dependency 接收。Global breaker 與 per-player protection 是不同 enable boundary，resource monitor、limit、webhook、breaker state 要維持既有 ownership/config separation。
+
+### 7.2 Audit
+
+Audit 是 optional。Cleanup/export 依 parent audit switch；停用時相關 Web API 會回報 feature disabled，而不是假裝資料存在。
+
+### 7.3 Shadow Sync and migration
+
+Shadow Sync、CMI migration、local-to-sync migration 是明確的 maintenance/data workflow，與 live economy routing 的 lifecycle、storage、authority semantics 分開。
+
+## 8. Configuration model
+
+`SyncmoneyConfig` 是 runtime snapshot；live reload 僅限既有 `display`、`pay`、`permissions`、`admin-permissions`、`debug` roots。需要新 connection、owner、listener、executor、schema、subscription 或 economy authority 的變更，在 lifecycle 未明確支援前都視為 restart-required。`server-name` 必須設定，空白會阻止正常 operation。
+
+## 9. Web Admin backend
+
+### 9.1 HTTP pipeline
+
+Embedded backend 使用 Undertow。
+
+- `/health` 不需 authentication。
+- 一般 `/api/*` route 需要 `Authorization: Bearer <api-key>`。
+- `ApiKeyAuthFilter` 使用 constant-time key comparison，並可能回傳 `429 RATE_LIMITED`。
+- 只有在 `web-admin.security.trust-proxy=true` 時才採信 `X-Forwarded-For`。
+- Route exception 由 `HttpHandlerRegistry` 正規化成一致的 API error response。
+- Static frontend asset 由 embedded distribution 提供。
+
+Shipped YAML 預設停用 Web Admin 並綁定 `localhost:8080`。預設 API key placeholder 是 `change-me-in-production`；config validation 會對此值提出警告，但目前 Web Service 的自動停用檢查只比對精確字串 `change-me`。因此在對外開放 Web Admin 前，operator 必須主動替換 shipped placeholder。
+
+### 9.2 Route registration
+
+Handler 會註冊到 `HttpHandlerRegistry`。相同 method/path 使用 replacement semantics，較晚註冊的 handler 會取代先前 handler。
+
+`SystemApiHandler` 與 `NodesApiHandler` 都會註冊 `GET /api/nodes` 和 `GET /api/nodes/status`；目前 `NodesApiHandler` 較晚註冊，因此實際生效的是它提供的 handler。
+
+### 9.3 SSE
+
+目前實作且 frontend 使用的 live channel 是 **`/api/sse`**。
+
+Frontend 會先呼叫 `POST /api/auth/ws-token` 取得一次性 token。Token 是 UUID，有效時間為 60,000 ms，且 successful validation 後會被 consume。`SseManager` 接受以下三種認證形式：
+
+- Bearer API key；
+- Bearer one-time token；或
+- `?token=<one-time-token>`。
+
+SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEvent` broadcast transaction telemetry。
+
+### 9.4 WebSocket limitation
+
+`/ws` 存在，但目前 `WebSocketManager` 尚未完成，不應視為 production WebSocket transport。
+
+目前行為和 SSE 有實質差異：
+
+- 一般非 upgrade request 會收到 `503 WEBSOCKET_UNAVAILABLE`；
+- upgrade-shaped request 只檢查 query token 是否非空；
+- 現行 handler **沒有**透過 `WsTokenHandler.validateToken` 驗證該 token；
+- 它會執行 101-shaped response、bookkeeping 與 logging，但 broadcast methods 尚未實作完整可用的 Undertow message transport。
+
+這是已知 implementation limitation，也是未來修改時需要特別審查的 security-sensitive area。
+
+## 10. Web Admin frontend
+
+`syncmoney-web` 使用 Vue 3、Vite、Pinia、`vue-i18n` 與 PWA tooling。Production build 會嵌入 `src/main/resources/syncmoney-web/dist`。
+
+目前 frontend package version 為 `1.3.1`。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新。
+
+## 11. PlaceholderAPI expansion
+
+Expansion 是獨立 JAR，identifier `syncmoney`，persistent，並以 lazy reflection discover core plugin；reflection 是刻意的 compatibility boundary。
+
+支援的 placeholder family 包含：
+
+- `balance`
+- `balance_formatted`
+- `balance_abbreviated`
+- `rank`
+- `my_rank`
+- `total_supply`
+- `total_players`
+- `version`
+- `online_players`
+- `top_<n>`
+- `balance_<player>`
+- `balance_formatted_<player>`
+- `balance_abbreviated_<player>`
+
+昂貴/全域工作以 async refresh 與 bounded cache 離開 hot path；目前 expiry 約 5 秒、cached/pending bound 約 10,000。
+
+## 12. Build 與 acceptance architecture
+
+主要 artifact：
+
+- `build/libs/Syncmoney-<version>.jar`
+- `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-<version>.jar`
+- `build/acceptance/SyncmoneyAcceptance.jar`
+
+標準 validation：
+
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar
+cd syncmoney-web
+pnpm typecheck
+pnpm test:unit --run
 pnpm build
-
-# dist/ 會複製到 src/main/resources/syncmoney-web/
-# 並透過 Gradle processResources 嵌入 JAR
 ```
+
+Project compile toolchain 是 Java 21；runtime Java 依 server，PlugDev 對較新 Paper 26.1+ environment 記載 Java 25。
+
+Scheduler、storage、lifecycle、CMI、cross-server 變更不能只靠 build success，需依 `tools/plugdev/README.md` 執行適用 matrix 並精確紀錄實際測試範圍。
+
+## 13. 架構變更檢查
+
+Architecture-affecting change 應能回答：
+
+1. 誰擁有並關閉 resource？
+2. 每個 Bukkit/CMI entity mutation 由哪個 scheduler owner 執行？
+3. 是否把 blocking I/O 加入 sync/hot path？
+4. accepted-write boundary 在哪裡，shutdown 如何排空？
+5. monotonic version 與 stale work 如何處理？
+6. Optional feature 停用時是否保持低成本？
+7. Config change 是否需要 restart？
+8. 英文/繁中 docs、REST contract、frontend client 與 tests 是否仍一致？
