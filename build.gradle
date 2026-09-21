@@ -1,7 +1,7 @@
 plugins {
     id 'java'
     id 'jacoco'
-    id 'com.gradleup.shadow' version '9.3.1'
+    id 'com.gradleup.shadow' version '9.6.1'
     id("xyz.jpenilla.run-paper") version "2.3.1"
 }
 
@@ -41,33 +41,33 @@ dependencies {
     // modern net.milkbowl.vault2 API. The server runtime supplies these classes.
     compileOnly("net.milkbowl.vault:VaultUnlockedAPI:2.20")
 
-    compileOnly("me.clip:placeholderapi:2.12.2")
+    compileOnly("me.clip:placeholderapi:2.12.3")
 
     implementation("redis.clients:jedis:5.2.0")
-    implementation("org.apache.commons:commons-pool2:2.12.1")
+    implementation("org.apache.commons:commons-pool2:2.13.1")
     implementation("com.zaxxer:HikariCP:6.2.1")
     implementation("com.mysql:mysql-connector-j:9.2.0")
-    implementation("org.postgresql:postgresql:42.7.5")
-    implementation("org.xerial:sqlite-jdbc:3.49.1.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+    implementation("org.postgresql:postgresql:42.7.13")
+    implementation("org.xerial:sqlite-jdbc:3.53.4.0")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     // Paper, Folia and Canvas provide their matching native Adventure runtime.
     // Keeping these compile-only prevents a MiniMessage 4.x implementation from
     // being paired with a server Adventure 5.x API at runtime.
     compileOnly("net.kyori:adventure-text-minimessage:4.16.0")
     compileOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
-    implementation("org.bstats:bstats-bukkit:3.1.0")
+    implementation("org.bstats:bstats-bukkit:3.2.1")
 
-    implementation 'io.undertow:undertow-core:2.3.18.Final'
-    implementation 'io.undertow:undertow-websockets-jsr:2.3.18.Final'
-    implementation 'io.undertow:undertow-servlet:2.3.18.Final'
+    implementation 'io.undertow:undertow-core:2.4.3.Final'
+    implementation 'io.undertow:undertow-websockets-jsr:2.4.3.Final'
+    implementation 'io.undertow:undertow-servlet:2.4.3.Final'
 
     // YAML configuration
-    implementation 'org.yaml:snakeyaml:2.4'
+    implementation 'org.yaml:snakeyaml:2.7'
 
     testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
     testImplementation("net.milkbowl.vault:VaultUnlockedAPI:2.20")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-    testImplementation 'org.mockito:mockito-core:5.8.0'
+    testImplementation 'org.mockito:mockito-core:5.23.0'
     // The server supplies Adventure in production; tests need a concrete native-like runtime.
     testRuntimeOnly("net.kyori:adventure-text-minimessage:4.16.0")
     testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
