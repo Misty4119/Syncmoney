@@ -29,10 +29,10 @@ dependencies {
     // Paper API
     compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
 
-    compileOnly("me.clip:placeholderapi:2.12.2")
+    compileOnly("me.clip:placeholderapi:2.12.3")
     compileOnly("com.zaxxer:HikariCP:6.2.1")
     compileOnly("com.mysql:mysql-connector-j:9.2.0")
-    compileOnly("org.postgresql:postgresql:42.7.5")
+    compileOnly("org.postgresql:postgresql:42.7.13")
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
