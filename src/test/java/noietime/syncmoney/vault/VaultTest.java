@@ -1,9 +1,15 @@
 package noietime.syncmoney.vault;
 
 import net.milkbowl.vault.economy.EconomyResponse;
+import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.economy.EconomyWriteQueue;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.FallbackEconomyWrapper;
+import noietime.syncmoney.economy.OverflowLogInterface;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.Plugin;
@@ -14,11 +20,16 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
@@ -184,6 +195,85 @@ class VaultTest {
         assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
         verify(economyFacade).deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT);
         verify(economyFacade, never()).pluginDeposit(any(UUID.class), any(BigDecimal.class), any(String.class));
+    }
+
+    @Test
+    void coldVaultAvailableReadDoesNotWarmUnknownState() {
+        UUID account = UUID.randomUUID();
+        BigDecimal existingBalance = new BigDecimal("735.25");
+        OfflinePlayer offline = mock(OfflinePlayer.class);
+        when(offline.getUniqueId()).thenReturn(account);
+
+        CacheManager cacheManager = mock(CacheManager.class);
+        when(cacheManager.getBalance(account)).thenReturn(existingBalance);
+        when(cacheManager.getVersion(account)).thenReturn(9L);
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isDegraded()).thenReturn(false);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        OverflowLogInterface overflowLog = mock(OverflowLogInterface.class);
+        EconomyFacade coldFacade = new EconomyFacade(plugin, config, cacheManager, redisManager,
+                mock(DatabaseManager.class), null, new EconomyWriteQueue(10),
+                new FallbackEconomyWrapper(plugin, redisManager), null, overflowLog);
+        VaultPlayerHandler coldHandler = new VaultPlayerHandler(coldFacade, nameResolver, plugin);
+
+        try {
+            assertEquals(existingBalance.doubleValue(), coldHandler.getBalance(offline), 0.0001,
+                    "a cold Vault read must return the existing offline account balance");
+            assertFalse(coldFacade.hasInMemory(account),
+                    "the synchronous Vault read must not cache an unknown or zero account state");
+            verify(cacheManager).getBalance(account);
+        } finally {
+            coldFacade.shutdown();
+        }
+    }
+
+    @Test
+    void coldVaultReadReturnsZeroWhenRedisReportsZeroDespiteExistingSqlAccount() {
+        UUID account = UUID.randomUUID();
+        OfflinePlayer offline = mock(OfflinePlayer.class);
+        when(offline.getUniqueId()).thenReturn(account);
+
+        CacheManager cacheManager = mock(CacheManager.class);
+        AtomicReference<Thread> cacheReadThread = new AtomicReference<>();
+        when(cacheManager.getBalance(account)).thenAnswer(invocation -> {
+            cacheReadThread.set(Thread.currentThread());
+            return BigDecimal.ZERO;
+        });
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isDegraded()).thenReturn(true);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isDbEnabled()).thenReturn(true);
+        DatabaseManager databaseManager = mock(DatabaseManager.class);
+        when(databaseManager.getPlayer(account)).thenReturn(Optional.of(new DatabaseManager.PlayerRecord(
+                account, "offline", new BigDecimal("735.25"), 9L, "test-server", Instant.now())));
+        OverflowLogInterface overflowLog = mock(OverflowLogInterface.class);
+        EconomyFacade coldFacade = new EconomyFacade(plugin, config, cacheManager, redisManager,
+                databaseManager, null, new EconomyWriteQueue(10),
+                new FallbackEconomyWrapper(plugin, redisManager), null, overflowLog);
+        VaultPlayerHandler coldHandler = new VaultPlayerHandler(coldFacade, nameResolver, plugin);
+
+        try {
+            double coldBalance = coldHandler.getBalance(offline);
+            assertAll(
+                    () -> assertEquals(0.0, coldBalance, 0.0001,
+                            "the cold Vault read exposes CacheManager's zero result"),
+                    () -> assertEquals(Thread.currentThread(), cacheReadThread.get(),
+                            "the synchronous Vault read invokes the cache adapter on its caller thread"),
+                    () -> verify(databaseManager, never()).getPlayer(account),
+                    () -> assertFalse(coldFacade.hasInMemory(account),
+                            "getBalanceSync does not warm the authoritative existing SQL state")
+            );
+
+            BigDecimal mutation = coldFacade.deposit(account, new BigDecimal("10.00"), EconomyEvent.EventSource.TEST);
+            assertAll(
+                    () -> assertEquals(0, mutation.compareTo(new BigDecimal("745.25")),
+                            "the later mutation loads the existing SQL balance through getBalance"),
+                    () -> assertEquals(0, coldFacade.getBalance(account).compareTo(new BigDecimal("745.25"))),
+                    () -> verify(databaseManager).getPlayer(account)
+            );
+        } finally {
+            coldFacade.shutdown();
+        }
     }
 
     // =========================================================================
