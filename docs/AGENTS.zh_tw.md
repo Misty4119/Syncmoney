@@ -8,7 +8,7 @@
 
 Syncmoney 是 Minecraft 經濟插件，提供 Vault-compatible economy、選用 VaultUnlocked/CMI、Redis 跨服 balance synchronization、relational persistence、audit/guard、embedded Web Admin 與 PlaceholderAPI expansion；不負責同步任意 permission 或第三方 command。
 
-目前 root `build.gradle` release 為 `1.3.2`，config schema `12`，build toolchain Java 21；三者是不同版本領域。
+root `build.gradle` release metadata 目前仍為 `1.3.2`，待 release task 更新；config schema 為 `12`。1.4.0 foundation target 使用 Java 25 與 Gradle 9.8.0；保留的 1.3.2 baseline 使用 Java 21 與 Gradle 9.1.0。這些是不同版本領域。
 
 - Core：`src/main/java/noietime/syncmoney`
 - Runtime defaults：`src/main/resources`
@@ -139,7 +139,7 @@ pnpm test:unit --run
 pnpm build
 ```
 
-Build toolchain 是 Java 21；runtime Java 依 Minecraft server，PlugDev 對較新 Paper 26.1+ acceptance environment 記載 Java 25。
+1.4.0 target 的 build 與 runtime 最低為 Java 25、Gradle 9.8.0、Paper 1.21.6；Java 21／Gradle 9.1.0 僅描述保留的 1.3.2 baseline。
 
 scheduler/storage/lifecycle/CMI/cross-server 變更要執行相關 PlugDev matrix，只回報實際測試範圍。Compilation alone 不能證明 Folia safety、queue durability 或 distributed consistency。收尾前執行 `git diff --check`、`git status --short`，並搜尋 stale release、endpoint、artifact name、removed behavior。
 

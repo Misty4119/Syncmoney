@@ -2,7 +2,7 @@
 
 > Project version: `1.3.2`
 > Configuration schema: `12`
-> Build toolchain: Java 21
+> 1.4.0 target toolchain: Java 25 / Gradle 9.8.0
 > This document describes the implementation in the current repository. Code and executable configuration remain authoritative.
 
 Traditional Chinese: [`ARCHITECTURE.zh_tw.md`](ARCHITECTURE.zh_tw.md)
@@ -297,7 +297,7 @@ pnpm test:unit --run
 pnpm build
 ```
 
-The project compiles with Java 21. Runtime Java follows the Minecraft server; current PlugDev guidance notes Java 25 for newer Paper 26.1+ acceptance environments.
+The 1.4.0 target compiles and runs on Java 25 or newer and requires Paper 1.21.6 or newer. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0.
 
 Release automation builds preview versions through a Gradle property, publishes the Web archive before the core JARs, and gates stable publication through the `production-release` environment. The Web archive excludes generated `dist`, dependency, coverage, Playwright, and editor directories because the plugin builds the frontend after downloading it.
 

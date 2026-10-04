@@ -12,7 +12,7 @@
 </p>
 <p align="center">
   <a href="https://docs.papermc.io/paper/getting-started/"><img src="https://img.shields.io/badge/Platform-Paper%20%7C%20Folia%20%7C%20Canvas-orange.svg" alt="Platform"></a>
-  <img src="https://img.shields.io/badge/Java-21%20%2F%2025-blueviolet.svg" alt="Java">
+  <img src="https://img.shields.io/badge/Java-25%2B%20%281.4%20target%29-blueviolet.svg" alt="Java">
   <a href="https://official.noie.fun"><img src="https://img.shields.io/badge/Discord-Community-7289DA.svg?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://paypal.me/NoieSrv"><img src="https://img.shields.io/badge/Donate-PayPal-blue" alt="Donate">
   </a>
@@ -42,7 +42,7 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 - **Comprehensive Auditing & Analytics**: High-throughput asynchronous audit log pipeline with search, stats, automated cleanup, and external export.
 - **Shadow Backups**: Independent background account synchronization designed for cold-standby snapshots and state tracking.
 - **Embedded Web Admin Dashboard**: Modern web interface (Vue 3 / Undertow) for health telemetry, configuration inspection, audit viewing, and economy monitoring.
-- **Region Scheduler Safe**: Validated on Paper 1.20.4/26.2, Folia `26.2.build.7-beta`, and Canvas 26.2; scheduler boundaries are designed for region-threaded architectures.
+- **Observed 1.3.2 runtime coverage (historical)**: Paper 1.20.4/26.2, Folia `26.2.build.7-beta`, and Canvas 26.2; these observations do not establish 1.4.0 coverage.
 - **Extensible Ecosystem**: Official PlaceholderAPI expansion and Bukkit transaction events (`PostTransactionEvent`).
 
 ---
@@ -51,8 +51,8 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 
 | Component | Requirement / Specification |
 |---|---|
-| **Server Engine** | Paper 1.20.4+ (Build API baseline), Folia, Canvas. *Plain Spigot is not supported.* |
-| **Java Runtime** | Java **21** (Paper 1.20.4 – 1.20.6); Java **25** required for Paper 26.1+ environments. |
+| **1.3.2 historical baseline** | Java 21 and Paper 1.20.4 baseline; the observed Paper/Folia/Canvas matrix below is historical. |
+| **1.4.0 target** | Java **25+** and Paper **1.21.6+** minimum. Folia and Canvas remain separate runtime gates. Plain Spigot is not supported. |
 | **Economy Bridge** | Required: **Vault** (legacy 1.7) or **VaultUnlocked** (2.20.0+). *Do not load both concurrently under the same name.* |
 | **Message Broker** | Redis 5.0+ (Required for `sync`, `local_redis`, and `cmi` modes). |
 | **Database** | MySQL 8.0+, MariaDB 10.5+, PostgreSQL 13+, or local SQLite. |
@@ -61,9 +61,11 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 > [!NOTE]
 > Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
 
-The 1.3.2 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. Folia was tested successfully on that beta server build; this remains an observed compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
+The historical 1.3.2 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. Folia was tested successfully on that beta server build; this remains an observed compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
 
 ---
+
+The install instructions below describe the published 1.3.2 artifact. For the 1.4.0 Java 25 / Paper 1.21.6 upgrade and rollback procedure, see the [developer guide](docs/DEVELOPER_GUIDE.md#upgrade-and-rollback).
 
 ## Installation & Setup
 
@@ -265,7 +267,7 @@ public void onPostTransaction(PostTransactionEvent event) {
 
 ## Building from Source
 
-Syncmoney uses Gradle with a Java 21 toolchain:
+The 1.4.0 foundation branch uses Java 25 and Gradle 9.8.0. Stable release metadata still reads 1.3.2 until the release task; the preserved 1.3.2 baseline used Java 21 and Gradle 9.1.0.
 
 ```bash
 # Build the plugin JAR and PAPI expansion

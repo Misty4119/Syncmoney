@@ -8,13 +8,13 @@ This document is a factual project snapshot for maintainers, contributors, and c
 - Repository: `Misty4119/Syncmoney`
 - Current build version: `1.3.2`
 - Configuration schema: `12`
-- Build toolchain: Java 21
-- Plugin API descriptor: `api-version: 1.20`
+- Build toolchain: Java 25 for the 1.4.0 target; Gradle 9.8.0
+- Plugin API descriptor: `api-version: 1.21.6` (1.4.0 target)
 - Main server targets: Paper, Folia, Canvas
 - Optional integrations: VaultUnlocked, CMI, PlaceholderAPI
 - License: Apache License 2.0
 
-Runtime Java requirements depend on the Minecraft server. PlugDev documents Java 25 for newer Paper 26.1+ environments even though project compilation uses Java 21.
+The 1.4.0 target requires Java 25 or newer at build and runtime and Paper 1.21.6 or newer. The preserved 1.3.2 release baseline used Java 21 / Gradle 9.1.0 and is not changed by that target.
 
 ## Product boundary
 
@@ -235,7 +235,7 @@ When web source changes, reconcile the built frontend with the embedded distribu
 
 ## Acceptance baseline
 
-The current PlugDev documentation covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure. Folia 26.2 Beta was exercised successfully; this is observed coverage for that beta build, not a guarantee for future Folia releases.
+The historical 1.3.2 PlugDev record covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure. Folia 26.2 Beta was exercised successfully; this is observed coverage for that beta build, not a guarantee for future Folia releases.
 
 Licensed CMI is not bundled; CMI acceptance requires a locally supplied licensed plugin. Do not turn this observed matrix into guarantees for future server releases.
 

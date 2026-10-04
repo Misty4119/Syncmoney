@@ -9,14 +9,14 @@ Before contributing, read [`AGENTS.md`](AGENTS.md), [`CONTEXT.md`](CONTEXT.md), 
 ## Development prerequisites
 
 - Git
-- JDK 21 for the Gradle toolchain/build
+- JDK 25 or newer for the 1.4.0 Gradle toolchain/build
 - the repository Gradle wrapper (`gradlew.bat` on Windows)
 - Node.js and pnpm for `syncmoney-web`
 - a compatible Paper/Folia/Canvas test server for runtime acceptance
 - Redis and/or SQL only when testing modes/features that require them
 - licensed CMI supplied locally when testing CMI integration; CMI is not distributed by this repository
 
-Newer Minecraft server releases can require a newer runtime JVM than the project compiler. Follow `tools/plugdev/README.md`; current PlugDev notes use Java 25 for newer Paper 26.1+ environments.
+The 1.4.0 target requires Java 25 or newer at runtime and Paper 1.21.6 or newer. The published 1.3.2 baseline used Java 21 / Gradle 9.1.0. Follow `tools/plugdev/README.md` for the target runtime smoke.
 
 ## Repository layout
 

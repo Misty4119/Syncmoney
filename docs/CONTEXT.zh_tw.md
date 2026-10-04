@@ -8,13 +8,13 @@
 - 儲存庫：`Misty4119/Syncmoney`
 - 目前 build 版本：`1.3.2`
 - 設定 schema：`12`
-- 編譯 toolchain：Java 21
-- Plugin API descriptor：`api-version: 1.20`
+- 編譯 toolchain：Java 25（1.4.0 target）；Gradle 9.8.0
+- Plugin API descriptor：`api-version: 1.21.6`（1.4.0 target）
 - 主要伺服器目標：Paper、Folia、Canvas
 - 選用整合：VaultUnlocked、CMI、PlaceholderAPI
 - 授權：Apache License 2.0
 
-Runtime Java 需求由 Minecraft server 決定。PlugDev 對較新的 Paper 26.1+ 環境記載使用 Java 25，但專案本身仍以 Java 21 編譯。
+1.4.0 target 的 build 與 runtime 最低為 Java 25，Paper 最低為 1.21.6。保留的 1.3.2 release baseline 使用 Java 21／Gradle 9.1.0；本次 target 不修改該歷史 baseline。
 
 ## 產品邊界
 
@@ -235,7 +235,7 @@ web source 變更時，要同步處理 build output 與 embedded distribution。
 
 ## 驗收基線
 
-目前 PlugDev 文件涵蓋 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。Folia 26.2 Beta 已實際通過測試；這是該 beta build 的觀察結果，不是對未來 Folia release 的保證。
+歷史 1.3.2 PlugDev 紀錄涵蓋 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。Folia 26.2 Beta 已實際通過測試；這是該 beta build 的觀察結果，不是對未來 Folia release 的保證。
 
 CMI 為授權軟體且不隨儲存庫提供；CMI acceptance 需要本機另備合法 plugin。不能把目前觀察到的 matrix 當成未來 server release 的保證。
 

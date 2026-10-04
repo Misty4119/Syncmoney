@@ -35,7 +35,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
 
     // VaultUnlockedAPI contains both the legacy Vault 1.7 contracts and the
     // modern net.milkbowl.vault2 API. The server runtime supplies these classes.
@@ -64,10 +64,14 @@ dependencies {
     // YAML configuration
     implementation 'org.yaml:snakeyaml:2.4'
 
-    testImplementation("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    testImplementation("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
     testImplementation("net.milkbowl.vault:VaultUnlockedAPI:2.20")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'
+    // Mockito 5.8.0 resolves Byte Buddy 1.14.10, which rejects Java 25 class files.
+    // Byte Buddy 1.17.5 updates ASM to 9.8 and adds Java 25 class-file support.
+    testImplementation 'net.bytebuddy:byte-buddy:1.17.5'
+    testImplementation 'net.bytebuddy:byte-buddy-agent:1.17.5'
     // The server supplies Adventure in production; tests need a concrete native-like runtime.
     testRuntimeOnly("net.kyori:adventure-text-minimessage:4.16.0")
     testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:4.16.0")
@@ -112,7 +116,7 @@ shadowJar {
 
 tasks {
   runServer {
-    minecraftVersion("1.20.4")
+      minecraftVersion("1.21.6")
   }
   
   build {
@@ -120,9 +124,9 @@ tasks {
   }
 }
 
-def targetJavaVersion = 21
+def targetJavaVersion = 25
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion

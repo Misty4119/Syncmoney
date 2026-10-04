@@ -1,7 +1,7 @@
 # Syncmoney Developer Guide
 
 > Current release: `1.3.2`
-> Java build toolchain: 21
+> 1.4.0 target build toolchain: Java 25 / Gradle 9.8.0
 > Configuration schema: `12`
 
 Traditional Chinese: [`DEVELOPER_GUIDE.zh_tw.md`](DEVELOPER_GUIDE.zh_tw.md)
@@ -13,14 +13,14 @@ This guide is for contributors working on the core plugin, PlaceholderAPI expans
 Use:
 
 - Git;
-- JDK 21 for Gradle compilation/toolchains;
+- JDK 25 or newer for 1.4.0 Gradle compilation/toolchains and server runtime;
 - the repository Gradle wrapper;
 - Node.js + pnpm for `syncmoney-web`;
 - an appropriate Paper/Folia/Canvas server for runtime acceptance;
 - Redis and SQL only for the modes/features being tested;
 - a locally supplied licensed CMI build when testing CMI integration.
 
-The Minecraft server may require a newer JVM than the project compiler. Current PlugDev notes use Java 25 for newer Paper 26.1+ environments.
+The 1.4.0 target requires Java 25 or newer at build and runtime and Paper 1.21.6 or newer. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0; that is historical context, not the 1.4.0 toolchain or runtime minimum.
 
 ## 2. Repository map
 
@@ -301,7 +301,15 @@ Use `tools/plugdev/README.md` for real-server acceptance. PlugDev is development
 
 Scheduler, lifecycle, storage, CMI, and cross-server synchronization changes require more than compilation. Record separately the exact Minecraft/Paper/Folia/Canvas version, runtime Java version, Syncmoney artifact/version, optional dependency versions actually present, player-side behavior, startup/shutdown logs, cross-server propagation where applicable, and scenarios that could not be tested.
 
-The Gradle toolchain is Java 21. Runtime Java follows the selected server; current PlugDev guidance notes Java 25 for newer Paper 26.1+ environments.
+For 1.4.0, use JDK 25 or newer with the repository Gradle 9.8.0 wrapper; servers must run Java 25 or newer and Paper 1.21.6 or newer. The Java 21 / Gradle 9.1.0 values describe the 1.3.2 baseline only.
+
+### Upgrade and rollback runbook
+
+Before upgrading, quiesce economy producers and administrator writes on every node. Drain accepted writes, retries, database work, and audit work to a known state, then stop each node normally. Back up configuration, messages, aliases, SQL databases, local SQLite files and WAL/SHM state, Redis RDB/AOF data, and recovery or overflow files. Record versions and hashes without recording secrets. Verify the Java/Paper minimums, candidate JAR checksum, and required dependencies in a disposable environment.
+
+Install one candidate Syncmoney JAR per server and keep the existing data directories. Keep producers quiesced while checking startup, configuration/schema handling, Vault provider readiness, and disposable-account reads and writes. Resume producers only after every node is ready and recorded balances reconcile. T00A's minimum Paper smoke is documented in [`tools/plugdev/README.md`](../tools/plugdev/README.md); it does not replace the full persisted-state upgrade and rollback gate in V03/M00–M12.
+
+To roll back, quiesce producers, drain accepted work, stop every node normally, and preserve current SQL, Redis, SQLite, and recovery state. Replace the candidate with the verified 1.3.2 JAR; keep Java 25 and the supported server where possible. If the JVM or server must also be downgraded, use a runtime supported by 1.3.2; do not assume a newer server runs on Java 21. Keep compatible current data and versions. Do not flush Redis or reset balances. An older backup can discard valid transactions made after it and should be restored only through a separately authorized disaster-recovery procedure. Full persisted-data upgrade and rollback acceptance remains a separate V03/M00–M12 gate.
 
 ## 18. Documentation, security, and release hygiene
 

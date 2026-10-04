@@ -6,7 +6,7 @@ This file is the operating guide for coding agents and automated contributors wo
 
 Syncmoney is a Minecraft economy plugin that provides a Vault-compatible economy, optional VaultUnlocked/CMI integration, Redis-backed cross-server synchronization, relational persistence, audit/guard features, an embedded web administration service, and an optional PlaceholderAPI expansion. It does not replicate arbitrary permissions or arbitrary third-party commands.
 
-Current release metadata is owned by root `build.gradle`. At this update the release is `1.3.2`, configuration schema is `12`, and the build toolchain is Java 21. These are separate version domains.
+Release metadata is owned by root `build.gradle` and currently remains `1.3.2` until the release task; configuration schema is `12`. The 1.4.0 foundation target uses Java 25 and Gradle 9.8.0; the preserved 1.3.2 baseline used Java 21 and Gradle 9.1.0. These are separate version domains.
 
 - Core plugin: `src/main/java/noietime/syncmoney`
 - Runtime defaults/descriptors: `src/main/resources`
@@ -153,7 +153,7 @@ pnpm test:unit --run
 pnpm build
 ```
 
-The build toolchain is Java 21. Runtime Java follows the Minecraft server; PlugDev documents Java 25 for newer Paper 26.1+ acceptance environments.
+The 1.4.0 target requires Java 25 or newer at build and runtime, Gradle 9.8.0, and Paper 1.21.6 or newer. Java 21 / Gradle 9.1.0 describe only the preserved 1.3.2 baseline.
 
 For scheduler/storage/lifecycle/CMI/cross-server changes, run the relevant PlugDev matrix and report exactly what was exercised. Compilation alone is not proof of Folia safety, queue durability, or distributed consistency.
 

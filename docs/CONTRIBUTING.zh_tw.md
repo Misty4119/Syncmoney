@@ -9,14 +9,14 @@
 ## 開發需求
 
 - Git
-- JDK 21，供 Gradle toolchain/build 使用
+- JDK 25 或更新版本，供 1.4.0 Gradle toolchain/build 使用
 - repository Gradle wrapper（Windows 為 `gradlew.bat`）
 - Node.js 與 pnpm，供 `syncmoney-web` 使用
 - 相容的 Paper/Folia/Canvas 測試 server，供 runtime acceptance
 - 只有測試需要 Redis/SQL 的 mode/feature 時才需要對應服務
 - 測試 CMI integration 時需自行提供合法授權的 CMI；repository 不散布 CMI
 
-較新的 Minecraft server 可能要求比專案 compiler 更高版本的 runtime JVM。依 `tools/plugdev/README.md` 為準；目前 PlugDev 對較新 Paper 26.1+ 環境記載 Java 25。
+1.4.0 target 的 runtime 最低為 Java 25、Paper 1.21.6。已發布的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。Runtime smoke 請依 `tools/plugdev/README.md` 執行。
 
 ## 儲存庫配置
 

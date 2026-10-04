@@ -2,7 +2,7 @@
 
 > 專案版本：`1.3.2`
 > Config schema：`12`
-> Build toolchain：Java 21
+> 1.4.0 target toolchain：Java 25／Gradle 9.8.0
 
 英文版：[`ARCHITECTURE.md`](ARCHITECTURE.md)
 
@@ -265,7 +265,7 @@ pnpm test:unit --run
 pnpm build
 ```
 
-Project compile toolchain 是 Java 21；runtime Java 依 server，PlugDev 對較新 Paper 26.1+ environment 記載 Java 25。
+1.4.0 target 使用 Java 25 編譯，runtime 最低為 Java 25 與 Paper 1.21.6。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。
 
 Release automation 透過 Gradle property 建置 preview version，先發佈 Web archive 再發佈 core JAR，stable publication 則由 `production-release` environment gate。Web archive 排除 generated `dist`、dependency、coverage、Playwright 與 editor directory，因為 plugin 下載後會自行建置 frontend。
 

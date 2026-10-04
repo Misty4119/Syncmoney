@@ -126,6 +126,11 @@ Objective.md
 Proposal/
 reference/
 tools/plugdev/
+!tools/plugdev/
+tools/plugdev/*
+!tools/plugdev/prepare.mjs
+!tools/plugdev/prepare.test.mjs
+!tools/plugdev/README.md
 plugdev.yml
 
 # Accidental archive/JAR extraction and scratch output

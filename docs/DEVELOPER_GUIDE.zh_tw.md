@@ -2,7 +2,7 @@
 
 > 專案版本：`1.3.2`
 > Config schema：`12`
-> Build toolchain：Java 21
+> 1.4.0 target build toolchain：Java 25／Gradle 9.8.0
 
 英文版：[`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md)
 
@@ -13,14 +13,14 @@
 ## 1. Prerequisites
 
 - Git
-- JDK 21，供 Gradle toolchain/build
+- JDK 25 或更新版本，供 1.4.0 Gradle toolchain/build 與 server runtime
 - repository Gradle wrapper
 - Node.js + pnpm，供 `syncmoney-web`
 - 依測試範圍準備 Paper/Folia/Canvas
 - 需要對應 mode/feature 時才啟動 Redis/SQL
 - CMI acceptance 需自行提供合法授權 CMI
 
-Runtime Java 由 server 版本決定；PlugDev 對較新 Paper 26.1+ acceptance environment 記載 Java 25。
+1.4.0 target 的 build 與 runtime 最低為 Java 25，Paper 最低為 1.21.6。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0；這些僅是歷史基準，不是 1.4.0 的 toolchain 或 runtime minimum。
 
 ## 2. Repository map
 
@@ -275,7 +275,15 @@ Permission behavior 同時由 `plugin.yml` 與 command router/subcommand checks 
 
 Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不能只靠 compilation 驗證。需分別記錄實際 Minecraft/Paper/Folia/Canvas version、runtime Java version、Syncmoney artifact/version、實際存在的 optional dependency versions、player-side behavior、startup/shutdown logs、適用時的 cross-server propagation，以及無法測試的 scenario。
 
-Gradle toolchain 使用 Java 21。Runtime Java 依選用 server 而定；目前 PlugDev 指引指出較新的 Paper 26.1+ environment 使用 Java 25。
+1.4.0 使用 JDK 25 或更新版本及 repository Gradle 9.8.0 wrapper；server 必須使用 Java 25 或更新版本與 Paper 1.21.6 或更新版本。Java 21／Gradle 9.1.0 僅描述 1.3.2 baseline。
+
+### 升級與回復 runbook
+
+升級前，在所有節點暫停經濟 producer 與管理員寫入。將已接受的寫入、重試、資料庫工作與 audit work 排空至可確認狀態，再正常停止各節點。備份設定、訊息、aliases、SQL database、local SQLite 檔案與 WAL/SHM、Redis RDB/AOF，以及 recovery 或 overflow 檔案。記錄版本與 hash，不記錄 secrets。先在 disposable environment 驗證 Java/Paper minimum、候選 JAR checksum 與必要 dependencies。
+
+每台 server 安裝一份候選 Syncmoney JAR，沿用現有資料目錄。producer 保持暫停，先檢查 startup、設定與 schema handling、Vault provider ready，以及 disposable account 的讀寫。所有節點 ready 且已記錄餘額核對一致後才恢復 producer。T00A minimum Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 的完整 persisted-state upgrade 與 rollback gate。
+
+回復時暫停 producer、排空 accepted work、正常停止所有節點，並保存目前 SQL、Redis、SQLite 與 recovery state。將候選 JAR 換回已驗證的 1.3.2 JAR；可行時保留 Java 25 與受支援的 server。若也要降級 JVM 或 server，使用 1.3.2 支援的 runtime；不可假設較新的 server 能在 Java 21 執行。保留相容的目前資料與版本，不清 Redis、不重設餘額。較舊備份可能丟失備份後的有效交易，只能透過另行授權的 disaster-recovery procedure 還原。完整 persisted-data upgrade 與 rollback acceptance 仍由 V03/M00–M12 gate 負責。
 
 ## 18. Documentation、security 與 release hygiene
 
