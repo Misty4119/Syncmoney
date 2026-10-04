@@ -2,7 +2,7 @@
 
 ## Evidence identity
 
-- Source commit: 71cc55d5a3e974a47dd8339b83256e29cead25aa.
+- Source commit: 71cc55dfeefe9a8f40a3835b051ddd324d353767.
 - Release tag: annotated 1.3.2, tag object 24da5a6cafdb4803f06d81a3f7a85518fb0f2ff5, peeled commit 9acbced657aaff410e712b2d3e4ecf948fd4002a.
 - The tag is present locally and has a published GitHub release. Signature check reports “no signature found”; tag identity and asset evidence are recorded separately from cryptographic verification.
 - The only tracked source delta from the peeled release commit to the task source commit is .github/workflows/release.yml. Twelve packaged resource files differ byte-for-byte between the official JAR and Windows checkout, but their Git blob IDs match at both commits and their contents match after CRLF-to-LF normalization. All 9,349 JAR entries exist in both builds; class entries have no size/CRC differences. This is checkout line-ending behavior, not source drift.
@@ -95,7 +95,7 @@ Preserve error names and KEYS/ARGV order. Lua atomic execution prevents command 
 
 ## Source SHA inventory
 
-Source SHA means the Git blob object ID in source commit 71cc55d5a3e974a47dd8339b83256e29cead25aa; line-number references are relative to that tree. Artifact SHA-256 checksums are above. Tag and source commit have identical blob IDs for every source path listed here.
+The source commit SHA above identifies the Git commit. The table below records Git blob object IDs for individual files at that commit; line-number references are relative to that tree. Artifact SHA-256 checksums are above. Tag and source commit have identical blob IDs for every source path listed here.
 
 | Source path | Git blob SHA |
 |---|---|
