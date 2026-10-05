@@ -13,9 +13,12 @@ import org.bukkit.plugin.Plugin;
 import java.math.BigDecimal;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -82,6 +85,7 @@ public final class EconomyFacade {
     private final TransferOrchestrator transferOrchestrator;
 
     private final ScheduledExecutorService cleanupExecutor;
+    private final ThreadPoolExecutor balanceLoadExecutor;
 
     public EconomyFacade(Plugin plugin, SyncmoneyConfig config,
             CacheManager cacheManager, RedisManager redisManager,
@@ -138,6 +142,12 @@ public final class EconomyFacade {
         });
         this.cleanupExecutor.scheduleAtFixedRate(this::cleanupExpiredEntries, 5, 5, TimeUnit.MINUTES);
         this.cleanupExecutor.scheduleAtFixedRate(stateManager::cleanupTransferData, 1, 1, TimeUnit.MINUTES);
+        this.balanceLoadExecutor = new ThreadPoolExecutor(
+                1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(64), r -> {
+                    Thread t = new Thread(r, "Syncmoney-AccountLoader");
+                    t.setDaemon(true);
+                    return t;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     /** [SYNC-ECO-039] Check if running in local mode. */
@@ -225,10 +235,13 @@ public final class EconomyFacade {
 
         if (isLocalMode && localEconomyHandler != null) {
             try {
-                balance = localEconomyHandler.getBalance(uuid);
-                version = 1L;
+                LocalEconomyHandler.AccountSnapshot account = localEconomyHandler.findAccountSnapshot(uuid)
+                        .orElse(null);
+                balance = account == null ? BigDecimal.ZERO : account.balance();
+                version = account == null ? 0L : account.version();
             } catch (Exception e) {
                 plugin.getLogger().warning("Failed to get balance from local SQLite: " + e.getMessage());
+                return BigDecimal.ZERO;
             }
         } else if (!redisManager.isDegraded()) {
             try {
@@ -261,8 +274,9 @@ public final class EconomyFacade {
         final BigDecimal finalBalance = balance;
         final long finalVersion = version;
         long now = System.currentTimeMillis();
-        stateManager.computeIfAbsent(uuid, key -> new EconomyState(finalBalance, finalVersion, now));
-        return balance;
+        EconomyState loadedState = stateManager.computeIfAbsent(uuid,
+                key -> new EconomyState(finalBalance, finalVersion, now));
+        return loadedState.balance();
     }
 
     /**
@@ -276,18 +290,109 @@ public final class EconomyFacade {
 
     /** [ThreadSafe] Never performs IO on a PlaceholderAPI caller's region thread. */
     public BigDecimal getBalanceForPlaceholder(UUID uuid) {
+        if (uuid == null) return null;
         EconomyState state = stateManager.get(uuid);
         if (state != null) return state.balance();
-        if (placeholderLoads.add(uuid)) {
+        requestPlaceholderBalanceLoad(uuid);
+        return null;
+    }
+
+    private void requestPlaceholderBalanceLoad(UUID uuid) {
+        if (!placeholderLoads.add(uuid)) {
+            return;
+        }
+        try {
+            balanceLoadExecutor.execute(() -> {
+                try {
+                    if (stateManager.get(uuid) != null) {
+                        return;
+                    }
+                    if (isLocalMode && localEconomyHandler != null) {
+                        LocalEconomyHandler.AccountSnapshot account = localEconomyHandler.findAccountSnapshot(uuid)
+                                .orElse(new LocalEconomyHandler.AccountSnapshot(BigDecimal.ZERO, 0L));
+                        cacheColdAccount(uuid, account.balance(), account.version());
+                    } else {
+                        loadColdSharedAccount(uuid);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().fine("Cold account load failed for " + uuid + ": " + e.getMessage());
+                } finally {
+                    placeholderLoads.remove(uuid);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            placeholderLoads.remove(uuid);
+            plugin.getLogger().fine("Account load queue is full; deferring cold balance load for " + uuid);
+        }
+    }
+
+    private void loadColdSharedAccount(UUID uuid) throws Exception {
+        Exception redisFailure = null;
+        boolean redisReadSucceeded = false;
+        CacheManager.CachedBalance redisSnapshot = null;
+        if (redisManager != null && !redisManager.isDegraded() && cacheManager != null) {
             try {
-                plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-                    try { getBalance(uuid); } finally { placeholderLoads.remove(uuid); }
-                });
-            } catch (RuntimeException e) {
-                placeholderLoads.remove(uuid);
+                redisSnapshot = cacheManager.getBalanceSnapshotStrict(uuid).orElse(null);
+                redisReadSucceeded = true;
+            } catch (Exception e) {
+                redisFailure = e;
+            }
+        } else {
+            redisFailure = new IllegalStateException("Redis is unavailable for a cold account load");
+        }
+
+        if (redisSnapshot != null && (redisSnapshot.version() != 0L
+                || !config.isDbEnabled() || databaseManager == null)) {
+            cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
+            return;
+        }
+
+        if (config.isDbEnabled() && databaseManager != null) {
+            try {
+                var record = databaseManager.getPlayerStrict(uuid);
+                if (record.isPresent()) {
+                    var account = record.get();
+                    fallbackWrapper.logDegradedOperation("getBalance from DB");
+                    cacheColdAccount(uuid, account.balance(), account.version());
+                    return;
+                }
+            } catch (Exception databaseFailure) {
+                if (redisSnapshot != null) {
+                    cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
+                    return;
+                }
+                if (redisFailure != null) {
+                    databaseFailure.addSuppressed(redisFailure);
+                }
+                throw databaseFailure;
             }
         }
-        return null;
+
+        if (redisSnapshot != null) {
+            cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
+            return;
+        }
+        if (redisReadSucceeded) {
+            // Both Redis keys and the configured SQL row were confirmed absent.
+            cacheColdAccount(uuid, BigDecimal.ZERO, 0L);
+            return;
+        }
+
+        throw redisFailure != null ? redisFailure : new IllegalStateException(
+                "No available backend for a cold account load");
+    }
+
+    private void cacheColdAccount(UUID uuid, BigDecimal balance, long version) {
+        long now = System.currentTimeMillis();
+        stateManager.computeIfAbsent(uuid, key -> new EconomyState(balance, version, now));
+    }
+
+    String resolveCachedPlayerName(UUID uuid) {
+        if (uuid == null || nameResolver == null) {
+            return uuid == null ? null : uuid.toString();
+        }
+        String name = nameResolver.getCachedUuidNameMap().get(uuid);
+        return name == null || name.isBlank() ? uuid.toString() : name;
     }
 
     /**
@@ -328,10 +433,14 @@ public final class EconomyFacade {
     /**
      * [SYNC-ECO-046] Ensure data is loaded into memory. If not exists, trigger getBalance.
      */
-    void ensureLoaded(UUID uuid) {
+    boolean ensureLoaded(UUID uuid) {
+        if (stateManager.containsKey(uuid)) {
+            return true;
+        }
         if (!stateManager.containsKey(uuid)) {
             getBalance(uuid);
         }
+        return stateManager.containsKey(uuid);
     }
 
     /**
@@ -581,6 +690,17 @@ public final class EconomyFacade {
      * [SYNC-ECO-069] Shutdown the EconomyFacade and release resources.
      */
     public void shutdown() {
+        balanceLoadExecutor.shutdown();
+        try {
+            if (!balanceLoadExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                balanceLoadExecutor.shutdownNow();
+                balanceLoadExecutor.awaitTermination(2, TimeUnit.SECONDS);
+            }
+        } catch (InterruptedException e) {
+            balanceLoadExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
         if (cleanupExecutor != null) {
             cleanupExecutor.shutdown();
             try {

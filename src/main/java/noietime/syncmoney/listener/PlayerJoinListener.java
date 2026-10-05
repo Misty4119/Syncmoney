@@ -86,7 +86,6 @@ public final class PlayerJoinListener implements Listener {
     private void loadPlayerData(UUID uuid, String name) {
         try {
             BigDecimal balance = economyFacade.getBalance(uuid);
-
             if (baltopManager != null) {
                 baltopManager.updatePlayerRank(uuid, balance.doubleValue());
             }

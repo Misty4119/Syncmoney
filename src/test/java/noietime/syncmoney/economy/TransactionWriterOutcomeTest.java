@@ -138,7 +138,7 @@ class TransactionWriterOutcomeTest {
     }
 
     @Test
-    void localPluginMutationsCompleteBreakerOnce() {
+    void localPluginMutationsCompleteBreakerOnce() throws Exception {
         UUID account = UUID.randomUUID();
         String caller = "ExampleShop";
         Plugin plugin = mock(Plugin.class);
@@ -174,6 +174,11 @@ class TransactionWriterOutcomeTest {
             BigDecimal depositResult = writer.pluginDeposit(account, new BigDecimal("10.00"), caller);
             BigDecimal withdrawResult = writer.pluginWithdraw(account, new BigDecimal("5.00"), caller);
 
+            EconomyEvent accepted;
+            while ((accepted = queue.poll(0, TimeUnit.MILLISECONDS)) != null) {
+                queue.complete(accepted);
+            }
+
             assertAll(
                     () -> assertEquals(0, depositResult.compareTo(new BigDecimal("110.00"))),
                     () -> assertEquals(0, withdrawResult.compareTo(new BigDecimal("105.00"))),
@@ -182,14 +187,14 @@ class TransactionWriterOutcomeTest {
                     () -> assertTrue(preEvents.stream().allMatch(event -> caller.equals(event.getReason()))),
                     () -> assertTrue(postEvents.stream().allMatch(event -> caller.equals(event.getReason()))),
                     () -> assertEquals(105, state.get(account).balance().intValue()),
-                    () -> assertEquals(0, queue.size(), "LOCAL mutations persist through SQLite directly"),
+                    () -> assertEquals(0, queue.size(), "accepted LOCAL mutations are drained by the persistence worker"),
                     () -> Mockito.verify(breaker, Mockito.times(2)).checkTransaction(any(UUID.class),
                             any(BigDecimal.class), any(EconomyEvent.EventSource.class)),
                     () -> Mockito.verify(breaker, Mockito.times(2)).onTransactionComplete(any(UUID.class),
                             any(BigDecimal.class), any(BigDecimal.class)),
-                    () -> verify(localHandler).deposit(account, null, new BigDecimal("10.00"),
+                    () -> verify(localHandler, never()).deposit(account, null, new BigDecimal("10.00"),
                             EconomyEvent.EventSource.PLUGIN_DEPOSIT.name()),
-                    () -> verify(localHandler).withdraw(account, null, new BigDecimal("5.00"),
+                    () -> verify(localHandler, never()).withdraw(account, null, new BigDecimal("5.00"),
                             EconomyEvent.EventSource.PLUGIN_WITHDRAW.name())
             );
         } finally {

@@ -452,6 +452,19 @@ public final class DatabaseManager implements AutoCloseable {
      * Get player data.
      */
     public Optional<PlayerRecord> getPlayer(UUID uuid) {
+        try {
+            return getPlayerStrict(uuid);
+        } catch (SQLException e) {
+            plugin.getLogger().warning("Failed to get player " + uuid + ": " + e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Get player data while preserving database failures for callers that must not
+     * treat an unavailable query as a confirmed absent account.
+     */
+    public Optional<PlayerRecord> getPlayerStrict(UUID uuid) throws SQLException {
         try (Connection conn = getConnection();
                 PreparedStatement stmt = conn.prepareStatement(SELECT_PLAYER_SQL)) {
             stmt.setString(1, uuid.toString());
@@ -470,8 +483,6 @@ public final class DatabaseManager implements AutoCloseable {
                             updatedAtInstant));
                 }
             }
-        } catch (SQLException e) {
-            plugin.getLogger().warning("Failed to get player " + uuid + ": " + e.getMessage());
         }
         return Optional.empty();
     }

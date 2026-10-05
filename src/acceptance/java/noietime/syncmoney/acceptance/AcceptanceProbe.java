@@ -3,6 +3,7 @@ package noietime.syncmoney.acceptance;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyEvent;
 import net.milkbowl.vault.economy.Economy;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -54,8 +55,19 @@ public final class AcceptanceProbe extends JavaPlugin {
             UUID b = UUID.nameUUIDFromBytes("OfflinePlayer:AcceptanceB".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             plugin.getNameResolver().cacheName("AcceptanceA", a);
             plugin.getNameResolver().cacheName("AcceptanceB", b);
+            var registration = getServer().getServicesManager().getRegistration(Economy.class);
+            require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
+            Economy vault = registration.getProvider();
+            require(vault.isEnabled(), "Vault provider enabled");
+            OfflinePlayer offlineA = getServer().getOfflinePlayer(a);
+            OfflinePlayer offlineB = getServer().getOfflinePlayer(b);
             if (args.length > 0 && args[0].equals("read")) {
-                getLogger().info("ACCEPTANCE READ a=" + facade.getBalance(a) + " b=" + facade.getBalance(b));
+                double coldVaultA = vault.getBalance(offlineA);
+                double coldVaultB = vault.getBalance(offlineB);
+                BigDecimal persistedA = facade.getBalance(a);
+                BigDecimal persistedB = facade.getBalance(b);
+                getLogger().info("ACCEPTANCE READ vault-a=" + coldVaultA + " vault-b=" + coldVaultB
+                        + " persisted-a=" + persistedA + " persisted-b=" + persistedB);
                 return;
             }
             // Seed only these disposable accounts through the existing administrative path.
@@ -64,8 +76,9 @@ public final class AcceptanceProbe extends JavaPlugin {
             var source = EconomyEvent.EventSource.COMMAND_ADMIN;
             facade.setBalance(a, new BigDecimal("1000.00"), source);
             facade.setBalance(b, new BigDecimal("500.00"), source);
-            facade.deposit(a, new BigDecimal("25.50"), source);
-            facade.withdraw(a, new BigDecimal("5.50"), source);
+            require(vault.depositPlayer(offlineA, 25.50).transactionSuccess(), "Vault deposit");
+            require(vault.withdrawPlayer(offlineA, 5.50).transactionSuccess(), "Vault withdrawal");
+            require(vault.getBalance(offlineA) == 1020.00, "Vault warm balance after deposit/withdrawal");
             require(facade.getBalance(a).compareTo(new BigDecimal("1020")) == 0, "deposit/withdraw");
             facade.atomicTransfer(a, b, new BigDecimal("20"), source);
             require(facade.getBalance(a).compareTo(new BigDecimal("1000")) == 0, "transfer sender");
@@ -74,10 +87,6 @@ public final class AcceptanceProbe extends JavaPlugin {
             require(facade.atomicTransfer(a, b, new BigDecimal("1001"), source).signum() < 0,
                     "insufficient funds rejected");
             require(facade.getBalance(a).add(facade.getBalance(b)).compareTo(before) == 0, "failed transfer conservation");
-            var registration = getServer().getServicesManager().getRegistration(Economy.class);
-            require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
-            Economy vault = registration.getProvider();
-            require(vault.isEnabled(), "Vault provider enabled");
             String expectedVersion = expectedVersion();
             String actualVersion = plugin.getDescription().getVersion();
             require(!actualVersion.isBlank(), "plugin version is present");

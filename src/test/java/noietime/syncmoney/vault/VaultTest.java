@@ -266,10 +266,11 @@ class VaultTest {
 
             BigDecimal mutation = coldFacade.deposit(account, new BigDecimal("10.00"), EconomyEvent.EventSource.TEST);
             assertAll(
-                    () -> assertEquals(0, mutation.compareTo(new BigDecimal("745.25")),
-                            "the later mutation loads the existing SQL balance through getBalance"),
-                    () -> assertEquals(0, coldFacade.getBalance(account).compareTo(new BigDecimal("745.25"))),
-                    () -> verify(databaseManager).getPlayer(account)
+                    () -> assertEquals(0, mutation.compareTo(new BigDecimal("-1.00")),
+                            "shared writes are rejected while Redis is known degraded"),
+                    () -> assertFalse(coldFacade.hasInMemory(account),
+                            "a rejected degraded-mode write must not create a memory balance"),
+                    () -> verify(databaseManager, never()).getPlayer(account)
             );
         } finally {
             coldFacade.shutdown();

@@ -182,12 +182,18 @@ public final class CacheManager {
         cacheMisses.incrementAndGet();
 
         try (var jedis = redisManager.getResource()) {
-            String balanceStr = jedis.get(KEY_PREFIX_BALANCE + uuid.toString());
+            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            if (values == null || values.size() != 2) {
+                throw new IllegalStateException("Redis returned an invalid balance/version pair");
+            }
+            String balanceStr = values.get(0);
+            String versionStr = values.get(1);
+            if (balanceStr == null && versionStr != null) {
+                throw new IllegalStateException("Redis account version exists without a balance");
+            }
             BigDecimal balance = balanceStr != null ?
                 NumericUtil.normalize(balanceStr) :
                 BigDecimal.ZERO;
-
-            String versionStr = jedis.get(KEY_PREFIX_VERSION + uuid.toString());
             long version = versionStr != null ? Long.parseLong(versionStr) : 0L;
             memoryCache.compute(uuid, (k, v) -> new CachedBalance(balance, version));
 
@@ -423,6 +429,41 @@ public final class CacheManager {
                 plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg);
             }
             return BigDecimal.valueOf(-1);
+        }
+    }
+
+    /**
+     * Load the Redis balance/version pair without converting a backend failure to zero.
+     * Callers that need to distinguish unavailable storage from a confirmed absent
+     * account use this method on an I/O worker and handle the exception themselves.
+     */
+    public java.util.Optional<CachedBalance> getBalanceSnapshotStrict(UUID uuid) {
+        CachedBalance cached = memoryCache.get(uuid);
+        if (cached != null && !cached.isExpired(expirationMinutes)) {
+            cacheHits.incrementAndGet();
+            memoryCache.compute(uuid, (k, v) -> new CachedBalance(cached.balance(), cached.version()));
+            return java.util.Optional.of(cached);
+        }
+
+        cacheMisses.incrementAndGet();
+        try (var jedis = redisManager.getResource()) {
+            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            if (values == null || values.size() != 2) {
+                throw new IllegalStateException("Redis returned an invalid cold account snapshot");
+            }
+            String balanceStr = values.get(0);
+            String versionStr = values.get(1);
+            if (balanceStr == null && versionStr == null) {
+                return java.util.Optional.empty();
+            }
+            if (balanceStr == null) {
+                throw new IllegalStateException("Redis account version exists without a balance");
+            }
+            BigDecimal balance = NumericUtil.normalize(balanceStr);
+            long version = versionStr != null ? Long.parseLong(versionStr) : 0L;
+            CachedBalance snapshot = new CachedBalance(balance, version);
+            memoryCache.compute(uuid, (k, v) -> snapshot);
+            return java.util.Optional.of(snapshot);
         }
     }
 

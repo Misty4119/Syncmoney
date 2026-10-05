@@ -99,6 +99,53 @@ final class TransactionWriter {
         return true;
     }
 
+    private boolean commitAcceptedWrite(EconomyWriteQueue.Reservation reservation, EconomyEvent event) {
+        if (!isLocalMode) {
+            return reservation.commit(event);
+        }
+        if (MigrationLock.isLocked()) {
+            // Reaching this branch requires the migration worker's already-consumed
+            // one-shot ADMIN_SET permit. Do not try to consume a second permit for
+            // the worker's own migration write.
+            return reservation.commit(event);
+        }
+
+        // Keep migration from snapshotting LOCAL SQLite until the accepted event has
+        // actually committed. The producer's own lease ends when the Vault call returns.
+        MigrationLock.WriteLease persistenceLease = MigrationLock.tryAcquireWrite();
+        if (persistenceLease == null) {
+            return false;
+        }
+        boolean accepted = false;
+        try {
+            accepted = reservation.commit(event, persistenceLease);
+            return accepted;
+        } finally {
+            if (!accepted) {
+                persistenceLease.close();
+            }
+        }
+    }
+
+    private boolean ensureAccountLoaded(UUID uuid) {
+        if (stateManager.get(uuid) != null) {
+            return true;
+        }
+        boolean loaded = facade.ensureLoaded(uuid);
+        return !isLocalMode || localEconomyHandler == null || loaded;
+    }
+
+    private boolean canAdvanceLocalVersion(UUID uuid, EconomyState currentState) {
+        if (!isLocalMode || localEconomyHandler == null) {
+            return true;
+        }
+        if (currentState == null || currentState.version() >= Integer.MAX_VALUE - 1L) {
+            plugin.getLogger().severe("LOCAL mutation rejected before SQLite version overflow for " + uuid);
+            return false;
+        }
+        return true;
+    }
+
     /**
      * [SYNC-ECO-047] Deposit with optimistic locking - immediate memory update.
      */
@@ -124,8 +171,14 @@ final class TransactionWriter {
         }
 
         String playerName = facade.resolvePlayerName(uuid);
-        facade.ensureLoaded(uuid);
+        if (!ensureAccountLoaded(uuid)) {
+            plugin.getLogger().warning("Deposit rejected because the account could not be loaded for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
         EconomyState currentState = stateManager.get(uuid);
+        if (!canAdvanceLocalVersion(uuid, currentState)) {
+            return BigDecimal.valueOf(-1);
+        }
         BigDecimal currentBalance = (currentState != null) ? currentState.balance() : BigDecimal.ZERO;
 
         if (!preTransactionChecks(uuid, playerName, amount, currentBalance,
@@ -133,9 +186,8 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        final EconomyWriteQueue.Reservation reservation = isLocalMode
-                ? null : stateManager.tryReserveWrite(uuid, currentState);
-        if (!isLocalMode && reservation == null) {
+        final EconomyWriteQueue.Reservation reservation = stateManager.tryReserveWrite(uuid, currentState);
+        if (reservation == null) {
             plugin.getLogger().warning("Deposit rejected before balance mutation: write admission is full for " + uuid);
             return BigDecimal.valueOf(-1);
         }
@@ -178,15 +230,13 @@ final class TransactionWriter {
                 }
 
                 EconomyState next = new EconomyState(existingBalance.add(amount), currentVersion + 1, now);
-                if (reservation != null) {
-                    EconomyEvent event = new EconomyEvent(
-                            uuid, amount, next.balance(), next.version(),
-                            EconomyEvent.EventType.DEPOSIT, source,
-                            UUID.randomUUID().toString(), System.currentTimeMillis());
-                    if (!reservation.commit(event)) {
-                        plugin.getLogger().severe("Deposit rejected because its reserved write slot could not be committed for " + uuid);
-                        return existing;
-                    }
+                EconomyEvent event = new EconomyEvent(
+                        uuid, amount, next.balance(), next.version(),
+                        EconomyEvent.EventType.DEPOSIT, source,
+                        UUID.randomUUID().toString(), System.currentTimeMillis());
+                if (!commitAcceptedWrite(reservation, event)) {
+                    plugin.getLogger().severe("Deposit rejected because its reserved write slot could not be committed for " + uuid);
+                    return existing;
                 }
                 mutationAccepted.set(true);
                 return next;
@@ -200,9 +250,7 @@ final class TransactionWriter {
                 return BigDecimal.valueOf(-1);
             }
 
-            if (reservation != null) {
-                writeQueue.reportUsage();
-            }
+            writeQueue.reportUsage();
 
             BigDecimal newBalance = newState.balance();
 
@@ -210,12 +258,7 @@ final class TransactionWriter {
             postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
                     amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
 
-            if (isLocalMode && localEconomyHandler != null) {
-                try {
-                    localEconomyHandler.deposit(uuid, null, amount, source.name());
-                } catch (Exception e) {
-                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
-                }
+            if (isLocalMode) {
                 return newBalance;
             }
 
@@ -253,8 +296,14 @@ final class TransactionWriter {
         }
 
         String playerName = facade.resolvePlayerName(uuid);
-        facade.ensureLoaded(uuid);
+        if (!ensureAccountLoaded(uuid)) {
+            plugin.getLogger().warning("Withdraw rejected because the account could not be loaded for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
         EconomyState currentState = stateManager.get(uuid);
+        if (!canAdvanceLocalVersion(uuid, currentState)) {
+            return BigDecimal.valueOf(-1);
+        }
         BigDecimal currentBalance = (currentState != null) ? currentState.balance() : BigDecimal.ZERO;
 
         if (!preTransactionChecks(uuid, playerName, amount, currentBalance,
@@ -262,9 +311,8 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        final EconomyWriteQueue.Reservation reservation = isLocalMode
-                ? null : stateManager.tryReserveWrite(uuid, currentState);
-        if (!isLocalMode && reservation == null) {
+        final EconomyWriteQueue.Reservation reservation = stateManager.tryReserveWrite(uuid, currentState);
+        if (reservation == null) {
             plugin.getLogger().warning("Withdraw rejected before balance mutation: write admission is full for " + uuid);
             return BigDecimal.valueOf(-1);
         }
@@ -315,15 +363,13 @@ final class TransactionWriter {
                 }
 
                 EconomyState next = new EconomyState(existingBalance.subtract(amount), currentVersion + 1, now);
-                if (reservation != null) {
-                    EconomyEvent event = new EconomyEvent(
-                            uuid, amount.negate(), next.balance(), next.version(),
-                            EconomyEvent.EventType.WITHDRAW, source,
-                            UUID.randomUUID().toString(), System.currentTimeMillis());
-                    if (!reservation.commit(event)) {
-                        plugin.getLogger().severe("Withdraw rejected because its reserved write slot could not be committed for " + uuid);
-                        return existing;
-                    }
+                EconomyEvent event = new EconomyEvent(
+                        uuid, amount.negate(), next.balance(), next.version(),
+                        EconomyEvent.EventType.WITHDRAW, source,
+                        UUID.randomUUID().toString(), System.currentTimeMillis());
+                if (!commitAcceptedWrite(reservation, event)) {
+                    plugin.getLogger().severe("Withdraw rejected because its reserved write slot could not be committed for " + uuid);
+                    return existing;
                 }
                 mutationAccepted.set(true);
                 return next;
@@ -338,9 +384,7 @@ final class TransactionWriter {
                 return BigDecimal.valueOf(-1);
             }
 
-            if (reservation != null) {
-                writeQueue.reportUsage();
-            }
+            writeQueue.reportUsage();
 
             BigDecimal newBalance = newState.balance();
 
@@ -348,12 +392,7 @@ final class TransactionWriter {
             postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
                     amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
 
-            if (isLocalMode && localEconomyHandler != null) {
-                try {
-                    localEconomyHandler.withdraw(uuid, null, amount, source.name());
-                } catch (Exception e) {
-                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
-                }
+            if (isLocalMode) {
                 return newBalance;
             }
 
@@ -393,14 +432,22 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        facade.ensureLoaded(uuid);
+        if (!ensureAccountLoaded(uuid)) {
+            plugin.getLogger().warning("SetBalance rejected because the account could not be loaded for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
 
         EconomyState existingState = stateManager.get(uuid);
+        if (!canAdvanceLocalVersion(uuid, existingState)) {
+            return BigDecimal.valueOf(-1);
+        }
         BigDecimal oldBalance = (existingState != null) ? existingState.balance() : BigDecimal.ZERO;
 
-        final EconomyWriteQueue.Reservation reservation = isLocalMode
+        boolean migrationWorkerWrite = isLocalMode && source == EconomyEvent.EventSource.ADMIN_SET
+                && MigrationLock.isLocked();
+        final EconomyWriteQueue.Reservation reservation = migrationWorkerWrite
                 ? null : stateManager.tryReserveWrite(uuid, existingState);
-        if (!isLocalMode && reservation == null) {
+        if (!migrationWorkerWrite && reservation == null) {
             plugin.getLogger().warning("SetBalance rejected before balance mutation: write admission is full for " + uuid);
             return BigDecimal.valueOf(-1);
         }
@@ -417,7 +464,7 @@ final class TransactionWriter {
                             uuid, delta, finalNewBalance, next.version(),
                             EconomyEvent.EventType.SET_BALANCE, source,
                             UUID.randomUUID().toString(), System.currentTimeMillis());
-                    if (!reservation.commit(event)) {
+                    if (!commitAcceptedWrite(reservation, event)) {
                         plugin.getLogger().severe("SetBalance rejected because its reserved write slot could not be committed for " + uuid);
                         return existing;
                     }
@@ -438,11 +485,9 @@ final class TransactionWriter {
             postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.SET_BALANCE,
                     newBalance.subtract(oldBalance), oldBalance, newBalance, source.name(), null, null, null, true, null);
 
-            if (isLocalMode && localEconomyHandler != null) {
-                try {
+            if (isLocalMode) {
+                if (migrationWorkerWrite && localEconomyHandler != null) {
                     localEconomyHandler.setBalance(uuid, null, newBalance, source.name());
-                } catch (Exception e) {
-                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
                 }
                 return newBalance;
             }

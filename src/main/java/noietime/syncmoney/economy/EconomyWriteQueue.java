@@ -38,6 +38,8 @@ public final class EconomyWriteQueue {
     private final int capacity;
     private final Logger logger;
     private final Semaphore admissionPermits;
+    private final Object admissionGate = new Object();
+    private boolean acceptingWrites = true;
     private volatile boolean warnedHighUsage = false;
 
 
@@ -52,6 +54,7 @@ public final class EconomyWriteQueue {
     private final Map<EconomyEvent, Long> reservationsByEvent =
             Collections.synchronizedMap(new IdentityHashMap<>());
     private final AtomicLong nextReservationId = new AtomicLong();
+    private final ConcurrentMap<Long, AutoCloseable> completionResources = new ConcurrentHashMap<>();
     private volatile WriteCompletionHandler writeCompletionHandler;
     private volatile long lastHighUsageWarning = 0;
 
@@ -100,6 +103,14 @@ public final class EconomyWriteQueue {
         }
 
         synchronized boolean commit(EconomyEvent event) {
+            return commit(event, null);
+        }
+
+        /**
+         * Commit an event and transfer a resource lease to the consumer. The resource is
+         * released only when the consumer completes the accepted event.
+         */
+        synchronized boolean commit(EconomyEvent event, AutoCloseable completionResource) {
             if (closed || committed || event == null || !uuid.equals(event.playerUuid())) {
                 return false;
             }
@@ -111,6 +122,9 @@ public final class EconomyWriteQueue {
                 reservationsByEvent.put(event, id);
             }
 
+            if (completionResource != null) {
+                completionResources.put(id, completionResource);
+            }
             acceptedWrite.committed = true;
             incrementCount(committedWriteCounts, uuid);
 
@@ -119,6 +133,7 @@ public final class EconomyWriteQueue {
                 queued = queue.offer(event);
             } catch (RuntimeException e) {
                 removeEventReservation(event);
+                completionResources.remove(id);
                 releaseOwnership(id, true);
                 closed = true;
                 throw e;
@@ -126,6 +141,7 @@ public final class EconomyWriteQueue {
 
             if (!queued) {
                 removeEventReservation(event);
+                completionResources.remove(id);
                 releaseOwnership(id, true);
                 closed = true;
                 return false;
@@ -191,18 +207,24 @@ public final class EconomyWriteQueue {
      * @return true if offered, false if timeout expired
      */
     public boolean offerBlocking(EconomyEvent event, long timeout, TimeUnit unit) {
-        if (event == null) {
+        if (event == null || event.playerUuid() == null) {
             return false;
         }
-        Reservation reservation;
         try {
             if (!admissionPermits.tryAcquire(timeout, unit)) {
                 return false;
             }
-            reservation = registerReservation(event.playerUuid());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        }
+        Reservation reservation;
+        synchronized (admissionGate) {
+            if (!acceptingWrites) {
+                admissionPermits.release();
+                return false;
+            }
+            reservation = registerReservation(event.playerUuid());
         }
         try (reservation) {
             boolean committed = reservation.commit(event);
@@ -302,7 +324,7 @@ public final class EconomyWriteQueue {
                 if (toRemove.size() >= maxDrain) {
                     break;
                 }
-                if (event.playerUuid().equals(uuid)) {
+                if (event.playerUuid().equals(uuid) && !hasCompletionResource(event)) {
                     toRemove.add(event);
                 }
             }
@@ -329,10 +351,25 @@ public final class EconomyWriteQueue {
     }
 
     Reservation tryReserve(UUID uuid) {
-        if (uuid == null || !admissionPermits.tryAcquire()) {
+        if (uuid == null) {
             return null;
         }
-        return registerReservation(uuid);
+        synchronized (admissionGate) {
+            if (!acceptingWrites || !admissionPermits.tryAcquire()) {
+                return null;
+            }
+            return registerReservation(uuid);
+        }
+    }
+
+    void closeAdmission() {
+        synchronized (admissionGate) {
+            acceptingWrites = false;
+        }
+    }
+
+    boolean hasOutstandingWrites() {
+        return !acceptedWrites.isEmpty();
     }
 
     private Reservation registerReservation(UUID uuid) {
@@ -354,6 +391,14 @@ public final class EconomyWriteQueue {
         return queue.removeIf(queuedEvent -> queuedEvent == event);
     }
 
+    private boolean hasCompletionResource(EconomyEvent event) {
+        Long reservationId;
+        synchronized (reservationsByEvent) {
+            reservationId = reservationsByEvent.get(event);
+        }
+        return reservationId != null && completionResources.containsKey(reservationId);
+    }
+
     void reportUsage() {
         checkHighUsage();
     }
@@ -371,6 +416,20 @@ public final class EconomyWriteQueue {
             decrementPendingCount(accepted.uuid(), 1);
         }
         admissionPermits.release();
+        AutoCloseable completionResource = completionResources.remove(reservationId);
+        closeCompletionResource(completionResource);
+    }
+
+    private void closeCompletionResource(AutoCloseable completionResource) {
+        if (completionResource != null) {
+            try {
+                completionResource.close();
+            } catch (Exception e) {
+                if (logger != null) {
+                    logger.warning("Failed to release accepted-write completion resource: " + e.getMessage());
+                }
+            }
+        }
     }
 
     private static void decrementCount(ConcurrentMap<UUID, AtomicInteger> counts, UUID uuid, int decrement) {
@@ -413,16 +472,21 @@ public final class EconomyWriteQueue {
         if (removeQueuedIdentity(event)) {
             decrementPendingCount(event.playerUuid(), 1);
         }
+        AutoCloseable completionResource = completionResources.remove(reservationId);
         releaseOwnership(reservationId, false);
-        WriteCompletionHandler handler = writeCompletionHandler;
-        if (handler != null) {
-            try {
-                handler.onComplete(event, authorityBalance, authorityVersion);
-            } catch (RuntimeException e) {
-                if (logger != null) {
-                    logger.warning("Failed to reconcile completed write for " + event.playerUuid() + ": " + e.getMessage());
+        try {
+            WriteCompletionHandler handler = writeCompletionHandler;
+            if (handler != null) {
+                try {
+                    handler.onComplete(event, authorityBalance, authorityVersion);
+                } catch (RuntimeException e) {
+                    if (logger != null) {
+                        logger.warning("Failed to reconcile completed write for " + event.playerUuid() + ": " + e.getMessage());
+                    }
                 }
             }
+        } finally {
+            closeCompletionResource(completionResource);
         }
     }
 

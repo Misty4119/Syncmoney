@@ -279,7 +279,9 @@ public final class Syncmoney extends JavaPlugin {
                 baltopManager,
                 economyServiceManager.getShadowSyncTask(),
                 economyServiceManager.getOverflowLog(),
-                storageManager.getDatabaseManager());
+                storageManager.getDatabaseManager(),
+                economyServiceManager.getEconomyFacade(),
+                economyServiceManager.getLocalEconomyHandler());
         eventConsumerManager.initialize();
         eventConsumerManager.start();
         getLogger().info("EconomyEventConsumer started");

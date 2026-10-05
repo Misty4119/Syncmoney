@@ -30,8 +30,11 @@ public class EventConsumerManager {
     private final ShadowSyncTask shadowSyncTask;
     private final OverflowLogInterface overflowLog;
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
+    private final EconomyFacade economyFacade;
+    private final LocalEconomyHandler localEconomyHandler;
 
     private EconomyEventConsumer economyEventConsumer;
+    private LocalPersistenceWorker localPersistenceWorker;
 
     public EventConsumerManager(Syncmoney plugin, SyncmoneyConfig config,
                               EconomyWriteQueue economyWriteQueue,
@@ -41,7 +44,8 @@ public class EventConsumerManager {
                               NameResolver nameResolver, BaltopManager baltopManager,
                               ShadowSyncTask shadowSyncTask,
                               OverflowLogInterface overflowLog,
-                              noietime.syncmoney.storage.db.DatabaseManager databaseManager) {
+                              noietime.syncmoney.storage.db.DatabaseManager databaseManager,
+                              EconomyFacade economyFacade, LocalEconomyHandler localEconomyHandler) {
         this.plugin = plugin;
         this.config = config;
         this.economyWriteQueue = economyWriteQueue;
@@ -55,12 +59,28 @@ public class EventConsumerManager {
         this.shadowSyncTask = shadowSyncTask;
         this.overflowLog = overflowLog;
         this.databaseManager = databaseManager;
+        this.economyFacade = economyFacade;
+        this.localEconomyHandler = localEconomyHandler;
     }
 
     /**
      * Initialize economy event consumer.
      */
     public void initialize() {
+        if (config.isLocalMode()) {
+            if (economyFacade == null || localEconomyHandler == null) {
+                plugin.getLogger().severe("LOCAL persistence worker unavailable: economy facade or SQLite handler is missing");
+                return;
+            }
+            this.localPersistenceWorker = new LocalPersistenceWorker(
+                    economyWriteQueue,
+                    event -> localEconomyHandler.persistAccepted(
+                            event, economyFacade.resolveCachedPlayerName(event.playerUuid())),
+                    plugin.getLogger());
+            plugin.getLogger().fine("LocalPersistenceWorker initialized");
+            return;
+        }
+
         this.economyEventConsumer = new EconomyEventConsumer(
                 plugin,
                 config,
@@ -83,6 +103,11 @@ public class EventConsumerManager {
      * Start the consumer.
      */
     public void start() {
+        if (localPersistenceWorker != null) {
+            localPersistenceWorker.start();
+            plugin.getLogger().fine("LocalPersistenceWorker ready");
+            return;
+        }
         if (economyEventConsumer == null) {
             return;
         }
@@ -102,6 +127,9 @@ public class EventConsumerManager {
         
         if (economyEventConsumer != null) {
             economyEventConsumer.shutdown();
+        }
+        if (localPersistenceWorker != null) {
+            localPersistenceWorker.shutdown();
         }
         
         plugin.getLogger().fine("Event consumer layer shutdown complete");

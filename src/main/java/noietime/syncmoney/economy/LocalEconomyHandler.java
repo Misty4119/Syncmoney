@@ -23,8 +23,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class LocalEconomyHandler implements AutoCloseable {
 
+    record AccountSnapshot(BigDecimal balance, long version) {
+    }
+
     private final Syncmoney plugin;
     private final String dbPath;
+    private final String serverName;
     private Connection connection;
 
     private BaltopManager baltopManager;
@@ -32,13 +36,17 @@ public class LocalEconomyHandler implements AutoCloseable {
     private volatile SseManager sseManager;
 
     private final ConcurrentHashMap<UUID, BigDecimal> balanceCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> versionCache = new ConcurrentHashMap<>();
 
     /** [SYNC-ECO-007] Monotonically increasing sequence counter for transaction ordering within the same millisecond. */
     private final AtomicInteger sequenceCounter = new AtomicInteger(0);
+    private final Map<String, Integer> pendingEventSequences = new HashMap<>();
 
     public LocalEconomyHandler(Syncmoney plugin, String dbPath) {
         this.plugin = plugin;
         this.dbPath = dbPath;
+        this.serverName = plugin.getConfig() != null
+                ? plugin.getConfig().getString("server-name", "local") : "local";
         initialize();
     }
 
@@ -165,35 +173,77 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-011] Get balance.
      */
-    public BigDecimal getBalance(UUID uuid) {
+    public synchronized BigDecimal getBalance(UUID uuid) {
+        try {
+            return findBalance(uuid).orElse(BigDecimal.ZERO);
+        } catch (SQLException e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    /**
+     * Read a LOCAL account without collapsing storage failure into a confirmed zero.
+     * An empty result means the query succeeded and the account is absent.
+     */
+    synchronized java.util.Optional<BigDecimal> findBalance(UUID uuid) throws SQLException {
         BigDecimal cached = balanceCache.get(uuid);
         if (cached != null) {
-            return cached;
+            return java.util.Optional.of(cached);
+        }
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("Local SQLite connection is unavailable");
         }
 
         String sql = "SELECT balance, name FROM player_balances WHERE uuid = ?";
 
         try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
             pstmt.setString(1, uuid.toString());
-
             try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    BigDecimal balance = NumericUtil.normalize(BigDecimal.valueOf(rs.getDouble("balance")));
-                    balanceCache.put(uuid, balance);
-
-                    return balance;
+                if (!rs.next()) {
+                    return java.util.Optional.empty();
                 }
+                BigDecimal balance = NumericUtil.normalize(BigDecimal.valueOf(rs.getDouble("balance")));
+                balanceCache.put(uuid, balance);
+                return java.util.Optional.of(balance);
             }
-        } catch (SQLException e) {
+        }
+    }
+
+    /**
+     * Read the persisted balance and SQLite version together for an async cold load.
+     * This deliberately bypasses the balance-only cache so a near-overflow version
+     * cannot be replaced by a synthetic in-memory starting value.
+     */
+    synchronized java.util.Optional<AccountSnapshot> findAccountSnapshot(UUID uuid) throws SQLException {
+        BigDecimal cachedBalance = balanceCache.get(uuid);
+        Long cachedVersion = versionCache.get(uuid);
+        if (cachedBalance != null && cachedVersion != null) {
+            return java.util.Optional.of(new AccountSnapshot(cachedBalance, cachedVersion));
+        }
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("Local SQLite connection is unavailable");
         }
 
-        return BigDecimal.ZERO;
+        String sql = "SELECT balance, version FROM player_balances WHERE uuid = ?";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    return java.util.Optional.empty();
+                }
+                BigDecimal balance = NumericUtil.normalize(BigDecimal.valueOf(rs.getDouble("balance")));
+                long version = rs.getLong("version");
+                balanceCache.put(uuid, balance);
+                versionCache.put(uuid, version);
+                return java.util.Optional.of(new AccountSnapshot(balance, version));
+            }
+        }
     }
 
     /**
      * [SYNC-ECO-012] Deposit.
      */
-    public BigDecimal deposit(UUID uuid, String name, BigDecimal amount, String source) {
+    public synchronized BigDecimal deposit(UUID uuid, String name, BigDecimal amount, String source) {
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -240,6 +290,7 @@ public class LocalEconomyHandler implements AutoCloseable {
             commit();
 
             balanceCache.put(uuid, newBalance);
+            versionCache.put(uuid, (long) version);
 
             updateBaltopRank(uuid, newBalance.doubleValue());
 
@@ -257,7 +308,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-013] Withdraw.
      */
-    public BigDecimal withdraw(UUID uuid, String name, BigDecimal amount, String source) {
+    public synchronized BigDecimal withdraw(UUID uuid, String name, BigDecimal amount, String source) {
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -309,6 +360,7 @@ public class LocalEconomyHandler implements AutoCloseable {
             commit();
 
             balanceCache.put(uuid, newBalance);
+            versionCache.put(uuid, (long) version);
 
             updateBaltopRank(uuid, newBalance.doubleValue());
 
@@ -326,7 +378,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-014] Set balance.
      */
-    public BigDecimal setBalance(UUID uuid, String name, BigDecimal newBalance, String source) {
+    public synchronized BigDecimal setBalance(UUID uuid, String name, BigDecimal newBalance, String source) {
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -372,6 +424,7 @@ public class LocalEconomyHandler implements AutoCloseable {
             commit();
 
             balanceCache.put(uuid, newBalance);
+            versionCache.put(uuid, (long) version);
 
             updateBaltopRank(uuid, newBalance.doubleValue());
 
@@ -383,6 +436,209 @@ public class LocalEconomyHandler implements AutoCloseable {
             return BigDecimal.valueOf(-1);
         } finally {
             restoreAutoCommit();
+        }
+    }
+
+    /**
+     * Persist an already accepted LOCAL write as one SQLite transaction. The worker
+     * retries the same immutable event on failure, so its per-process transaction
+     * sequence is kept stable and a retry can recognize a commit whose acknowledgment
+     * was lost.
+     */
+    synchronized LocalPersistenceReceipt persistAccepted(EconomyEvent event, String playerName) throws SQLException {
+        if (event == null || event.playerUuid() == null || event.requestId() == null) {
+            throw new IllegalArgumentException("Accepted local event requires an account and request id");
+        }
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("Local SQLite connection is unavailable");
+        }
+
+        UUID uuid = event.playerUuid();
+        String name = playerName == null || playerName.isBlank() ? uuid.toString() : playerName;
+        BigDecimal balanceAfter = NumericUtil.normalize(event.balanceAfter());
+        BigDecimal balanceBefore = BigDecimal.ZERO;
+        long version = 0L;
+        int sequence = pendingEventSequences.computeIfAbsent(event.requestId(),
+                ignored -> sequenceCounter.incrementAndGet());
+        long timestamp = event.timestamp() > 0 ? event.timestamp() : System.currentTimeMillis();
+        String type = localTransactionType(event.type());
+        BigDecimal transactionAmount = event.type() == EconomyEvent.EventType.SET_BALANCE
+                ? balanceAfter : event.delta().abs();
+        String normalizedType = "PLAYER_TRANSFER".equals(event.source().name()) ? "TRANSFER" : type;
+        double signedAmount = transactionAmount.doubleValue();
+        if (event.type() == EconomyEvent.EventType.WITHDRAW
+                || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
+            signedAmount = -Math.abs(signedAmount);
+        }
+
+        long transactionRowId = 0L;
+        boolean insertedTransaction = false;
+        SQLException failure = null;
+        try {
+            connection.setAutoCommit(false);
+            transactionRowId = findTransactionRow(uuid, timestamp, sequence);
+            if (transactionRowId == 0L) {
+                balanceBefore = readBalanceFromDatabase(uuid);
+                balanceAfter = balanceAfterForAcceptedEvent(event, balanceBefore);
+                long eventVersion;
+                try {
+                    eventVersion = Math.addExact(event.version(), 1L);
+                } catch (ArithmeticException e) {
+                    throw new SQLException("LOCAL account version overflow", e);
+                }
+                long nextVersion = Math.max((long) getVersionStrict(uuid) + 1L, eventVersion);
+                if (nextVersion > Integer.MAX_VALUE) {
+                    throw new SQLException("LOCAL account version exceeds the legacy SQLite integer range");
+                }
+                version = nextVersion;
+                upsertBalance(uuid, name, balanceAfter, (int) version);
+                transactionRowId = insertTransactionStrict(uuid, name, normalizedType, signedAmount,
+                        balanceBefore.doubleValue(), balanceAfter.doubleValue(), event.source().name(),
+                        timestamp, sequence);
+                insertedTransaction = true;
+            } else {
+                balanceAfter = readBalanceFromDatabase(uuid);
+                version = getVersionStrict(uuid);
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            failure = e;
+            try {
+                connection.rollback();
+            } catch (SQLException rollbackFailure) {
+                e.addSuppressed(rollbackFailure);
+            }
+        } finally {
+            try {
+                if (!connection.getAutoCommit()) {
+                    connection.setAutoCommit(true);
+                }
+            } catch (SQLException restoreFailure) {
+                if (failure == null) {
+                    failure = restoreFailure;
+                } else {
+                    failure.addSuppressed(restoreFailure);
+                }
+            }
+        }
+
+        if (failure != null) {
+            throw failure;
+        }
+
+        pendingEventSequences.remove(event.requestId());
+        balanceCache.put(uuid, balanceAfter);
+        versionCache.put(uuid, version);
+        if (insertedTransaction && transactionRowId > 0) {
+            broadcastLocalAuditEvent(transactionRowId, uuid, name, normalizedType, signedAmount,
+                    balanceAfter.doubleValue(), event.source().name(), timestamp, sequence);
+        }
+        updateBaltopRank(uuid, balanceAfter.doubleValue());
+        return new LocalPersistenceReceipt(balanceAfter, version);
+    }
+
+    private BigDecimal balanceAfterForAcceptedEvent(EconomyEvent event, BigDecimal balanceBefore)
+            throws SQLException {
+        return switch (event.type()) {
+            case DEPOSIT, TRANSFER_IN -> NumericUtil.normalize(balanceBefore.add(event.delta()));
+            case WITHDRAW, TRANSFER_OUT -> {
+                BigDecimal resultingBalance = NumericUtil.normalize(balanceBefore.add(event.delta()));
+                if (resultingBalance.compareTo(BigDecimal.ZERO) < 0) {
+                    throw new SQLException("Accepted LOCAL withdrawal exceeds the persisted balance");
+                }
+                yield resultingBalance;
+            }
+            case SET_BALANCE -> NumericUtil.normalize(event.balanceAfter());
+        };
+    }
+
+    private String localTransactionType(EconomyEvent.EventType type) {
+        return switch (type) {
+            case DEPOSIT -> "DEPOSIT";
+            case WITHDRAW -> "WITHDRAW";
+            case SET_BALANCE -> "SET_BALANCE";
+            case TRANSFER_IN -> "TRANSFER_IN";
+            case TRANSFER_OUT -> "TRANSFER_OUT";
+        };
+    }
+
+    private BigDecimal readBalanceFromDatabase(UUID uuid) throws SQLException {
+        String sql = "SELECT balance FROM player_balances WHERE uuid = ?";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? NumericUtil.normalize(BigDecimal.valueOf(rs.getDouble(1))) : BigDecimal.ZERO;
+            }
+        }
+    }
+
+    private long getVersionStrict(UUID uuid) throws SQLException {
+        String sql = "SELECT version FROM player_balances WHERE uuid = ?";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private void upsertBalance(UUID uuid, String name, BigDecimal balance, int version) throws SQLException {
+        String sql = """
+                INSERT INTO player_balances (uuid, name, balance, version, last_update, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uuid) DO UPDATE SET
+                    name = excluded.name,
+                    balance = excluded.balance,
+                    version = excluded.version,
+                    last_update = excluded.last_update
+                """;
+        long now = System.currentTimeMillis();
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            pstmt.setString(2, name);
+            pstmt.setBigDecimal(3, balance);
+            pstmt.setInt(4, version);
+            pstmt.setLong(5, now);
+            pstmt.setLong(6, now);
+            pstmt.executeUpdate();
+        }
+    }
+
+    private long findTransactionRow(UUID uuid, long timestamp, int sequence) throws SQLException {
+        String sql = "SELECT id FROM transactions WHERE uuid = ? AND timestamp = ? AND sequence = ? LIMIT 1";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            pstmt.setLong(2, timestamp);
+            pstmt.setInt(3, sequence);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private long insertTransactionStrict(UUID uuid, String name, String type, double amount,
+            double balanceBefore, double balanceAfter, String source, long timestamp, int sequence)
+            throws SQLException {
+        String sql = """
+                INSERT INTO transactions (uuid, name, type, amount, balance_before, balance_after,
+                                         source, target_name, timestamp, sequence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement pstmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            pstmt.setString(1, uuid.toString());
+            pstmt.setString(2, name);
+            pstmt.setString(3, type);
+            pstmt.setDouble(4, amount);
+            pstmt.setDouble(5, balanceBefore);
+            pstmt.setDouble(6, balanceAfter);
+            pstmt.setString(7, source);
+            pstmt.setString(8, null);
+            pstmt.setLong(9, timestamp);
+            pstmt.setInt(10, sequence);
+            pstmt.executeUpdate();
+            try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                return generatedKeys.next() ? generatedKeys.getLong(1) : 0L;
+            }
         }
     }
 
@@ -464,7 +720,6 @@ public class LocalEconomyHandler implements AutoCloseable {
                                           long timestamp, int sequence) {
         if (sseManager == null || !sseManager.isEnabled()) return;
         try {
-            String serverName = plugin.getConfig().getString("server-name", "local");
             String safeName = name != null ? name.replace("\\", "\\\\").replace("\"", "\\\"") : "unknown";
             String safeSource = source != null ? source.replace("\"", "\\\"") : "LOCAL";
             String safeServer = serverName.replace("\"", "\\\"");
@@ -567,7 +822,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-021] Gets all balances sorted by balance (for baltop).
      */
-    public List<Map<String, Object>> getAllBalancesSorted(int limit) {
+    public synchronized List<Map<String, Object>> getAllBalancesSorted(int limit) {
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT uuid, name, balance FROM player_balances ORDER BY balance DESC LIMIT ?";
 
@@ -593,7 +848,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-022] Gets total balance of all players.
      */
-    public BigDecimal getTotalBalance() {
+    public synchronized BigDecimal getTotalBalance() {
         String sql = "SELECT SUM(balance) as total FROM player_balances";
 
         try (PreparedStatement pstmt = connection.prepareStatement(sql);
@@ -612,7 +867,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-023] Gets total number of players with balance > 0.
      */
-    public int getTotalPlayerCount() {
+    public synchronized int getTotalPlayerCount() {
         String sql = "SELECT COUNT(*) as count FROM player_balances WHERE balance > 0";
 
         try (PreparedStatement pstmt = connection.prepareStatement(sql);
@@ -630,7 +885,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-024] Gets transaction count for today.
      */
-    public int getTodayTransactionCount() {
+    public synchronized int getTodayTransactionCount() {
         long todayStart = getTodayStartTimestamp();
         String sql = "SELECT COUNT(*) as count FROM transactions WHERE timestamp >= ?";
 
@@ -660,14 +915,14 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-026] Gets transaction history for a player.
      */
-    public List<Map<String, Object>> getTransactionHistory(UUID uuid, int limit) {
+    public synchronized List<Map<String, Object>> getTransactionHistory(UUID uuid, int limit) {
         return getTransactionHistory(uuid, limit, 0);
     }
 
     /**
      * [SYNC-ECO-027] Gets transaction history for a player with offset support.
      */
-    public List<Map<String, Object>> getTransactionHistory(UUID uuid, int limit, int offset) {
+    public synchronized List<Map<String, Object>> getTransactionHistory(UUID uuid, int limit, int offset) {
         List<Map<String, Object>> result = new ArrayList<>();
         String sql;
         if (offset > 0) {
@@ -712,7 +967,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-028] Gets all transactions with pagination.
      */
-    public List<Map<String, Object>> getAllTransactions(int offset, int limit) {
+    public synchronized List<Map<String, Object>> getAllTransactions(int offset, int limit) {
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT * FROM transactions ORDER BY timestamp DESC, sequence DESC LIMIT ? OFFSET ?";
 
@@ -747,7 +1002,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     /**
      * [SYNC-ECO-029] Gets transactions with true cursor-based pagination for infinite scroll support.
      */
-    public List<Map<String, Object>> getTransactionsBefore(UUID playerUuid, long startTime, long endTime,
+    public synchronized List<Map<String, Object>> getTransactionsBefore(UUID playerUuid, long startTime, long endTime,
             String type, long cursorTimestamp, int cursorSequence, int limit) {
         List<Map<String, Object>> result = new ArrayList<>();
 
@@ -812,7 +1067,7 @@ public class LocalEconomyHandler implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         try {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
