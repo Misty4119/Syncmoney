@@ -15,6 +15,7 @@ import org.bukkit.plugin.Plugin;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -58,12 +59,13 @@ final class TransactionWriter {
      */
     private boolean preTransactionChecks(UUID uuid, String playerName, BigDecimal amount,
             BigDecimal currentBalance, AsyncPreTransactionEvent.TransactionType type,
-            BigDecimal circuitBreakerDelta, EconomyEvent.EventSource source, String opLabel) {
+            BigDecimal circuitBreakerDelta, EconomyEvent.EventSource source, String opLabel,
+            String attribution) {
         if (SyncmoneyEventBus.isInitialized()) {
             AsyncPreTransactionEvent preEvent = new AsyncPreTransactionEvent(
                     uuid, playerName, type,
                     amount, currentBalance, source.name(),
-                    null, null, null);
+                    null, null, attribution);
             SyncmoneyEventBus.getInstance().callEvent(preEvent);
             if (preEvent.isCancelled()) {
                 plugin.getLogger().warning(opLabel + " rejected by AsyncPreTransactionEvent: " + preEvent.getCancelReason() + " for " + playerName);
@@ -85,6 +87,14 @@ final class TransactionWriter {
             return false;
         }
 
+        return true;
+    }
+
+    private boolean rejectIfRedisUnavailable(String operation) {
+        if (isLocalMode || !fallbackWrapper.isDegraded()) {
+            return false;
+        }
+        plugin.getLogger().warning(operation + " rejected: Redis authority is unavailable");
         return true;
     }
 
@@ -110,8 +120,15 @@ final class TransactionWriter {
      * [SYNC-ECO-047] Deposit with optimistic locking - immediate memory update.
      */
     BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        return deposit(uuid, amount, source, null);
+    }
+
+    private BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
         if (MigrationLock.isLocked()) {
             plugin.getLogger().warning("Deposit rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+        if (rejectIfRedisUnavailable("Deposit")) {
             return BigDecimal.valueOf(-1);
         }
 
@@ -121,7 +138,7 @@ final class TransactionWriter {
         BigDecimal currentBalance = (currentState != null) ? currentState.balance() : BigDecimal.ZERO;
 
         if (!preTransactionChecks(uuid, playerName, amount, currentBalance,
-                AsyncPreTransactionEvent.TransactionType.DEPOSIT, amount, source, "Deposit")) {
+                AsyncPreTransactionEvent.TransactionType.DEPOSIT, amount, source, "Deposit", attribution)) {
             return BigDecimal.valueOf(-1);
         }
 
@@ -173,7 +190,7 @@ final class TransactionWriter {
 
         BigDecimal balanceBefore = newBalance.subtract(amount);
         postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
-                amount, balanceBefore, newBalance, source.name(), null, null, null, true, null);
+                amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
 
         if (isLocalMode && localEconomyHandler != null) {
             try {
@@ -182,11 +199,6 @@ final class TransactionWriter {
                 plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
             }
             return newBalance;
-        }
-
-        boolean isDegraded = fallbackWrapper.isDegraded();
-        if (isDegraded) {
-            fallbackWrapper.logDegradedOperation("deposit - falling back to database only");
         }
 
         EconomyEvent event = new EconomyEvent(
@@ -208,8 +220,15 @@ final class TransactionWriter {
      * [SYNC-ECO-049] Withdraw with optimistic locking - validates sufficient balance.
      */
     BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        return withdraw(uuid, amount, source, null);
+    }
+
+    private BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
         if (MigrationLock.isLocked()) {
             plugin.getLogger().warning("Withdraw rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+        if (rejectIfRedisUnavailable("Withdraw")) {
             return BigDecimal.valueOf(-1);
         }
 
@@ -219,17 +238,15 @@ final class TransactionWriter {
         BigDecimal currentBalance = (currentState != null) ? currentState.balance() : BigDecimal.ZERO;
 
         if (!preTransactionChecks(uuid, playerName, amount, currentBalance,
-                AsyncPreTransactionEvent.TransactionType.WITHDRAW, amount.negate(), source, "Withdraw")) {
+                AsyncPreTransactionEvent.TransactionType.WITHDRAW, amount.negate(), source, "Withdraw", attribution)) {
             return BigDecimal.valueOf(-1);
         }
 
         final PlayerTransactionGuard playerTransactionGuard = facade.getPlayerTransactionGuard();
         final AtomicReference<CheckResult> guardResultRef = new AtomicReference<>();
 
-        EconomyState stateBefore = stateManager.get(uuid);
-        long versionBefore = (stateBefore != null) ? stateBefore.version() : 0L;
-
         long now = System.currentTimeMillis();
+        AtomicBoolean mutationAccepted = new AtomicBoolean();
         EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
             BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
             long currentVersion = (existing != null) ? existing.version() : 0L;
@@ -269,6 +286,7 @@ final class TransactionWriter {
                 return existing;
             }
 
+            mutationAccepted.set(true);
             return new EconomyState(existingBalance.subtract(amount), currentVersion + 1, now);
         });
 
@@ -277,7 +295,7 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        if (newState == null || newState.version() == versionBefore) {
+        if (!mutationAccepted.get() || newState == null) {
             return BigDecimal.valueOf(-1);
         }
 
@@ -286,7 +304,7 @@ final class TransactionWriter {
 
         BigDecimal balanceBefore = newBalance.add(amount);
         postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
-                amount, balanceBefore, newBalance, source.name(), null, null, null, true, null);
+                amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
 
         if (isLocalMode && localEconomyHandler != null) {
             try {
@@ -295,11 +313,6 @@ final class TransactionWriter {
                 plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
             }
             return newBalance;
-        }
-
-        boolean isDegraded = fallbackWrapper.isDegraded();
-        if (isDegraded) {
-            fallbackWrapper.logDegradedOperation("withdraw - falling back to database only");
         }
 
         BigDecimal delta = amount.negate();
@@ -337,6 +350,10 @@ final class TransactionWriter {
         newBalance = NumericUtil.normalize(newBalance);
         final BigDecimal finalNewBalance = newBalance;
 
+        if (rejectIfRedisUnavailable("SetBalance")) {
+            return BigDecimal.valueOf(-1);
+        }
+
         facade.ensureLoaded(uuid);
 
         EconomyState existingState = stateManager.get(uuid);
@@ -363,11 +380,6 @@ final class TransactionWriter {
             return newBalance;
         }
 
-        boolean isDegraded = fallbackWrapper.isDegraded();
-        if (isDegraded) {
-            fallbackWrapper.logDegradedOperation("setBalance - falling back to database only");
-        }
-
         BigDecimal delta = newBalance.subtract(oldBalance);
         EconomyEvent event = new EconomyEvent(
                 uuid, delta, newBalance, newVersion,
@@ -392,34 +404,10 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        String playerName = facade.resolvePlayerName(uuid);
-        if (SyncmoneyEventBus.isInitialized()) {
-            AsyncPreTransactionEvent preEvent = new AsyncPreTransactionEvent(
-                    uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
-                    amount, facade.getBalance(uuid), EconomyEvent.EventSource.PLUGIN_DEPOSIT.name(),
-                    null, null, null);
-            SyncmoneyEventBus.getInstance().callEvent(preEvent);
-            if (preEvent.isCancelled()) {
-                plugin.getLogger().warning("Plugin deposit rejected by AsyncPreTransactionEvent: " + preEvent.getCancelReason());
-                return BigDecimal.valueOf(-1);
-            }
+        BigDecimal newBalance = deposit(uuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT, pluginName);
+        if (isLocalMode && localEconomyHandler != null && newBalance.compareTo(BigDecimal.ZERO) > 0) {
+            completeLocalPluginTransaction(uuid, newBalance.subtract(amount), newBalance);
         }
-
-        var circuitBreaker = facade.getCircuitBreaker();
-        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
-            var cbResult = circuitBreaker.checkTransaction(uuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT);
-            if (!cbResult.allowed()) {
-                plugin.getLogger().warning("Plugin deposit rejected by CircuitBreaker: " + cbResult.reason());
-                return BigDecimal.valueOf(-1);
-            }
-        }
-
-        BigDecimal newBalance = deposit(uuid, amount, EconomyEvent.EventSource.PLUGIN_DEPOSIT);
-
-        if (newBalance.compareTo(BigDecimal.ZERO) > 0 && circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
-            circuitBreaker.onTransactionComplete(uuid, newBalance.subtract(amount), newBalance);
-        }
-
         return newBalance;
     }
 
@@ -436,35 +424,18 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        String playerName = facade.resolvePlayerName(uuid);
-        if (SyncmoneyEventBus.isInitialized()) {
-            AsyncPreTransactionEvent preEvent = new AsyncPreTransactionEvent(
-                    uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
-                    amount, facade.getBalance(uuid), EconomyEvent.EventSource.PLUGIN_WITHDRAW.name(),
-                    null, null, null);
-            SyncmoneyEventBus.getInstance().callEvent(preEvent);
-            if (preEvent.isCancelled()) {
-                plugin.getLogger().warning("Plugin withdraw rejected by AsyncPreTransactionEvent: " + preEvent.getCancelReason());
-                return BigDecimal.valueOf(-1);
-            }
+        BigDecimal newBalance = withdraw(uuid, amount, EconomyEvent.EventSource.PLUGIN_WITHDRAW, pluginName);
+        if (isLocalMode && localEconomyHandler != null && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
+            completeLocalPluginTransaction(uuid, newBalance.add(amount), newBalance);
         }
+        return newBalance;
+    }
 
+    private void completeLocalPluginTransaction(UUID uuid, BigDecimal balanceBefore, BigDecimal balanceAfter) {
         var circuitBreaker = facade.getCircuitBreaker();
         if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
-            var cbResult = circuitBreaker.checkTransaction(uuid, amount.negate(), EconomyEvent.EventSource.PLUGIN_WITHDRAW);
-            if (!cbResult.allowed()) {
-                plugin.getLogger().warning("Plugin withdraw rejected by CircuitBreaker: " + cbResult.reason());
-                return BigDecimal.valueOf(-1);
-            }
+            circuitBreaker.onTransactionComplete(uuid, balanceBefore, balanceAfter);
         }
-
-        BigDecimal newBalance = withdraw(uuid, amount, EconomyEvent.EventSource.PLUGIN_WITHDRAW);
-
-        if (newBalance.compareTo(BigDecimal.ZERO) >= 0 && circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
-            circuitBreaker.onTransactionComplete(uuid, newBalance.add(amount), newBalance);
-        }
-
-        return newBalance;
     }
 
     /**

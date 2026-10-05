@@ -20,6 +20,7 @@ public class BreakerManager {
 
     private NameResolver nameResolver;
     private EconomicCircuitBreaker circuitBreaker;
+    private ConnectionStateManager connectionStateManager;
     private PlayerTransactionGuard playerTransactionGuard;
     private NotificationService notificationService;
     private DiscordWebhookNotifier discordNotifier;
@@ -44,6 +45,8 @@ public class BreakerManager {
                 economyFacade,
                 redisManager,
                 useRedis);
+        } else if (useRedis && redisManager != null) {
+            this.connectionStateManager = new ConnectionStateManager(plugin, config, redisManager, true, null);
         }
 
 
@@ -89,6 +92,8 @@ public class BreakerManager {
 
         if (circuitBreaker != null) {
             circuitBreaker.shutdown();
+        } else if (connectionStateManager != null) {
+            connectionStateManager.shutdown();
         }
 
 

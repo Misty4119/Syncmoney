@@ -10,9 +10,11 @@ import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
@@ -26,53 +28,255 @@ import static org.mockito.Mockito.*;
 class ConsumerFailureSemanticsTest {
 
     @Test
-    void negativeWithdrawalFallbackDoesNotCredit() throws Exception {
+    void degradedRedisRetainsSignedWithdrawalUntilRecovery() throws Exception {
         UUID account = UUID.randomUUID();
         ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest");
-        AtomicReference<BigDecimal> fallbackBalance = new AtomicReference<>();
-        CountDownLatch fallbackApplied = new CountDownLatch(1);
-        when(harness.cacheManager.atomicAddBalance(account, new BigDecimal("-10.00"))).thenReturn(null);
-        when(harness.cacheManager.getBalance(account)).thenReturn(new BigDecimal("100.00"));
-        when(harness.cacheManager.atomicSetBalance(eq(account), any(BigDecimal.class))).thenAnswer(invocation -> {
-            fallbackBalance.set(invocation.getArgument(1));
-            fallbackApplied.countDown();
-            return 1L;
+        AtomicBoolean redisDegraded = new AtomicBoolean(true);
+        CountDownLatch degradedStateObserved = new CountDownLatch(1);
+        when(harness.redisManager.isDegraded()).thenAnswer(invocation -> {
+            boolean degraded = redisDegraded.get();
+            if (degraded) degradedStateObserved.countDown();
+            return degraded;
         });
+        when(harness.config.isDbEnabled()).thenReturn(true);
+        when(harness.cacheManager.getBalance(account)).thenReturn(new BigDecimal("100.00"));
+        when(harness.nameResolver.getNameCachedOnly(account)).thenReturn("account");
+        AtomicInteger redisWrites = new AtomicInteger();
+        AtomicReference<BigDecimal> redisDelta = new AtomicReference<>();
+        doAnswer(invocation -> {
+            redisWrites.incrementAndGet();
+            redisDelta.set(invocation.getArgument(1));
+            return new BigDecimal("90.00");
+        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+        AtomicInteger dbOffers = new AtomicInteger();
+        doAnswer(invocation -> {
+            dbOffers.incrementAndGet();
+            return true;
+        }).when(harness.dbWriteQueue).offer(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("-10.00"), new BigDecimal("90.00"),
-                    EconomyEvent.EventType.WITHDRAW, "withdraw-fallback"));
-            assertTrue(fallbackApplied.await(5, TimeUnit.SECONDS), "the Redis failure fallback should run");
+                    EconomyEvent.EventType.WITHDRAW, EconomyEvent.EventSource.PLUGIN_WITHDRAW, "withdraw-degraded"));
+            assertTrue(degradedStateObserved.await(5, TimeUnit.SECONDS), "the consumer should observe degraded Redis");
+            assertEquals(1, harness.queue.size(), "accepted work remains queued while its authority is unavailable");
+            assertEquals(0, redisWrites.get(), "the consumer must not send a new Redis mutation during known outage");
+            assertEquals(0, dbOffers.get(), "the consumer must not make SQL a fallback authority");
+
+            redisDegraded.set(false);
             harness.close();
 
-            assertEquals(new BigDecimal("90.00"), fallbackBalance.get(),
-                    "a signed withdrawal delta must lower the fallback balance from 100 to 90");
+            assertEquals(1, redisWrites.get(), "the retained withdrawal is applied once after Redis recovers");
+            assertEquals(new BigDecimal("-10.00"), redisDelta.get(), "withdrawal remains a signed negative delta");
+            assertEquals(1, dbOffers.get(), "the normal persistence step follows confirmed Redis application");
         } finally {
+            redisDegraded.set(false);
             harness.close();
         }
     }
 
     @Test
-    void setFallbackUsesAbsoluteTarget() throws Exception {
+    void degradedRedisRetainsDepositUntilRecovery() throws Exception {
         UUID account = UUID.randomUUID();
         ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest");
-        AtomicReference<BigDecimal> lastSet = new AtomicReference<>();
-        CountDownLatch fallbackApplied = new CountDownLatch(1);
-        when(harness.cacheManager.getBalance(account)).thenReturn(new BigDecimal("80.00"));
-        when(harness.cacheManager.atomicSetBalance(eq(account), any(BigDecimal.class))).thenAnswer(invocation -> {
-            lastSet.set(invocation.getArgument(1));
-            fallbackApplied.countDown();
-            return 0L;
+        AtomicBoolean redisDegraded = new AtomicBoolean(true);
+        CountDownLatch degradedStateObserved = new CountDownLatch(1);
+        when(harness.redisManager.isDegraded()).thenAnswer(invocation -> {
+            boolean degraded = redisDegraded.get();
+            if (degraded) degradedStateObserved.countDown();
+            return degraded;
         });
+        when(harness.config.isDbEnabled()).thenReturn(true);
+        when(harness.nameResolver.getNameCachedOnly(account)).thenReturn("account");
+        AtomicInteger redisWrites = new AtomicInteger();
+        AtomicReference<BigDecimal> redisDelta = new AtomicReference<>();
+        doAnswer(invocation -> {
+            redisWrites.incrementAndGet();
+            redisDelta.set(invocation.getArgument(1));
+            return new BigDecimal("110.00");
+        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+        AtomicInteger dbOffers = new AtomicInteger();
+        doAnswer(invocation -> {
+            dbOffers.incrementAndGet();
+            return true;
+        }).when(harness.dbWriteQueue).offer(any());
+
+        try {
+            harness.startWith(event(account, new BigDecimal("10.00"), new BigDecimal("110.00"),
+                    EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.ADMIN_GIVE, "deposit-degraded"));
+            assertTrue(degradedStateObserved.await(5, TimeUnit.SECONDS), "the consumer should observe degraded Redis");
+            assertEquals(1, harness.queue.size(), "accepted deposit remains queued while its authority is unavailable");
+            assertEquals(0, redisWrites.get(), "the consumer must not send a new Redis mutation during known outage");
+            assertEquals(0, dbOffers.get(), "the consumer must not make SQL a fallback authority");
+
+            redisDegraded.set(false);
+            harness.close();
+
+            assertEquals(1, redisWrites.get(), "the retained deposit is applied once after Redis recovers");
+            assertEquals(new BigDecimal("10.00"), redisDelta.get(), "deposit remains a positive signed delta");
+            assertEquals(1, dbOffers.get(), "the normal persistence step follows confirmed Redis application");
+        } finally {
+            redisDegraded.set(false);
+            harness.close();
+        }
+    }
+
+    @Test
+    void degradedRedisUsesAbsoluteSetAfterRecovery() throws Exception {
+        UUID account = UUID.randomUUID();
+        ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest");
+        AtomicBoolean redisDegraded = new AtomicBoolean(true);
+        CountDownLatch degradedStateObserved = new CountDownLatch(1);
+        when(harness.redisManager.isDegraded()).thenAnswer(invocation -> {
+            boolean degraded = redisDegraded.get();
+            if (degraded) degradedStateObserved.countDown();
+            return degraded;
+        });
+        when(harness.config.isDbEnabled()).thenReturn(true);
+        when(harness.cacheManager.getBalance(account)).thenReturn(new BigDecimal("80.00"));
+        when(harness.nameResolver.getNameCachedOnly(account)).thenReturn("account");
+        AtomicInteger redisWrites = new AtomicInteger();
+        AtomicReference<BigDecimal> redisTarget = new AtomicReference<>();
+        doAnswer(invocation -> {
+            redisWrites.incrementAndGet();
+            if (redisDegraded.get()) return 0L;
+            redisTarget.set(invocation.getArgument(1));
+            return 1L;
+        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+        AtomicInteger dbOffers = new AtomicInteger();
+        doAnswer(invocation -> {
+            dbOffers.incrementAndGet();
+            return true;
+        }).when(harness.dbWriteQueue).offer(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("-60.00"), new BigDecimal("40.00"),
-                    EconomyEvent.EventType.SET_BALANCE, "set-fallback"));
-            assertTrue(fallbackApplied.await(5, TimeUnit.SECONDS), "the SET fallback should run");
+                    EconomyEvent.EventType.SET_BALANCE, EconomyEvent.EventSource.ADMIN_SET, "set-degraded"));
+            assertTrue(degradedStateObserved.await(5, TimeUnit.SECONDS), "the consumer should observe degraded Redis");
+            assertEquals(1, harness.queue.size(), "accepted SET remains queued while its authority is unavailable");
+            assertEquals(0, redisWrites.get(), "the consumer must not issue SET while Redis is known unavailable");
+            assertEquals(0, dbOffers.get(), "the consumer must not persist a degraded SET as a new authority value");
+
+            redisDegraded.set(false);
             harness.close();
 
-            assertEquals(new BigDecimal("40.00"), lastSet.get(),
-                    "SET fallback must use its absolute target even when Redis currently has 80");
+            assertEquals(1, redisWrites.get(), "the retained SET is applied once after Redis recovers");
+            assertEquals(new BigDecimal("40.00"), redisTarget.get(), "SET uses the absolute target after recovery");
+            assertEquals(1, dbOffers.get(), "the normal persistence step follows confirmed Redis application");
+        } finally {
+            redisDegraded.set(false);
+            harness.close();
+        }
+    }
+
+    @Test
+    void failedRedisSetRetainsAbsoluteTargetWithoutArithmeticFallback() throws Exception {
+        UUID account = UUID.randomUUID();
+        ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest");
+        AtomicBoolean redisDegraded = new AtomicBoolean();
+        CountDownLatch firstRedisAttempt = new CountDownLatch(1);
+        CountDownLatch degradedStateObserved = new CountDownLatch(1);
+        CountDownLatch dbOfferObserved = new CountDownLatch(1);
+        when(harness.redisManager.isDegraded()).thenAnswer(invocation -> {
+            boolean degraded = redisDegraded.get();
+            if (degraded) degradedStateObserved.countDown();
+            return degraded;
+        });
+        when(harness.config.isDbEnabled()).thenReturn(true);
+        when(harness.cacheManager.getBalance(account)).thenReturn(new BigDecimal("80.00"));
+        when(harness.nameResolver.getNameCachedOnly(account)).thenReturn("account");
+
+        AtomicInteger redisWrites = new AtomicInteger();
+        List<BigDecimal> targets = new java.util.concurrent.CopyOnWriteArrayList<>();
+        doAnswer(invocation -> {
+            targets.add(invocation.getArgument(1));
+            if (redisWrites.incrementAndGet() == 1) {
+                redisDegraded.set(true);
+                firstRedisAttempt.countDown();
+                return 0L;
+            }
+            return 1L;
+        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+
+        AtomicInteger dbOffers = new AtomicInteger();
+        doAnswer(invocation -> {
+            dbOffers.incrementAndGet();
+            dbOfferObserved.countDown();
+            return true;
+        }).when(harness.dbWriteQueue).offer(any());
+
+        try {
+            harness.startWith(event(account, new BigDecimal("-60.00"), new BigDecimal("40.00"),
+                    EconomyEvent.EventType.SET_BALANCE, EconomyEvent.EventSource.ADMIN_SET,
+                    "set-null-result"));
+            assertTrue(firstRedisAttempt.await(5, TimeUnit.SECONDS), "the first Redis SET should be attempted");
+            assertTrue(degradedStateObserved.await(5, TimeUnit.SECONDS),
+                    "the consumer should retain the event after Redis reports degraded");
+            assertEquals(0, harness.queue.size(), "the failed event is retained in retry tracking");
+            assertEquals(List.of(new BigDecimal("40.00")), targets,
+                    "the failed authority attempt uses the absolute SET target");
+            assertEquals(0, dbOffers.get(), "SQL must not become authority after the Redis failure");
+
+            redisDegraded.set(false);
+            assertTrue(dbOfferObserved.await(5, TimeUnit.SECONDS), "the accepted SET should resume after recovery");
+            harness.close();
+
+            assertAll(
+                    () -> assertEquals(List.of(new BigDecimal("40.00"), new BigDecimal("40.00")), targets,
+                            "retry keeps the absolute target instead of applying current plus delta"),
+                    () -> assertEquals(2, redisWrites.get(), "one failed attempt and one recovery attempt are expected"),
+                    () -> assertEquals(1, dbOffers.get(), "the ordinary persistence step follows Redis recovery"),
+                    () -> verify(harness.cacheManager, never()).getBalance(account)
+            );
+        } finally {
+            redisDegraded.set(false);
+            harness.close();
+        }
+    }
+
+    @Test
+    void laterQueuedMutationWaitsForEarlierFailedSet() throws Exception {
+        UUID account = UUID.randomUUID();
+        ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest");
+        List<String> redisOperations = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicInteger setAttempts = new AtomicInteger();
+        AtomicReference<BigDecimal> authorityBalance = new AtomicReference<>(new BigDecimal("80.00"));
+        CountDownLatch laterMutationApplied = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            BigDecimal target = invocation.getArgument(1);
+            redisOperations.add("SET:" + target.toPlainString());
+            if (setAttempts.incrementAndGet() == 1) {
+                return 0L;
+            }
+            authorityBalance.set(target);
+            return 9L;
+        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+        doAnswer(invocation -> {
+            BigDecimal delta = invocation.getArgument(1);
+            redisOperations.add("ADD:" + delta.toPlainString());
+            BigDecimal updated = authorityBalance.updateAndGet(balance -> balance.add(delta));
+            laterMutationApplied.countDown();
+            return updated;
+        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+
+        EconomyEvent set = event(account, new BigDecimal("-40.00"), new BigDecimal("40.00"),
+                EconomyEvent.EventType.SET_BALANCE, EconomyEvent.EventSource.ADMIN_SET, "set-before-add");
+        EconomyEvent add = event(account, new BigDecimal("10.00"), new BigDecimal("50.00"),
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.ADMIN_GIVE, "add-after-set");
+        assertTrue(harness.queue.offerBlocking(set, 1, TimeUnit.SECONDS), "SET event must enter the queue");
+        assertTrue(harness.queue.offerBlocking(add, 1, TimeUnit.SECONDS), "ADD event must enter the queue");
+
+        try {
+            harness.consumer.start();
+            assertTrue(laterMutationApplied.await(5, TimeUnit.SECONDS), "the later ADD should eventually apply");
+            harness.close();
+
+            assertAll(
+                    () -> assertEquals(List.of("SET:40.00", "SET:40.00", "ADD:10.00"), redisOperations,
+                            "a later queued mutation must not overtake an unresolved earlier SET"),
+                    () -> assertEquals(new BigDecimal("50.00"), authorityBalance.get(),
+                            "FIFO application preserves the final shared balance")
+            );
         } finally {
             harness.close();
         }
@@ -180,7 +384,12 @@ class ConsumerFailureSemanticsTest {
 
     private static EconomyEvent event(UUID account, BigDecimal delta, BigDecimal after,
             EconomyEvent.EventType type, String requestId) {
-        return new EconomyEvent(account, delta, after, 8L, type, EconomyEvent.EventSource.TEST,
+        return event(account, delta, after, type, EconomyEvent.EventSource.TEST, requestId);
+    }
+
+    private static EconomyEvent event(UUID account, BigDecimal delta, BigDecimal after,
+            EconomyEvent.EventType type, EconomyEvent.EventSource source, String requestId) {
+        return new EconomyEvent(account, delta, after, 8L, type, source,
                 requestId, System.currentTimeMillis());
     }
 

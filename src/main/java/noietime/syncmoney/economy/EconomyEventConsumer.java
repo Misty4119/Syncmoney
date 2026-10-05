@@ -325,7 +325,17 @@ public final class EconomyEventConsumer implements Runnable {
 
         while (running || !queue.isEmpty()) {
             try {
+                if (isRedisDegraded()) {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    continue;
+                }
+
                 processFailedEvents();
+                if (!failedEvents.isEmpty()) {
+                    // Preserve the single consumer's FIFO order while earlier accepted work is unresolved.
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    continue;
+                }
 
                 EconomyEvent event = queue.poll(100, TimeUnit.MILLISECONDS);
                 if (event != null) {
@@ -343,50 +353,22 @@ public final class EconomyEventConsumer implements Runnable {
         plugin.getLogger().fine("EconomyEventConsumer stopped.");
     }
 
+    private boolean isRedisDegraded() {
+        return redisManager != null && redisManager.isDegraded();
+    }
+
     /**
-     * Process single economic event.
-     * [STORE-03 FIX] Added DB fallback when Redis fails.
+     * Process one accepted economic event. Redis remains authoritative for shared modes;
+     * failed work is retained for retry rather than applied through a SQL fallback.
      */
     private void processEvent(EconomyEvent event) {
         try {
             BigDecimal newBalance = processRedisWrite(event);
 
             if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
-                plugin.getLogger()
-                        .warning("Redis write failed for event: " + event.requestId());
-
-
-
-                BigDecimal currentBalance = cacheManager.getBalance(event.playerUuid());
-                if (currentBalance == null) {
-                    currentBalance = BigDecimal.ZERO;
-                }
-                
-                BigDecimal eventDelta = event.delta() != null ? event.delta() : BigDecimal.ZERO;
-                
-
-                if (event.type() == EconomyEvent.EventType.DEPOSIT || 
-                    event.type() == EconomyEvent.EventType.SET_BALANCE ||
-                    event.source() == EconomyEvent.EventSource.ADMIN_GIVE ||
-                    event.source() == EconomyEvent.EventSource.COMMAND_PAY) {
-                    newBalance = currentBalance.add(eventDelta);
-                } else if (event.type() == EconomyEvent.EventType.WITHDRAW ||
-                           event.source() == EconomyEvent.EventSource.ADMIN_TAKE ||
-                           event.source() == EconomyEvent.EventSource.VAULT_WITHDRAW ||
-                           event.source() == EconomyEvent.EventSource.PLAYER_TRANSFER) {
-                    newBalance = currentBalance.subtract(eventDelta);
-                } else {
-                    newBalance = eventDelta;
-                }
-                
-
-                cacheManager.atomicSetBalance(event.playerUuid(), newBalance);
-                
-
-                processEventStepsWithoutRedis(event, newBalance);
-                
-                plugin.getLogger().info("DB fallback successful for event: " + event.requestId() + 
-                    ", new balance: " + newBalance);
+                plugin.getLogger().warning("Redis write failed for accepted event " + event.requestId()
+                        + "; retaining it for retry after authority recovery");
+                failedEvents.putIfAbsent(failedKey(event), new FailedEvent(event, 0, System.currentTimeMillis()));
                 return;
             }
 
@@ -411,35 +393,6 @@ public final class EconomyEventConsumer implements Runnable {
         return false;
     }
     */
-
-    /**
-     * Process event steps without Redis (used when Redis fails but DB fallback succeeds).
-     */
-    private void processEventStepsWithoutRedis(EconomyEvent event, BigDecimal newBalance) {
-
-
-
-        if (config.isDbEnabled()) {
-            enqueueDbWrite(event, newBalance);
-        }
-
-        if (hybridAuditManager != null && hybridAuditManager.isEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
-            recordAuditLog(event, newBalance);
-        } else if (auditLogger != null && auditLogger.isEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
-            recordAuditLog(event, newBalance);
-        }
-
-        if (baltopManager != null && event.source() != EconomyEvent.EventSource.TEST) {
-            updateBaltop(event.playerUuid(), newBalance.doubleValue());
-        }
-
-        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
-            String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
-            if (playerName != null) {
-                shadowSyncTask.enqueueSyncEvent(event.playerUuid(), playerName, newBalance);
-            }
-        }
-    }
 
     /**
      * Process event steps (after Redis write succeeds).

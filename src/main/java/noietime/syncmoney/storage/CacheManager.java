@@ -3,6 +3,7 @@ package noietime.syncmoney.storage;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
+import redis.clients.jedis.exceptions.JedisConnectionException;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -290,6 +291,7 @@ public final class CacheManager {
 
             return newVersion;
         } catch (Exception e) {
+            markDegradedOnRedisTransportFailure(e);
             String errorMsg = e.getMessage();
             if (handleLuaScriptError(errorMsg)) {
                 plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg + " (script reloaded, please retry)");
@@ -413,6 +415,7 @@ public final class CacheManager {
 
             return BigDecimal.valueOf(-1);
         } catch (Exception e) {
+            markDegradedOnRedisTransportFailure(e);
             String errorMsg = e.getMessage();
             if (handleLuaScriptError(errorMsg)) {
                 plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg + " (script reloaded, please retry)");
@@ -420,6 +423,19 @@ public final class CacheManager {
                 plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg);
             }
             return BigDecimal.valueOf(-1);
+        }
+    }
+
+    private void markDegradedOnRedisTransportFailure(Throwable failure) {
+        if (!redisRequired) {
+            return;
+        }
+
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof JedisConnectionException) {
+                redisManager.setDegraded(true);
+                return;
+            }
         }
     }
 

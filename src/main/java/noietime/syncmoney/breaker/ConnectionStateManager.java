@@ -29,7 +29,9 @@ public final class ConnectionStateManager {
 
     private volatile long lastCheckTime = System.currentTimeMillis();
 
-    private volatile boolean redisAvailable = true;
+    private volatile boolean redisAvailable;
+
+    private volatile boolean redisLockdownTriggered;
 
     private final AtomicLong consecutiveFailures = new AtomicLong(0);
 
@@ -42,6 +44,7 @@ public final class ConnectionStateManager {
         this.redisManager = redisManager;
         this.redisRequired = redisRequired;
         this.circuitBreaker = circuitBreaker;
+        this.redisAvailable = !redisManager.isDegraded();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "Syncmoney-ConnectionStateManager");
             t.setDaemon(true);
@@ -82,6 +85,10 @@ public final class ConnectionStateManager {
             if (isConnected) {
                 lastSuccessfulConnection = System.currentTimeMillis();
                 consecutiveFailures.set(0);
+                redisLockdownTriggered = false;
+                if (redisManager.isDegraded()) {
+                    redisManager.setDegraded(false);
+                }
 
                 if (!redisAvailable) {
                     redisAvailable = true;
@@ -103,12 +110,16 @@ public final class ConnectionStateManager {
                     }
                 }
             } else {
+                if (!redisManager.isDegraded()) {
+                    redisManager.setDegraded(true);
+                }
                 long failureCount = consecutiveFailures.incrementAndGet();
                 long disconnectDuration = (System.currentTimeMillis() - lastSuccessfulConnection) / 1000;
 
                     if (disconnectDuration >= config.circuitBreaker().getCircuitBreakerRedisDisconnectLockSeconds()) {
-                        if (redisAvailable) {
+                        if (redisAvailable || !redisLockdownTriggered) {
                             redisAvailable = false;
+                            redisLockdownTriggered = true;
                             if (redisRequired) {
                                 plugin.getLogger().severe("ConnectionStateManager: Redis disconnected for " +
                                         disconnectDuration + "s, triggering LOCKDOWN");

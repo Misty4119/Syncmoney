@@ -138,6 +138,67 @@ class TransactionWriterOutcomeTest {
     }
 
     @Test
+    void localPluginMutationsCompleteBreakerOnce() {
+        UUID account = UUID.randomUUID();
+        String caller = "ExampleShop";
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
+        when(config.circuitBreaker().isCircuitBreakerEnabled()).thenReturn(true);
+        EconomicCircuitBreaker breaker = mock(EconomicCircuitBreaker.class);
+        when(breaker.checkTransaction(any(UUID.class), any(BigDecimal.class), any(EconomyEvent.EventSource.class)))
+                .thenReturn(EconomicCircuitBreaker.CheckResult.ALLOWED);
+        when(facade.getCircuitBreaker()).thenReturn(breaker);
+
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true), null,
+                state, new AtomicLong(), true);
+
+        SyncmoneyEventBus bus = eventBus(plugin);
+        List<AsyncPreTransactionEvent> preEvents = new ArrayList<>();
+        List<PostTransactionEvent> postEvents = new ArrayList<>();
+        SyncmoneyListener<AsyncPreTransactionEvent> preObserver = preEvents::add;
+        SyncmoneyListener<PostTransactionEvent> postObserver = postEvents::add;
+        bus.register(AsyncPreTransactionEvent.class, preObserver);
+        bus.register(PostTransactionEvent.class, postObserver);
+        try {
+            BigDecimal depositResult = writer.pluginDeposit(account, new BigDecimal("10.00"), caller);
+            BigDecimal withdrawResult = writer.pluginWithdraw(account, new BigDecimal("5.00"), caller);
+
+            assertAll(
+                    () -> assertEquals(0, depositResult.compareTo(new BigDecimal("110.00"))),
+                    () -> assertEquals(0, withdrawResult.compareTo(new BigDecimal("105.00"))),
+                    () -> assertEquals(2, preEvents.size(), "each local plugin mutation has one pre-event"),
+                    () -> assertEquals(2, postEvents.size(), "each local plugin mutation has one post event"),
+                    () -> assertTrue(preEvents.stream().allMatch(event -> caller.equals(event.getReason()))),
+                    () -> assertTrue(postEvents.stream().allMatch(event -> caller.equals(event.getReason()))),
+                    () -> assertEquals(105, state.get(account).balance().intValue()),
+                    () -> assertEquals(0, queue.size(), "LOCAL mutations persist through SQLite directly"),
+                    () -> Mockito.verify(breaker, Mockito.times(2)).checkTransaction(any(UUID.class),
+                            any(BigDecimal.class), any(EconomyEvent.EventSource.class)),
+                    () -> Mockito.verify(breaker, Mockito.times(2)).onTransactionComplete(any(UUID.class),
+                            any(BigDecimal.class), any(BigDecimal.class)),
+                    () -> verify(localHandler).deposit(account, null, new BigDecimal("10.00"),
+                            EconomyEvent.EventSource.PLUGIN_DEPOSIT.name()),
+                    () -> verify(localHandler).withdraw(account, null, new BigDecimal("5.00"),
+                            EconomyEvent.EventSource.PLUGIN_WITHDRAW.name())
+            );
+        } finally {
+            bus.unregister(AsyncPreTransactionEvent.class, preObserver);
+            bus.unregister(PostTransactionEvent.class, postObserver);
+        }
+    }
+
+    @Test
     void pluginPreCancellationDoesNotMutateOrPost() {
         UUID account = UUID.randomUUID();
         Plugin plugin = mock(Plugin.class);
@@ -200,7 +261,7 @@ class TransactionWriterOutcomeTest {
         when(facade.getCircuitBreaker()).thenReturn(null);
         when(facade.getPlayerTransactionGuard()).thenReturn(null);
 
-        CountDownLatch staleSnapshotCaptured = new CountDownLatch(1);
+        CountDownLatch earlierBalanceCaptured = new CountDownLatch(1);
         CountDownLatch allowFirstWithdrawToContinue = new CountDownLatch(1);
         AtomicReference<Thread> firstWithdrawThread = new AtomicReference<>();
         MemoryStateManager state = spy(new MemoryStateManager(plugin));
@@ -209,8 +270,8 @@ class TransactionWriterOutcomeTest {
             EconomyState snapshot = (EconomyState) invocation.callRealMethod();
             int read = stateReads.get() + 1;
             stateReads.set(read);
-            if (Thread.currentThread() == firstWithdrawThread.get() && read == 2) {
-                staleSnapshotCaptured.countDown();
+            if (Thread.currentThread() == firstWithdrawThread.get() && read == 1) {
+                earlierBalanceCaptured.countDown();
                 if (!allowFirstWithdrawToContinue.await(5, TimeUnit.SECONDS)) {
                     throw new IllegalStateException("withdraw interleaving barrier timed out");
                 }
@@ -248,8 +309,8 @@ class TransactionWriterOutcomeTest {
             firstWithdrawThread.set(firstWithdraw);
             firstWithdraw.start();
 
-            assertTrue(staleSnapshotCaptured.await(5, TimeUnit.SECONDS),
-                    "first withdrawal should pause after capturing the earlier account state");
+            assertTrue(earlierBalanceCaptured.await(5, TimeUnit.SECONDS),
+                    "first withdrawal should pause after capturing the earlier balance for preflight checks");
 
             BigDecimal secondResult = writer.withdraw(
                     account, new BigDecimal("100.00"), EconomyEvent.EventSource.TEST);
