@@ -6,6 +6,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyWriteQueue;
+import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.TransferLockManager;
@@ -91,35 +92,44 @@ final class PayTransferExecutor {
         }
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            Optional<UUID> targetUuidOpt = resolveTargetPlayer(targetName);
-            if (targetUuidOpt.isEmpty()) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
-                        .replace("{player}", targetName));
-                return;
-            }
-
-            UUID targetUuid = targetUuidOpt.get();
-
-            boolean lockAcquired = acquireTransferLock(senderUuid, targetUuid);
-            if (!lockAcquired) {
+            MigrationLock.WriteLease migrationWrite = MigrationLock.tryAcquireWrite();
+            if (migrationWrite == null) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
+                cleanupIdempotencyKeys(senderUuid, idempotencyKey);
                 return;
             }
 
-            try {
-                Object result = executeLuaTransfer(senderUuid, targetUuid, amount);
-
-                if (result instanceof java.util.List) {
-                    handleTransferSuccess(sender, senderName, targetName, amount, result);
-                } else if (result instanceof String) {
-                    BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
-                    handleTransferError(sender, result, senderBalance, amount);
+            try (migrationWrite) {
+                Optional<UUID> targetUuidOpt = resolveTargetPlayer(targetName);
+                if (targetUuidOpt.isEmpty()) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
+                            .replace("{player}", targetName));
+                    return;
                 }
-            } catch (Exception e) {
-                handleTransferException(sender, e);
-                cleanupIdempotencyKeys(senderUuid, idempotencyKey);
-            } finally {
-                releaseTransferLock(senderUuid, targetUuid);
+
+                UUID targetUuid = targetUuidOpt.get();
+
+                boolean lockAcquired = acquireTransferLock(senderUuid, targetUuid);
+                if (!lockAcquired) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
+                    return;
+                }
+
+                try {
+                    Object result = executeLuaTransfer(senderUuid, targetUuid, amount);
+
+                    if (result instanceof java.util.List) {
+                        handleTransferSuccess(sender, senderName, targetName, amount, result);
+                    } else if (result instanceof String) {
+                        BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
+                        handleTransferError(sender, result, senderBalance, amount);
+                    }
+                } catch (Exception e) {
+                    handleTransferException(sender, e);
+                    cleanupIdempotencyKeys(senderUuid, idempotencyKey);
+                } finally {
+                    releaseTransferLock(senderUuid, targetUuid);
+                }
             }
         });
     }
@@ -144,67 +154,76 @@ final class PayTransferExecutor {
         }
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            Optional<UUID> targetUuidOpt = nameResolver.resolve(targetName);
-            if (targetUuidOpt.isEmpty()) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
-                        .replace("{player}", targetName));
-                return;
-            }
-
-            UUID targetUuid = targetUuidOpt.get();
-
-            if (!lockManager.acquireDualLock(senderUuid, targetUuid)) {
+            MigrationLock.WriteLease migrationWrite = MigrationLock.tryAcquireWrite();
+            if (migrationWrite == null) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
+                cleanupIdempotencyKeys(senderUuid, idempotencyKey);
                 return;
             }
 
-            try {
-                BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
-
-                if (senderBalance.compareTo(amount) < 0) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.insufficient-funds")
-                            .replace("{balance}", FormatUtil.formatCurrency(senderBalance)));
+            try (migrationWrite) {
+                Optional<UUID> targetUuidOpt = nameResolver.resolve(targetName);
+                if (targetUuidOpt.isEmpty()) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
+                            .replace("{player}", targetName));
                     return;
                 }
 
-                BigDecimal senderNewBalance = economyFacade.withdraw(senderUuid, amount,
-                        EconomyEvent.EventSource.PLAYER_TRANSFER);
+                UUID targetUuid = targetUuidOpt.get();
 
-                if (senderNewBalance.compareTo(BigDecimal.ZERO) < 0) {
-                    if (economyFacade.isPlayerLocked(senderUuid)) {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.account-locked"));
-                    } else {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
+                if (!lockManager.acquireDualLock(senderUuid, targetUuid)) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
+                    return;
+                }
+
+                try {
+                    BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
+
+                    if (senderBalance.compareTo(amount) < 0) {
+                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.insufficient-funds")
+                                .replace("{balance}", FormatUtil.formatCurrency(senderBalance)));
+                        return;
                     }
-                    return;
-                }
 
-                BigDecimal targetNewBalance = economyFacade.deposit(targetUuid, amount,
-                        EconomyEvent.EventSource.PLAYER_TRANSFER);
+                    BigDecimal senderNewBalance = economyFacade.withdraw(senderUuid, amount,
+                            EconomyEvent.EventSource.PLAYER_TRANSFER);
 
-                if (targetNewBalance.compareTo(BigDecimal.ZERO) < 0) {
-                    plugin.getLogger().warning("Local transfer deposit failed for target " + targetUuid
-                            + ", rolling back sender " + senderUuid);
-                    economyFacade.deposit(senderUuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
+                    if (senderNewBalance.compareTo(BigDecimal.ZERO) < 0) {
+                        if (economyFacade.isPlayerLocked(senderUuid)) {
+                            MessageHelper.sendMessage(sender, plugin.getMessage("pay.account-locked"));
+                        } else {
+                            MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
+                        }
+                        return;
+                    }
+
+                    BigDecimal targetNewBalance = economyFacade.deposit(targetUuid, amount,
+                            EconomyEvent.EventSource.PLAYER_TRANSFER);
+
+                    if (targetNewBalance.compareTo(BigDecimal.ZERO) < 0) {
+                        plugin.getLogger().warning("Local transfer deposit failed for target " + targetUuid
+                                + ", rolling back sender " + senderUuid);
+                        economyFacade.deposit(senderUuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
+                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
+                        return;
+                    }
+
+                    if (baltopManager != null) {
+                        baltopManager.updatePlayerRank(senderUuid, senderNewBalance.doubleValue());
+                        baltopManager.updatePlayerRank(targetUuid, targetNewBalance.doubleValue());
+                    }
+
+                    notifyTransferSuccess(sender, targetName, amount, senderNewBalance.doubleValue());
+
+                    plugin.getLogger().fine("Local Transfer: " + senderName + " -> " + targetName +
+                            " " + amount.toPlainString() + " (sender new balance: " + senderNewBalance + ")");
+
+                } catch (Exception e) {
+                    plugin.getLogger().severe("Local transfer error: " + e.getMessage());
                     MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
-                    return;
+                } finally {
+                    lockManager.releaseDualLock(senderUuid, targetUuid);
                 }
-
-                if (baltopManager != null) {
-                    baltopManager.updatePlayerRank(senderUuid, senderNewBalance.doubleValue());
-                    baltopManager.updatePlayerRank(targetUuid, targetNewBalance.doubleValue());
-                }
-
-                notifyTransferSuccess(sender, targetName, amount, senderNewBalance.doubleValue());
-
-                plugin.getLogger().fine("Local Transfer: " + senderName + " -> " + targetName +
-                        " " + amount.toPlainString() + " (sender new balance: " + senderNewBalance + ")");
-
-            } catch (Exception e) {
-                plugin.getLogger().severe("Local transfer error: " + e.getMessage());
-                MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
-            } finally {
-                lockManager.releaseDualLock(senderUuid, targetUuid);
             }
         });
     }

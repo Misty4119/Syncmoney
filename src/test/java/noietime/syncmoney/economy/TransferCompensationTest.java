@@ -95,28 +95,18 @@ class TransferCompensationTest {
             BigDecimal transferResult = orchestrator.atomicTransfer(
                     sender, receiver, amount, EconomyEvent.EventSource.TEST);
 
-            List<EconomyEvent> acceptedWrites = new java.util.ArrayList<>();
-            EconomyEvent acceptedWrite;
-            while ((acceptedWrite = queue.poll(0, TimeUnit.MILLISECONDS)) != null) {
-                acceptedWrites.add(acceptedWrite);
-            }
             assertEquals(0, state.get(sender).balance().compareTo(new BigDecimal("100.00")),
                     "compensation restores the sender's memory projection");
             assertEquals(0, state.get(receiver).balance().compareTo(BigDecimal.ZERO),
                     "the cancelled receiver deposit must not mutate memory");
+            assertEquals(1, queue.size(), "the accepted sender withdrawal remains queued");
 
-            durableWrites.set(new CountDownLatch(acceptedWrites.size()));
-            for (EconomyEvent write : acceptedWrites) {
-                assertTrue(queue.offerBlocking(write, 1, TimeUnit.SECONDS),
-                        "each accepted persistence event must be requeued for the consumer");
-            }
-            if (!acceptedWrites.isEmpty()) {
-                consumer.start();
-                assertTrue(durableWrites.get().await(5, TimeUnit.SECONDS),
-                        "the consumer should drain every accepted event");
-                consumer.stop();
-                consumer.shutdown();
-            }
+            durableWrites.set(new CountDownLatch(1));
+            consumer.start();
+            assertTrue(durableWrites.get().await(5, TimeUnit.SECONDS),
+                    "the consumer should apply the accepted sender withdrawal");
+            consumer.stop();
+            consumer.shutdown();
 
             when(cacheManager.getBalance(sender)).thenReturn(durableBalances.get(sender));
             when(cacheManager.getBalance(receiver)).thenReturn(durableBalances.get(receiver));

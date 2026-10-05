@@ -84,13 +84,18 @@ public final class LocalToSyncMigrationTask {
 
         if (config.migration().isMigrationLockEconomy()) {
             MigrationLock.enable();
-            MigrationLock.lock();
+            if (!MigrationLock.lock()) {
+                plugin.getLogger().warning("Local-to-Sync migration not started because an economy write is still active or another migration holds the lock");
+                reportError("Local-to-Sync migration could not acquire the economy lock; no SQLite snapshot was started");
+                return;
+            }
             plugin.getLogger().fine("Economy operations locked for migration");
         }
 
         running = true;
 
-        plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
+        try {
+            plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
             try {
                 String localDbPath = config.local().getLocalSQLitePath();
                 if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
@@ -170,7 +175,15 @@ public final class LocalToSyncMigrationTask {
                     plugin.getLogger().fine("Economy operations unlocked after migration");
                 }
             }
-        });
+            });
+        } catch (RuntimeException | Error failure) {
+            running = false;
+            if (config.migration().isMigrationLockEconomy()) {
+                MigrationLock.unlock();
+                MigrationLock.disable();
+            }
+            throw failure;
+        }
     }
 
     /**
@@ -454,8 +467,13 @@ public final class LocalToSyncMigrationTask {
             // Update baltop ZSET for leaderboard
             jedis.zadd(BALTOP_KEY, balance.doubleValue(), uuid.toString());
 
-            // Update in-memory state so EconomyFacade.memoryState is warm after migration
-            economyFacade.forceUpdateMemoryState(uuid, balance, version);
+            // Use the force path only while this maintenance workflow has stopped producers.
+            // Without the configured lock, use normal monotonic version acceptance.
+            if (MigrationLock.isLocked()) {
+                economyFacade.forceUpdateMemoryState(uuid, balance, version);
+            } else {
+                economyFacade.updateMemoryState(uuid, balance, version);
+            }
 
             plugin.getLogger().fine("Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
         } catch (Exception e) {

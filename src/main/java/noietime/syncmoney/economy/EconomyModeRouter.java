@@ -2,6 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.migration.MigrationLock;
 
 import java.math.BigDecimal;
 import java.util.EnumMap;
@@ -131,7 +132,13 @@ public class EconomyModeRouter {
         @Override
         public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
             if (localHandler != null) {
-                return localHandler.deposit(uuid, null, amount, source != null ? source.name() : "LOCAL");
+                MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+                if (writeLease == null) {
+                    return BigDecimal.valueOf(-1);
+                }
+                try (writeLease) {
+                    return localHandler.deposit(uuid, null, amount, source != null ? source.name() : "LOCAL");
+                }
             }
             return BigDecimal.ZERO;
         }
@@ -139,7 +146,13 @@ public class EconomyModeRouter {
         @Override
         public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
             if (localHandler != null) {
-                return localHandler.withdraw(uuid, null, amount, source != null ? source.name() : "LOCAL");
+                MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+                if (writeLease == null) {
+                    return BigDecimal.valueOf(-1);
+                }
+                try (writeLease) {
+                    return localHandler.withdraw(uuid, null, amount, source != null ? source.name() : "LOCAL");
+                }
             }
             return BigDecimal.ZERO;
         }
@@ -155,7 +168,13 @@ public class EconomyModeRouter {
         @Override
         public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
             if (localHandler != null) {
-                return localHandler.setBalance(uuid, null, newBalance, source != null ? source.name() : "LOCAL");
+                MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+                if (writeLease == null) {
+                    return BigDecimal.valueOf(-1);
+                }
+                try (writeLease) {
+                    return localHandler.setBalance(uuid, null, newBalance, source != null ? source.name() : "LOCAL");
+                }
             }
             return BigDecimal.ZERO;
         }

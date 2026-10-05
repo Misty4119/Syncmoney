@@ -5,6 +5,7 @@ import noietime.syncmoney.economy.EconomyFacade.EconomyState;
 import noietime.syncmoney.economy.EconomyFacade.PendingRollback;
 import noietime.syncmoney.economy.EconomyFacade.TransferContext;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.migration.MigrationLock;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -35,6 +36,17 @@ final class TransferOrchestrator {
      * This method bypasses the memory state and directly uses Redis for true atomicity.
      */
     CacheManager.TransferResult executeAtomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount) {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            plugin.getLogger().warning("Atomic transfer rejected: migration in progress and economy is locked");
+            return null;
+        }
+        try (writeLease) {
+            return executeAtomicTransferAdmitted(fromUuid, toUuid, amount);
+        }
+    }
+
+    private CacheManager.TransferResult executeAtomicTransferAdmitted(UUID fromUuid, UUID toUuid, BigDecimal amount) {
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Atomic transfer rejected: one or both players are locked");
             return null;
@@ -77,6 +89,18 @@ final class TransferOrchestrator {
      * @return new balance of fromUuid, or -1 if transfer failed
      */
     BigDecimal atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            plugin.getLogger().warning("Atomic transfer rejected: migration in progress and economy is locked");
+            return BigDecimal.valueOf(-1);
+        }
+        try (writeLease) {
+            return atomicTransferAdmitted(fromUuid, toUuid, amount, source);
+        }
+    }
+
+    private BigDecimal atomicTransferAdmitted(UUID fromUuid, UUID toUuid, BigDecimal amount,
+            EconomyEvent.EventSource source) {
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Atomic transfer rejected: one or both players are locked");
             return BigDecimal.valueOf(-1);
@@ -193,12 +217,20 @@ final class TransferOrchestrator {
             plugin.getLogger().warning("Plugin atomic transfer rejected: invalid parameters");
             return null;
         }
-        if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
-            plugin.getLogger().warning("Plugin atomic transfer rejected: one or both players are locked");
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: migration in progress");
             return null;
         }
-        if (noietime.syncmoney.migration.MigrationLock.isLocked()) {
-            plugin.getLogger().warning("Plugin atomic transfer rejected: migration in progress");
+        try (writeLease) {
+            return pluginAtomicTransferAdmitted(fromUuid, toUuid, amount, pluginName);
+        }
+    }
+
+    private CacheManager.TransferResult pluginAtomicTransferAdmitted(UUID fromUuid, UUID toUuid,
+            BigDecimal amount, String pluginName) {
+        if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: one or both players are locked");
             return null;
         }
 

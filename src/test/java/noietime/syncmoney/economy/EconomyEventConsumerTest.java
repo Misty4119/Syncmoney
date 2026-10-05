@@ -113,6 +113,32 @@ class EconomyEventConsumerTest {
     }
 
     @Test
+    void successfulWorkerCompletionReleasesAcceptedWriteOwnership() throws Exception {
+        UUID account = UUID.randomUUID();
+        EconomyWriteQueue queue = new EconomyWriteQueue(1);
+        EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
+        EconomyEvent event = new EconomyEvent(account, BigDecimal.ONE, new BigDecimal("101.00"), 8L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
+                "worker-completion", System.currentTimeMillis());
+        assertNotNull(reservation);
+        assertTrue(reservation.commit(event));
+
+        when(mockConfig.isPubsubEnabled()).thenReturn(false);
+        when(mockConfig.isDbEnabled()).thenReturn(false);
+        when(mockRedisManager.isDegraded()).thenReturn(false);
+        when(mockCacheManager.atomicAddBalance(account, BigDecimal.ONE)).thenReturn(new BigDecimal("101.00"));
+        EconomyEventConsumer worker = new EconomyEventConsumer(
+                mockPlugin, mockConfig, queue, mockCacheManager, mockRedisManager,
+                null, null, null, null, null, null, null, null);
+
+        worker.start();
+        worker.shutdown();
+
+        assertFalse(queue.hasAcceptedWrite(account),
+                "successful processing must release the committed admission slot and account ownership");
+    }
+
+    @Test
     void testBatchProcessing() throws Exception {
 
         when(mockQueue.poll(anyLong(), any())).thenReturn(

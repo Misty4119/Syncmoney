@@ -126,7 +126,7 @@ public final class EconomyFacade {
 
         this.isLocalMode = (localEconomyHandler != null);
 
-        this.stateManager = new MemoryStateManager(plugin);
+        this.stateManager = new MemoryStateManager(plugin, writeQueue);
         this.transactionWriter = new TransactionWriter(this, plugin, config, localEconomyHandler,
                 writeQueue, fallbackWrapper, overflowLog, stateManager, droppedEventCount, isLocalMode);
         this.transferOrchestrator = new TransferOrchestrator(this, plugin, config, cacheManager, stateManager);
@@ -457,7 +457,11 @@ public final class EconomyFacade {
      * Only updates when new version > current version.
      */
     public boolean updateMemoryState(UUID uuid, BigDecimal balance, long version) {
-        return stateManager.applyRemoteUpdate(uuid, balance, version);
+        MemoryStateManager.RemoteUpdateResult result = stateManager.applyRemoteUpdateResult(uuid, balance, version);
+        if (result != MemoryStateManager.RemoteUpdateResult.REJECTED && cacheManager != null) {
+            cacheManager.updateMemoryCache(uuid, balance, version);
+        }
+        return result == MemoryStateManager.RemoteUpdateResult.APPLIED;
     }
 
     /**
@@ -483,8 +487,8 @@ public final class EconomyFacade {
     }
 
     /**
-     * [SYNC-ECO-057] Force update memory state from external source.
-     * Used by periodic version check to sync data from Redis.
+     * Force update memory state during the migration maintenance lock.
+     * Ordinary Redis version checks use {@link #updateMemoryState(UUID, BigDecimal, long)}.
      */
     public void forceUpdateMemoryState(UUID uuid, BigDecimal balance, long version) {
         stateManager.forceUpdate(uuid, balance, version);

@@ -2,6 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.sync.CMIApi;
 import noietime.syncmoney.sync.CMIVersioning;
@@ -97,7 +98,11 @@ public class CMIEconomyHandler {
 
     public void syncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
                                     boolean isDeposit, String sourceName) {
-        try {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            return;
+        }
+        try (writeLease) {
             BigDecimal newBalance = NumericUtil.normalize(absoluteBalance);
             BigDecimal last = lastKnownBalance.get(uuid);
             if (last != null && last.compareTo(newBalance) == 0) {
@@ -188,12 +193,18 @@ public class CMIEconomyHandler {
         final double target = mirror.doubleValue();
         final BigDecimal normalizedMirror = mirror;
         final long version = mirrorVersion;
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            return;
+        }
+        try (writeLease) {
             suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
             cmiApi.setBalance(uuid, target);
             notifyInboundApplied(uuid, normalizedMirror, version);
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
             }
+        }
     }
 
     private static final long OUTBOUND_SUPPRESS_MS = 750L;
@@ -267,31 +278,43 @@ public class CMIEconomyHandler {
      * by the local CMI command that triggered this or by inbound consumers on other servers.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount) {
-        BigDecimal newBalance = getRedisBalance(uuid).add(amount);
-        long version = setRedisBalanceWithVersion(uuid, newBalance);
-
-        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_DEPOSIT", amount.doubleValue(), "CMI");
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            return BigDecimal.valueOf(-1);
         }
-        return newBalance;
+        try (writeLease) {
+            BigDecimal newBalance = getRedisBalance(uuid).add(amount);
+            long version = setRedisBalanceWithVersion(uuid, newBalance);
+
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+                syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_DEPOSIT", amount.doubleValue(), "CMI");
+            }
+            return newBalance;
+        }
     }
 
     /**
      * Withdraw (CMI mode specific).
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount) {
-        BigDecimal current = getRedisBalance(uuid);
-        if (current.compareTo(amount) < 0) {
-            throw new IllegalArgumentException("Insufficient funds: cannot withdraw " + amount + " from balance " + current);
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            return BigDecimal.valueOf(-1);
         }
+        try (writeLease) {
+            BigDecimal current = getRedisBalance(uuid);
+            if (current.compareTo(amount) < 0) {
+                throw new IllegalArgumentException("Insufficient funds: cannot withdraw " + amount + " from balance " + current);
+            }
 
-        BigDecimal newBalance = current.subtract(amount);
-        long version = setRedisBalanceWithVersion(uuid, newBalance);
+            BigDecimal newBalance = current.subtract(amount);
+            long version = setRedisBalanceWithVersion(uuid, newBalance);
 
-        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_WITHDRAW", -amount.doubleValue(), "CMI");
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+                syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_WITHDRAW", -amount.doubleValue(), "CMI");
+            }
+            return newBalance;
         }
-        return newBalance;
     }
 
     /**
@@ -305,11 +328,17 @@ public class CMIEconomyHandler {
      * Sets balance.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance) {
-        long version = setRedisBalanceWithVersion(uuid, newBalance);
-
-        if (config.cmi().isCMICrossServerSync() && syncManager != null) {
-            syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_SET_BALANCE", newBalance.doubleValue(), "CMI");
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
+            return BigDecimal.valueOf(-1);
         }
-        return newBalance;
+        try (writeLease) {
+            long version = setRedisBalanceWithVersion(uuid, newBalance);
+
+            if (config.cmi().isCMICrossServerSync() && syncManager != null) {
+                syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_SET_BALANCE", newBalance.doubleValue(), "CMI");
+            }
+            return newBalance;
+        }
     }
 }

@@ -391,7 +391,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
      * Handles resume migration.
      */
     private void handleResume(CommandSender sender) {
-        if (migrationTask.isRunning()) {
+        if (migrationTask.isRunning() || localToSyncMigrationTask.isRunning()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
             return;
         }

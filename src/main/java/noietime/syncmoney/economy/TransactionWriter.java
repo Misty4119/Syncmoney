@@ -47,6 +47,7 @@ final class TransactionWriter {
         this.fallbackWrapper = fallbackWrapper;
         this.overflowLog = overflowLog;
         this.stateManager = stateManager;
+        this.stateManager.attachWriteQueue(writeQueue);
         this.droppedEventCount = droppedEventCount;
         this.isLocalMode = isLocalMode;
     }
@@ -99,24 +100,6 @@ final class TransactionWriter {
     }
 
     /**
-     * [SYNC-ECO-108] Enqueue an event for async persistence, falling back to the overflow
-     * WAL log if the write queue cannot accept it. Shared by deposit/withdraw/setBalance.
-     */
-    private void enqueueOrOverflow(UUID uuid, EconomyEvent event) {
-        boolean queued = writeQueue.offer(event);
-        if (!queued) {
-            queued = writeQueue.offerWithTimeout(event);
-        }
-
-        if (!queued) {
-            overflowLog.log(event);
-            droppedEventCount.incrementAndGet();
-            plugin.getLogger().warning("EconomyWriteQueue full, event dropped for " + uuid
-                    + ". Total dropped: " + droppedEventCount.get());
-        }
-    }
-
-    /**
      * [SYNC-ECO-047] Deposit with optimistic locking - immediate memory update.
      */
     BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
@@ -124,10 +107,18 @@ final class TransactionWriter {
     }
 
     private BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
-        if (MigrationLock.isLocked()) {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
             plugin.getLogger().warning("Deposit rejected: migration in progress and economy is locked");
             return BigDecimal.valueOf(-1);
         }
+        try (writeLease) {
+            return depositAdmitted(uuid, amount, source, attribution);
+        }
+    }
+
+    private BigDecimal depositAdmitted(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
+            String attribution) {
         if (rejectIfRedisUnavailable("Deposit")) {
             return BigDecimal.valueOf(-1);
         }
@@ -142,78 +133,99 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        final PlayerTransactionGuard playerTransactionGuard = facade.getPlayerTransactionGuard();
-        final AtomicReference<CheckResult> guardResultRef = new AtomicReference<>();
-
-        long now = System.currentTimeMillis();
-        EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
-            BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
-            long currentVersion = (existing != null) ? existing.version() : 0L;
-
-            boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
-            boolean skipGuard = skipGuardForLocalMode;
-
-            boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
-                    || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
-            if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
-                skipGuard = true;
-            }
-
-            if (isLocalMode && !skipGuard) {
-                List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
-                if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
-                    skipGuard = true;
-                }
-            }
-
-            if (!skipGuard && playerTransactionGuard != null) {
-                facade.ensureLoaded(uuid);
-                var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount, EconomyEvent.EventType.DEPOSIT, source);
-                guardResultRef.set(result);
-                if (!result.allowed()) {
-                    plugin.getLogger().warning(
-                            "Deposit rejected by PlayerTransactionGuard: " + result.reason() + " for " + uuid);
-                    return existing;
-                }
-            }
-
-            return new EconomyState(existingBalance.add(amount), currentVersion + 1, now);
-        });
-
-        var guardResult = guardResultRef.get();
-        if (guardResult != null && !guardResult.allowed()) {
+        final EconomyWriteQueue.Reservation reservation = isLocalMode
+                ? null : stateManager.tryReserveWrite(uuid, currentState);
+        if (!isLocalMode && reservation == null) {
+            plugin.getLogger().warning("Deposit rejected before balance mutation: write admission is full for " + uuid);
             return BigDecimal.valueOf(-1);
         }
 
-        BigDecimal newBalance = newState.balance();
-        long newVersion = newState.version();
+        final PlayerTransactionGuard playerTransactionGuard = facade.getPlayerTransactionGuard();
+        final AtomicReference<CheckResult> guardResultRef = new AtomicReference<>();
+        AtomicBoolean mutationAccepted = new AtomicBoolean();
 
-        BigDecimal balanceBefore = newBalance.subtract(amount);
-        postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
-                amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
+        try (reservation) {
+            long now = System.currentTimeMillis();
+            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
+                BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
+                long currentVersion = (existing != null) ? existing.version() : 0L;
 
-        if (isLocalMode && localEconomyHandler != null) {
-            try {
-                localEconomyHandler.deposit(uuid, null, amount, source.name());
-            } catch (Exception e) {
-                plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
+                boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
+                boolean skipGuard = skipGuardForLocalMode;
+
+                boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
+                        || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
+                if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
+                    skipGuard = true;
+                }
+
+                if (isLocalMode && !skipGuard) {
+                    List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
+                    if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
+                        skipGuard = true;
+                    }
+                }
+
+                if (!skipGuard && playerTransactionGuard != null) {
+                    facade.ensureLoaded(uuid);
+                    var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount, EconomyEvent.EventType.DEPOSIT, source);
+                    guardResultRef.set(result);
+                    if (!result.allowed()) {
+                        plugin.getLogger().warning(
+                                "Deposit rejected by PlayerTransactionGuard: " + result.reason() + " for " + uuid);
+                        return existing;
+                    }
+                }
+
+                EconomyState next = new EconomyState(existingBalance.add(amount), currentVersion + 1, now);
+                if (reservation != null) {
+                    EconomyEvent event = new EconomyEvent(
+                            uuid, amount, next.balance(), next.version(),
+                            EconomyEvent.EventType.DEPOSIT, source,
+                            UUID.randomUUID().toString(), System.currentTimeMillis());
+                    if (!reservation.commit(event)) {
+                        plugin.getLogger().severe("Deposit rejected because its reserved write slot could not be committed for " + uuid);
+                        return existing;
+                    }
+                }
+                mutationAccepted.set(true);
+                return next;
+            });
+
+            var guardResult = guardResultRef.get();
+            if (guardResult != null && !guardResult.allowed()) {
+                return BigDecimal.valueOf(-1);
             }
+            if (!mutationAccepted.get() || newState == null) {
+                return BigDecimal.valueOf(-1);
+            }
+
+            if (reservation != null) {
+                writeQueue.reportUsage();
+            }
+
+            BigDecimal newBalance = newState.balance();
+
+            BigDecimal balanceBefore = newBalance.subtract(amount);
+            postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
+                    amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
+
+            if (isLocalMode && localEconomyHandler != null) {
+                try {
+                    localEconomyHandler.deposit(uuid, null, amount, source.name());
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
+                }
+                return newBalance;
+            }
+
+            var circuitBreaker = facade.getCircuitBreaker();
+            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+                circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
+            }
+
             return newBalance;
         }
-
-        EconomyEvent event = new EconomyEvent(
-                uuid, amount, newBalance, newVersion,
-                EconomyEvent.EventType.DEPOSIT, source,
-                UUID.randomUUID().toString(), System.currentTimeMillis());
-
-        enqueueOrOverflow(uuid, event);
-
-        var circuitBreaker = facade.getCircuitBreaker();
-        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
-            circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
-        }
-
-        return newBalance;
     }
 
     /**
@@ -224,10 +236,18 @@ final class TransactionWriter {
     }
 
     private BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
-        if (MigrationLock.isLocked()) {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
             plugin.getLogger().warning("Withdraw rejected: migration in progress and economy is locked");
             return BigDecimal.valueOf(-1);
         }
+        try (writeLease) {
+            return withdrawAdmitted(uuid, amount, source, attribution);
+        }
+    }
+
+    private BigDecimal withdrawAdmitted(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
+            String attribution) {
         if (rejectIfRedisUnavailable("Withdraw")) {
             return BigDecimal.valueOf(-1);
         }
@@ -242,106 +262,125 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
+        final EconomyWriteQueue.Reservation reservation = isLocalMode
+                ? null : stateManager.tryReserveWrite(uuid, currentState);
+        if (!isLocalMode && reservation == null) {
+            plugin.getLogger().warning("Withdraw rejected before balance mutation: write admission is full for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
+
         final PlayerTransactionGuard playerTransactionGuard = facade.getPlayerTransactionGuard();
         final AtomicReference<CheckResult> guardResultRef = new AtomicReference<>();
 
-        long now = System.currentTimeMillis();
-        AtomicBoolean mutationAccepted = new AtomicBoolean();
-        EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
-            BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
-            long currentVersion = (existing != null) ? existing.version() : 0L;
+        try (reservation) {
+            long now = System.currentTimeMillis();
+            AtomicBoolean mutationAccepted = new AtomicBoolean();
+            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
+                BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
+                long currentVersion = (existing != null) ? existing.version() : 0L;
 
-            boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
-            boolean skipGuard = skipGuardForLocalMode
-                    || source == EconomyEvent.EventSource.ADMIN_GIVE
-                    || source == EconomyEvent.EventSource.ADMIN_SET
-                    || source == EconomyEvent.EventSource.ADMIN_TAKE;
+                boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
+                boolean skipGuard = skipGuardForLocalMode
+                        || source == EconomyEvent.EventSource.ADMIN_GIVE
+                        || source == EconomyEvent.EventSource.ADMIN_SET
+                        || source == EconomyEvent.EventSource.ADMIN_TAKE;
 
-            boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
-                    || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
-            if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
-                skipGuard = true;
-            }
-
-            if (isLocalMode && !skipGuard) {
-                List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
-                if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
+                boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
+                        || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
+                if (isLocalMode && isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) {
                     skipGuard = true;
                 }
-            }
 
-            if (!skipGuard && playerTransactionGuard != null) {
-                facade.ensureLoaded(uuid);
-                var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount.negate(),
-                        EconomyEvent.EventType.WITHDRAW, source);
-                guardResultRef.set(result);
-                if (!result.allowed()) {
-                    plugin.getLogger().warning(
-                            "Withdraw rejected by PlayerTransactionGuard: " + result.reason() + " for " + uuid);
+                if (isLocalMode && !skipGuard) {
+                    List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
+                    if (whitelist != null && !whitelist.isEmpty() && whitelist.contains(source.name())) {
+                        skipGuard = true;
+                    }
+                }
+
+                if (!skipGuard && playerTransactionGuard != null) {
+                    facade.ensureLoaded(uuid);
+                    var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount.negate(),
+                            EconomyEvent.EventType.WITHDRAW, source);
+                    guardResultRef.set(result);
+                    if (!result.allowed()) {
+                        plugin.getLogger().warning(
+                                "Withdraw rejected by PlayerTransactionGuard: " + result.reason() + " for " + uuid);
+                        return existing;
+                    }
+                }
+
+                if (existingBalance.compareTo(amount) < 0) {
                     return existing;
                 }
+
+                EconomyState next = new EconomyState(existingBalance.subtract(amount), currentVersion + 1, now);
+                if (reservation != null) {
+                    EconomyEvent event = new EconomyEvent(
+                            uuid, amount.negate(), next.balance(), next.version(),
+                            EconomyEvent.EventType.WITHDRAW, source,
+                            UUID.randomUUID().toString(), System.currentTimeMillis());
+                    if (!reservation.commit(event)) {
+                        plugin.getLogger().severe("Withdraw rejected because its reserved write slot could not be committed for " + uuid);
+                        return existing;
+                    }
+                }
+                mutationAccepted.set(true);
+                return next;
+            });
+
+            var guardResult = guardResultRef.get();
+            if (guardResult != null && !guardResult.allowed()) {
+                return BigDecimal.valueOf(-1);
             }
 
-            if (existingBalance.compareTo(amount) < 0) {
-                return existing;
+            if (!mutationAccepted.get() || newState == null) {
+                return BigDecimal.valueOf(-1);
             }
 
-            mutationAccepted.set(true);
-            return new EconomyState(existingBalance.subtract(amount), currentVersion + 1, now);
-        });
-
-        var guardResult = guardResultRef.get();
-        if (guardResult != null && !guardResult.allowed()) {
-            return BigDecimal.valueOf(-1);
-        }
-
-        if (!mutationAccepted.get() || newState == null) {
-            return BigDecimal.valueOf(-1);
-        }
-
-        BigDecimal newBalance = newState.balance();
-        long newVersion = newState.version();
-
-        BigDecimal balanceBefore = newBalance.add(amount);
-        postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
-                amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
-
-        if (isLocalMode && localEconomyHandler != null) {
-            try {
-                localEconomyHandler.withdraw(uuid, null, amount, source.name());
-            } catch (Exception e) {
-                plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
+            if (reservation != null) {
+                writeQueue.reportUsage();
             }
+
+            BigDecimal newBalance = newState.balance();
+
+            BigDecimal balanceBefore = newBalance.add(amount);
+            postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
+                    amount, balanceBefore, newBalance, source.name(), null, null, attribution, true, null);
+
+            if (isLocalMode && localEconomyHandler != null) {
+                try {
+                    localEconomyHandler.withdraw(uuid, null, amount, source.name());
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
+                }
+                return newBalance;
+            }
+
+            var circuitBreaker = facade.getCircuitBreaker();
+            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
+                circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
+            }
+
             return newBalance;
         }
-
-        BigDecimal delta = amount.negate();
-        EconomyEvent event = new EconomyEvent(
-                uuid, delta, newBalance, newVersion,
-                EconomyEvent.EventType.WITHDRAW, source,
-                UUID.randomUUID().toString(), System.currentTimeMillis());
-
-        enqueueOrOverflow(uuid, event);
-
-        var circuitBreaker = facade.getCircuitBreaker();
-        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
-            circuitBreaker.onTransactionComplete(uuid, balanceBefore, newBalance);
-        }
-
-        return newBalance;
     }
 
     /**
      * [SYNC-ECO-051] Set balance directly (admin operation) with optimistic locking.
      */
     BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
-        if (MigrationLock.isLocked() &&
-                source != EconomyEvent.EventSource.ADMIN_SET &&
-                source != EconomyEvent.EventSource.COMMAND_ADMIN) {
+        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        if (writeLease == null) {
             plugin.getLogger().warning("SetBalance rejected: migration in progress and economy is locked");
             return BigDecimal.valueOf(-1);
         }
+        try (writeLease) {
+            return setBalanceAdmitted(uuid, newBalance, source);
+        }
+    }
 
+    private BigDecimal setBalanceAdmitted(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
         if (newBalance.compareTo(BigDecimal.ZERO) < 0 || newBalance.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
             plugin.getLogger().warning("SetBalance rejected: Amount out of bounds (" + newBalance.toPlainString() + ")");
             return BigDecimal.valueOf(-1);
@@ -359,36 +398,57 @@ final class TransactionWriter {
         EconomyState existingState = stateManager.get(uuid);
         BigDecimal oldBalance = (existingState != null) ? existingState.balance() : BigDecimal.ZERO;
 
-        long now = System.currentTimeMillis();
-        EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
-            long currentVersion = (existing != null) ? existing.version() : 0L;
-            return new EconomyState(finalNewBalance, currentVersion + 1, now);
-        });
-
-        long newVersion = newState.version();
-
-        String playerName = facade.resolvePlayerName(uuid);
-        postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.SET_BALANCE,
-                newBalance.subtract(oldBalance), oldBalance, newBalance, source.name(), null, null, null, true, null);
-
-        if (isLocalMode && localEconomyHandler != null) {
-            try {
-                localEconomyHandler.setBalance(uuid, null, newBalance, source.name());
-            } catch (Exception e) {
-                plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
-            }
-            return newBalance;
+        final EconomyWriteQueue.Reservation reservation = isLocalMode
+                ? null : stateManager.tryReserveWrite(uuid, existingState);
+        if (!isLocalMode && reservation == null) {
+            plugin.getLogger().warning("SetBalance rejected before balance mutation: write admission is full for " + uuid);
+            return BigDecimal.valueOf(-1);
         }
 
-        BigDecimal delta = newBalance.subtract(oldBalance);
-        EconomyEvent event = new EconomyEvent(
-                uuid, delta, newBalance, newVersion,
-                EconomyEvent.EventType.SET_BALANCE, source,
-                UUID.randomUUID().toString(), System.currentTimeMillis());
+        try (reservation) {
+            long now = System.currentTimeMillis();
+            AtomicBoolean mutationAccepted = new AtomicBoolean();
+            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
+                long currentVersion = (existing != null) ? existing.version() : 0L;
+                EconomyState next = new EconomyState(finalNewBalance, currentVersion + 1, now);
+                if (reservation != null) {
+                    BigDecimal delta = finalNewBalance.subtract(oldBalance);
+                    EconomyEvent event = new EconomyEvent(
+                            uuid, delta, finalNewBalance, next.version(),
+                            EconomyEvent.EventType.SET_BALANCE, source,
+                            UUID.randomUUID().toString(), System.currentTimeMillis());
+                    if (!reservation.commit(event)) {
+                        plugin.getLogger().severe("SetBalance rejected because its reserved write slot could not be committed for " + uuid);
+                        return existing;
+                    }
+                }
+                mutationAccepted.set(true);
+                return next;
+            });
 
-        enqueueOrOverflow(uuid, event);
+            if (!mutationAccepted.get() || newState == null) {
+                return BigDecimal.valueOf(-1);
+            }
 
-        return newBalance;
+            if (reservation != null) {
+                writeQueue.reportUsage();
+            }
+
+            String playerName = facade.resolvePlayerName(uuid);
+            postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.SET_BALANCE,
+                    newBalance.subtract(oldBalance), oldBalance, newBalance, source.name(), null, null, null, true, null);
+
+            if (isLocalMode && localEconomyHandler != null) {
+                try {
+                    localEconomyHandler.setBalance(uuid, null, newBalance, source.name());
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Failed to write to local SQLite: " + e.getMessage());
+                }
+                return newBalance;
+            }
+
+            return newBalance;
+        }
     }
 
     /**

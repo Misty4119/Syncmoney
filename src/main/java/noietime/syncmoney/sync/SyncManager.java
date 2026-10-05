@@ -141,8 +141,9 @@ public class SyncManager {
                     BigDecimal redisBalance = cacheManager.getBalance(uuid);
                     long redisVersionFromCache = cacheManager.getVersion(uuid);
 
-                    economyFacade.forceUpdateMemoryState(uuid, redisBalance, redisVersionFromCache);
-                    syncCount++;
+                    if (economyFacade.updateMemoryState(uuid, redisBalance, redisVersionFromCache)) {
+                        syncCount++;
+                    }
                 }
             } catch (Exception e) {
                 logger.warning("Version sync failed for " + uuid + ": " + e.getMessage());

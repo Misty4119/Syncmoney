@@ -184,6 +184,7 @@ public final class EconomyEventConsumer implements Runnable {
                 plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
 
                 processEventSteps(failed.event(), newBalance);
+                queue.complete(failed.event(), newBalance, cacheManager.getVersion(failed.event().playerUuid()));
             } else {
                 // Atomic CAS bump so a concurrent removal/insert for the same requestId is never lost.
                 failedEvents.replace(key, failed, new FailedEvent(
@@ -373,6 +374,7 @@ public final class EconomyEventConsumer implements Runnable {
             }
 
             processEventSteps(event, newBalance);
+            queue.complete(event, newBalance, cacheManager.getVersion(event.playerUuid()));
 
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());

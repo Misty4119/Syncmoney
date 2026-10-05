@@ -2,6 +2,7 @@ package noietime.syncmoney.sync;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.MessageHelper;
@@ -87,6 +88,12 @@ public final class CMIPubsubHandler {
             }
 
             BigDecimal balance = NumericUtil.normalize(msg.getBalanceAsBigDecimal());
+            MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+            if (writeLease == null) {
+                return;
+            }
+            boolean leaseTransferred = false;
+            try {
             updateRedisMirror(uuid, balance, incoming);
             lastUpdateVersion.put(uuid, new VersionEntry(incoming, System.currentTimeMillis()));
             maybeCleanup();
@@ -94,8 +101,11 @@ public final class CMIPubsubHandler {
             if (cmiApi.isAvailable()) {
                 final BigDecimal targetBalance = balance;
                 final long appliedVersion = incoming;
-                Runnable apply = () -> {
+                Player player = plugin.getServer().getPlayer(uuid);
+                if (player != null && player.isOnline()) {
                     try {
+                        var scheduled = player.getScheduler().run(plugin, task -> {
+                            try {
                         if (currentVersion(uuid) != appliedVersion) return;
                         Double beforeObj = cmiApi.getBalance(uuid);
                         double before = beforeObj != null ? beforeObj.doubleValue() : targetBalance.doubleValue();
@@ -111,24 +121,34 @@ public final class CMIPubsubHandler {
                             plugin.getLogger().fine("[CMI Inbound] CMI write " + uuid
                                     + " = " + targetBalance + " (before=" + before + ")");
                         }
-                    } catch (Throwable th) {
-                        plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
-                                + ": " + th.getMessage());
-                    }
-                };
-                try {
-                    // Offline mirrors are reconciled on join; only online entities are mutated here.
-                    noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid, player -> apply.run());
-                } catch (Throwable schedEx) {
-                    if (config.isDebug()) {
-                        plugin.getLogger().fine("[CMI Inbound] GlobalRegionScheduler.run failed for "
-                                + uuid + " (" + schedEx.getMessage() + "), CMI write skipped this tick");
+                            } catch (Throwable th) {
+                                plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
+                                        + ": " + th.getMessage());
+                            } finally {
+                                writeLease.close();
+                            }
+                        }, writeLease::close);
+                        leaseTransferred = scheduled != null;
+                        if (!leaseTransferred) {
+                            writeLease.close();
+                        }
+                    } catch (Throwable schedEx) {
+                        writeLease.close();
+                        if (config.isDebug()) {
+                            plugin.getLogger().fine("[CMI Inbound] EntityScheduler.run failed for "
+                                    + uuid + " (" + schedEx.getMessage() + "), CMI write skipped this tick");
+                        }
                     }
                 }
             } else {
                 plugin.getLogger().fine("[CMI Inbound] CMI API unavailable on this server; "
                         + "Redis mirror updated for " + uuid + " but in-game CMI will only sync on next join.");
                 cmiHandler.notifyInboundApplied(uuid, balance, incoming);
+            }
+            } finally {
+                if (!leaseTransferred) {
+                    writeLease.close();
+                }
             }
 
             if (config.isDebug()) {

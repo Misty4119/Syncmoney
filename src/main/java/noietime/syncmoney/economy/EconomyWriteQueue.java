@@ -1,14 +1,20 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.util.FormatUtil;
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
@@ -23,9 +29,15 @@ import java.util.logging.Logger;
  */
 public final class EconomyWriteQueue {
 
+    @FunctionalInterface
+    interface WriteCompletionHandler {
+        void onComplete(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion);
+    }
+
     private final BlockingQueue<EconomyEvent> queue;
     private final int capacity;
     private final Logger logger;
+    private final Semaphore admissionPermits;
     private volatile boolean warnedHighUsage = false;
 
 
@@ -34,7 +46,33 @@ public final class EconomyWriteQueue {
     private static final long HIGH_USAGE_CHECK_INTERVAL = 1000;
 
     private final ConcurrentMap<UUID, AtomicInteger> pendingCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, AtomicInteger> acceptedWriteCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, AtomicInteger> committedWriteCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, AcceptedWrite> acceptedWrites = new ConcurrentHashMap<>();
+    private final Map<EconomyEvent, Long> reservationsByEvent =
+            Collections.synchronizedMap(new IdentityHashMap<>());
+    private final AtomicLong nextReservationId = new AtomicLong();
+    private volatile WriteCompletionHandler writeCompletionHandler;
     private volatile long lastHighUsageWarning = 0;
+
+    private static final class AcceptedWrite {
+        private final UUID uuid;
+        private final long acceptedAtMillis;
+        private volatile boolean committed;
+
+        private AcceptedWrite(UUID uuid, long acceptedAtMillis) {
+            this.uuid = uuid;
+            this.acceptedAtMillis = acceptedAtMillis;
+        }
+
+        UUID uuid() {
+            return uuid;
+        }
+
+        long acceptedAtMillis() {
+            return acceptedAtMillis;
+        }
+    }
 
     public EconomyWriteQueue(int capacity) {
         this(capacity, null);
@@ -44,6 +82,66 @@ public final class EconomyWriteQueue {
         this.capacity = capacity;
         this.queue = new LinkedBlockingQueue<>(capacity);
         this.logger = logger;
+        this.admissionPermits = new Semaphore(capacity);
+    }
+
+    /** A non-blocking slot held until the worker completes the accepted event. */
+    final class Reservation implements AutoCloseable {
+        private final long id;
+        private final UUID uuid;
+        private final AcceptedWrite acceptedWrite;
+        private boolean committed;
+        private boolean closed;
+
+        private Reservation(long id, UUID uuid, AcceptedWrite acceptedWrite) {
+            this.id = id;
+            this.uuid = uuid;
+            this.acceptedWrite = acceptedWrite;
+        }
+
+        synchronized boolean commit(EconomyEvent event) {
+            if (closed || committed || event == null || !uuid.equals(event.playerUuid())) {
+                return false;
+            }
+
+            synchronized (reservationsByEvent) {
+                if (reservationsByEvent.containsKey(event)) {
+                    return false;
+                }
+                reservationsByEvent.put(event, id);
+            }
+
+            acceptedWrite.committed = true;
+            incrementCount(committedWriteCounts, uuid);
+
+            boolean queued;
+            try {
+                queued = queue.offer(event);
+            } catch (RuntimeException e) {
+                removeEventReservation(event);
+                releaseOwnership(id, true);
+                closed = true;
+                throw e;
+            }
+
+            if (!queued) {
+                removeEventReservation(event);
+                releaseOwnership(id, true);
+                closed = true;
+                return false;
+            }
+
+            committed = true;
+            return true;
+        }
+
+        @Override
+        public synchronized void close() {
+            if (!committed && !closed) {
+                closed = true;
+                releaseOwnership(id, true);
+            }
+        }
     }
 
     /**
@@ -52,7 +150,7 @@ public final class EconomyWriteQueue {
      * @return true if successfully offered, false if queue is over 70% capacity
      */
     public boolean offer(EconomyEvent event) {
-        int currentSize = queue.size();
+        int currentSize = capacity - admissionPermits.availablePermits();
         int usageThreshold = (int) (capacity * BACKPRESSURE_THRESHOLD);
         
         if (currentSize >= usageThreshold) {
@@ -68,13 +166,18 @@ public final class EconomyWriteQueue {
             }
             return false;
         }
-        
-        boolean result = queue.offer(event);
-        if (result) {
-            pendingCounts.computeIfAbsent(event.uuid(), k -> new AtomicInteger(0)).incrementAndGet();
-            checkHighUsage();
+
+        Reservation reservation = tryReserve(event.playerUuid());
+        if (reservation == null) {
+            return false;
         }
-        return result;
+        try (reservation) {
+            boolean committed = reservation.commit(event);
+            if (committed) {
+                checkHighUsage();
+            }
+            return committed;
+        }
     }
 
     /**
@@ -88,16 +191,25 @@ public final class EconomyWriteQueue {
      * @return true if offered, false if timeout expired
      */
     public boolean offerBlocking(EconomyEvent event, long timeout, TimeUnit unit) {
+        if (event == null) {
+            return false;
+        }
+        Reservation reservation;
         try {
-            boolean result = queue.offer(event, timeout, unit);
-            if (result) {
-                pendingCounts.computeIfAbsent(event.uuid(), k -> new AtomicInteger(0)).incrementAndGet();
-                checkHighUsage();
+            if (!admissionPermits.tryAcquire(timeout, unit)) {
+                return false;
             }
-            return result;
+            reservation = registerReservation(event.playerUuid());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        }
+        try (reservation) {
+            boolean committed = reservation.commit(event);
+            if (committed) {
+                checkHighUsage();
+            }
+            return committed;
         }
     }
 
@@ -117,7 +229,7 @@ public final class EconomyWriteQueue {
      */
     private void checkHighUsage() {
         if (logger == null) return;
-        int currentSize = queue.size();
+        int currentSize = capacity - admissionPermits.availablePermits();
         int usageThreshold = (int) (capacity * BACKPRESSURE_THRESHOLD);
 
         if (currentSize >= usageThreshold && !warnedHighUsage) {
@@ -169,11 +281,7 @@ public final class EconomyWriteQueue {
     public EconomyEvent poll(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
         EconomyEvent event = queue.poll(timeout, unit);
         if (event != null) {
-            pendingCounts.computeIfAbsent(event.playerUuid(), k -> new AtomicInteger(0))
-                        .updateAndGet(current -> {
-                            int newVal = current - 1;
-                            return newVal >= 0 ? newVal : 0;
-                        });
+            decrementPendingCount(event.playerUuid(), 1);
         }
         return event;
     }
@@ -201,19 +309,13 @@ public final class EconomyWriteQueue {
 
             int removed = 0;
             for (EconomyEvent event : toRemove) {
-                if (queue.remove(event)) {
+                if (removeQueuedIdentity(event)) {
                     removed++;
+                    complete(event);
                 }
             }
 
-            final int removedCount = removed;
-            if (removedCount > 0) {
-                pendingCounts.computeIfAbsent(uuid, k -> new AtomicInteger(0))
-                            .updateAndGet(current -> {
-                                int newVal = current - removedCount;
-                                return newVal >= 0 ? newVal : 0;
-                            });
-            }
+            decrementPendingCount(uuid, removed);
 
             return removed;
         }
@@ -224,6 +326,134 @@ public final class EconomyWriteQueue {
      */
     public int getCapacity() {
         return capacity;
+    }
+
+    Reservation tryReserve(UUID uuid) {
+        if (uuid == null || !admissionPermits.tryAcquire()) {
+            return null;
+        }
+        return registerReservation(uuid);
+    }
+
+    private Reservation registerReservation(UUID uuid) {
+        long id = nextReservationId.incrementAndGet();
+        AcceptedWrite acceptedWrite = new AcceptedWrite(uuid, System.currentTimeMillis());
+        acceptedWrites.put(id, acceptedWrite);
+        incrementCount(acceptedWriteCounts, uuid);
+        incrementCount(pendingCounts, uuid);
+        return new Reservation(id, uuid, acceptedWrite);
+    }
+
+    private void removeEventReservation(EconomyEvent event) {
+        synchronized (reservationsByEvent) {
+            reservationsByEvent.remove(event);
+        }
+    }
+
+    private boolean removeQueuedIdentity(EconomyEvent event) {
+        return queue.removeIf(queuedEvent -> queuedEvent == event);
+    }
+
+    void reportUsage() {
+        checkHighUsage();
+    }
+
+    private void releaseOwnership(long reservationId, boolean releasePendingCount) {
+        AcceptedWrite accepted = acceptedWrites.remove(reservationId);
+        if (accepted == null) {
+            return;
+        }
+        decrementCount(acceptedWriteCounts, accepted.uuid(), 1);
+        if (accepted.committed) {
+            decrementCount(committedWriteCounts, accepted.uuid(), 1);
+        }
+        if (releasePendingCount) {
+            decrementPendingCount(accepted.uuid(), 1);
+        }
+        admissionPermits.release();
+    }
+
+    private static void decrementCount(ConcurrentMap<UUID, AtomicInteger> counts, UUID uuid, int decrement) {
+        if (decrement <= 0) {
+            return;
+        }
+        counts.computeIfPresent(uuid, (ignored, count) ->
+                count.addAndGet(-decrement) > 0 ? count : null);
+    }
+
+    private static void incrementCount(ConcurrentMap<UUID, AtomicInteger> counts, UUID uuid) {
+        counts.compute(uuid, (ignored, count) -> {
+            if (count == null) {
+                return new AtomicInteger(1);
+            }
+            count.incrementAndGet();
+            return count;
+        });
+    }
+
+    private void decrementPendingCount(UUID uuid, int decrement) {
+        decrementCount(pendingCounts, uuid, decrement);
+    }
+
+    void complete(EconomyEvent event) {
+        complete(event, null, -1L);
+    }
+
+    void complete(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
+        if (event == null) {
+            return;
+        }
+        Long reservationId;
+        synchronized (reservationsByEvent) {
+            reservationId = reservationsByEvent.remove(event);
+        }
+        if (reservationId == null) {
+            return;
+        }
+        if (removeQueuedIdentity(event)) {
+            decrementPendingCount(event.playerUuid(), 1);
+        }
+        releaseOwnership(reservationId, false);
+        WriteCompletionHandler handler = writeCompletionHandler;
+        if (handler != null) {
+            try {
+                handler.onComplete(event, authorityBalance, authorityVersion);
+            } catch (RuntimeException e) {
+                if (logger != null) {
+                    logger.warning("Failed to reconcile completed write for " + event.playerUuid() + ": " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    void setWriteCompletionHandler(WriteCompletionHandler handler) {
+        if (handler == null) {
+            throw new IllegalArgumentException("Write completion handler cannot be null");
+        }
+        synchronized (this) {
+            if (writeCompletionHandler != null && writeCompletionHandler != handler) {
+                throw new IllegalStateException("EconomyWriteQueue already has a completion owner");
+            }
+            writeCompletionHandler = handler;
+        }
+    }
+
+    boolean hasAcceptedWrite(UUID uuid) {
+        AtomicInteger count = acceptedWriteCounts.get(uuid);
+        return count != null && count.get() > 0;
+    }
+
+    boolean hasCommittedWrite(UUID uuid) {
+        AtomicInteger count = committedWriteCounts.get(uuid);
+        return count != null && count.get() > 0;
+    }
+
+    long oldestAcceptedAgeMillis() {
+        long oldest = Long.MAX_VALUE;
+        for (AcceptedWrite accepted : acceptedWrites.values()) {
+            oldest = Math.min(oldest, accepted.acceptedAtMillis());
+        }
+        return oldest == Long.MAX_VALUE ? -1 : Math.max(0, System.currentTimeMillis() - oldest);
     }
 
     /**

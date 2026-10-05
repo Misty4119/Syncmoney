@@ -41,6 +41,7 @@ public final class MigrationTask {
     private final int batchSize;
 
     private volatile boolean running = false;
+    private volatile boolean migrationLockOwned = false;
 
     private MigrationProgressCallback progressCallback;
 
@@ -149,109 +150,50 @@ public final class MigrationTask {
 
         if (config.migration().isMigrationLockEconomy()) {
             MigrationLock.enable();
-            MigrationLock.lock();
+            if (!MigrationLock.lock()) {
+                plugin.getLogger().warning("CMI migration not started because an economy write is still active or another migration holds the lock");
+                if (progressCallback != null) {
+                    progressCallback.onError("CMI migration could not acquire the economy lock; no migration snapshot was started");
+                }
+                return;
+            }
+            migrationLockOwned = true;
             plugin.getLogger().fine("Economy operations locked for CMI migration");
         }
 
-        int totalPlayers;
-        if (multiServerReader != null) {
-            totalPlayers = multiServerReader.getTotalPlayerCount();
-        } else {
-            totalPlayers = cmiReader.getTotalPlayerCount();
-        }
-        final int totalPlayersFinal = totalPlayers;
-        if (totalPlayers == 0) {
-            plugin.getLogger().warning("No players found in CMI database!");
+        final int totalPlayersFinal;
+        try {
+            int totalPlayers;
+            if (multiServerReader != null) {
+                totalPlayers = multiServerReader.getTotalPlayerCount();
+            } else {
+                totalPlayers = cmiReader.getTotalPlayerCount();
+            }
+            totalPlayersFinal = totalPlayers;
+            if (totalPlayers == 0) {
+                plugin.getLogger().warning("No players found in CMI database!");
                 if (progressCallback != null) {
                     progressCallback.onError("No player data found in CMI database");
                 }
-            return;
-        }
+                releaseMigrationLock();
+                return;
+            }
 
-        checkpoint.init(totalPlayers);
+            checkpoint.init(totalPlayers);
 
-        if (createBackup) {
-            createBackup();
+            if (createBackup) {
+                createBackup();
+            }
+        } catch (RuntimeException | Error failure) {
+            failAndReleaseMigrationLock(failure);
+            throw failure;
         }
 
         running = true;
 
         AtomicInteger offset = new AtomicInteger(0);
         AtomicInteger successCount = new AtomicInteger(0);
-
-        plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            try {
-                List<CMIPlayerData> players;
-                final int currentOffset = offset.get();
-                if (multiServerReader != null) {
-                    players = multiServerReader.readAndMergePlayers();
-                } else {
-                    players = cmiReader.readPlayers(currentOffset, batchSize);
-                }
-
-                if (players.isEmpty()) {
-                    completeMigration();
-                    return;
-                }
-
-                for (CMIPlayerData player : players) {
-                    try {
-                        migratePlayer(player, force);
-                        successCount.incrementAndGet();
-
-
-                        if (!checkRedisHealthDuringMigration(successCount.get())) {
-
-                            plugin.getLogger().warning("Migration paused due to Redis health issue");
-                            if (progressCallback != null) {
-                                progressCallback.onError("Migration paused: Redis connection issue");
-                            }
-                            return;
-                        }
-                    } catch (Exception ex) {
-                        String pName = player.playerName();
-                        String reason = ex.getMessage();
-                        plugin.getLogger().warning("Failed to migrate player " + pName + ": " + reason);
-                        checkpoint.recordFailure(pName, reason);
-                    }
-                }
-
-                if (multiServerReader != null) {
-                    final int successCountVal = successCount.get();
-                    checkpoint.updateProgress(totalPlayersFinal, successCountVal);
-                    if (progressCallback != null) {
-                        double percent = checkpoint.getProgressPercent();
-                        progressCallback.onProgress(successCountVal, totalPlayersFinal, percent);
-                    }
-                    completeMigration();
-                    return;
-                }
-
-                int newOffset = offset.addAndGet(batchSize);
-                final int currentSuccessCount = successCount.get();
-                checkpoint.updateProgress(newOffset, currentSuccessCount);
-
-                if (progressCallback != null) {
-                    double percent = checkpoint.getProgressPercent();
-                    final int currentCount = successCount.get();
-                    final int totalCount = totalPlayersFinal;
-                    progressCallback.onProgress(currentCount, totalCount, percent);
-                }
-
-                if (!running || newOffset >= totalPlayersFinal) {
-                    completeMigration();
-                }
-
-            } catch (Exception e) {
-                plugin.getLogger().severe("Migration error: " + e.getMessage());
-                checkpoint.fail();
-                running = false;
-                if (progressCallback != null) {
-                    progressCallback.onError("Migration error: " + e.getMessage());
-                }
-                cancel();
-            }
-        });
+        scheduleMigrationBatch(force, totalPlayersFinal, offset, successCount, false);
     }
 
     /**
@@ -259,6 +201,12 @@ public final class MigrationTask {
      * @return true if resumed successfully
      */
     public boolean resume() {
+        if (config.migration().isMigrationLockEconomy()
+                && MigrationLock.isLocked() && !migrationLockOwned) {
+            plugin.getLogger().warning("CMI migration resume not started because another migration holds the economy lock");
+            return false;
+        }
+
         if (!checkpoint.resume()) {
             plugin.getLogger().warning("No checkpoint to resume!");
             return false;
@@ -270,56 +218,113 @@ public final class MigrationTask {
             return false;
         }
 
+        if (config.migration().isMigrationLockEconomy()) {
+            if (migrationLockOwned && !MigrationLock.isLocked()) {
+                migrationLockOwned = false;
+            }
+            if (!migrationLockOwned) {
+                MigrationLock.enable();
+            }
+            if (!migrationLockOwned && !MigrationLock.lock()) {
+                plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
+                checkpoint.pause();
+                return false;
+            }
+            migrationLockOwned = true;
+        }
+
         running = true;
 
         AtomicInteger offset = new AtomicInteger(checkpoint.getCurrentOffset());
         AtomicInteger successCount = new AtomicInteger(checkpoint.getMigratedCount());
 
-        plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            try {
-                final int currentOffset = offset.get();
-                List<CMIPlayerData> players = cmiReader.readPlayers(currentOffset, batchSize);
-
-                if (players.isEmpty()) {
-                    completeMigration();
-                    return;
-                }
-
-                for (CMIPlayerData player : players) {
-                    try {
-                        migratePlayer(player, false);
-                        successCount.incrementAndGet();
-                    } catch (Exception ex) {
-                        String pName = player.playerName();
-                        String reason = ex.getMessage();
-                        checkpoint.recordFailure(pName, reason);
-                    }
-                }
-
-                int newOffset = offset.addAndGet(batchSize);
-                final int currentSuccessCount2 = successCount.get();
-                checkpoint.updateProgress(newOffset, currentSuccessCount2);
-
-                if (progressCallback != null) {
-                    final int currentTotal = checkpoint.getTotalPlayers();
-                    double percent = checkpoint.getProgressPercent();
-                    final int currentCount = successCount.get();
-                    progressCallback.onProgress(currentCount, currentTotal, percent);
-                }
-
-                if (!running || newOffset >= checkpoint.getTotalPlayers()) {
-                    completeMigration();
-                }
-
-            } catch (Exception e) {
-                plugin.getLogger().severe("Migration resume error: " + e.getMessage());
-                checkpoint.fail();
-                running = false;
-                cancel();
-            }
-        });
+        scheduleMigrationBatch(false, checkpoint.getTotalPlayers(), offset, successCount, true);
 
         return true;
+    }
+
+    private void scheduleMigrationBatch(boolean force, int totalPlayers, AtomicInteger offset,
+                                        AtomicInteger successCount, boolean resuming) {
+        try {
+            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                try {
+                    if (!running) {
+                        checkpoint.pause();
+                        return;
+                    }
+
+                    int currentOffset = offset.get();
+                    List<CMIPlayerData> players = !resuming && multiServerReader != null
+                            ? multiServerReader.readAndMergePlayers()
+                            : cmiReader.readPlayers(currentOffset, batchSize);
+
+                    if (players.isEmpty()) {
+                        completeMigration();
+                        return;
+                    }
+
+                    for (CMIPlayerData player : players) {
+                        try {
+                            migratePlayer(player, force);
+                            successCount.incrementAndGet();
+                            if (!resuming && !checkRedisHealthDuringMigration(successCount.get())) {
+                                plugin.getLogger().warning("Migration paused due to Redis health issue");
+                                checkpoint.pause();
+                                running = false;
+                                if (progressCallback != null) {
+                                    progressCallback.onError("Migration paused: Redis connection issue");
+                                }
+                                return;
+                            }
+                        } catch (Exception ex) {
+                            String playerName = player.playerName();
+                            plugin.getLogger().warning("Failed to migrate player " + playerName + ": " + ex.getMessage());
+                            checkpoint.recordFailure(playerName, ex.getMessage());
+                        }
+                    }
+
+                    if (!resuming && multiServerReader != null) {
+                        int migrated = successCount.get();
+                        checkpoint.updateProgress(totalPlayers, migrated);
+                        if (progressCallback != null) {
+                            progressCallback.onProgress(migrated, totalPlayers, checkpoint.getProgressPercent());
+                        }
+                        if (!running) {
+                            checkpoint.pause();
+                            return;
+                        }
+                        completeMigration();
+                        return;
+                    }
+
+                    int newOffset = Math.min(totalPlayers, currentOffset + players.size());
+                    offset.set(newOffset);
+                    int migrated = successCount.get();
+                    checkpoint.updateProgress(newOffset, migrated);
+                    if (progressCallback != null) {
+                        progressCallback.onProgress(migrated, totalPlayers, checkpoint.getProgressPercent());
+                    }
+
+                    if (!running) {
+                        checkpoint.pause();
+                    } else if (newOffset >= totalPlayers) {
+                        completeMigration();
+                    } else {
+                        scheduleMigrationBatch(force, totalPlayers, offset, successCount, resuming);
+                    }
+                } catch (Exception failure) {
+                    plugin.getLogger().severe((resuming ? "Migration resume error: " : "Migration error: ")
+                            + failure.getMessage());
+                    failAndReleaseMigrationLock(failure);
+                    if (progressCallback != null && !resuming) {
+                        progressCallback.onError("Migration error: " + failure.getMessage());
+                    }
+                }
+            });
+        } catch (RuntimeException | Error failure) {
+            failAndReleaseMigrationLock(failure);
+            throw failure;
+        }
     }
 
     /**
@@ -356,7 +361,13 @@ public final class MigrationTask {
             return;
         }
 
-        economyFacade.setBalance(uuid, balance, EconomyEvent.EventSource.ADMIN_SET);
+        BigDecimal appliedBalance;
+        try (var migrationWrite = MigrationLock.beginMigrationWrite()) {
+            appliedBalance = economyFacade.setBalance(uuid, balance, EconomyEvent.EventSource.ADMIN_SET);
+        }
+        if (appliedBalance == null || appliedBalance.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalStateException("Economy rejected migration write for " + playerName + " (" + uuid + ")");
+        }
 
         checkpoint.addBackupAmount(balance);
 
@@ -661,13 +672,30 @@ public final class MigrationTask {
             scheduleCMIEconomyDisable();
         }
 
-        if (MigrationLock.isEnabled()) {
-            MigrationLock.unlock();
-            MigrationLock.disable();
-            plugin.getLogger().fine("Economy operations unlocked after CMI migration");
-        }
+        releaseMigrationLock();
 
         cancel();
+    }
+
+    private void releaseMigrationLock() {
+        if (migrationLockOwned) {
+            MigrationLock.unlock();
+            MigrationLock.disable();
+            migrationLockOwned = false;
+            plugin.getLogger().fine("Economy operations unlocked after CMI migration");
+        }
+    }
+
+    private void failAndReleaseMigrationLock(Throwable failure) {
+        try {
+            checkpoint.fail();
+        } catch (RuntimeException | Error checkpointFailure) {
+            failure.addSuppressed(checkpointFailure);
+        } finally {
+            running = false;
+            cancel();
+            releaseMigrationLock();
+        }
     }
 
     /**
