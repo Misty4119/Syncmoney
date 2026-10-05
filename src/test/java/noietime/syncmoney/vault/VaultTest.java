@@ -23,6 +23,10 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
@@ -32,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -273,6 +278,53 @@ class VaultTest {
                     () -> verify(databaseManager, never()).getPlayer(account)
             );
         } finally {
+            coldFacade.shutdown();
+        }
+    }
+
+    @Test
+    void coldVaultReadWaitsForSynchronousCacheAdapter() throws Exception {
+        UUID account = UUID.randomUUID();
+        OfflinePlayer offline = mock(OfflinePlayer.class);
+        when(offline.getUniqueId()).thenReturn(account);
+
+        CacheManager cacheManager = mock(CacheManager.class);
+        CountDownLatch cacheReadEntered = new CountDownLatch(1);
+        CountDownLatch releaseCacheRead = new CountDownLatch(1);
+        AtomicReference<Thread> cacheReadThread = new AtomicReference<>();
+        when(cacheManager.getBalance(account)).thenAnswer(invocation -> {
+            cacheReadThread.set(Thread.currentThread());
+            cacheReadEntered.countDown();
+            releaseCacheRead.await();
+            return new BigDecimal("735.25");
+        });
+
+        RedisManager redisManager = mock(RedisManager.class);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        EconomyFacade coldFacade = new EconomyFacade(plugin, config, cacheManager, redisManager,
+                mock(DatabaseManager.class), null, new EconomyWriteQueue(10),
+                mock(FallbackEconomyWrapper.class), null, mock(OverflowLogInterface.class));
+        VaultPlayerHandler coldHandler = new VaultPlayerHandler(coldFacade, nameResolver, plugin);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        AtomicReference<Thread> vaultCallerThread = new AtomicReference<>();
+
+        try {
+            var result = caller.submit(() -> {
+                vaultCallerThread.set(Thread.currentThread());
+                return coldHandler.getBalance(offline);
+            });
+            assertTrue(cacheReadEntered.await(10, TimeUnit.SECONDS),
+                    "the cold Vault call should reach the cache adapter");
+            assertFalse(result.isDone(),
+                    "the current cold Vault call remains blocked while its synchronous cache read is blocked");
+            assertEquals(vaultCallerThread.get(), cacheReadThread.get(),
+                    "the cache adapter runs on the Vault caller thread");
+
+            releaseCacheRead.countDown();
+            assertEquals(735.25, result.get(10, TimeUnit.SECONDS), 0.0001);
+        } finally {
+            releaseCacheRead.countDown();
+            caller.shutdownNow();
             coldFacade.shutdown();
         }
     }
