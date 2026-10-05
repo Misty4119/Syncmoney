@@ -117,6 +117,9 @@ public final class EconomyEventConsumer implements Runnable {
     }
 
     public void shutdown() {
+        // Stop new producers before draining. Reservations accepted before closure may
+        // still commit, so the worker remains alive until their ownership is released.
+        queue.closeAdmission();
         running = false;
         plugin.getLogger().fine("EconomyEventConsumer shutting down...");
 
@@ -324,7 +327,7 @@ public final class EconomyEventConsumer implements Runnable {
             replayOverflowEvents();
         }
 
-        while (running || !queue.isEmpty()) {
+        while (running || !queue.isEmpty() || queue.hasOutstandingWrites()) {
             try {
                 if (isRedisDegraded()) {
                     TimeUnit.MILLISECONDS.sleep(100);
