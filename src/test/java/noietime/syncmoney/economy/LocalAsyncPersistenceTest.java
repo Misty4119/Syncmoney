@@ -176,6 +176,73 @@ class LocalAsyncPersistenceTest {
     }
 
     @Test
+    void localShutdownRetainsAcceptedWriteAcrossRepeatedSqlFailuresUntilRecovery() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        UUID uuid = UUID.randomUUID();
+        UUID admissionProbeUuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "shutdown-retry-drain", 10L);
+        CountDownLatch firstAttemptEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstFailure = new CountDownLatch(1);
+        CountDownLatch recoveryAttemptEntered = new CountDownLatch(1);
+        CountDownLatch releaseRecovery = new CountDownLatch(1);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger failures = new AtomicInteger();
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+        try {
+            assertTrue(queue.tryReserve(uuid).commit(event));
+            worker = new LocalPersistenceWorker(queue, accepted -> {
+                int attempt = attempts.incrementAndGet();
+                if (attempt == 1) {
+                    firstAttemptEntered.countDown();
+                    releaseFirstFailure.await();
+                    failures.incrementAndGet();
+                    throw new SQLException("temporary SQLite failure during shutdown");
+                }
+                if (attempt < 4) {
+                    failures.incrementAndGet();
+                    throw new SQLException("temporary SQLite failure during shutdown");
+                }
+                recoveryAttemptEntered.countDown();
+                releaseRecovery.await();
+                return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
+            }, Logger.getLogger("LocalAsyncPersistenceTest"));
+            worker.start();
+            assertTrue(firstAttemptEntered.await(1, TimeUnit.SECONDS));
+
+            var shutdown = shutdownCaller.submit(worker::shutdown);
+            long admissionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            boolean admissionClosed = false;
+            while (!admissionClosed && System.nanoTime() < admissionDeadline) {
+                EconomyWriteQueue.Reservation probe = queue.tryReserve(admissionProbeUuid);
+                if (probe == null) {
+                    admissionClosed = true;
+                } else {
+                    probe.close();
+                    Thread.yield();
+                }
+            }
+            assertTrue(admissionClosed, "shutdown must enter its admission-closing phase while persistence is blocked");
+            releaseFirstFailure.countDown();
+
+            assertTrue(recoveryAttemptEntered.await(5, TimeUnit.SECONDS),
+                    "the worker must retry failed persistence while shutdown waits");
+            assertEquals(4, attempts.get(), "three failed attempts must precede the controlled recovery attempt");
+            assertEquals(3, failures.get());
+            assertFalse(shutdown.isDone(), "shutdown must remain pending while the accepted write is unresolved");
+            assertTrue(queue.hasAcceptedWrite(uuid), "the failed accepted write must retain queue ownership");
+
+            releaseRecovery.countDown();
+            shutdown.get(2, TimeUnit.SECONDS);
+            assertFalse(queue.hasAcceptedWrite(uuid), "ownership clears only after persistence returns a receipt");
+        } finally {
+            releaseFirstFailure.countDown();
+            releaseRecovery.countDown();
+            shutdownCaller.shutdownNow();
+        }
+    }
+
+    @Test
     void localShutdownClosesAdmissionAndDrainsReservationsAcceptedBeforeShutdown() throws Exception {
         EconomyWriteQueue queue = new EconomyWriteQueue(2);
         UUID acceptedUuid = UUID.randomUUID();
