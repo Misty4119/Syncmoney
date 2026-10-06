@@ -82,9 +82,10 @@ public final class CMIMultiServerReader {
             }
         } else {
             for (String path : paths) {
-                if (path != null && !path.isEmpty()) {
-                    dbPaths.add(normalizePath(path));
+                if (path == null || path.isBlank()) {
+                    throw new IllegalArgumentException("CMI multi-server database paths must not contain blank entries");
                 }
+                dbPaths.add(normalizePath(path));
             }
         }
 
@@ -108,27 +109,34 @@ public final class CMIMultiServerReader {
      */
     public synchronized void initialize() {
         if (!dataSources.isEmpty()) {
+            if (dataSources.size() != dbPaths.size()) {
+                throw new IllegalStateException("Only part of the configured CMI multi-server databases are connected");
+            }
             return;
         }
 
-        for (String dbPath : dbPaths) {
-            File dbFile = new File(dbPath);
-            if (!dbFile.exists()) {
-                plugin.getLogger().warning("CMI database not found: " + dbPath);
-                continue;
-            }
+        if (dbPaths.isEmpty()) {
+            throw new IllegalStateException("No CMI multi-server database paths are configured");
+        }
 
-            try {
+        try {
+            for (String dbPath : dbPaths) {
+                File dbFile = new File(dbPath);
+                if (!dbFile.isFile()) {
+                    throw new IllegalStateException("Configured CMI database does not exist: " + dbPath);
+                }
+
                 HikariDataSource ds = createSQLiteDataSource(dbPath);
                 dataSources.add(ds);
                 plugin.getLogger().fine("CMI Multi-Server: connected to " + dbPath);
-            } catch (Exception e) {
-                plugin.getLogger().severe("Failed to connect to CMI database " + dbPath + ": " + e.getMessage());
             }
-        }
 
-        if (dataSources.isEmpty()) {
-            plugin.getLogger().severe("No CMI databases could be connected!");
+            if (dataSources.size() != dbPaths.size()) {
+                throw new IllegalStateException("Not all configured CMI databases were connected");
+            }
+        } catch (RuntimeException | Error failure) {
+            shutdown();
+            throw failure;
         }
     }
 
@@ -153,6 +161,10 @@ public final class CMIMultiServerReader {
             initialize();
         }
 
+        if (dbPaths.isEmpty() || dataSources.size() != dbPaths.size()) {
+            return false;
+        }
+
         boolean allOk = true;
         for (int i = 0; i < dataSources.size(); i++) {
             try (Connection conn = dataSources.get(i).getConnection()) {
@@ -175,6 +187,9 @@ public final class CMIMultiServerReader {
         if (dataSources.isEmpty()) {
             initialize();
         }
+        if (dataSources.size() != dbPaths.size() || dataSources.isEmpty()) {
+            throw new IllegalStateException("Cannot read a partial CMI multi-server source set");
+        }
 
         Map<String, List<CMIDatabaseReader.CMIPlayerData>> playerMap = new LinkedHashMap<>();
 
@@ -190,8 +205,8 @@ public final class CMIMultiServerReader {
                     int count = 0;
                     while (rs.next()) {
                         String playerName = rs.getString(USERNAME_COLUMN);
-                        if (playerName == null || playerName.isEmpty()) {
-                            continue;
+                        if (playerName == null || playerName.isBlank()) {
+                            throw new IllegalStateException("CMI source " + dbPath + " contains a row without a username");
                         }
 
                         UUID uuid = null;
@@ -200,22 +215,15 @@ public final class CMIMultiServerReader {
                             if (uuidObj != null) {
                                 uuid = UUID.fromString(uuidObj.toString());
                             }
-                        } catch (Exception ignored) {
+                        } catch (IllegalArgumentException ignored) {
                         }
 
-                        BigDecimal balance = BigDecimal.ZERO;
+                        BigDecimal balance;
                         try {
-                            Object balanceObj = rs.getObject(BALANCE_COLUMN);
-                            if (balanceObj != null) {
-                                if (balanceObj instanceof Number) {
-                                    balance = BigDecimal.valueOf(((Number) balanceObj).doubleValue())
-                                            .setScale(2, java.math.RoundingMode.HALF_UP);
-                                } else {
-                                    balance = new BigDecimal(balanceObj.toString())
-                                            .setScale(2, java.math.RoundingMode.HALF_UP);
-                                }
-                            }
-                        } catch (Exception ignored) {
+                            balance = CMIDatabaseReader.parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                        } catch (Exception failure) {
+                            throw new IllegalStateException("Failed to read CMI balance for "
+                                    + playerName + " from " + dbPath, failure);
                         }
 
                         long lastLogoffTime = 0;
@@ -228,7 +236,9 @@ public final class CMIMultiServerReader {
                                     lastLogoffTime = Long.parseLong(lastLogoffObj.toString());
                                 }
                             }
-                        } catch (Exception ignored) {
+                        } catch (Exception failure) {
+                            throw new IllegalStateException("Failed to read CMI last logoff time for "
+                                    + playerName + " from " + dbPath, failure);
                         }
 
                         CMIDatabaseReader.CMIPlayerData playerData =
@@ -243,6 +253,7 @@ public final class CMIMultiServerReader {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("Failed to read from CMI database " + dbPath + ": " + e.getMessage());
+                throw new IllegalStateException("Failed to read CMI database " + dbPath, e);
             }
         }
 
@@ -343,6 +354,14 @@ public final class CMIMultiServerReader {
      */
     public MergeStrategy getMergeStrategy() {
         return mergeStrategy;
+    }
+
+    /** Stable source order, paths, and strategy used to validate a resumed snapshot. */
+    public String getSourceIdentity() {
+        String paths = dbPaths.stream()
+                .map(path -> new File(path).getAbsoluteFile().toPath().normalize().toString())
+                .collect(java.util.stream.Collectors.joining("\u001f"));
+        return "cmi-multi|" + mergeStrategy.name() + "|" + paths;
     }
 
     /**

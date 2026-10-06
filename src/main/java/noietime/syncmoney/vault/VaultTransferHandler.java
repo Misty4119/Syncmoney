@@ -117,8 +117,11 @@ public class VaultTransferHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot withdraw negative amount");
         }
         if (amount == 0) {
-            BigDecimal currentBalance = economyFacade.getBalance(player.getUniqueId());
-            return new EconomyResponse(0, currentBalance.doubleValue(),
+            double currentBalance = readyBalance(player.getUniqueId());
+            if (Double.isNaN(currentBalance)) {
+                return accountNotReady();
+            }
+            return new EconomyResponse(0, currentBalance,
                     EconomyResponse.ResponseType.SUCCESS, "Zero withdraw ignored");
         }
 
@@ -139,9 +142,9 @@ public class VaultTransferHandler {
         BigDecimal newBalance = economyFacade.withdraw(uuid, amountBd, EconomyEvent.EventSource.VAULT_WITHDRAW);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            BigDecimal currentBalance = economyFacade.getBalance(uuid);
-            return new EconomyResponse(0, currentBalance.doubleValue(), EconomyResponse.ResponseType.FAILURE,
-                    "Insufficient funds");
+            double currentBalance = readyBalance(uuid);
+            return new EconomyResponse(0, currentBalance, EconomyResponse.ResponseType.FAILURE,
+                    Double.isNaN(currentBalance) ? notReadyMessage() : "Insufficient funds");
         }
 
         String sourcePlugin = pluginDetector.detectCallingPlugin();
@@ -161,13 +164,15 @@ public class VaultTransferHandler {
             CacheManager.TransferResult result = economyFacade.executeAtomicTransfer(fromUuid, toUuid, amountBd);
 
             if (result == null) {
-                return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Atomic transfer failed - try again");
+                double balance = readyBalance(fromUuid);
+                return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE,
+                        Double.isNaN(balance) ? notReadyMessage() : "Atomic transfer failed - try again");
             }
 
             if (result == CacheManager.TransferResult.insufficientFunds()) {
-                BigDecimal currentBalance = economyFacade.getBalance(fromUuid);
-                return new EconomyResponse(0, currentBalance.doubleValue(), EconomyResponse.ResponseType.FAILURE,
-                    "Insufficient funds");
+                double currentBalance = readyBalance(fromUuid);
+                return new EconomyResponse(0, currentBalance, EconomyResponse.ResponseType.FAILURE,
+                        Double.isNaN(currentBalance) ? notReadyMessage() : "Insufficient funds");
             }
 
             CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, result.fromNewBalance);
@@ -193,6 +198,19 @@ public class VaultTransferHandler {
             plugin.getLogger().severe("Atomic transfer exception: " + e.getMessage());
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Transfer error: " + e.getMessage());
         }
+    }
+
+    private double readyBalance(UUID uuid) {
+        BigDecimal balance = economyFacade.getBalanceForPlaceholder(uuid);
+        return balance == null ? Double.NaN : balance.doubleValue();
+    }
+
+    private EconomyResponse accountNotReady() {
+        return new EconomyResponse(0, Double.NaN, EconomyResponse.ResponseType.FAILURE, notReadyMessage());
+    }
+
+    private String notReadyMessage() {
+        return "Account is not ready; retry after it finishes loading";
     }
 
 }

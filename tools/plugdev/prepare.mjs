@@ -71,7 +71,7 @@ export function createProfileConfig(options) {
     deps: [{ ...VAULT_UNLOCKED }],
     dev: { mode: "server", onlineMode: false, applySkins: false },
     jvm: { args: [`-Dsyncmoney.acceptance.version=${candidateVersion}`] },
-    run: { cleanup: "never" },
+    run: { cleanup: "never", autoStop: false },
     client: { launcher: "none", joinOnReady: false },
   };
 }

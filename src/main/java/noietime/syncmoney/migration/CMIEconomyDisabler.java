@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * CMI Economy Module Disabler.
- * Used to automatically disable CMI economy-related commands after migration completion.
+ * Quiesces the configured CMI economy commands and module before a migration snapshot.
  */
 public final class CMIEconomyDisabler {
 
@@ -112,8 +112,22 @@ public final class CMIEconomyDisabler {
      * Executes CMI reload.
      */
     public void reloadCMI() {
-        Bukkit.getServer().dispatchCommand(Bukkit.getConsoleSender(), "cmi reload");
-        plugin.getLogger().fine("CMI reloaded");
+        reloadCMIAndReport();
+    }
+
+    /**
+     * Executes CMI reload and reports only whether Bukkit accepted the command.
+     * CMI does not expose a supported runtime verification API here, so this does not prove
+     * that every direct API writer has stopped.
+     */
+    public boolean reloadCMIAndReport() {
+        boolean dispatched = Bukkit.getServer().dispatchCommand(Bukkit.getConsoleSender(), "cmi reload");
+        if (dispatched) {
+            plugin.getLogger().fine("CMI reload command accepted by Bukkit; runtime writer quiescence is not independently verifiable");
+        } else {
+            plugin.getLogger().warning("CMI reload command was not accepted");
+        }
+        return dispatched;
     }
 
     /**

@@ -26,9 +26,7 @@ public class VaultPlayerHandler {
     }
 
     /**
-     * Safely obtains OfflinePlayer, avoiding synchronous IO.
-     * Prioritizes cache lookup from NameResolver, falls back to
-     * getOfflinePlayerIfCached.
+     * Safely obtains an already-cached OfflinePlayer without synchronous IO.
      */
     public OfflinePlayer getOfflinePlayerSafe(String playerName) {
         return plugin.getServer().getOfflinePlayerIfCached(playerName);
@@ -69,35 +67,34 @@ public class VaultPlayerHandler {
      * Gets player balance by name.
      */
     public double getBalance(String playerName) {
-        return getBalance(getOfflinePlayerSafe(playerName));
+        OfflinePlayer player = getOfflinePlayerSafe(playerName);
+        if (player != null) {
+            return getBalance(player);
+        }
+        if (playerName == null || playerName.isBlank() || nameResolver == null) {
+            return Double.NaN;
+        }
+        UUID uuid = nameResolver.resolveUUIDForPlaceholder(playerName);
+        return uuid == null ? Double.NaN : getBalance(uuid);
     }
 
     /**
      * Gets player balance.
      */
     public double getBalance(OfflinePlayer player) {
-        if (player == null)
-            return 0.0;
-        UUID uuid = player.getUniqueId();
+        return player == null ? Double.NaN : getBalance(player.getUniqueId());
+    }
 
+    private double getBalance(UUID uuid) {
+        BigDecimal balance = economyFacade.getBalanceForPlaceholder(uuid);
+        if (balance == null) {
+            return Double.NaN;
+        }
         if (economyFacade.isPlayerLocked(uuid)) {
             return 0.0;
         }
 
-        if (economyFacade.hasInMemory(uuid)) {
-            return economyFacade.getBalance(uuid).doubleValue();
-        }
-
-        try {
-            BigDecimal balance = economyFacade.getBalanceSync(uuid);
-            return balance.doubleValue();
-        } catch (Exception e) {
-            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-                economyFacade.getBalance(uuid);
-            });
-            plugin.getLogger().warning("Failed to get balance sync for " + uuid + ", returning 0: " + e.getMessage());
-            return 0.0;
-        }
+        return balance.doubleValue();
     }
 
     /**
@@ -112,7 +109,7 @@ public class VaultPlayerHandler {
             return BigDecimal.ZERO;
         }
 
-        return economyFacade.getBalance(uuid);
+        return economyFacade.getBalanceForPlaceholder(uuid);
     }
 
     /**
@@ -143,9 +140,13 @@ public class VaultPlayerHandler {
         if (player == null)
             return false;
         UUID uuid = player.getUniqueId();
+        if (economyFacade.isPlayerLocked(uuid)) {
+            return false;
+        }
         BigDecimal amountBd = NumericUtil.normalize(amount);
 
-        return getBalance(player) >= amountBd.doubleValue();
+        BigDecimal balance = economyFacade.getBalanceForPlaceholder(uuid);
+        return balance != null && balance.compareTo(amountBd) >= 0;
     }
 
     /**

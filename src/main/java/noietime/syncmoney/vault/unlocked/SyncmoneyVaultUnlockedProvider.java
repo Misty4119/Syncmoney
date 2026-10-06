@@ -201,7 +201,8 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
         if (accountID == null) {
             return BigDecimal.ZERO;
         }
-        return NumericUtil.normalize(economyFacade.getBalance(accountID));
+        BigDecimal balance = economyFacade.getBalanceForPlaceholder(accountID);
+        return balance == null ? null : NumericUtil.normalize(balance);
     }
 
     @Override
@@ -216,8 +217,11 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public boolean has(String pluginName, UUID accountID, BigDecimal amount) {
-        return NumericUtil.isNonNegative(amount)
-                && getBalance(pluginName, accountID).compareTo(NumericUtil.normalize(amount)) >= 0;
+        if (!NumericUtil.isNonNegative(amount) || accountID == null) {
+            return false;
+        }
+        BigDecimal balance = getBalance(pluginName, accountID);
+        return balance != null && balance.compareTo(NumericUtil.normalize(amount)) >= 0;
     }
 
     @Override
@@ -234,8 +238,16 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     @Override
     public EconomyResponse canWithdraw(String pluginName, UUID accountID, BigDecimal amount) {
         BigDecimal balance = getBalance(pluginName, accountID);
+        return canWithdraw(pluginName, accountID, amount, balance);
+    }
+
+    private EconomyResponse canWithdraw(String pluginName, UUID accountID,
+            BigDecimal amount, BigDecimal balance) {
         if (!validTransaction(accountID, amount)) {
             return failure(balance, "Invalid account or amount");
+        }
+        if (balance == null) {
+            return failure(null, notReadyMessage());
         }
         if (economyFacade.isPlayerLocked(accountID)) {
             return failure(balance, "Account is locked");
@@ -261,7 +273,7 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     @Override
     public EconomyResponse withdraw(String pluginName, UUID accountID, BigDecimal amount) {
         BigDecimal balance = getBalance(pluginName, accountID);
-        EconomyResponse allowed = canWithdraw(pluginName, accountID, amount);
+        EconomyResponse allowed = canWithdraw(pluginName, accountID, amount, balance);
         if (!allowed.transactionSuccess()) {
             return allowed;
         }
@@ -293,8 +305,16 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     @Override
     public EconomyResponse canDeposit(String pluginName, UUID accountID, BigDecimal amount) {
         BigDecimal balance = getBalance(pluginName, accountID);
+        return canDeposit(pluginName, accountID, amount, balance);
+    }
+
+    private EconomyResponse canDeposit(String pluginName, UUID accountID,
+            BigDecimal amount, BigDecimal balance) {
         if (!validTransaction(accountID, amount)) {
             return failure(balance, "Invalid account or amount");
+        }
+        if (balance == null) {
+            return failure(null, notReadyMessage());
         }
         if (economyFacade.isPlayerLocked(accountID)) {
             return failure(balance, "Account is locked");
@@ -317,7 +337,7 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     @Override
     public EconomyResponse deposit(String pluginName, UUID accountID, BigDecimal amount) {
         BigDecimal balance = getBalance(pluginName, accountID);
-        EconomyResponse allowed = canDeposit(pluginName, accountID, amount);
+        EconomyResponse allowed = canDeposit(pluginName, accountID, amount, balance);
         if (!allowed.transactionSuccess()) {
             return allowed;
         }
@@ -352,11 +372,17 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
             return transferFailure(amount, "Invalid transfer");
         }
 
+        BigDecimal fromCurrent = getBalance(pluginName, from);
+        BigDecimal toCurrent = getBalance(pluginName, to);
+        if (fromCurrent == null || toCurrent == null) {
+            return transferFailure(amount, notReadyMessage());
+        }
+
         BigDecimal normalized = NumericUtil.normalize(amount);
         if (normalized.signum() == 0) {
             MultiEconomyResponse response = transferSuccess(normalized);
-            response.addBalance(from, getBalance(pluginName, from));
-            response.addBalance(to, getBalance(pluginName, to));
+            response.addBalance(from, fromCurrent);
+            response.addBalance(to, toCurrent);
             return response;
         }
 
@@ -441,7 +467,7 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
         if (nameResolver != null) {
             nameResolver.cacheName(name, accountID);
         }
-        economyFacade.getBalance(accountID);
+        economyFacade.getBalanceForPlaceholder(accountID);
         return true;
     }
 
@@ -472,9 +498,13 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     private EconomyResponse failure(BigDecimal balance, String message) {
         return new EconomyResponse(
                 BigDecimal.ZERO,
-                NumericUtil.normalize(balance),
+                balance == null ? null : NumericUtil.normalize(balance),
                 EconomyResponse.ResponseType.FAILURE,
                 message);
+    }
+
+    private String notReadyMessage() {
+        return "Account is not ready; retry after it finishes loading";
     }
 
     private MultiEconomyResponse transferSuccess(BigDecimal amount) {

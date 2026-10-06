@@ -59,6 +59,31 @@ class CMIEconomyMigrationLockTest {
     }
 
     @Test
+    void mirrorAttemptReportsLockRejectionSoListenerCanRetryWithoutCachingIt() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CMIEconomyMigrationLockTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.cmi().getCMIRedisPrefix()).thenReturn("syncmoney:cmi");
+        RedisManager redis = mock(RedisManager.class);
+        Jedis jedis = mock(Jedis.class);
+        when(redis.getResource()).thenReturn(jedis);
+        when(jedis.set(anyString(), anyString())).thenReturn("OK");
+        CMIEconomyHandler handler = new CMIEconomyHandler(plugin, config, redis, null, mock(CMIApi.class));
+        UUID account = UUID.randomUUID();
+
+        Method trySync = CMIEconomyHandler.class.getDeclaredMethod("trySyncAbsoluteBalance",
+                UUID.class, BigDecimal.class, BigDecimal.class, boolean.class, String.class);
+        trySync.setAccessible(true);
+        MigrationLock.enable();
+        assertTrue(MigrationLock.lock());
+        assertEquals(false, trySync.invoke(handler, account, BigDecimal.TEN, BigDecimal.TEN, true, "CMI"));
+
+        MigrationLock.unlock();
+        assertEquals(true, trySync.invoke(handler, account, BigDecimal.TEN, BigDecimal.TEN, true, "CMI"));
+        verify(redis).getResource();
+    }
+
+    @Test
     void joinMirrorReconciliationDoesNotMutateCmiWhileMigrationLockIsActive() throws Exception {
         Syncmoney plugin = mock(Syncmoney.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("CMIEconomyMigrationLockTest"));

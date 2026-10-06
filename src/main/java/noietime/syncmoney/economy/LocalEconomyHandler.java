@@ -14,7 +14,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -29,7 +31,14 @@ public class LocalEconomyHandler implements AutoCloseable {
     private final Syncmoney plugin;
     private final String dbPath;
     private final String serverName;
+    private final LocalPersistenceJournal persistenceJournal;
     private Connection connection;
+    private volatile boolean recoveryReady;
+    private volatile boolean persistenceRecoveryPending;
+    private volatile Thread persistenceWorkerThread;
+    private volatile boolean closeRequested;
+    private final AtomicBoolean closeFinalizerStarted = new AtomicBoolean();
+    private volatile Thread closeFinalizer;
 
     private BaltopManager baltopManager;
 
@@ -45,6 +54,8 @@ public class LocalEconomyHandler implements AutoCloseable {
     public LocalEconomyHandler(Syncmoney plugin, String dbPath) {
         this.plugin = plugin;
         this.dbPath = dbPath;
+        this.persistenceJournal = new LocalPersistenceJournal(
+                LocalPersistenceJournal.pathForDatabase(dbPath));
         this.serverName = plugin.getConfig() != null
                 ? plugin.getConfig().getString("server-name", "local") : "local";
         initialize();
@@ -80,11 +91,49 @@ public class LocalEconomyHandler implements AutoCloseable {
 
             createTables();
             restoreSequenceCounter();
+            replayQuarantinedWrites();
+            recoveryReady = true;
 
             plugin.getLogger().fine("Local SQLite database initialized: " + dbPath);
-        } catch (SQLException e) {
-            plugin.getLogger().severe("Failed to initialize SQLite: " + e.getMessage());
+        } catch (Exception e) {
+            recoveryReady = false;
+            plugin.getLogger().severe("Failed to initialize or recover SQLite: " + e.getMessage());
         }
+    }
+
+    boolean isRecoveryReady() {
+        return recoveryReady;
+    }
+
+    private void replayQuarantinedWrites() throws Exception {
+        List<LocalPersistenceJournal.Entry> entries = persistenceJournal.readPending();
+        if (entries.isEmpty()) {
+            return;
+        }
+        for (LocalPersistenceJournal.Entry entry : entries) {
+            persistAccepted(entry.event(), entry.playerName());
+        }
+        persistenceJournal.clear();
+        plugin.getLogger().warning("Recovered " + entries.size()
+                + " accepted LOCAL SQLite write(s) from the shutdown journal");
+    }
+
+    private void requireRecoveryReady() {
+        if (!recoveryReady) {
+            throw new IllegalStateException("LOCAL SQLite state is unavailable until accepted-write recovery completes");
+        }
+    }
+
+    void quarantineAcceptedWrites(List<EconomyEvent> events, Function<UUID, String> playerNameResolver)
+            throws SQLException, java.io.IOException {
+        if (events == null || events.isEmpty()) {
+            return;
+        }
+        List<LocalPersistenceJournal.Entry> entries = events.stream()
+                .map(event -> new LocalPersistenceJournal.Entry(event,
+                        playerNameResolver == null ? null : playerNameResolver.apply(event.playerUuid())))
+                .toList();
+        persistenceJournal.append(entries);
     }
 
     private void createTables() throws SQLException {
@@ -135,10 +184,21 @@ public class LocalEconomyHandler implements AutoCloseable {
             }
 
             try {
-                stmt.execute("ALTER TABLE transactions ADD COLUMN target_name TEXT");
+            stmt.execute("ALTER TABLE transactions ADD COLUMN target_name TEXT");
             } catch (SQLException e) {
 
             }
+
+            try {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN request_id TEXT");
+            } catch (SQLException e) {
+                if (e.getMessage() == null || !e.getMessage().toLowerCase().contains("duplicate column")) {
+                    throw e;
+                }
+            }
+
+            stmt.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_request_id "
+                    + "ON transactions(request_id) WHERE request_id IS NOT NULL");
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp DESC)");
 
@@ -174,6 +234,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-011] Get balance.
      */
     public synchronized BigDecimal getBalance(UUID uuid) {
+        requireRecoveryReady();
         try {
             return findBalance(uuid).orElse(BigDecimal.ZERO);
         } catch (SQLException e) {
@@ -186,6 +247,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * An empty result means the query succeeded and the account is absent.
      */
     synchronized java.util.Optional<BigDecimal> findBalance(UUID uuid) throws SQLException {
+        requireRecoveryReady();
         BigDecimal cached = balanceCache.get(uuid);
         if (cached != null) {
             return java.util.Optional.of(cached);
@@ -215,6 +277,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * cannot be replaced by a synthetic in-memory starting value.
      */
     synchronized java.util.Optional<AccountSnapshot> findAccountSnapshot(UUID uuid) throws SQLException {
+        requireRecoveryReady();
         BigDecimal cachedBalance = balanceCache.get(uuid);
         Long cachedVersion = versionCache.get(uuid);
         if (cachedBalance != null && cachedVersion != null) {
@@ -244,6 +307,9 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-012] Deposit.
      */
     public synchronized BigDecimal deposit(UUID uuid, String name, BigDecimal amount, String source) {
+        if (!recoveryReady) {
+            return BigDecimal.valueOf(-1);
+        }
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -309,6 +375,9 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-013] Withdraw.
      */
     public synchronized BigDecimal withdraw(UUID uuid, String name, BigDecimal amount, String source) {
+        if (!recoveryReady) {
+            return BigDecimal.valueOf(-1);
+        }
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -379,6 +448,9 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-014] Set balance.
      */
     public synchronized BigDecimal setBalance(UUID uuid, String name, BigDecimal newBalance, String source) {
+        if (!recoveryReady) {
+            return BigDecimal.valueOf(-1);
+        }
         long now = System.currentTimeMillis();
 
         if (name == null) {
@@ -471,12 +543,18 @@ public class LocalEconomyHandler implements AutoCloseable {
             signedAmount = -Math.abs(signedAmount);
         }
 
-        long transactionRowId = 0L;
+        long transactionRowId = findTransactionRow(event.requestId());
+        if (transactionRowId != 0L
+                && !transactionMatchesAcceptedEvent(transactionRowId, event, normalizedType, signedAmount)) {
+            throw new SQLException("LOCAL request id is already attached to a different accepted payload");
+        }
         boolean insertedTransaction = false;
         SQLException failure = null;
         try {
             connection.setAutoCommit(false);
-            transactionRowId = findTransactionRow(uuid, timestamp, sequence);
+            if (transactionRowId == 0L) {
+                transactionRowId = findTransactionRow(uuid, timestamp, sequence);
+            }
             if (transactionRowId == 0L) {
                 balanceBefore = readBalanceFromDatabase(uuid);
                 balanceAfter = balanceAfterForAcceptedEvent(event, balanceBefore);
@@ -494,7 +572,7 @@ public class LocalEconomyHandler implements AutoCloseable {
                 upsertBalance(uuid, name, balanceAfter, (int) version);
                 transactionRowId = insertTransactionStrict(uuid, name, normalizedType, signedAmount,
                         balanceBefore.doubleValue(), balanceAfter.doubleValue(), event.source().name(),
-                        timestamp, sequence);
+                        timestamp, sequence, event.requestId());
                 insertedTransaction = true;
             } else {
                 balanceAfter = readBalanceFromDatabase(uuid);
@@ -529,11 +607,13 @@ public class LocalEconomyHandler implements AutoCloseable {
         pendingEventSequences.remove(event.requestId());
         balanceCache.put(uuid, balanceAfter);
         versionCache.put(uuid, version);
-        if (insertedTransaction && transactionRowId > 0) {
+        if (recoveryReady && insertedTransaction && transactionRowId > 0) {
             broadcastLocalAuditEvent(transactionRowId, uuid, name, normalizedType, signedAmount,
                     balanceAfter.doubleValue(), event.source().name(), timestamp, sequence);
         }
-        updateBaltopRank(uuid, balanceAfter.doubleValue());
+        if (recoveryReady) {
+            updateBaltopRank(uuid, balanceAfter.doubleValue());
+        }
         return new LocalPersistenceReceipt(balanceAfter, version);
     }
 
@@ -616,13 +696,42 @@ public class LocalEconomyHandler implements AutoCloseable {
         }
     }
 
+    private long findTransactionRow(String requestId) throws SQLException {
+        String sql = "SELECT id FROM transactions WHERE request_id = ? LIMIT 1";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, requestId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private boolean transactionMatchesAcceptedEvent(long transactionRowId, EconomyEvent event,
+            String normalizedType, double signedAmount) throws SQLException {
+        String sql = "SELECT uuid, type, amount, source FROM transactions WHERE id = ?";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setLong(1, transactionRowId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next() || !event.playerUuid().toString().equals(rs.getString("uuid"))
+                        || !normalizedType.equals(rs.getString("type"))
+                        || !event.source().name().equals(rs.getString("source"))) {
+                    return false;
+                }
+                BigDecimal storedAmount = NumericUtil.normalize(BigDecimal.valueOf(rs.getDouble("amount")));
+                BigDecimal expectedAmount = NumericUtil.normalize(BigDecimal.valueOf(signedAmount));
+                return storedAmount.compareTo(expectedAmount) == 0;
+            }
+        }
+    }
+
     private long insertTransactionStrict(UUID uuid, String name, String type, double amount,
-            double balanceBefore, double balanceAfter, String source, long timestamp, int sequence)
+            double balanceBefore, double balanceAfter, String source, long timestamp, int sequence,
+            String requestId)
             throws SQLException {
         String sql = """
                 INSERT INTO transactions (uuid, name, type, amount, balance_before, balance_after,
-                                         source, target_name, timestamp, sequence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         source, target_name, timestamp, sequence, request_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (PreparedStatement pstmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             pstmt.setString(1, uuid.toString());
@@ -635,6 +744,7 @@ public class LocalEconomyHandler implements AutoCloseable {
             pstmt.setString(8, null);
             pstmt.setLong(9, timestamp);
             pstmt.setInt(10, sequence);
+            pstmt.setString(11, requestId);
             pstmt.executeUpdate();
             try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
                 return generatedKeys.next() ? generatedKeys.getLong(1) : 0L;
@@ -823,6 +933,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-021] Gets all balances sorted by balance (for baltop).
      */
     public synchronized List<Map<String, Object>> getAllBalancesSorted(int limit) {
+        requireRecoveryReady();
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT uuid, name, balance FROM player_balances ORDER BY balance DESC LIMIT ?";
 
@@ -849,6 +960,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-022] Gets total balance of all players.
      */
     public synchronized BigDecimal getTotalBalance() {
+        requireRecoveryReady();
         String sql = "SELECT SUM(balance) as total FROM player_balances";
 
         try (PreparedStatement pstmt = connection.prepareStatement(sql);
@@ -868,6 +980,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-023] Gets total number of players with balance > 0.
      */
     public synchronized int getTotalPlayerCount() {
+        requireRecoveryReady();
         String sql = "SELECT COUNT(*) as count FROM player_balances WHERE balance > 0";
 
         try (PreparedStatement pstmt = connection.prepareStatement(sql);
@@ -886,6 +999,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-024] Gets transaction count for today.
      */
     public synchronized int getTodayTransactionCount() {
+        requireRecoveryReady();
         long todayStart = getTodayStartTimestamp();
         String sql = "SELECT COUNT(*) as count FROM transactions WHERE timestamp >= ?";
 
@@ -923,6 +1037,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-027] Gets transaction history for a player with offset support.
      */
     public synchronized List<Map<String, Object>> getTransactionHistory(UUID uuid, int limit, int offset) {
+        requireRecoveryReady();
         List<Map<String, Object>> result = new ArrayList<>();
         String sql;
         if (offset > 0) {
@@ -968,6 +1083,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      * [SYNC-ECO-028] Gets all transactions with pagination.
      */
     public synchronized List<Map<String, Object>> getAllTransactions(int offset, int limit) {
+        requireRecoveryReady();
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT * FROM transactions ORDER BY timestamp DESC, sequence DESC LIMIT ? OFFSET ?";
 
@@ -1004,6 +1120,7 @@ public class LocalEconomyHandler implements AutoCloseable {
      */
     public synchronized List<Map<String, Object>> getTransactionsBefore(UUID playerUuid, long startTime, long endTime,
             String type, long cursorTimestamp, int cursorSequence, int limit) {
+        requireRecoveryReady();
         List<Map<String, Object>> result = new ArrayList<>();
 
         StringBuilder sql = new StringBuilder(
@@ -1067,7 +1184,78 @@ public class LocalEconomyHandler implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
+        recoveryReady = false;
+        closeRequested = true;
+        Thread worker = persistenceWorkerThread;
+        if (worker != null || persistenceRecoveryPending) {
+            plugin.getLogger().warning("Deferring LOCAL SQLite close until accepted-write persistence recovery completes");
+            return;
+        }
+
+        Thread finalizer = scheduleConnectionClose();
+        if (finalizer == null || finalizer == Thread.currentThread()) {
+            return;
+        }
+        try {
+            finalizer.join(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private Thread scheduleConnectionClose() {
+        if (!closeFinalizerStarted.compareAndSet(false, true)) {
+            return closeFinalizer;
+        }
+
+        Thread finalizer = new Thread(() -> {
+            synchronized (LocalEconomyHandler.this) {
+                if (persistenceWorkerThread == null && !persistenceRecoveryPending) {
+                    closeConnection();
+                }
+            }
+        }, "syncmoney-local-sqlite-close");
+        finalizer.setDaemon(true);
+        closeFinalizer = finalizer;
+        try {
+            finalizer.start();
+            return finalizer;
+        } catch (RuntimeException e) {
+            closeFinalizerStarted.set(false);
+            closeFinalizer = null;
+            plugin.getLogger().warning("Failed to schedule LOCAL SQLite close: " + e.getMessage());
+            return null;
+        }
+    }
+
+    synchronized void registerPersistenceWorker(Thread worker) {
+        persistenceWorkerThread = worker;
+    }
+
+    synchronized void persistenceWorkerStopped() {
+        persistenceWorkerThread = null;
+        if (closeRequested && !persistenceRecoveryPending) {
+            closeConnection();
+        }
+    }
+
+    synchronized void persistenceWorkerFailed(boolean acceptedWritesOutstanding) {
+        recoveryReady = false;
+        persistenceRecoveryPending = acceptedWritesOutstanding;
+        plugin.getLogger().severe(acceptedWritesOutstanding
+                ? "LOCAL persistence worker failed with accepted writes outstanding; account reads and migrations are disabled until recovery completes"
+                : "LOCAL persistence worker failed; new LOCAL writes and account reads are disabled");
+    }
+
+    synchronized void persistenceRecoveryHandoffCompleted() {
+        persistenceRecoveryPending = false;
+        if (closeRequested && persistenceWorkerThread == null) {
+            closeConnection();
+        }
+    }
+
+    private synchronized void closeConnection() {
         try {
             if (connection != null && !connection.isClosed()) {
                 connection.close();

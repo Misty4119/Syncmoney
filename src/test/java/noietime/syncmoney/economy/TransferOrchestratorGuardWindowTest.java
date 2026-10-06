@@ -63,6 +63,10 @@ class TransferOrchestratorGuardWindowTest {
         EconomyFacade facade = new EconomyFacade(plugin, config, cacheManager, redisManager,
                 null, null, queue, new FallbackEconomyWrapper(plugin, redisManager), guard,
                 mock(OverflowLogInterface.class));
+        assertTrue(facade.updateMemoryState(sender, new BigDecimal("100.00"), 7L),
+                "the fixture starts with a READY sender account");
+        assertTrue(facade.updateMemoryState(receiver, BigDecimal.ZERO, 3L),
+                "the fixture starts with a READY receiver account");
         AtomicReference<BigDecimal> transferResult = new AtomicReference<>();
         AtomicReference<Throwable> transferFailure = new AtomicReference<>();
         Thread transferThread = new Thread(() -> {

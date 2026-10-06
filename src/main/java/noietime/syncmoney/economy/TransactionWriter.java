@@ -129,10 +129,13 @@ final class TransactionWriter {
 
     private boolean ensureAccountLoaded(UUID uuid) {
         if (stateManager.get(uuid) != null) {
-            return true;
+            return !isLocalMode || localEconomyHandler == null || localEconomyHandler.isRecoveryReady();
         }
-        boolean loaded = facade.ensureLoaded(uuid);
-        return !isLocalMode || localEconomyHandler == null || loaded;
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            plugin.getLogger().warning("LOCAL mutation rejected while accepted-write recovery is unresolved for " + uuid);
+            return false;
+        }
+        return facade.ensureLoaded(uuid);
     }
 
     private boolean canAdvanceLocalVersion(UUID uuid, EconomyState currentState) {
@@ -219,7 +222,6 @@ final class TransactionWriter {
                 }
 
                 if (!skipGuard && playerTransactionGuard != null) {
-                    facade.ensureLoaded(uuid);
                     var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount, EconomyEvent.EventType.DEPOSIT, source);
                     guardResultRef.set(result);
                     if (!result.allowed()) {
@@ -347,7 +349,6 @@ final class TransactionWriter {
                 }
 
                 if (!skipGuard && playerTransactionGuard != null) {
-                    facade.ensureLoaded(uuid);
                     var result = playerTransactionGuard.checkTransaction(uuid, existingBalance, amount.negate(),
                             EconomyEvent.EventType.WITHDRAW, source);
                     guardResultRef.set(result);
@@ -415,11 +416,12 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
         try (writeLease) {
-            return setBalanceAdmitted(uuid, newBalance, source);
+            return setBalanceAdmitted(uuid, newBalance, source, writeLease);
         }
     }
 
-    private BigDecimal setBalanceAdmitted(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
+    private BigDecimal setBalanceAdmitted(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source,
+                                          MigrationLock.WriteLease writeLease) {
         if (newBalance.compareTo(BigDecimal.ZERO) < 0 || newBalance.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
             plugin.getLogger().warning("SetBalance rejected: Amount out of bounds (" + newBalance.toPlainString() + ")");
             return BigDecimal.valueOf(-1);
@@ -455,25 +457,28 @@ final class TransactionWriter {
         try (reservation) {
             long now = System.currentTimeMillis();
             AtomicBoolean mutationAccepted = new AtomicBoolean();
-            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
-                long currentVersion = (existing != null) ? existing.version() : 0L;
-                EconomyState next = new EconomyState(finalNewBalance, currentVersion + 1, now);
-                if (reservation != null) {
-                    BigDecimal delta = finalNewBalance.subtract(oldBalance);
-                    EconomyEvent event = new EconomyEvent(
-                            uuid, delta, finalNewBalance, next.version(),
-                            EconomyEvent.EventType.SET_BALANCE, source,
-                            UUID.randomUUID().toString(), System.currentTimeMillis());
-                    if (!commitAcceptedWrite(reservation, event)) {
-                        plugin.getLogger().severe("SetBalance rejected because its reserved write slot could not be committed for " + uuid);
-                        return existing;
+            boolean committedAtSourceBoundary = writeLease.commitMutationIfSourceStable(() -> {
+                stateManager.compute(uuid, (key, existing) -> {
+                    long currentVersion = (existing != null) ? existing.version() : 0L;
+                    EconomyState next = new EconomyState(finalNewBalance, currentVersion + 1, now);
+                    if (reservation != null) {
+                        BigDecimal delta = finalNewBalance.subtract(oldBalance);
+                        EconomyEvent event = new EconomyEvent(
+                                uuid, delta, finalNewBalance, next.version(),
+                                EconomyEvent.EventType.SET_BALANCE, source,
+                                UUID.randomUUID().toString(), System.currentTimeMillis());
+                        if (!commitAcceptedWrite(reservation, event)) {
+                            plugin.getLogger().severe("SetBalance rejected because its reserved write slot could not be committed for " + uuid);
+                            return existing;
+                        }
                     }
-                }
-                mutationAccepted.set(true);
-                return next;
+                    mutationAccepted.set(true);
+                    return next;
+                });
+                return mutationAccepted.get();
             });
 
-            if (!mutationAccepted.get() || newState == null) {
+            if (!committedAtSourceBoundary || !mutationAccepted.get()) {
                 return BigDecimal.valueOf(-1);
             }
 

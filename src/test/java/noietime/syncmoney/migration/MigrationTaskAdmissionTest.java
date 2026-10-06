@@ -13,6 +13,7 @@ import noietime.syncmoney.storage.db.DatabaseManager;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import redis.clients.jedis.Jedis;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -28,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -83,6 +85,104 @@ class MigrationTaskAdmissionTest {
         } finally {
             facade.shutdown();
         }
+    }
+
+    @Test
+    void failedSqlReceiptRejectsMigrationBeforeCheckpointingBackupAmount() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
+
+        UUID account = UUID.randomUUID();
+        DatabaseManager databaseManager = mock(DatabaseManager.class);
+        when(databaseManager.tryInsertOrUpdatePlayer(any(UUID.class), anyString(), any(BigDecimal.class),
+                anyLong(), nullable(String.class))).thenReturn(false);
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.getBalance(account)).thenReturn(BigDecimal.ZERO);
+        when(facade.setBalance(eq(account), any(BigDecimal.class), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, databaseManager,
+                null, null, checkpoint, null, null);
+
+        assertTrue(task.acquireMigrationLockForExecution());
+        InvocationTargetException failure = assertThrows(InvocationTargetException.class,
+                () -> invokeMigratePlayer(task, new CMIDatabaseReader.CMIPlayerData(
+                        account, "account", new BigDecimal("150.00"), 0L)));
+
+        assertTrue(failure.getCause() instanceof IllegalStateException);
+        verify(checkpoint, never()).addBackupAmount(any(BigDecimal.class));
+        verify(databaseManager).tryInsertOrUpdatePlayer(any(UUID.class), anyString(), any(BigDecimal.class),
+                anyLong(), nullable(String.class));
+    }
+
+    @Test
+    void unavailableRedisRejectsMigrationBeforeCheckpointingBackupAmount() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        when(config.migration().isMigrationPopulateRedis()).thenReturn(true);
+
+        UUID account = UUID.randomUUID();
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isConnected()).thenReturn(false);
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.getBalance(account)).thenReturn(BigDecimal.ZERO);
+        when(facade.setBalance(eq(account), any(BigDecimal.class), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, null,
+                redisManager, null, checkpoint, null, null);
+
+        assertTrue(task.acquireMigrationLockForExecution());
+        InvocationTargetException failure = assertThrows(InvocationTargetException.class,
+                () -> invokeMigratePlayer(task, new CMIDatabaseReader.CMIPlayerData(
+                        account, "account", new BigDecimal("150.00"), 0L)));
+
+        assertTrue(failure.getCause() instanceof IllegalStateException);
+        assertEquals(1, task.getFailedRedisCount());
+        verify(checkpoint, never()).addBackupAmount(any(BigDecimal.class));
+    }
+
+    @Test
+    void cmiSourceMutationBetweenRedisBalanceAndVersionWritesStopsThePair() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        when(config.migration().isMigrationPopulateRedis()).thenReturn(true);
+
+        UUID account = UUID.randomUUID();
+        RedisManager redis = mock(RedisManager.class);
+        when(redis.isConnected()).thenReturn(true);
+        Jedis jedis = mock(Jedis.class);
+        when(redis.getResource()).thenReturn(jedis);
+        when(jedis.set(anyString(), anyString())).thenAnswer(invocation -> {
+            assertTrue(MigrationLock.recordCmiAuthorityMutation());
+            return "OK";
+        });
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.getBalance(account)).thenReturn(BigDecimal.ZERO);
+        when(facade.setBalance(eq(account), any(BigDecimal.class), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, null,
+                redis, null, checkpoint, null, null);
+
+        assertTrue(task.acquireMigrationLockForExecution());
+        java.lang.reflect.Field leaseField = MigrationTask.class.getDeclaredField("migrationLockLease");
+        leaseField.setAccessible(true);
+        assertTrue(((MigrationLock.MigrationLease) leaseField.get(task)).beginSourceSnapshot());
+
+        invokeMigratePlayer(task, new CMIDatabaseReader.CMIPlayerData(
+                account, "account", new BigDecimal("150.00"), 0L));
+
+        verify(jedis).set("syncmoney:balance:" + account, "150.00");
+        verify(jedis, never()).set("syncmoney:version:" + account, "1");
+        verify(checkpoint, never()).addBackupAmount(any(BigDecimal.class));
     }
 
     private static void invokeMigratePlayer(MigrationTask task,

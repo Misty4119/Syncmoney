@@ -1,5 +1,7 @@
 package noietime.syncmoney.migration;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * Migration lock controller.
  * Controls whether economy operations should be locked during migration.
@@ -12,7 +14,90 @@ public final class MigrationLock {
     private static volatile boolean locked = false;
     private static volatile boolean enabled = false;
     private static int activeWriters;
+    private static Object migrationOwner;
+    private static boolean sourceSnapshotStarted;
+    private static boolean cmiAuthorityChangedDuringSnapshot;
     private static final ThreadLocal<MigrationWritePermit> currentMigrationWritePermit = new ThreadLocal<>();
+
+    /** Internal lease tying privileged migration writes and lock release to one owner. */
+    static final class MigrationLease implements AutoCloseable {
+        private final Object owner;
+        private boolean closed;
+
+        private MigrationLease(Object owner) {
+            this.owner = owner;
+        }
+
+        boolean isActive() {
+            synchronized (WRITE_GATE) {
+                return !closed && locked && migrationOwner == owner;
+            }
+        }
+
+        boolean beginSourceSnapshot() {
+            synchronized (WRITE_GATE) {
+                if (closed || !locked || migrationOwner != owner) {
+                    return false;
+                }
+                sourceSnapshotStarted = true;
+                return true;
+            }
+        }
+
+        boolean sourceChangedDuringSnapshot() {
+            synchronized (WRITE_GATE) {
+                return !closed && locked && migrationOwner == owner
+                        && sourceSnapshotStarted && cmiAuthorityChangedDuringSnapshot;
+            }
+        }
+
+        /** Atomically checks the CMI source fence and releases this migration's lock. */
+        boolean completeSourceSnapshotIfStable() {
+            synchronized (WRITE_GATE) {
+                if (closed || !locked || migrationOwner != owner
+                        || !sourceSnapshotStarted || cmiAuthorityChangedDuringSnapshot) {
+                    return false;
+                }
+                closeOwnedLock();
+                return true;
+            }
+        }
+
+        MigrationWritePermit beginWrite() {
+            synchronized (WRITE_GATE) {
+                if (closed || !locked || migrationOwner != owner
+                        || (sourceSnapshotStarted && cmiAuthorityChangedDuringSnapshot)) {
+                    return null;
+                }
+                MigrationWritePermit permit = new MigrationWritePermit(owner, currentMigrationWritePermit.get());
+                currentMigrationWritePermit.set(permit);
+                return permit;
+            }
+        }
+
+        @Override
+        public void close() {
+            synchronized (WRITE_GATE) {
+                if (closed) {
+                    return;
+                }
+                if (migrationOwner == owner) {
+                    closeOwnedLock();
+                } else {
+                    closed = true;
+                }
+            }
+        }
+
+        private void closeOwnedLock() {
+            locked = false;
+            enabled = false;
+            migrationOwner = null;
+            sourceSnapshotStarted = false;
+            cmiAuthorityChangedDuringSnapshot = false;
+            closed = true;
+        }
+    }
 
     /**
      * Internal cross-package coordination lease held for the full lifetime of an economy write.
@@ -21,10 +106,36 @@ public final class MigrationLock {
      */
     public static final class WriteLease implements AutoCloseable {
         private final boolean counted;
+        private final Object migrationOwner;
         private boolean closed;
 
-        private WriteLease(boolean counted) {
+        private WriteLease(boolean counted, Object migrationOwner) {
             this.counted = counted;
+            this.migrationOwner = migrationOwner;
+        }
+
+        /**
+         * Commits the short in-memory mutation only while its migration source is still stable.
+         * The source event recorder uses the same gate, so whichever operation wins this gate
+         * determines whether the migration write is accepted. Backend I/O must happen afterward.
+         */
+        public boolean commitMutationIfSourceStable(BooleanSupplier mutation) {
+            if (counted) {
+                synchronized (WRITE_GATE) {
+                    if (closed) {
+                        return false;
+                    }
+                }
+                return mutation.getAsBoolean();
+            }
+
+            synchronized (WRITE_GATE) {
+                if (closed || migrationOwner == null || !locked || MigrationLock.migrationOwner != migrationOwner
+                        || (sourceSnapshotStarted && cmiAuthorityChangedDuringSnapshot)) {
+                    return false;
+                }
+                return mutation.getAsBoolean();
+            }
         }
 
         @Override
@@ -61,6 +172,7 @@ public final class MigrationLock {
         synchronized (WRITE_GATE) {
             enabled = false;
             locked = false;
+            migrationOwner = null;
         }
     }
 
@@ -80,7 +192,26 @@ public final class MigrationLock {
                 return false;
             }
             locked = true;
+            migrationOwner = new Object();
+            sourceSnapshotStarted = false;
+            cmiAuthorityChangedDuringSnapshot = false;
             return true;
+        }
+    }
+
+    /** Atomically enables and takes the economy lock for one migration owner. */
+    static MigrationLease tryAcquireMigrationLease() {
+        synchronized (WRITE_GATE) {
+            enabled = true;
+            if (locked || activeWriters != 0) {
+                return null;
+            }
+            Object owner = new Object();
+            locked = true;
+            migrationOwner = owner;
+            sourceSnapshotStarted = false;
+            cmiAuthorityChangedDuringSnapshot = false;
+            return new MigrationLease(owner);
         }
     }
 
@@ -90,6 +221,9 @@ public final class MigrationLock {
     public static void unlock() {
         synchronized (WRITE_GATE) {
             locked = false;
+            migrationOwner = null;
+            sourceSnapshotStarted = false;
+            cmiAuthorityChangedDuringSnapshot = false;
         }
     }
 
@@ -109,6 +243,18 @@ public final class MigrationLock {
         return enabled;
     }
 
+    /** Records a post-change CMI event while a migration source snapshot is active. */
+    public static boolean recordCmiAuthorityMutation() {
+        synchronized (WRITE_GATE) {
+            if (!locked || migrationOwner == null || !sourceSnapshotStarted) {
+                return false;
+            }
+            cmiAuthorityChangedDuringSnapshot = true;
+            return true;
+        }
+    }
+
+
     /**
      * Internal cross-package entry point. A locked migration may only admit the migration worker's
      * single authorized set-balance mutation. This public JVM member is not a supported
@@ -117,10 +263,11 @@ public final class MigrationLock {
     public static WriteLease tryAcquireWrite() {
         synchronized (WRITE_GATE) {
             if (locked) {
-                return consumeMigrationWriteAuthorization() ? new WriteLease(false) : null;
+                Object owner = consumeMigrationWriteAuthorization();
+                return owner == null ? null : new WriteLease(false, owner);
             }
             activeWriters++;
-            return new WriteLease(true);
+            return new WriteLease(true, null);
         }
     }
 
@@ -129,27 +276,24 @@ public final class MigrationLock {
      * The scope itself is package-private so callers outside the migration implementation
      * cannot bypass an active economy lock by choosing an event source.
      */
-    private static boolean consumeMigrationWriteAuthorization() {
+    private static Object consumeMigrationWriteAuthorization() {
         MigrationWritePermit permit = currentMigrationWritePermit.get();
-        if (permit == null || permit.consumed) {
-            return false;
+        if (permit == null || permit.consumed || permit.owner != migrationOwner
+                || (sourceSnapshotStarted && cmiAuthorityChangedDuringSnapshot)) {
+            return null;
         }
         permit.consumed = true;
-        return true;
-    }
-
-    static MigrationWritePermit beginMigrationWrite() {
-        MigrationWritePermit permit = new MigrationWritePermit(currentMigrationWritePermit.get());
-        currentMigrationWritePermit.set(permit);
-        return permit;
+        return permit.owner;
     }
 
     static final class MigrationWritePermit implements AutoCloseable {
+        private final Object owner;
         private final MigrationWritePermit previous;
         private boolean consumed;
         private boolean closed;
 
-        private MigrationWritePermit(MigrationWritePermit previous) {
+        private MigrationWritePermit(Object owner, MigrationWritePermit previous) {
+            this.owner = owner;
             this.previous = previous;
         }
 

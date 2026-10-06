@@ -41,7 +41,8 @@ public final class MigrationTask {
     private final int batchSize;
 
     private volatile boolean running = false;
-    private volatile boolean migrationLockOwned = false;
+    private volatile MigrationLock.MigrationLease migrationLockLease;
+    private volatile boolean checkpointStarted;
 
     private MigrationProgressCallback progressCallback;
 
@@ -121,6 +122,8 @@ public final class MigrationTask {
             return;
         }
 
+        checkpointStarted = false;
+
         this.multiServerReader = multiServerReader;
 
         if (multiServerReader != null) {
@@ -148,52 +151,19 @@ public final class MigrationTask {
             return;
         }
 
-        if (config.migration().isMigrationLockEconomy()) {
-            MigrationLock.enable();
-            if (!MigrationLock.lock()) {
-                plugin.getLogger().warning("CMI migration not started because an economy write is still active or another migration holds the lock");
-                if (progressCallback != null) {
-                    progressCallback.onError("CMI migration could not acquire the economy lock; no migration snapshot was started");
-                }
-                return;
-            }
-            migrationLockOwned = true;
-            plugin.getLogger().fine("Economy operations locked for CMI migration");
+        if (!config.migration().isMigrationLockEconomy()) {
+            plugin.getLogger().warning("CMI migration always locks Syncmoney writes for snapshot safety; migration.lock-economy=false is ignored");
         }
-
-        final int totalPlayersFinal;
-        try {
-            int totalPlayers;
-            if (multiServerReader != null) {
-                totalPlayers = multiServerReader.getTotalPlayerCount();
-            } else {
-                totalPlayers = cmiReader.getTotalPlayerCount();
+        if (!acquireMigrationLockForExecution()) {
+            plugin.getLogger().warning("CMI migration not started because an economy write is still active or another migration holds the lock");
+            if (progressCallback != null) {
+                progressCallback.onError("CMI migration could not acquire the economy lock; no migration snapshot was started");
             }
-            totalPlayersFinal = totalPlayers;
-            if (totalPlayers == 0) {
-                plugin.getLogger().warning("No players found in CMI database!");
-                if (progressCallback != null) {
-                    progressCallback.onError("No player data found in CMI database");
-                }
-                releaseMigrationLock();
-                return;
-            }
-
-            checkpoint.init(totalPlayers);
-
-            if (createBackup) {
-                createBackup();
-            }
-        } catch (RuntimeException | Error failure) {
-            failAndReleaseMigrationLock(failure);
-            throw failure;
+            return;
         }
-
+        plugin.getLogger().fine("Economy operations locked for CMI migration");
         running = true;
-
-        AtomicInteger offset = new AtomicInteger(0);
-        AtomicInteger successCount = new AtomicInteger(0);
-        scheduleMigrationBatch(force, totalPlayersFinal, offset, successCount, false);
+        prepareCmiSourceForSnapshot(force, createBackup, multiServerReader, false);
     }
 
     /**
@@ -201,8 +171,7 @@ public final class MigrationTask {
      * @return true if resumed successfully
      */
     public boolean resume() {
-        if (config.migration().isMigrationLockEconomy()
-                && MigrationLock.isLocked() && !migrationLockOwned) {
+        if (MigrationLock.isLocked() && !ownsActiveMigrationLock()) {
             plugin.getLogger().warning("CMI migration resume not started because another migration holds the economy lock");
             return false;
         }
@@ -218,29 +187,217 @@ public final class MigrationTask {
             return false;
         }
 
-        if (config.migration().isMigrationLockEconomy()) {
-            if (migrationLockOwned && !MigrationLock.isLocked()) {
-                migrationLockOwned = false;
-            }
-            if (!migrationLockOwned) {
-                MigrationLock.enable();
-            }
-            if (!migrationLockOwned && !MigrationLock.lock()) {
-                plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
-                checkpoint.pause();
-                return false;
-            }
-            migrationLockOwned = true;
+        String sourceIdentity = checkpoint.getSourceIdentity();
+        if (sourceIdentity == null || (!sourceIdentity.startsWith("cmi-single|")
+                && !sourceIdentity.startsWith("cmi-multi|"))) {
+            plugin.getLogger().warning("Cannot safely resume CMI migration: checkpoint has no recognized source identity");
+            return false;
         }
 
+        if (!acquireMigrationLockForExecution()) {
+            plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
+            checkpoint.pause();
+            return false;
+        }
+
+        checkpointStarted = true;
         running = true;
-
-        AtomicInteger offset = new AtomicInteger(checkpoint.getCurrentOffset());
-        AtomicInteger successCount = new AtomicInteger(checkpoint.getMigratedCount());
-
-        scheduleMigrationBatch(false, checkpoint.getTotalPlayers(), offset, successCount, true);
+        prepareCmiSourceForSnapshot(false, false, multiServerReader, true);
 
         return true;
+    }
+
+    private void prepareCmiSourceForSnapshot(boolean force, boolean createBackup,
+                                             CMIMultiServerReader source, boolean resuming) {
+        if (economyDisabler == null
+                || !config.migration().isCMIAutoDisableCommands()
+                || !config.migration().isCMIAutoDisableEconomy()) {
+            abortBeforeSnapshot("Safe CMI migration requires automatic CMI economy command and module disable", resuming);
+            return;
+        }
+
+        try {
+            plugin.getServer().getGlobalRegionScheduler().execute(plugin, () -> {
+                if (!running) {
+                    releaseMigrationLock();
+                    return;
+                }
+                try {
+                    if (!economyDisabler.disableEconomyCommands()
+                            || !economyDisabler.disableEconomyModule()
+                            || !economyDisabler.reloadCMIAndReport()) {
+                        abortBeforeSnapshot("Could not disable and reload CMI economy before taking the migration snapshot", resuming);
+                        return;
+                    }
+                    MigrationLock.MigrationLease lease = migrationLockLease;
+                    if (lease == null || !lease.beginSourceSnapshot()) {
+                        abortBeforeSnapshot("CMI migration lost its economy lock before the source snapshot", resuming);
+                        return;
+                    }
+                    scheduleSnapshotInitialization(force, createBackup, source, resuming);
+                } catch (RuntimeException | Error failure) {
+                    failAndReleaseMigrationLock(failure);
+                    reportMigrationError("Could not prepare CMI source for migration: " + failure.getMessage());
+                }
+            });
+        } catch (RuntimeException | Error failure) {
+            failAndReleaseMigrationLock(failure);
+            reportMigrationError("Could not schedule CMI source quiescence: " + failure.getMessage());
+        }
+    }
+
+    private void scheduleSnapshotInitialization(boolean force, boolean createBackup,
+                                                CMIMultiServerReader source, boolean resuming) {
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            if (!running) {
+                if (resuming) {
+                    checkpoint.pause();
+                }
+                releaseMigrationLock();
+                return;
+            }
+            try {
+                if (resuming) {
+                    initializeAndValidateResumeSource();
+                    retryFailedRedisEntries();
+                    if (!failedRedisQueue.isEmpty()) {
+                        throw new IllegalStateException("Redis population retries are still failing");
+                    }
+                    int checkpointOffset = checkpoint.getCurrentOffset();
+                    int checkpointTotal = checkpoint.getTotalPlayers();
+                    if (checkpointOffset < 0 || checkpointOffset > checkpointTotal) {
+                        throw new IllegalStateException("CMI checkpoint offset is outside the recorded source snapshot; refusing to resume");
+                    }
+                    AtomicInteger offset = new AtomicInteger(checkpointOffset);
+                    AtomicInteger successCount = new AtomicInteger(checkpoint.getMigratedCount());
+                    scheduleMigrationBatch(checkpoint.getForceOverwrite(), checkpoint.getTotalPlayers(), offset,
+                            successCount, true);
+                    return;
+                }
+
+                int totalPlayers = source != null
+                        ? source.getTotalPlayerCount()
+                        : cmiReader.getTotalPlayerCount();
+                if (totalPlayers == 0) {
+                    running = false;
+                    plugin.getLogger().warning("No players found in CMI database!");
+                    reportMigrationError("No player data found in CMI database");
+                    releaseMigrationLock();
+                    return;
+                }
+
+                String sourceIdentity = source != null
+                        ? source.getSourceIdentity()
+                        : cmiReader.getSourceIdentity();
+                if (sourceIdentity == null || sourceIdentity.isBlank()) {
+                    throw new IllegalStateException("CMI source identity is unavailable; migration cannot be checkpointed safely");
+                }
+                checkpoint.init(totalPlayers, sourceIdentity, force);
+                checkpointStarted = true;
+                if (createBackup) {
+                    createBackup();
+                }
+                scheduleMigrationBatch(force, totalPlayers, new AtomicInteger(0),
+                        new AtomicInteger(0), false);
+            } catch (RuntimeException | Error failure) {
+                if (resuming && checkpointStarted) {
+                    pauseAndReleaseMigrationLock(failure);
+                } else {
+                    failAndReleaseMigrationLock(failure);
+                }
+                reportMigrationError("Could not snapshot CMI source: " + failure.getMessage());
+            }
+        });
+    }
+
+    private void abortBeforeSnapshot(String message, boolean resuming) {
+        running = false;
+        if (resuming) {
+            checkpoint.pause();
+        }
+        releaseMigrationLock();
+        plugin.getLogger().warning(message);
+        reportMigrationError(message);
+    }
+
+    private void initializeAndValidateResumeSource() {
+        String expected = checkpoint.getSourceIdentity();
+        String actual;
+        if (expected.startsWith("cmi-multi|")) {
+            if (multiServerReader == null) {
+                multiServerReader = new CMIMultiServerReader(plugin, config);
+            }
+            multiServerReader.initialize();
+            if (!multiServerReader.testConnections()) {
+                throw new IllegalStateException("Configured CMI multi-server sources are unavailable");
+            }
+            actual = multiServerReader.getSourceIdentity();
+            cmiReader = null;
+        } else {
+            if (cmiReader == null || !cmiReader.isInitialized()) {
+                cmiReader = new CMIDatabaseReader(plugin, config);
+            }
+            cmiReader.initialize();
+            if (!cmiReader.testConnection()) {
+                throw new IllegalStateException("Configured CMI source is unavailable");
+            }
+            actual = cmiReader.getSourceIdentity();
+            multiServerReader = null;
+        }
+
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException("CMI migration source changed since the checkpoint was created; refusing to resume at an old offset");
+        }
+
+        int currentTotal = multiServerReader != null
+                ? multiServerReader.getTotalPlayerCount()
+                : cmiReader.getTotalPlayerCount();
+        if (currentTotal != checkpoint.getTotalPlayers()) {
+            throw new IllegalStateException("CMI source row count changed since the checkpoint was created; refusing to resume at an old offset");
+        }
+    }
+
+    private void reportMigrationError(String message) {
+        if (progressCallback != null) {
+            progressCallback.onError(message);
+        }
+    }
+
+    private boolean abortIfCmiSourceChanged() {
+        MigrationLock.MigrationLease lease = migrationLockLease;
+        if (lease != null && lease.isActive() && !lease.sourceChangedDuringSnapshot()) {
+            return false;
+        }
+        IllegalStateException failure = new IllegalStateException(
+                "CMI balance changed during migration; the copied target is partial and must not be activated. " +
+                        "Quiesce all CMI source writers and start a new migration with -force.");
+        failAndReleaseMigrationLock(failure);
+        reportMigrationError(failure.getMessage());
+        return true;
+    }
+
+    private boolean isCmiSourceChanged() {
+        MigrationLock.MigrationLease lease = migrationLockLease;
+        return lease == null || !lease.isActive() || lease.sourceChangedDuringSnapshot();
+    }
+
+    boolean acquireMigrationLockForExecution() {
+        MigrationLock.MigrationLease current = migrationLockLease;
+        if (current != null && current.isActive()) {
+            return true;
+        }
+        MigrationLock.MigrationLease acquired = MigrationLock.tryAcquireMigrationLease();
+        if (acquired == null) {
+            migrationLockLease = null;
+            return false;
+        }
+        migrationLockLease = acquired;
+        return true;
+    }
+
+    private boolean ownsActiveMigrationLock() {
+        MigrationLock.MigrationLease current = migrationLockLease;
+        return current != null && current.isActive();
     }
 
     private void scheduleMigrationBatch(boolean force, int totalPlayers, AtomicInteger offset,
@@ -249,24 +406,59 @@ public final class MigrationTask {
             plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
                 try {
                     if (!running) {
-                        checkpoint.pause();
+                        if (checkpointStarted) {
+                            checkpoint.pause();
+                        } else {
+                            releaseMigrationLock();
+                        }
+                        return;
+                    }
+
+                    if (abortIfCmiSourceChanged()) {
                         return;
                     }
 
                     int currentOffset = offset.get();
-                    List<CMIPlayerData> players = !resuming && multiServerReader != null
-                            ? multiServerReader.readAndMergePlayers()
-                            : cmiReader.readPlayers(currentOffset, batchSize);
+                    List<CMIPlayerData> players;
+                    if (multiServerReader != null) {
+                        List<CMIPlayerData> sourcePlayers = multiServerReader.readAndMergePlayers();
+                        if (resuming && sourcePlayers.size() != totalPlayers) {
+                            throw new IllegalStateException("CMI multi-server row count changed since the checkpoint was created; refusing to resume at an old offset");
+                        }
+                        if (resuming) {
+                            int start = Math.min(currentOffset, sourcePlayers.size());
+                            players = new ArrayList<>(sourcePlayers.subList(start, sourcePlayers.size()));
+                        } else {
+                            players = sourcePlayers;
+                        }
+                    } else {
+                        players = cmiReader.readPlayers(currentOffset, batchSize);
+                    }
+
+                    if (abortIfCmiSourceChanged()) {
+                        return;
+                    }
 
                     if (players.isEmpty()) {
+                        if (currentOffset < totalPlayers) {
+                            throw new IllegalStateException("CMI source returned an empty page before the expected end of the snapshot");
+                        }
                         completeMigration();
                         return;
                     }
 
                     for (CMIPlayerData player : players) {
+                        if (abortIfCmiSourceChanged()) {
+                            return;
+                        }
                         try {
-                            migratePlayer(player, force);
+                            String playerName = player.playerName();
+                            migratePlayer(player, force || checkpoint.hasFailure(playerName));
+                            checkpoint.clearFailure(playerName);
                             successCount.incrementAndGet();
+                            if (abortIfCmiSourceChanged()) {
+                                return;
+                            }
                             if (!resuming && !checkRedisHealthDuringMigration(successCount.get())) {
                                 plugin.getLogger().warning("Migration paused due to Redis health issue");
                                 checkpoint.pause();
@@ -277,13 +469,22 @@ public final class MigrationTask {
                                 return;
                             }
                         } catch (Exception ex) {
+                            if (abortIfCmiSourceChanged()) {
+                                return;
+                            }
                             String playerName = player.playerName();
                             plugin.getLogger().warning("Failed to migrate player " + playerName + ": " + ex.getMessage());
                             checkpoint.recordFailure(playerName, ex.getMessage());
+                            pauseAndReleaseMigrationLock(ex);
+                            reportMigrationError("Migration paused after failing player " + playerName + ": " + ex.getMessage());
+                            return;
                         }
                     }
 
                     if (!resuming && multiServerReader != null) {
+                        if (abortIfCmiSourceChanged()) {
+                            return;
+                        }
                         int migrated = successCount.get();
                         checkpoint.updateProgress(totalPlayers, migrated);
                         if (progressCallback != null) {
@@ -297,6 +498,9 @@ public final class MigrationTask {
                         return;
                     }
 
+                    if (abortIfCmiSourceChanged()) {
+                        return;
+                    }
                     int newOffset = Math.min(totalPlayers, currentOffset + players.size());
                     offset.set(newOffset);
                     int migrated = successCount.get();
@@ -315,10 +519,8 @@ public final class MigrationTask {
                 } catch (Exception failure) {
                     plugin.getLogger().severe((resuming ? "Migration resume error: " : "Migration error: ")
                             + failure.getMessage());
-                    failAndReleaseMigrationLock(failure);
-                    if (progressCallback != null && !resuming) {
-                        progressCallback.onError("Migration error: " + failure.getMessage());
-                    }
+                    pauseAndReleaseMigrationLock(failure);
+                    reportMigrationError("Migration paused: " + failure.getMessage());
                 }
             });
         } catch (RuntimeException | Error failure) {
@@ -332,7 +534,11 @@ public final class MigrationTask {
      */
     public void stop() {
         running = false;
-        checkpoint.pause();
+        if (checkpointStarted) {
+            checkpoint.pause();
+        } else {
+            releaseMigrationLock();
+        }
     }
 
     /**
@@ -356,34 +562,58 @@ public final class MigrationTask {
             throw new IllegalArgumentException("Cannot resolve UUID for " + playerName);
         }
 
+        if (!ownsActiveMigrationLock()) {
+            throw new IllegalStateException("CMI migration no longer owns the economy lock");
+        }
+
         BigDecimal existingBalance = economyFacade.getBalance(uuid);
         if (existingBalance.compareTo(BigDecimal.ZERO) > 0 && !force) {
             return;
         }
 
         BigDecimal appliedBalance;
-        try (var migrationWrite = MigrationLock.beginMigrationWrite()) {
+        MigrationLock.MigrationLease lockLease = migrationLockLease;
+        MigrationLock.MigrationWritePermit migrationWrite = lockLease == null ? null : lockLease.beginWrite();
+        try (migrationWrite) {
             appliedBalance = economyFacade.setBalance(uuid, balance, EconomyEvent.EventSource.ADMIN_SET);
         }
         if (appliedBalance == null || appliedBalance.compareTo(BigDecimal.ZERO) < 0) {
             throw new IllegalStateException("Economy rejected migration write for " + playerName + " (" + uuid + ")");
         }
 
-        checkpoint.addBackupAmount(balance);
+        if (isCmiSourceChanged()) {
+            return;
+        }
 
         if (databaseManager != null) {
-            databaseManager.insertOrUpdatePlayer(
+            if (isCmiSourceChanged()) {
+                return;
+            }
+            if (!databaseManager.tryInsertOrUpdatePlayer(
                     uuid,
                     playerName,
                     balance,
                     1L,
                     config.getServerName()
-            );
+            )) {
+                throw new IllegalStateException("SQL rejected migration write for " + playerName + " (" + uuid + ")");
+            }
+            if (isCmiSourceChanged()) {
+                return;
+            }
         }
 
         if (config.migration().isMigrationPopulateRedis()) {
-            populateRedis(uuid, balance, 1L);
+            if (isCmiSourceChanged() || !populateRedis(uuid, balance, 1L)) {
+                return;
+            }
         }
+
+        if (isCmiSourceChanged()) {
+            return;
+        }
+
+        checkpoint.addBackupAmount(balance);
 
         plugin.getLogger().fine("Migrated player: " + playerName + " with balance " + balance);
     }
@@ -392,33 +622,40 @@ public final class MigrationTask {
      * Populates Redis with player balance and version data.
      * Uses SYNC mode key space (syncmoney:balance:) instead of CMI key space.
      */
-    private void populateRedis(UUID uuid, BigDecimal balance, long version) {
+    private boolean populateRedis(UUID uuid, BigDecimal balance, long version) {
+        if (isCmiSourceChanged()) {
+            return false;
+        }
         if (redisManager == null || !redisManager.isConnected()) {
             plugin.getLogger().warning("Redis not available, skipping Redis population for: " + uuid);
 
             String playerName = nameResolver != null ? nameResolver.getName(uuid) : uuid.toString();
             failedRedisQueue.add(new FailedRedisEntry(uuid, balance, version, playerName));
-            return;
+            throw new IllegalStateException("Redis unavailable while migrating " + playerName);
         }
 
         try (var jedis = redisManager.getResource()) {
+            if (isCmiSourceChanged()) {
+                return false;
+            }
             String keyBalance = "syncmoney:balance:" + uuid.toString();
             String keyVersion = "syncmoney:version:" + uuid.toString();
 
             jedis.set(keyBalance, balance.toPlainString());
+            if (isCmiSourceChanged()) {
+                return false;
+            }
             jedis.set(keyVersion, String.valueOf(version));
 
             plugin.getLogger().fine("CMI Migration: Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
+            return !isCmiSourceChanged();
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to populate Redis for " + uuid + ": " + e.getMessage());
 
             String playerName = nameResolver != null ? nameResolver.getName(uuid) : uuid.toString();
             failedRedisQueue.add(new FailedRedisEntry(uuid, balance, version, playerName));
-
-
-            if (failedRedisQueue.size() % 10 == 0) {
-                notifyRedisFailure();
-            }
+            notifyRedisFailure();
+            throw new IllegalStateException("Redis population failed for " + playerName, e);
         }
     }
 
@@ -654,6 +891,23 @@ public final class MigrationTask {
      * Completes migration.
      */
     private void completeMigration() {
+        if (checkpoint.getFailedCount() != 0 || !failedRedisQueue.isEmpty()) {
+            IllegalStateException failure = new IllegalStateException(
+                    "CMI migration has unresolved player or Redis failures and cannot be completed");
+            pauseAndReleaseMigrationLock(failure);
+            reportMigrationError(failure.getMessage());
+            return;
+        }
+
+        MigrationLock.MigrationLease lease = migrationLockLease;
+        if (lease == null || !lease.completeSourceSnapshotIfStable()) {
+            IllegalStateException failure = new IllegalStateException(
+                    "CMI balance changed during migration; the copied target is partial and must not be activated");
+            failAndReleaseMigrationLock(failure);
+            reportMigrationError(failure.getMessage());
+            return;
+        }
+
         running = false;
         checkpoint.complete();
 
@@ -668,27 +922,25 @@ public final class MigrationTask {
         showMigrationSummary(checkpoint.getMigratedCount(), checkpoint.getFailedCount(),
                 checkpoint.getTotalBackupAmount(), failedRedisQueue.size());
 
-        if (economyDisabler != null) {
-            scheduleCMIEconomyDisable();
-        }
-
         releaseMigrationLock();
 
         cancel();
     }
 
     private void releaseMigrationLock() {
-        if (migrationLockOwned) {
-            MigrationLock.unlock();
-            MigrationLock.disable();
-            migrationLockOwned = false;
+        MigrationLock.MigrationLease lockLease = migrationLockLease;
+        if (lockLease != null) {
+            lockLease.close();
+            migrationLockLease = null;
             plugin.getLogger().fine("Economy operations unlocked after CMI migration");
         }
     }
 
     private void failAndReleaseMigrationLock(Throwable failure) {
         try {
-            checkpoint.fail();
+            if (checkpointStarted) {
+                checkpoint.fail();
+            }
         } catch (RuntimeException | Error checkpointFailure) {
             failure.addSuppressed(checkpointFailure);
         } finally {
@@ -698,37 +950,18 @@ public final class MigrationTask {
         }
     }
 
-    /**
-     * Schedules CMI economy disable task (executes on main thread).
-     */
-    private void scheduleCMIEconomyDisable() {
-        plugin.getServer().getGlobalRegionScheduler().execute(plugin, () -> {
-            try {
-                if (config.migration().isCMIAutoDisableCommands()) {
-                    boolean commandsDisabled = economyDisabler.disableEconomyCommands();
-                    if (commandsDisabled) {
-                        plugin.getLogger().fine("CMI economy commands disabled successfully");
-                    } else {
-                        plugin.getLogger().warning("Failed to disable CMI economy commands");
-                    }
-                }
-
-                if (config.migration().isCMIAutoDisableEconomy()) {
-                    boolean economyDisabled = economyDisabler.disableEconomyModule();
-                    if (economyDisabled) {
-                        plugin.getLogger().fine("CMI economy module disabled successfully");
-                    } else {
-                        plugin.getLogger().warning("Failed to disable CMI economy module");
-                    }
-                }
-
-                economyDisabler.reloadCMI();
-                plugin.getLogger().fine("CMI reload completed");
-
-            } catch (Exception e) {
-                plugin.getLogger().severe("Error during CMI economy disable: " + e.getMessage());
+    private void pauseAndReleaseMigrationLock(Throwable failure) {
+        try {
+            if (checkpointStarted) {
+                checkpoint.pause();
             }
-        });
+        } catch (RuntimeException | Error checkpointFailure) {
+            failure.addSuppressed(checkpointFailure);
+        } finally {
+            running = false;
+            cancel();
+            releaseMigrationLock();
+        }
     }
 
     /**

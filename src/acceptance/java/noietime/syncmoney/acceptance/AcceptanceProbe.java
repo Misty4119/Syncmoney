@@ -5,11 +5,14 @@ import noietime.syncmoney.economy.EconomyEvent;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.java.JavaPlugin;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.UUID;
 
 /** Explicit RCON-triggered tests against an isolated development server, never production. */
 public final class AcceptanceProbe extends JavaPlugin {
+    private static final long ACCOUNT_LOAD_TIMEOUT_MILLIS = 10_000L;
+
     @Override public void onEnable() {
         getCommand("smaccept").setExecutor((sender, command, label, args) -> {
             boolean console = sender instanceof org.bukkit.command.ConsoleCommandSender
@@ -59,20 +62,34 @@ public final class AcceptanceProbe extends JavaPlugin {
             require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
             Economy vault = registration.getProvider();
             require(vault.isEnabled(), "Vault provider enabled");
+            VaultUnlockedAccess vaultUnlocked = vaultUnlockedAccess(plugin);
             OfflinePlayer offlineA = getServer().getOfflinePlayer(a);
             OfflinePlayer offlineB = getServer().getOfflinePlayer(b);
             if (args.length > 0 && args[0].equals("read")) {
                 double coldVaultA = vault.getBalance(offlineA);
-                double coldVaultB = vault.getBalance(offlineB);
+                BigDecimal coldVaultUnlockedB = vaultUnlocked.balance(b);
+                require(Double.isNaN(coldVaultA), "cold Vault account A is unavailable");
+                require(coldVaultUnlockedB == null, "cold VaultUnlocked account B is unavailable");
+                awaitAccountReady(facade, a);
+                awaitAccountReady(facade, b);
                 BigDecimal persistedA = facade.getBalance(a);
                 BigDecimal persistedB = facade.getBalance(b);
-                getLogger().info("ACCEPTANCE READ vault-a=" + coldVaultA + " vault-b=" + coldVaultB
-                        + " persisted-a=" + persistedA + " persisted-b=" + persistedB);
+                BigDecimal warmVaultUnlockedB = vaultUnlocked.balance(b);
+                require(persistedA.compareTo(new BigDecimal("1000")) == 0, "persisted account A");
+                require(persistedB.compareTo(new BigDecimal("520")) == 0, "persisted account B");
+                require(new BigDecimal("520.00").compareTo(warmVaultUnlockedB) == 0,
+                        "VaultUnlocked account B after background load");
+                getLogger().info("ACCEPTANCE READ cold-vault-a=" + coldVaultA
+                        + " cold-vault-unlocked-b=" + coldVaultUnlockedB
+                        + " a=" + persistedA + " b=" + persistedB
+                        + " vault-unlocked-b=" + warmVaultUnlockedB);
                 return;
             }
             // Seed only these disposable accounts through the existing administrative path.
             facade.unlockPlayer(a);
             facade.unlockPlayer(b);
+            awaitAccountReady(facade, a);
+            awaitAccountReady(facade, b);
             var source = EconomyEvent.EventSource.COMMAND_ADMIN;
             facade.setBalance(a, new BigDecimal("1000.00"), source);
             facade.setBalance(b, new BigDecimal("500.00"), source);
@@ -105,6 +122,34 @@ public final class AcceptanceProbe extends JavaPlugin {
 
     private static void require(boolean condition, String check) {
         if (!condition) throw new IllegalStateException(check);
+    }
+
+    private BigDecimal awaitAccountReady(noietime.syncmoney.economy.EconomyFacade facade, UUID uuid)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS
+                .toNanos(ACCOUNT_LOAD_TIMEOUT_MILLIS);
+        while (System.nanoTime() < deadline) {
+            BigDecimal balance = facade.getBalanceForPlaceholder(uuid);
+            if (balance != null) return balance;
+            Thread.sleep(10L);
+        }
+        throw new IllegalStateException("Timed out waiting for account readiness: " + uuid);
+    }
+
+    private VaultUnlockedAccess vaultUnlockedAccess(Syncmoney plugin) throws ReflectiveOperationException {
+        Class<?> economyApi = Class.forName("net.milkbowl.vault2.economy.Economy", true,
+                plugin.getClass().getClassLoader());
+        var registration = getServer().getServicesManager().getRegistration(economyApi);
+        require(registration != null && registration.getPlugin() == plugin,
+                "VaultUnlocked provider registration");
+        return new VaultUnlockedAccess(registration.getProvider(),
+                economyApi.getMethod("getBalance", String.class, UUID.class));
+    }
+
+    private record VaultUnlockedAccess(Object provider, Method getBalanceMethod) {
+        BigDecimal balance(UUID account) throws ReflectiveOperationException {
+            return (BigDecimal) getBalanceMethod.invoke(provider, "SyncmoneyAcceptanceProbe", account);
+        }
     }
 
     private static String expectedVersion() {

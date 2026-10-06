@@ -7,6 +7,7 @@ import org.bukkit.plugin.Plugin;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -22,6 +23,7 @@ import java.util.concurrent.ConcurrentMap;
 public final class NameResolver {
 
     private static final int MAX_CACHE_SIZE = 10_000;
+    static final int MAX_PENDING_NAME_LOOKUPS = 256;
 
     private final Plugin plugin;
     private final CacheManager cacheManager;
@@ -142,6 +144,7 @@ public final class NameResolver {
     }
 
     private final java.util.Set<String> pendingNameLookups = ConcurrentHashMap.newKeySet();
+    private final Semaphore pendingNameLookupPermits = new Semaphore(MAX_PENDING_NAME_LOOKUPS);
 
     /** [ThreadSafe] Cached lookup for placeholders; resolves a cache miss asynchronously. */
     public UUID resolveUUIDForPlaceholder(String name) {
@@ -149,14 +152,25 @@ public final class NameResolver {
         String key = name.toLowerCase(java.util.Locale.ROOT);
         UUID cached = nameToUuidCache.get(key);
         if (cached != null) return cached;
-        if (pendingNameLookups.add(key)) {
-            try {
-                plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-                    try { resolve(name); } finally { pendingNameLookups.remove(key); }
-                });
-            } catch (RuntimeException e) {
-                pendingNameLookups.remove(key);
-            }
+        if (!pendingNameLookupPermits.tryAcquire()) {
+            return null;
+        }
+        if (!pendingNameLookups.add(key)) {
+            pendingNameLookupPermits.release();
+            return null;
+        }
+        try {
+            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                try {
+                    resolve(name);
+                } finally {
+                    pendingNameLookups.remove(key);
+                    pendingNameLookupPermits.release();
+                }
+            });
+        } catch (RuntimeException e) {
+            pendingNameLookups.remove(key);
+            pendingNameLookupPermits.release();
         }
         return null;
     }

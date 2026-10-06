@@ -269,7 +269,10 @@ public class VaultProviderCore {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot deposit negative amount");
         }
         if (amount == 0) {
-            BigDecimal currentBalance = economyFacade.getBalance(player.getUniqueId());
+            BigDecimal currentBalance = economyFacade.getBalanceForPlaceholder(player.getUniqueId());
+            if (currentBalance == null) {
+                return accountNotReady();
+            }
             return new EconomyResponse(0, currentBalance.doubleValue(),
                     EconomyResponse.ResponseType.SUCCESS, "Zero deposit ignored");
         }
@@ -285,8 +288,7 @@ public class VaultProviderCore {
         BigDecimal newBalance = economyFacade.deposit(uuid, amountBd, EconomyEvent.EventSource.VAULT_DEPOSIT);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            return new EconomyResponse(0, economyFacade.getBalance(uuid).doubleValue(),
-                    EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
+            return failedMutation(uuid, "Failed to deposit");
         }
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
@@ -339,8 +341,7 @@ public class VaultProviderCore {
         BigDecimal newBalance = economyFacade.pluginDeposit(uuid, amountBd, pluginName);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            return new EconomyResponse(0, economyFacade.getBalance(uuid).doubleValue(),
-                    EconomyResponse.ResponseType.FAILURE, "Failed to deposit");
+            return failedMutation(uuid, "Failed to deposit");
         }
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
@@ -382,9 +383,7 @@ public class VaultProviderCore {
         BigDecimal newBalance = economyFacade.pluginWithdraw(uuid, amountBd, pluginName);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            BigDecimal currentBalance = economyFacade.getBalance(uuid);
-            return new EconomyResponse(0, currentBalance.doubleValue(), EconomyResponse.ResponseType.FAILURE,
-                    "Insufficient funds");
+            return failedMutation(uuid, "Insufficient funds");
         }
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, newBalance);
@@ -426,9 +425,11 @@ public class VaultProviderCore {
         CacheManager.TransferResult result = economyFacade.pluginAtomicTransfer(fromUuid, toUuid, amountBd, pluginName);
 
         if (result == null) {
-            BigDecimal currentBalance = economyFacade.getBalance(fromUuid);
-            return new EconomyResponse(0, currentBalance.doubleValue(), EconomyResponse.ResponseType.FAILURE,
-                    "Atomic transfer failed - insufficient funds or locked account");
+            double balance = readyBalance(fromUuid);
+            double receiverBalance = readyBalance(toUuid);
+            String message = Double.isNaN(balance) || Double.isNaN(receiverBalance) ? notReadyMessage()
+                    : "Atomic transfer failed - insufficient funds or locked account";
+            return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE, message);
         }
 
         CrossServerNotifier.notifyBalanceChange(plugin, from, "vault.withdrawn", amountBd, result.fromNewBalance);
@@ -457,6 +458,25 @@ public class VaultProviderCore {
 
     public EconomyResponse createBank(String name, OfflinePlayer player) {
         return bankHandler.createBank(name, player);
+    }
+
+    private EconomyResponse failedMutation(UUID uuid, String fallbackMessage) {
+        double balance = readyBalance(uuid);
+        return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE,
+                Double.isNaN(balance) ? notReadyMessage() : fallbackMessage);
+    }
+
+    private double readyBalance(UUID uuid) {
+        BigDecimal balance = economyFacade.getBalanceForPlaceholder(uuid);
+        return balance == null ? Double.NaN : balance.doubleValue();
+    }
+
+    private EconomyResponse accountNotReady() {
+        return new EconomyResponse(0, Double.NaN, EconomyResponse.ResponseType.FAILURE, notReadyMessage());
+    }
+
+    private String notReadyMessage() {
+        return "Account is not ready; retry after it finishes loading";
     }
 
     public EconomyResponse deleteBank(String name) {

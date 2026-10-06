@@ -13,22 +13,31 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.math.BigDecimal;
+import java.io.IOException;
 import java.sql.SQLException;
 import java.nio.file.Path;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -69,6 +78,7 @@ class LocalAsyncPersistenceTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
         LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
         when(localHandler.findAccountSnapshot(any(UUID.class))).thenReturn(java.util.Optional.of(
                 new LocalEconomyHandler.AccountSnapshot(new BigDecimal("100.00"), 1L)));
         CountDownLatch sqlEntered = new CountDownLatch(1);
@@ -84,6 +94,8 @@ class LocalAsyncPersistenceTest {
             return new LocalPersistenceReceipt(event.balanceAfter(), event.version());
         }, plugin.getLogger());
         UUID uuid = UUID.randomUUID();
+        assertTrue(facade.updateMemoryState(uuid, new BigDecimal("100.00"), 1L),
+                "this test exercises admission after the account is already READY");
         ExecutorService caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() -> facade.deposit(uuid, new BigDecimal("10.00"),
@@ -115,6 +127,7 @@ class LocalAsyncPersistenceTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
         LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
         when(localHandler.findAccountSnapshot(any(UUID.class))).thenReturn(java.util.Optional.of(
                 new LocalEconomyHandler.AccountSnapshot(new BigDecimal("100.00"), 1L)));
         EconomyWriteQueue queue = new EconomyWriteQueue(1, plugin.getLogger());
@@ -123,12 +136,12 @@ class LocalAsyncPersistenceTest {
                 null, mock(OverflowLogInterface.class));
 
         UUID occupyingUuid = UUID.randomUUID();
+        UUID uuid = UUID.randomUUID();
+        assertTrue(facade.updateMemoryState(uuid, new BigDecimal("100.00"), 1L));
         EconomyEvent occupyingEvent = new EconomyEvent(occupyingUuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
                 EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "occupying-write", 10L);
         var occupyingReservation = queue.tryReserve(occupyingUuid);
         assertTrue(occupyingReservation.commit(occupyingEvent));
-        UUID uuid = UUID.randomUUID();
-
         assertEquals(new BigDecimal("-1"), facade.deposit(uuid, BigDecimal.ONE,
                 EconomyEvent.EventSource.VAULT_DEPOSIT));
         assertEquals(new BigDecimal("100.00"), facade.getMemoryState(uuid).balance());
@@ -137,7 +150,7 @@ class LocalAsyncPersistenceTest {
     }
 
     @Test
-    void localShutdownKeepsWaitingUntilAcceptedWriteIsPersisted() throws Exception {
+    void localShutdownReturnsAtDeadlineButKeepsWorkerAndAcceptedWriteUntilReceipt() throws Exception {
         EconomyWriteQueue queue = new EconomyWriteQueue(2);
         UUID uuid = UUID.randomUUID();
         EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
@@ -149,26 +162,36 @@ class LocalAsyncPersistenceTest {
             persistenceEntered.countDown();
             releasePersistence.await(20, TimeUnit.SECONDS);
             return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
-        }, Logger.getLogger("LocalAsyncPersistenceTest"));
+        }, unresolved -> {
+            throw new IOException("injected unavailable quarantine owner");
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 40L);
         worker.start();
+        Thread recoveryActor = worker.recoveryThread();
+        assertNotNull(recoveryActor);
+        assertTrue(recoveryActor.isAlive(), "the recovery actor starts before the LOCAL writer accepts work");
+        assertFalse(recoveryActor.isDaemon(), "the recovery actor owns unresolved writes until receipt or journal");
         assertTrue(persistenceEntered.await(1, TimeUnit.SECONDS));
 
         ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
         try {
             var shutdown = shutdownCaller.submit(worker::shutdown);
-            boolean shutdownFinishedBeforePersistence = true;
-            try {
-                shutdown.get(11, TimeUnit.SECONDS);
-            } catch (TimeoutException expected) {
-                shutdownFinishedBeforePersistence = false;
-            }
-            assertFalse(shutdownFinishedBeforePersistence,
-                    "shutdown must not stop the worker while an accepted SQLite write is unresolved");
-            assertTrue(queue.hasAcceptedWrite(uuid), "the accepted write remains owned while shutdown waits");
+            shutdown.get(1, TimeUnit.SECONDS);
+            assertTrue(queue.hasAcceptedWrite(uuid), "the accepted write remains owned after bounded shutdown returns");
+            assertTrue(worker.workerThread().isAlive(),
+                    "the worker and its persistence dependency remain alive while the write is unresolved");
+            assertTrue(worker.workerThread().isDaemon(),
+                    "a stuck SQLite call must not itself hold ordinary JVM shutdown after the plugin callback returns");
+            assertSame(recoveryActor, worker.recoveryThread(),
+                    "shutdown must signal the recovery actor created before accepting writes");
+            assertTrue(recoveryActor.isAlive(),
+                    "the recovery actor keeps the JVM alive while no receipt or journal exists");
 
             releasePersistence.countDown();
-            shutdown.get(2, TimeUnit.SECONDS);
-            assertFalse(queue.hasAcceptedWrite(uuid), "shutdown returns after the receipt completes");
+            worker.workerThread().join(2_000);
+            assertFalse(worker.workerThread().isAlive(), "the worker exits once it obtains a persistence receipt");
+            assertFalse(queue.hasAcceptedWrite(uuid), "ownership clears only after the receipt completes");
+            recoveryActor.join(1_000);
+            assertFalse(recoveryActor.isAlive(), "the recovery actor exits after the receipt");
         } finally {
             releasePersistence.countDown();
             shutdownCaller.shutdownNow();
@@ -239,6 +262,651 @@ class LocalAsyncPersistenceTest {
             releaseFirstFailure.countDown();
             releaseRecovery.countDown();
             shutdownCaller.shutdownNow();
+        }
+    }
+
+    @Test
+    void shutdownDeadlineJournalsAcceptedWriteAndStartupReplayAppliesItExactlyOnce() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        Path database = tempDir.resolve("deadline-local.db");
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin, database.toString());
+        UUID uuid = UUID.randomUUID();
+        handler.setBalance(uuid, "Alice", new BigDecimal("100.00"), "ADMIN_SET");
+        EconomyEvent event = new EconomyEvent(uuid, new BigDecimal("10.00"), new BigDecimal("110.00"), 2L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.VAULT_DEPOSIT,
+                "deadline-local-request", System.currentTimeMillis() + 1_000);
+
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        assertTrue(queue.tryReserve(uuid).commit(event));
+        CountDownLatch persistenceEntered = new CountDownLatch(1);
+        CountDownLatch releasePersistence = new CountDownLatch(1);
+        CountDownLatch workerStopped = new CountDownLatch(1);
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            persistenceEntered.countDown();
+            boolean released = false;
+            while (!released) {
+                try {
+                    releasePersistence.await();
+                    released = true;
+                } catch (InterruptedException ignored) {
+                    // Model an uninterruptible SQLite call so close deferral is exercised.
+                }
+            }
+            return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
+        }, events -> handler.quarantineAcceptedWrites(events, ignored -> "Alice"),
+                plugin.getLogger(), 50L, handler::registerPersistenceWorker, () -> {
+                    handler.persistenceWorkerStopped();
+                    workerStopped.countDown();
+                });
+        worker.start();
+
+        ExecutorService closeCaller = Executors.newSingleThreadExecutor();
+        LocalEconomyHandler reopened = null;
+        try {
+            assertTrue(persistenceEntered.await(1, TimeUnit.SECONDS));
+            long start = System.nanoTime();
+            worker.shutdown();
+            long shutdownMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue(shutdownMillis < 1_000, "shutdown must hand off accepted work after its bounded drain window");
+            long handoffDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (queue.hasAcceptedWrite(uuid) && System.nanoTime() < handoffDeadline) {
+                Thread.sleep(5);
+            }
+            assertFalse(queue.hasAcceptedWrite(uuid), "durable journal ownership replaces the in-memory reservation");
+
+            var close = closeCaller.submit(handler::close);
+            close.get(250, TimeUnit.MILLISECONDS);
+            assertTrue(java.nio.file.Files.size(database.resolveSibling("local-persistence.journal")) > 0,
+                    "the accepted event must be forced to the recovery journal before ownership is released");
+
+            releasePersistence.countDown();
+            assertTrue(workerStopped.await(2, TimeUnit.SECONDS), "the interrupted worker should finish and close SQLite");
+            reopened = new LocalEconomyHandler(plugin, database.toString());
+            assertTrue(reopened.isRecoveryReady(), "startup replay must complete before LOCAL writes are enabled");
+            assertEquals(new BigDecimal("110.00"), reopened.findBalance(uuid).orElseThrow());
+            assertEquals(2, reopened.getTransactionHistory(uuid, 10).size());
+
+            reopened.persistAccepted(event, "Alice");
+            assertEquals(new BigDecimal("110.00"), reopened.findBalance(uuid).orElseThrow(),
+                    "replaying an already committed request must not apply its delta twice");
+            assertEquals(2, reopened.getTransactionHistory(uuid, 10).size(),
+                    "request-id deduplication must also preserve one audit row");
+            assertEquals(0L, java.nio.file.Files.size(database.resolveSibling("local-persistence.journal")),
+                    "the journal is cleared only after every entry has a committed SQLite receipt");
+        } finally {
+            releasePersistence.countDown();
+            if (worker != null) {
+                worker.shutdown();
+            }
+            workerStopped.await(2, TimeUnit.SECONDS);
+            closeCaller.shutdownNow();
+            if (reopened != null) {
+                reopened.close();
+            }
+            handler.close();
+        }
+    }
+
+    @Test
+    void shutdownReturnsAfterJournalFailureWhileWorkerRetainsAndRetriesAcceptedWrite() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "shutdown-journal-failure", 10L);
+        CountDownLatch persistenceAttempted = new CountDownLatch(1);
+        CountDownLatch quarantineAttempted = new CountDownLatch(1);
+        AtomicBoolean persistenceRecovered = new AtomicBoolean();
+        AtomicInteger quarantineAttempts = new AtomicInteger();
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+        try {
+            assertTrue(queue.tryReserve(uuid).commit(event));
+            worker = new LocalPersistenceWorker(queue, accepted -> {
+                persistenceAttempted.countDown();
+                if (!persistenceRecovered.get()) {
+                    throw new SQLException("injected persistent SQLite failure");
+                }
+                return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
+            }, unresolved -> {
+                quarantineAttempts.incrementAndGet();
+                quarantineAttempted.countDown();
+                throw new IOException("injected full/read-only journal filesystem");
+            }, Logger.getLogger("LocalAsyncPersistenceTest"), 30L);
+            worker.start();
+            Thread recoveryActor = worker.recoveryThread();
+            assertNotNull(recoveryActor);
+            assertTrue(recoveryActor.isAlive(), "recovery ownership is established before the drain deadline");
+            assertTrue(persistenceAttempted.await(1, TimeUnit.SECONDS));
+
+            var shutdown = shutdownCaller.submit(worker::shutdown);
+            assertTrue(quarantineAttempted.await(2, TimeUnit.SECONDS),
+                    "shutdown must attempt durable quarantine after its drain deadline");
+            shutdown.get(500, TimeUnit.MILLISECONDS);
+
+            assertTrue(quarantineAttempts.get() >= 1, "shutdown starts durable quarantine retries asynchronously");
+            assertTrue(queue.hasAcceptedWrite(uuid), "failed quarantine must retain accepted write ownership");
+            assertTrue(worker.workerThread().isAlive(), "the persistence worker remains available to retry");
+            assertTrue(worker.workerThread().isDaemon());
+            assertSame(recoveryActor, worker.recoveryThread(),
+                    "the deadline signals the already-running recovery owner");
+            assertTrue(recoveryActor.isAlive());
+            assertFalse(recoveryActor.isDaemon(),
+                    "the recovery actor prevents process exit while persistence and journal remain unresolved");
+
+            persistenceRecovered.set(true);
+            worker.workerThread().join(2_000);
+            assertFalse(worker.workerThread().isAlive(), "the worker exits after persistence recovers");
+            assertFalse(queue.hasAcceptedWrite(uuid), "ownership clears only after a persistence receipt");
+            recoveryActor.join(1_000);
+            assertFalse(recoveryActor.isAlive(), "the recovery actor exits once SQLite acknowledges the write");
+        } finally {
+            persistenceRecovered.set(true);
+            if (worker != null && worker.workerThread() != null) {
+                worker.workerThread().join(2_000);
+            }
+            shutdownCaller.shutdownNow();
+        }
+    }
+
+    @Test
+    void shutdownDoesNotWaitForAStalledJournalWriteAfterTheDrainDeadline() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "stalled-journal", 10L);
+        CountDownLatch persistenceEntered = new CountDownLatch(1);
+        CountDownLatch releasePersistence = new CountDownLatch(1);
+        CountDownLatch journalEntered = new CountDownLatch(1);
+        CountDownLatch releaseJournal = new CountDownLatch(1);
+        CountDownLatch workerStopped = new CountDownLatch(1);
+        assertTrue(queue.tryReserve(uuid).commit(event));
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            persistenceEntered.countDown();
+            boolean released = false;
+            while (!released) {
+                try {
+                    releasePersistence.await();
+                    released = true;
+                } catch (InterruptedException ignored) {
+                    // Keep the fake SQLite call unresolved until the test releases it.
+                }
+            }
+            return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
+        }, unresolved -> {
+            journalEntered.countDown();
+            boolean released = false;
+            while (!released) {
+                try {
+                    releaseJournal.await();
+                    released = true;
+                } catch (InterruptedException ignored) {
+                    // Model a filesystem operation that cannot be safely cancelled.
+                }
+            }
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 30L, ignored -> { }, workerStopped::countDown);
+        worker.start();
+
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+        try {
+            assertTrue(persistenceEntered.await(1, TimeUnit.SECONDS));
+            var shutdown = shutdownCaller.submit(worker::shutdown);
+            assertTrue(journalEntered.await(2, TimeUnit.SECONDS),
+                    "shutdown should hand off journal I/O after the drain deadline");
+            shutdown.get(500, TimeUnit.MILLISECONDS);
+            assertTrue(queue.hasAcceptedWrite(uuid),
+                    "the reservation remains owned until the journal acknowledges the handoff");
+
+            releaseJournal.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (queue.hasAcceptedWrite(uuid) && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            assertFalse(queue.hasAcceptedWrite(uuid), "durable journal acknowledgment transfers ownership");
+            worker.recoveryThread().join(1_000);
+            assertFalse(worker.recoveryThread().isAlive(),
+                    "a stuck daemon SQLite call does not hold JVM exit after journal handoff");
+            assertTrue(worker.workerThread().isAlive(), "the simulated SQLite call is still unresolved");
+            releasePersistence.countDown();
+            assertTrue(workerStopped.await(2, TimeUnit.SECONDS));
+        } finally {
+            releaseJournal.countDown();
+            releasePersistence.countDown();
+            shutdownCaller.shutdownNow();
+            if (worker.workerThread() != null) {
+                worker.workerThread().join(2_000);
+            }
+        }
+    }
+
+    @Test
+    void unexpectedPersistenceWorkerExitClosesAdmissionAndJournalsAcceptedWrites() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "worker-stopped-unexpectedly", 10L);
+        CountDownLatch journaled = new CountDownLatch(1);
+        assertTrue(queue.tryReserve(uuid).commit(event));
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            throw new AssertionError("injected fatal persistence callback failure");
+        }, unresolved -> {
+            unresolved.forEach(queue::quarantine);
+            journaled.countDown();
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 30L);
+        worker.start();
+
+        try {
+            worker.workerThread().join(1_000);
+            assertFalse(worker.workerThread().isAlive(), "the injected fatal callback ends this worker");
+            assertTrue(journaled.await(1, TimeUnit.SECONDS),
+                    "worker failure must notify the recovery actor without waiting for plugin shutdown");
+            assertFalse(queue.hasAcceptedWrite(uuid), "durable journal acknowledgment transfers accepted ownership");
+            assertNull(queue.tryReserve(UUID.randomUUID()),
+                    "new LOCAL writes are rejected after the only persistence worker exits");
+
+            worker.shutdown();
+
+            assertFalse(queue.hasAcceptedWrite(uuid));
+            worker.recoveryThread().join(1_000);
+            assertFalse(worker.recoveryThread().isAlive());
+        } finally {
+            worker.shutdown();
+        }
+    }
+
+    @Test
+    void unexpectedIdleWorkerExitClosesLocalAdmissionAndBlocksSnapshots() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin, tempDir.resolve("idle-worker-exit.db").toString());
+        EconomyWriteQueue queue = mock(EconomyWriteQueue.class);
+        org.mockito.Mockito.when(queue.poll(anyLong(), eq(TimeUnit.MILLISECONDS)))
+                .thenThrow(new AssertionError("injected idle worker failure"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
+                mock(DatabaseManager.class), handler, queue, mock(FallbackEconomyWrapper.class), null,
+                mock(OverflowLogInterface.class));
+        worker = new LocalPersistenceWorker(queue, accepted -> new LocalPersistenceReceipt(
+                accepted.balanceAfter(), accepted.version()), events -> handler.quarantineAcceptedWrites(events,
+                ignored -> "Alice"), Logger.getLogger("LocalAsyncPersistenceTest"), 100L,
+                handler::registerPersistenceWorker, handler::persistenceWorkerStopped,
+                handler::persistenceWorkerFailed, handler::persistenceRecoveryHandoffCompleted);
+
+        try {
+            worker.start();
+            worker.workerThread().join(1_000);
+
+            assertFalse(worker.workerThread().isAlive(), "the injected idle failure ends the worker");
+            assertFalse(handler.isRecoveryReady(), "an exited worker invalidates LOCAL recovery readiness");
+            assertFalse(facade.isLocalRecoveryReady(), "migration must not snapshot pre-replay LOCAL data");
+            assertThrows(IllegalStateException.class, () -> handler.getAllBalancesSorted(10));
+            assertNull(queue.tryReserve(UUID.randomUUID()), "idle worker failure permanently closes LOCAL admission");
+        } finally {
+            if (worker != null) {
+                worker.shutdown();
+            }
+            if (facade != null) {
+                facade.shutdown();
+                facade = null;
+            }
+            handler.close();
+        }
+    }
+
+    @Test
+    void localSnapshotReadinessWaitsForAcceptedWritesToReceiveReceipts() {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        LocalEconomyHandler handler = mock(LocalEconomyHandler.class);
+        when(handler.isRecoveryReady()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
+                mock(DatabaseManager.class), handler, queue, mock(FallbackEconomyWrapper.class), null,
+                mock(OverflowLogInterface.class));
+
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.TEN, BigDecimal.TEN, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "migration-pending", 10L);
+        assertTrue(facade.isLocalRecoveryReady(), "an idle, recovered LOCAL store may be snapshotted");
+        assertTrue(queue.tryReserve(uuid).commit(event));
+
+        assertFalse(facade.isLocalRecoveryReady(),
+                "accepted writes remain outside SQLite until their persistence receipt completes");
+
+        queue.complete(event, new BigDecimal("10.00"), 2L);
+        assertTrue(facade.isLocalRecoveryReady(), "a completed persistence receipt restores snapshot readiness");
+    }
+
+    @Test
+    void unavailableRecoveryActorNeverRetriesJournalSynchronouslyOnShutdownCaller() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent event = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "recovery-actor-dead", 10L);
+        assertTrue(queue.tryReserve(uuid).commit(event));
+        AtomicBoolean persistenceRecovered = new AtomicBoolean();
+        CountDownLatch persistenceEntered = new CountDownLatch(1);
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            persistenceEntered.countDown();
+            if (!persistenceRecovered.get()) {
+                throw new SQLException("injected SQLite failure");
+            }
+            return new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version());
+        }, unresolved -> {
+            throw new AssertionError("injected fatal recovery actor failure");
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 40L);
+        worker.start();
+        worker.recoveryThread().setUncaughtExceptionHandler((thread, failure) -> { });
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+
+        try {
+            assertTrue(persistenceEntered.await(1, TimeUnit.SECONDS));
+            Future<?> shutdown = shutdownCaller.submit(worker::shutdown);
+            shutdown.get(1, TimeUnit.SECONDS);
+
+            worker.recoveryThread().join(1_000);
+            assertFalse(worker.recoveryThread().isAlive(), "the injected fatal actor error terminates the actor");
+            assertTrue(queue.hasAcceptedWrite(uuid), "failed handoff retains ownership until SQLite receipts the event");
+
+            persistenceRecovered.set(true);
+            worker.workerThread().join(2_000);
+            assertFalse(worker.workerThread().isAlive());
+            assertFalse(queue.hasAcceptedWrite(uuid), "a later SQLite receipt releases the accepted write");
+        } finally {
+            persistenceRecovered.set(true);
+            if (worker.workerThread() != null) {
+                worker.workerThread().join(2_000);
+            }
+            shutdownCaller.shutdownNow();
+            worker.shutdown();
+        }
+    }
+
+    @Test
+    void workerStartFailureClearsRegisteredSQLiteWorkerBeforeHandlerClose() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin, tempDir.resolve("worker-start-failure.db").toString());
+        var connectionField = LocalEconomyHandler.class.getDeclaredField("connection");
+        connectionField.setAccessible(true);
+        java.sql.Connection connection = (java.sql.Connection) connectionField.get(handler);
+        worker = new LocalPersistenceWorker(new EconomyWriteQueue(2), accepted ->
+                new LocalPersistenceReceipt(accepted.balanceAfter(), accepted.version()), events -> { },
+                Logger.getLogger("LocalAsyncPersistenceTest"), 100L, registeredThread -> {
+                    handler.registerPersistenceWorker(registeredThread);
+                    throw new IllegalStateException("injected worker registration/start failure");
+                }, handler::persistenceWorkerStopped, handler::persistenceWorkerFailed,
+                handler::persistenceRecoveryHandoffCompleted);
+
+        try {
+            assertThrows(IllegalStateException.class, worker::start);
+            handler.close();
+            assertTrue(connection.isClosed(), "a failed start must not leave a dead worker registered with SQLite");
+        } finally {
+            worker.shutdown();
+            handler.close();
+        }
+    }
+
+    @Test
+    void shutdownJournalsReservationsThatCommitAfterDeadWorkerHandoffStarts() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(3);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent first = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "dead-worker-first", 11L);
+        EconomyEvent second = new EconomyEvent(uuid, BigDecimal.ONE, new BigDecimal("2.00"), 2L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "dead-worker-second", 12L);
+        assertTrue(queue.tryReserve(uuid).commit(first));
+        EconomyWriteQueue.Reservation laterReservation = queue.tryReserve(uuid);
+        assertTrue(laterReservation != null);
+
+        CountDownLatch firstJournaled = new CountDownLatch(1);
+        CountDownLatch secondJournaled = new CountDownLatch(1);
+        AtomicInteger journalCalls = new AtomicInteger();
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            throw new AssertionError("injected fatal persistence callback failure");
+        }, unresolved -> {
+            unresolved.forEach(queue::quarantine);
+            if (journalCalls.incrementAndGet() == 1) {
+                firstJournaled.countDown();
+            } else {
+                secondJournaled.countDown();
+            }
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 2_000L);
+        worker.start();
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+
+        try {
+            worker.workerThread().join(1_000);
+            assertFalse(worker.workerThread().isAlive(), "the injected fatal callback ends this worker");
+            Future<?> shutdown = shutdownCaller.submit(worker::shutdown);
+
+            assertTrue(firstJournaled.await(1, TimeUnit.SECONDS),
+                    "shutdown must journal committed writes after the persistence worker dies");
+            assertTrue(laterReservation.commit(second), "a reservation accepted before shutdown may still commit");
+            assertTrue(secondJournaled.await(1, TimeUnit.SECONDS),
+                    "handoff must continue until every pre-shutdown reservation is journaled");
+            shutdown.get(1, TimeUnit.SECONDS);
+            assertFalse(queue.hasOutstandingWrites());
+            worker.recoveryThread().join(1_000);
+            assertFalse(worker.recoveryThread().isAlive());
+        } finally {
+            laterReservation.close();
+            shutdownCaller.shutdownNow();
+            worker.shutdown();
+        }
+    }
+
+    @Test
+    void shutdownCancelsUncommittedReservationsAfterDeadWorkerDrainDeadline() throws Exception {
+        EconomyWriteQueue queue = new EconomyWriteQueue(3);
+        UUID uuid = UUID.randomUUID();
+        EconomyEvent committed = new EconomyEvent(uuid, BigDecimal.ONE, BigDecimal.ONE, 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "dead-worker-committed", 13L);
+        EconomyEvent late = new EconomyEvent(uuid, BigDecimal.ONE, new BigDecimal("2.00"), 2L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "dead-worker-uncommitted", 14L);
+        assertTrue(queue.tryReserve(uuid).commit(committed));
+        EconomyWriteQueue.Reservation reservation = queue.tryReserve(uuid);
+        assertTrue(reservation != null);
+
+        CountDownLatch journaled = new CountDownLatch(1);
+        worker = new LocalPersistenceWorker(queue, accepted -> {
+            throw new AssertionError("injected fatal persistence callback failure");
+        }, unresolved -> {
+            unresolved.forEach(queue::quarantine);
+            journaled.countDown();
+        }, Logger.getLogger("LocalAsyncPersistenceTest"), 100L);
+        worker.start();
+
+        try {
+            worker.workerThread().join(1_000);
+            assertFalse(worker.workerThread().isAlive(), "the injected fatal callback ends this worker");
+            worker.shutdown();
+
+            assertTrue(journaled.await(1, TimeUnit.SECONDS), "committed work is journaled");
+            worker.recoveryThread().join(2_000);
+            assertFalse(worker.recoveryThread().isAlive(),
+                    "a never-committed reservation must not hold host shutdown past its bounded deadline");
+            assertFalse(queue.hasOutstandingWrites());
+            assertFalse(reservation.commit(late), "a reservation cancelled at the drain deadline cannot mutate state");
+        } finally {
+            reservation.close();
+            worker.shutdown();
+        }
+    }
+
+    @Test
+    void corruptRecoveryJournalPreservesEvidenceAndRejectsLocalMutations() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        Path database = tempDir.resolve("corrupt-journal-local.db");
+        LocalEconomyHandler initial = new LocalEconomyHandler(plugin, database.toString());
+        initial.close();
+        Path journal = database.resolveSibling("local-persistence.journal");
+        byte[] corruptRecord = "SYNCLOCAL1\ttruncated".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Path expected = tempDir.resolve("corrupt-journal-expected.bin");
+        java.nio.file.Files.write(expected, corruptRecord);
+        java.nio.file.Files.write(journal, corruptRecord);
+
+        LocalEconomyHandler recovered = new LocalEconomyHandler(plugin, database.toString());
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
+        facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
+                mock(DatabaseManager.class), recovered, queue, mock(FallbackEconomyWrapper.class),
+                null, mock(OverflowLogInterface.class));
+
+        try {
+            assertFalse(recovered.isRecoveryReady(), "corrupt recovery evidence must keep LOCAL writes disabled");
+            assertEquals(new BigDecimal("-1"), facade.deposit(UUID.randomUUID(), BigDecimal.TEN,
+                    EconomyEvent.EventSource.VAULT_DEPOSIT));
+            assertEquals(0, queue.size());
+            assertEquals(-1, java.nio.file.Files.mismatch(journal, expected),
+                    "startup must preserve an invalid journal for operator recovery");
+        } finally {
+            facade.shutdown();
+            recovered.close();
+        }
+    }
+
+    @Test
+    void unresolvedRecoveryBlocksDirectBalanceAndAggregateReadsAndCachedFacadeReadiness() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        Path database = tempDir.resolve("unresolved-read-local.db");
+        LocalEconomyHandler initial = new LocalEconomyHandler(plugin, database.toString());
+        UUID uuid = UUID.randomUUID();
+        initial.setBalance(uuid, "Alice", new BigDecimal("75.00"), "ADMIN_SET");
+        initial.close();
+        Path journal = database.resolveSibling("local-persistence.journal");
+        java.nio.file.Files.writeString(journal, "SYNCLOCAL1\ttruncated");
+
+        LocalEconomyHandler recovered = new LocalEconomyHandler(plugin, database.toString());
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        EconomyFacade localFacade = new EconomyFacade(plugin, config, mock(CacheManager.class),
+                mock(RedisManager.class), mock(DatabaseManager.class), recovered,
+                new EconomyWriteQueue(4), mock(FallbackEconomyWrapper.class), null,
+                mock(OverflowLogInterface.class));
+        try {
+            assertFalse(recovered.isRecoveryReady());
+            assertThrows(IllegalStateException.class, () -> recovered.getBalance(uuid));
+            assertThrows(IllegalStateException.class, () -> recovered.getAllBalancesSorted(10));
+            assertThrows(IllegalStateException.class, recovered::getTotalBalance);
+            assertThrows(IllegalStateException.class, recovered::getTotalPlayerCount);
+
+            localFacade.updateMemoryState(uuid, new BigDecimal("90.00"), 3L);
+            assertNull(localFacade.getBalanceSync(uuid),
+                    "synchronous balance reads must not expose cached state before LOCAL recovery is ready");
+            assertFalse(localFacade.ensureLoaded(uuid),
+                    "a cached balance cannot make the account ready while LOCAL recovery is unresolved");
+            assertThrows(IllegalStateException.class, () -> localFacade.getBalance(uuid));
+        } finally {
+            localFacade.shutdown();
+            recovered.close();
+        }
+    }
+
+    @Test
+    void closeDefersForRegisteredPersistenceWorkerEvenBeforeItsThreadStarts() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin, tempDir.resolve("close-race-local.db").toString());
+        Thread registeredButNotStarted = new Thread(() -> { });
+        handler.registerPersistenceWorker(registeredButNotStarted);
+        var connectionField = LocalEconomyHandler.class.getDeclaredField("connection");
+        connectionField.setAccessible(true);
+        java.sql.Connection connection = (java.sql.Connection) connectionField.get(handler);
+
+        handler.close();
+        assertFalse(connection.isClosed(),
+                "close must not race between worker registration and Thread.start");
+
+        handler.persistenceWorkerStopped();
+        assertTrue(connection.isClosed(),
+                "SQLite closes when the registered worker reports that it stopped");
+    }
+
+    @Test
+    void closeRequestReturnsWhileColdSqliteOperationOwnsHandlerMonitor() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin,
+                tempDir.resolve("close-with-cold-read.db").toString());
+        var connectionField = LocalEconomyHandler.class.getDeclaredField("connection");
+        connectionField.setAccessible(true);
+        java.sql.Connection connection = (java.sql.Connection) connectionField.get(handler);
+        CountDownLatch monitorHeld = new CountDownLatch(1);
+        CountDownLatch releaseMonitor = new CountDownLatch(1);
+        Thread coldRead = new Thread(() -> {
+            synchronized (handler) {
+                monitorHeld.countDown();
+                try {
+                    releaseMonitor.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }, "test-blocked-local-cold-read");
+        ExecutorService shutdownCaller = Executors.newSingleThreadExecutor();
+        try {
+            coldRead.start();
+            assertTrue(monitorHeld.await(1, TimeUnit.SECONDS));
+            var close = shutdownCaller.submit(() -> {
+                handler.close();
+                return true;
+            });
+
+            boolean closeReturnedBeforeReadReleased;
+            try {
+                close.get(250, TimeUnit.MILLISECONDS);
+                closeReturnedBeforeReadReleased = true;
+            } catch (TimeoutException timeout) {
+                closeReturnedBeforeReadReleased = false;
+            }
+
+            releaseMonitor.countDown();
+            coldRead.join(TimeUnit.SECONDS.toMillis(1));
+            assertTrue(close.get(1, TimeUnit.SECONDS), "close request must finish after the handler lock is released");
+            long closeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (!connection.isClosed() && System.nanoTime() < closeDeadline) {
+                Thread.sleep(5);
+            }
+            assertTrue(connection.isClosed(), "deferred close must release SQLite after the cold read completes");
+            assertTrue(closeReturnedBeforeReadReleased,
+                    "plugin shutdown must not block indefinitely waiting for a cold SQLite read monitor");
+        } finally {
+            releaseMonitor.countDown();
+            coldRead.join(TimeUnit.SECONDS.toMillis(1));
+            shutdownCaller.shutdownNow();
+            handler.close();
         }
     }
 
@@ -434,6 +1102,37 @@ class LocalAsyncPersistenceTest {
                     "retrying the same accepted event must not duplicate its transaction row");
         } finally {
             reopened.close();
+        }
+    }
+
+    @Test
+    void duplicateRequestIdWithDifferentPayloadIsRejectedWithoutChangingPersistedBalance() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("LocalAsyncPersistenceTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+
+        LocalEconomyHandler handler = new LocalEconomyHandler(plugin, tempDir.resolve("request-payload-local.db").toString());
+        UUID uuid = UUID.randomUUID();
+        handler.setBalance(uuid, "Alice", new BigDecimal("100.00"), "ADMIN_SET");
+        long timestamp = System.currentTimeMillis() + 1_000;
+        EconomyEvent accepted = new EconomyEvent(uuid, new BigDecimal("10.00"), new BigDecimal("110.00"), 2L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.VAULT_DEPOSIT,
+                "same-request-different-payload", timestamp);
+        try {
+            handler.persistAccepted(accepted, "Alice");
+            EconomyEvent conflictingRetry = new EconomyEvent(uuid, new BigDecimal("25.00"),
+                    new BigDecimal("125.00"), 3L, EconomyEvent.EventType.DEPOSIT,
+                    EconomyEvent.EventSource.VAULT_DEPOSIT, accepted.requestId(), timestamp);
+
+            assertThrows(SQLException.class, () -> handler.persistAccepted(conflictingRetry, "Alice"),
+                    "a request id is an identity for one immutable accepted payload");
+            assertEquals(new BigDecimal("110.00"), handler.getBalance(uuid));
+            assertEquals(2, handler.getTransactionHistory(uuid, 10).size(),
+                    "the conflicting payload must not create a second balance or audit effect");
+        } finally {
+            handler.close();
         }
     }
 

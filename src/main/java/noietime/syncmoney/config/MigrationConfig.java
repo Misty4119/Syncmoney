@@ -60,25 +60,25 @@ public final class MigrationConfig {
     }
 
     /**
-     * [SYNC-CONFIG-016] Whether to lock economy operations during migration.
-     * When enabled, prevents data inconsistency during migration.
+     * [SYNC-CONFIG-016] Legacy setting retained for configuration compatibility.
+     * CMI and LOCAL-to-Sync migrations always fence Syncmoney writes for snapshot safety.
      */
     public boolean isMigrationLockEconomy() {
-        return config.getBoolean("migration.lock-economy", false);
+        return config.getBoolean("migration.lock-economy", true);
     }
 
     /**
-     * [SYNC-CONFIG-017] Whether to automatically disable CMI economy commands after migration
+     * [SYNC-CONFIG-017] Whether CMI economy commands are disabled before/after safe migration
      */
     public boolean isCMIAutoDisableCommands() {
         return config.getBoolean("migration.cmi.auto-disable-commands", true);
     }
 
     /**
-     * [SYNC-CONFIG-018] Whether to automatically disable CMI economy module after migration
+     * [SYNC-CONFIG-018] Whether the CMI economy module is disabled before a safe migration snapshot.
      */
     public boolean isCMIAutoDisableEconomy() {
-        return config.getBoolean("migration.cmi.auto-disable-economy", false);
+        return config.getBoolean("migration.cmi.auto-disable-economy", true);
     }
 
     /**

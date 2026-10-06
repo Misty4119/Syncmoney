@@ -9,6 +9,7 @@ import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.event.SyncmoneyListener;
+import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
@@ -21,12 +22,14 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -37,6 +40,87 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class TransactionWriterOutcomeTest {
+
+    @Test
+    void cmiMutationAfterPermitAdmissionRejectsSetBalanceBeforeMemoryCommit() throws Exception {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
+        LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = Mockito.spy(new MemoryStateManager(plugin, queue));
+        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        CountDownLatch atPreCommitRead = new CountDownLatch(1);
+        CountDownLatch allowCommit = new CountDownLatch(1);
+        AtomicInteger accountReads = new AtomicInteger();
+        doAnswer(invocation -> {
+            EconomyState current = (EconomyState) invocation.callRealMethod();
+            if (accountReads.incrementAndGet() == 2) {
+                atPreCommitRead.countDown();
+                assertTrue(allowCommit.await(5, TimeUnit.SECONDS), "test must release the pre-commit read");
+            }
+            return current;
+        }).when(state).get(account);
+
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true),
+                mock(OverflowLogInterface.class), state, new AtomicLong(), true);
+
+        var acquireLease = MigrationLock.class.getDeclaredMethod("tryAcquireMigrationLease");
+        acquireLease.setAccessible(true);
+        AutoCloseable migrationLease = (AutoCloseable) acquireLease.invoke(null);
+        var beginSnapshot = migrationLease.getClass().getDeclaredMethod("beginSourceSnapshot");
+        beginSnapshot.setAccessible(true);
+        assertTrue((Boolean) beginSnapshot.invoke(migrationLease));
+        var beginWrite = migrationLease.getClass().getDeclaredMethod("beginWrite");
+        beginWrite.setAccessible(true);
+        AtomicReference<BigDecimal> result = new AtomicReference<>();
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        Thread migrationWriter = new Thread(() -> {
+            AutoCloseable permit = null;
+            try {
+                permit = (AutoCloseable) beginWrite.invoke(migrationLease);
+                result.set(writer.setBalance(account, new BigDecimal("150.00"),
+                        EconomyEvent.EventSource.ADMIN_SET));
+            } catch (Throwable failure) {
+                workerFailure.set(failure);
+            } finally {
+                if (permit != null) {
+                    try {
+                        permit.close();
+                    } catch (Exception failure) {
+                        workerFailure.compareAndSet(null, failure);
+                    }
+                }
+            }
+        }, "migration-transaction-writer-test");
+
+        try {
+            migrationWriter.start();
+            assertTrue(atPreCommitRead.await(5, TimeUnit.SECONDS), "migration write should reach the pre-commit boundary");
+            assertTrue(MigrationLock.recordCmiAuthorityMutation());
+            allowCommit.countDown();
+            migrationWriter.join(5_000);
+
+            assertTrue(!migrationWriter.isAlive(), "migration writer should finish after the source fence is released");
+            assertNull(workerFailure.get());
+            assertEquals(new BigDecimal("-1"), result.get());
+            assertEquals(new BigDecimal("100.00"), state.get(account).balance());
+            assertEquals(0, queue.size());
+            verify(localHandler, never()).setBalance(account, null, new BigDecimal("150.00"), "ADMIN_SET");
+        } finally {
+            allowCommit.countDown();
+            migrationWriter.join(5_000);
+            migrationLease.close();
+            MigrationLock.unlock();
+            MigrationLock.disable();
+        }
+    }
 
     @Test
     void pluginPreEventOnceWithAttribution() throws Exception {
@@ -158,6 +242,7 @@ class TransactionWriterOutcomeTest {
         MemoryStateManager state = new MemoryStateManager(plugin);
         state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
         TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
                 new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true), null,

@@ -2,6 +2,7 @@ package noietime.syncmoney.listener;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.CMIEconomyHandler;
+import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.sync.CMIDebounceManager;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.entity.Player;
@@ -42,7 +43,9 @@ public final class CMIEconomyListener implements Listener {
     private ScheduledTask pollingTask;
     private final ConcurrentHashMap<UUID, BigDecimal> lastKnownCMIBalance = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> outboundSuppressUntilMs = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Integer> failedOutboundSyncAttempts = new ConcurrentHashMap<>();
     private static final long OUTBOUND_SUPPRESS_MS = 750L;
+    private static final int MAX_OUTBOUND_SYNC_ATTEMPTS = 3;
 
     private static Class<?> cmiEventClass = null;
     private static Method getUserMethod = null;
@@ -125,9 +128,16 @@ public final class CMIEconomyListener implements Listener {
                 return;
             }
 
+            // This is a post-change notification. Invalidate a live snapshot before applying
+            // echo suppression, which only controls outbound publishing.
+            MigrationLock.recordCmiAuthorityMutation();
+
             Object cmiUser = getUserMethod.invoke(event);
             UUID uuid = getUUIDFromCMIUser(cmiUser);
-            if (uuid == null || isOutboundSuppressed(uuid)) {
+            if (uuid == null) {
+                return;
+            }
+            if (isOutboundSuppressed(uuid)) {
                 return;
             }
 
@@ -149,25 +159,48 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void publishOnPlayerScheduler(UUID uuid, String sourceName) {
-        if (isOutboundSuppressed(uuid)) {
+        if (cmiHandler == null) {
             return;
         }
         BigDecimal absolute = cmiHandler.getCMILocalBalance(uuid);
         if (absolute == null) {
             return;
         }
-
         BigDecimal previous = lastKnownCMIBalance.get(uuid);
+        if (MigrationLock.isLocked()) {
+            // Polling is only an observer. A changed or unknown current balance cannot be
+            // silently accepted into a snapshot whose baseline may predate that observation.
+            if (previous == null || previous.compareTo(absolute) != 0) {
+                MigrationLock.recordCmiAuthorityMutation();
+            }
+            debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
+            return;
+        }
+        if (isOutboundSuppressed(uuid)) {
+            return;
+        }
+
         if (previous != null && previous.compareTo(absolute) == 0) {
             return;
         }
 
         BigDecimal diff = previous != null ? absolute.subtract(previous) : BigDecimal.ZERO;
         boolean isDeposit = diff.compareTo(BigDecimal.ZERO) >= 0;
-        lastKnownCMIBalance.put(uuid, absolute);
 
-        plugin.getServer().getAsyncScheduler().runNow(plugin, task ->
-                cmiHandler.syncAbsoluteBalance(uuid, absolute, diff, isDeposit, sourceName));
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            if (cmiHandler.trySyncAbsoluteBalance(uuid, absolute, diff, isDeposit, sourceName)) {
+                lastKnownCMIBalance.put(uuid, absolute);
+                failedOutboundSyncAttempts.remove(uuid);
+            } else {
+                int attempts = failedOutboundSyncAttempts.merge(uuid, 1, Integer::sum);
+                if (MigrationLock.isLocked() || attempts < MAX_OUTBOUND_SYNC_ATTEMPTS) {
+                    debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
+                } else {
+                    failedOutboundSyncAttempts.remove(uuid, attempts);
+                    plugin.getLogger().warning("CMI balance mirror retries exhausted for " + uuid);
+                }
+            }
+        });
     }
 
     public void suppressOutbound(UUID uuid, long durationMs) {
@@ -236,5 +269,6 @@ public final class CMIEconomyListener implements Listener {
         if (pollingTask != null) {
             pollingTask.cancel();
         }
+        failedOutboundSyncAttempts.clear();
     }
 }

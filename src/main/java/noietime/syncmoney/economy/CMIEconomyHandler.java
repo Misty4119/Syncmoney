@@ -98,15 +98,21 @@ public class CMIEconomyHandler {
 
     public void syncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
                                     boolean isDeposit, String sourceName) {
+        trySyncAbsoluteBalance(uuid, absoluteBalance, diff, isDeposit, sourceName);
+    }
+
+    /** Returns false when the migration fence or the mirror write rejected this update. */
+    public boolean trySyncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
+                                          boolean isDeposit, String sourceName) {
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
-            return;
+            return false;
         }
         try (writeLease) {
             BigDecimal newBalance = NumericUtil.normalize(absoluteBalance);
             BigDecimal last = lastKnownBalance.get(uuid);
             if (last != null && last.compareTo(newBalance) == 0) {
-                return;
+                return true;
             }
 
             long version = setRedisBalanceWithVersion(uuid, newBalance);
@@ -124,8 +130,10 @@ public class CMIEconomyHandler {
                 plugin.getLogger().fine("[CMI] Absolute sync: " + uuid + " = " + newBalance
                         + " v" + version + " (source=" + sourceName + ")");
             }
+            return true;
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to sync CMI absolute balance: " + e.getMessage());
+            return false;
         }
     }
 

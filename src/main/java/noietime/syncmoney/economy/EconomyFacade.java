@@ -155,6 +155,16 @@ public final class EconomyFacade {
         return isLocalMode;
     }
 
+    /** Internal migration guard: LOCAL recovery must be ready and all accepted writes receipted. */
+    public boolean isLocalRecoveryReady() {
+        if (localEconomyHandler == null) {
+            return config != null
+                    && config.local() != null
+                    && !LocalPersistenceJournal.existsForDatabase(config.local().getLocalSQLitePath());
+        }
+        return localEconomyHandler.isRecoveryReady() && !stateManager.hasOutstandingWrites();
+    }
+
     /**
      * [SYNC-ECO-040] Get the overflow log instance.
      */
@@ -225,6 +235,9 @@ public final class EconomyFacade {
      * Core read path for player balances.
      */
     public BigDecimal getBalance(UUID uuid) {
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            throw new IllegalStateException("LOCAL balance is unavailable while accepted-write recovery is unresolved");
+        }
         EconomyState state = stateManager.get(uuid);
         if (state != null) {
             return state.balance();
@@ -288,9 +301,16 @@ public final class EconomyFacade {
 
     private final java.util.Set<UUID> placeholderLoads = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    /** [ThreadSafe] Never performs IO on a PlaceholderAPI caller's region thread. */
+    /**
+     * Returns the ready in-memory balance, or {@code null} while the account is not
+     * available. A cold account schedules one bounded background load; this method
+     * never reads Redis, SQL, or SQLite on its caller.
+     */
     public BigDecimal getBalanceForPlaceholder(UUID uuid) {
         if (uuid == null) return null;
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            return null;
+        }
         EconomyState state = stateManager.get(uuid);
         if (state != null) return state.balance();
         requestPlaceholderBalanceLoad(uuid);
@@ -308,6 +328,9 @@ public final class EconomyFacade {
                         return;
                     }
                     if (isLocalMode && localEconomyHandler != null) {
+                        if (!localEconomyHandler.isRecoveryReady()) {
+                            throw new IllegalStateException("LOCAL accepted-write recovery is unresolved");
+                        }
                         LocalEconomyHandler.AccountSnapshot account = localEconomyHandler.findAccountSnapshot(uuid)
                                 .orElse(new LocalEconomyHandler.AccountSnapshot(BigDecimal.ZERO, 0L));
                         cacheColdAccount(uuid, account.balance(), account.version());
@@ -397,9 +420,13 @@ public final class EconomyFacade {
 
     /**
      * [SYNC-ECO-045] Synchronously gets player balance.
-     * Intended for Vault API compatibility mapping.
+     * Intended for Vault API compatibility mapping. Returns {@code null} while LOCAL
+     * accepted-write recovery is unresolved so stale balances are never exposed.
      */
     public BigDecimal getBalanceSync(UUID uuid) {
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            return null;
+        }
         EconomyState state = stateManager.get(uuid);
         if (state != null) {
             return state.balance();
@@ -434,13 +461,30 @@ public final class EconomyFacade {
      * [SYNC-ECO-046] Ensure data is loaded into memory. If not exists, trigger getBalance.
      */
     boolean ensureLoaded(UUID uuid) {
+        if (uuid == null) {
+            return false;
+        }
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            return false;
+        }
         if (stateManager.containsKey(uuid)) {
             return true;
         }
-        if (!stateManager.containsKey(uuid)) {
-            getBalance(uuid);
+        requestPlaceholderBalanceLoad(uuid);
+        return false;
+    }
+
+    boolean ensureAccountsLoaded(UUID... uuids) {
+        if (uuids == null || uuids.length == 0) {
+            return false;
         }
-        return stateManager.containsKey(uuid);
+        boolean ready = true;
+        for (UUID uuid : uuids) {
+            if (!ensureLoaded(uuid)) {
+                ready = false;
+            }
+        }
+        return ready;
     }
 
     /**

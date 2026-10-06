@@ -392,6 +392,24 @@ public final class DatabaseManager implements AutoCloseable {
         }
     }
 
+    /** Insert or update player data and return whether SQL accepted the write. */
+    public boolean tryInsertOrUpdatePlayer(UUID uuid, String name, BigDecimal balance, long version, String server) {
+        try (Connection conn = getConnection();
+                PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
+            stmt.setString(1, uuid.toString());
+            stmt.setString(2, name);
+            stmt.setBigDecimal(3, NumericUtil.normalize(balance));
+            stmt.setLong(4, version);
+            stmt.setString(5, server);
+            stmt.setTimestamp(6, java.sql.Timestamp.from(Instant.now()));
+            stmt.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Failed to insert/update player " + uuid + ": " + e.getMessage());
+            return false;
+        }
+    }
+
     /**
      * Insert or update player data (double-compatible version).
      */

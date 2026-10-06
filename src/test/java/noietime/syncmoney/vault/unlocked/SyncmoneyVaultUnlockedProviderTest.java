@@ -17,8 +17,13 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -48,7 +53,7 @@ class SyncmoneyVaultUnlockedProviderTest {
     @Test
     void deposit_usesBigDecimalPluginPathAndPreservesAttribution() {
         UUID account = UUID.randomUUID();
-        when(economyFacade.getBalance(account)).thenReturn(new BigDecimal("10.00"));
+        when(economyFacade.getBalanceForPlaceholder(account)).thenReturn(new BigDecimal("10.00"));
         when(economyFacade.isPlayerLocked(account)).thenReturn(false);
         when(economyFacade.pluginDeposit(account, new BigDecimal("2.35"), "Shop"))
                 .thenReturn(new BigDecimal("12.35"));
@@ -64,7 +69,7 @@ class SyncmoneyVaultUnlockedProviderTest {
     @Test
     void withdraw_rejectsInsufficientFundsBeforeMutation() {
         UUID account = UUID.randomUUID();
-        when(economyFacade.getBalance(account)).thenReturn(new BigDecimal("4.00"));
+        when(economyFacade.getBalanceForPlaceholder(account)).thenReturn(new BigDecimal("4.00"));
         when(economyFacade.isPlayerLocked(account)).thenReturn(false);
 
         EconomyResponse response = provider.withdraw("Shop", account, new BigDecimal("5.00"));
@@ -81,13 +86,67 @@ class SyncmoneyVaultUnlockedProviderTest {
                 eq(from), eq(to), eq(new BigDecimal("3.00")),
                 eq(EconomyEvent.EventSource.PLUGIN_WITHDRAW)))
                 .thenReturn(new BigDecimal("7.00"));
-        when(economyFacade.getBalance(to)).thenReturn(new BigDecimal("8.00"));
+        when(economyFacade.getBalanceForPlaceholder(from)).thenReturn(new BigDecimal("10.00"));
+        when(economyFacade.getBalanceForPlaceholder(to)).thenReturn(new BigDecimal("8.00"));
 
         MultiEconomyResponse response = provider.transfer("Auction", from, to, new BigDecimal("3"));
 
         assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type());
         assertEquals(new BigDecimal("7.00"), response.balance(from).orElseThrow());
         assertEquals(new BigDecimal("8.00"), response.balance(to).orElseThrow());
+    }
+
+    @Test
+    void coldAccountReturnsNullAndRejectsMutationsWithoutReadingStorageSynchronously() {
+        UUID account = UUID.randomUUID();
+        when(economyFacade.getBalanceForPlaceholder(account)).thenReturn(null);
+
+        assertNull(provider.getBalance("Shop", account),
+                "VaultUnlocked BigDecimal has no unavailable number, so null must remain explicit");
+        assertFalse(provider.has("Shop", account, BigDecimal.ONE),
+                "an unavailable balance must fail closed");
+
+        EconomyResponse response = provider.deposit("Shop", account, BigDecimal.ONE);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        assertTrue(response.errorMessage.toLowerCase().contains("not ready"));
+        assertNull(response.balance, "a rejected cold operation must not report an invented zero balance");
+        verify(economyFacade, never()).getBalance(account);
+        verify(economyFacade, never()).pluginDeposit(eq(account), eq(BigDecimal.ONE), eq("Shop"));
+    }
+
+    @Test
+    void withdrawRejectsColdSnapshotEvenIfAsyncLoadCompletesDuringTheSameCall() {
+        UUID account = UUID.randomUUID();
+        when(economyFacade.getBalanceForPlaceholder(account))
+                .thenReturn(null, new BigDecimal("10.00"));
+        when(economyFacade.isPlayerLocked(account)).thenReturn(false);
+        when(economyFacade.pluginWithdraw(eq(account), any(BigDecimal.class), eq("Shop")))
+                .thenReturn(new BigDecimal("9.00"));
+
+        EconomyResponse response = provider.withdraw("Shop", account, BigDecimal.ONE);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        assertTrue(response.errorMessage.toLowerCase().contains("not ready"));
+        verify(economyFacade, times(1)).getBalanceForPlaceholder(account);
+        verify(economyFacade, never()).pluginWithdraw(eq(account), eq(BigDecimal.ONE), eq("Shop"));
+    }
+
+    @Test
+    void depositRejectsColdSnapshotEvenIfAsyncLoadCompletesDuringTheSameCall() {
+        UUID account = UUID.randomUUID();
+        when(economyFacade.getBalanceForPlaceholder(account))
+                .thenReturn(null, new BigDecimal("10.00"));
+        when(economyFacade.isPlayerLocked(account)).thenReturn(false);
+        when(economyFacade.pluginDeposit(eq(account), any(BigDecimal.class), eq("Shop")))
+                .thenReturn(new BigDecimal("11.00"));
+
+        EconomyResponse response = provider.deposit("Shop", account, BigDecimal.ONE);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        assertTrue(response.errorMessage.toLowerCase().contains("not ready"));
+        verify(economyFacade, times(1)).getBalanceForPlaceholder(account);
+        verify(economyFacade, never()).pluginDeposit(eq(account), eq(BigDecimal.ONE), eq("Shop"));
     }
 
     @Test

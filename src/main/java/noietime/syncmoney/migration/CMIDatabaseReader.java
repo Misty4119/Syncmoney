@@ -35,6 +35,7 @@ public final class CMIDatabaseReader {
     private HikariDataSource dataSource;
     private String tableName;
     private StorageType storageType;
+    private String sourceIdentity;
     private boolean initialized = false;
 
     public enum StorageType {
@@ -85,8 +86,12 @@ public final class CMIDatabaseReader {
 
         if (storageType == StorageType.MySQL) {
             this.tableName = cmiConfig.getTablePrefix() + "users";
+            this.sourceIdentity = "cmi-single|MySQL|" + cmiConfig.getHost() + ":" + cmiConfig.getPort()
+                    + "/" + cmiConfig.getDatabase() + "|" + cmiConfig.getTablePrefix();
         } else {
             this.tableName = "users";
+            String path = new File(cmiConfig.getSqlitePath()).getAbsoluteFile().toPath().normalize().toString();
+            this.sourceIdentity = "cmi-single|SQLite|" + path + "|" + tableName;
         }
 
         if (storageType == StorageType.MySQL) {
@@ -177,8 +182,9 @@ public final class CMIDatabaseReader {
             }
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to get CMI player count: " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI player count", e);
         }
-        return 0;
+        throw new IllegalStateException("CMI player count query returned no result");
     }
 
     /**
@@ -204,6 +210,9 @@ public final class CMIDatabaseReader {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String playerName = rs.getString(USERNAME_COLUMN);
+                    if (playerName == null || playerName.isBlank()) {
+                        throw new IllegalStateException("CMI source contains a player row without a username");
+                    }
                     Object uuidObj = rs.getObject(UUID_COLUMN);
 
                     UUID uuid = null;
@@ -214,20 +223,11 @@ public final class CMIDatabaseReader {
                         }
                     }
 
-                    BigDecimal balance = BigDecimal.ZERO;
+                    BigDecimal balance;
                     try {
-                        Object balanceObj = rs.getObject(BALANCE_COLUMN);
-                        if (balanceObj != null) {
-                            if (balanceObj instanceof Number) {
-                                balance = BigDecimal.valueOf(((Number) balanceObj).doubleValue())
-                                        .setScale(2, java.math.RoundingMode.HALF_UP);
-                            } else {
-                                balance = new BigDecimal(balanceObj.toString())
-                                        .setScale(2, java.math.RoundingMode.HALF_UP);
-                            }
-                        }
+                        balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
                     } catch (Exception e) {
-                        plugin.getLogger().warning("Failed to read balance for " + playerName + ": " + e.getMessage());
+                        throw new IllegalStateException("Failed to read CMI balance for " + playerName, e);
                     }
 
                     long lastLogoffTime = 0;
@@ -248,6 +248,7 @@ public final class CMIDatabaseReader {
             }
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to read CMI players: " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI players", e);
         }
 
         return players;
@@ -280,19 +281,11 @@ public final class CMIDatabaseReader {
                         }
                     }
 
-                    BigDecimal balance = BigDecimal.ZERO;
+                    BigDecimal balance;
                     try {
-                        Object balanceObj = rs.getObject(BALANCE_COLUMN);
-                        if (balanceObj != null) {
-                            if (balanceObj instanceof Number) {
-                                balance = BigDecimal.valueOf(((Number) balanceObj).doubleValue())
-                                        .setScale(2, java.math.RoundingMode.HALF_UP);
-                            } else {
-                                balance = new BigDecimal(balanceObj.toString())
-                                        .setScale(2, java.math.RoundingMode.HALF_UP);
-                            }
-                        }
-                    } catch (Exception ignored) {
+                        balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                    } catch (Exception failure) {
+                        throw new IllegalStateException("Failed to read CMI balance for " + playerName, failure);
                     }
 
                     long lastLogoffTime = 0;
@@ -311,6 +304,7 @@ public final class CMIDatabaseReader {
             }
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to read CMI player " + playerName + ": " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI player " + playerName, e);
         }
 
         return null;
@@ -346,6 +340,23 @@ public final class CMIDatabaseReader {
      */
     public String getTableName() {
         return tableName;
+    }
+
+    /** Stable, credential-free identity used to prevent resuming against another CMI source. */
+    public String getSourceIdentity() {
+        ensureInitialized();
+        return sourceIdentity;
+    }
+
+    static BigDecimal parseRequiredBalance(Object balanceObj, String playerName) {
+        if (balanceObj == null) {
+            throw new IllegalStateException("CMI source contains a null balance for " + playerName);
+        }
+        try {
+            return new BigDecimal(balanceObj.toString()).setScale(2, java.math.RoundingMode.HALF_UP);
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("CMI source contains an invalid balance for " + playerName, failure);
+        }
     }
 
     /**

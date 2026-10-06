@@ -19,7 +19,10 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
@@ -27,8 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -56,6 +61,7 @@ class ColdAccountContractTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("ColdAccountContractTest"));
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
         EconomyWriteQueue queue = new EconomyWriteQueue(8);
         CountDownLatch repositoryEntered = new CountDownLatch(1);
         CountDownLatch releaseRepository = new CountDownLatch(1);
@@ -114,6 +120,35 @@ class ColdAccountContractTest {
         facade.shutdown();
 
         assertFalse(facade.hasInMemory(uuid), "a failed SQLite read must not be cached as a confirmed zero balance");
+    }
+
+    @Test
+    void unresolvedLocalRecoveryNeverServesCachedOrRepositoryBalance() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("ColdAccountContractTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        LocalEconomyHandler repository = mock(LocalEconomyHandler.class);
+        when(repository.isRecoveryReady()).thenReturn(false);
+        UUID cachedUuid = UUID.randomUUID();
+        UUID coldUuid = UUID.randomUUID();
+        when(repository.findAccountSnapshot(coldUuid)).thenReturn(Optional.of(
+                new LocalEconomyHandler.AccountSnapshot(new BigDecimal("735.25"), 4L)));
+        facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
+                mock(DatabaseManager.class), repository, new EconomyWriteQueue(8),
+                mock(FallbackEconomyWrapper.class), null, mock(OverflowLogInterface.class));
+        facade.updateMemoryState(cachedUuid, new BigDecimal("120.00"), 7L);
+
+        assertNull(facade.getBalanceForPlaceholder(cachedUuid),
+                "LOCAL state must stay unavailable while startup recovery is unresolved");
+        assertNull(facade.getBalanceForPlaceholder(coldUuid),
+                "cold LOCAL state must not expose a pre-replay repository snapshot");
+        assertThrows(IllegalStateException.class, () -> facade.getBalance(coldUuid),
+                "the synchronous internal getter must fail explicitly instead of seeding stale state");
+        assertFalse(facade.hasInMemory(coldUuid));
+        verify(repository, never()).findAccountSnapshot(coldUuid);
     }
 
     @Test
@@ -218,7 +253,7 @@ class ColdAccountContractTest {
     }
 
     @Test
-    void localMutationDoesNotUseZeroWhenColdSqliteReadFails() {
+    void localMutationAndReadFailClosedWhenLocalRecoveryIsUnavailable() {
         Syncmoney plugin = mock(Syncmoney.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("ColdAccountContractTest"));
         FileConfiguration fileConfiguration = mock(FileConfiguration.class);
@@ -232,7 +267,8 @@ class ColdAccountContractTest {
                 mock(DatabaseManager.class), localHandler, queue, mock(FallbackEconomyWrapper.class),
                 null, mock(OverflowLogInterface.class));
         UUID coldReadUuid = UUID.randomUUID();
-        BigDecimal coldRead = facade.getBalance(coldReadUuid);
+        assertThrows(IllegalStateException.class, () -> facade.getBalance(coldReadUuid),
+                "a synchronous read must not report a false zero while LOCAL recovery is unresolved");
         UUID depositUuid = UUID.randomUUID();
         UUID withdrawUuid = UUID.randomUUID();
         UUID setUuid = UUID.randomUUID();
@@ -241,7 +277,6 @@ class ColdAccountContractTest {
         BigDecimal set = facade.setBalance(setUuid, new BigDecimal("10.00"), EconomyEvent.EventSource.TEST);
 
         assertAll(
-                () -> assertEquals(BigDecimal.ZERO, coldRead, "legacy cold reads keep their zero fallback"),
                 () -> assertFalse(facade.hasInMemory(coldReadUuid), "a failed read must not cache a zero balance"),
                 () -> assertEquals(new BigDecimal("-1"), deposit,
                         "deposit must reject instead of accepting against an unavailable account"),
@@ -254,6 +289,68 @@ class ColdAccountContractTest {
                 () -> assertFalse(facade.hasInMemory(setUuid)),
                 () -> assertEquals(0, queue.size(), "a rejected mutation must not enqueue persistence")
         );
+    }
+
+    @Test
+    void coldTransferRejectsBeforeDebitingSenderWhenEitherAccountIsNotReady() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("ColdAccountContractTest"));
+        FileConfiguration fileConfiguration = mock(FileConfiguration.class);
+        when(plugin.getConfig()).thenReturn(fileConfiguration);
+        when(fileConfiguration.getString("server-name", "local")).thenReturn("test-server");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        LocalEconomyHandler repository = mock(LocalEconomyHandler.class);
+        when(repository.isRecoveryReady()).thenReturn(true);
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        CountDownLatch repositoryEntered = new CountDownLatch(1);
+        CountDownLatch releaseRepository = new CountDownLatch(1);
+        when(repository.findAccountSnapshot(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+            UUID requested = invocation.getArgument(0);
+            repositoryEntered.countDown();
+            assertTrue(releaseRepository.await(10, TimeUnit.SECONDS));
+            BigDecimal balance = requested.equals(sender) ? new BigDecimal("100.00") : new BigDecimal("40.00");
+            return Optional.of(new LocalEconomyHandler.AccountSnapshot(balance, 1L));
+        });
+
+        EconomyWriteQueue queue = new EconomyWriteQueue(8);
+        facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
+                mock(DatabaseManager.class), repository, queue, mock(FallbackEconomyWrapper.class),
+                null, mock(OverflowLogInterface.class));
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            var transfer = caller.submit(() -> facade.atomicTransfer(sender, receiver,
+                    new BigDecimal("10.00"), EconomyEvent.EventSource.TEST));
+            assertTrue(repositoryEntered.await(2, TimeUnit.SECONDS), "cold transfer should schedule account loading");
+            BigDecimal result = null;
+            boolean returnedBeforeRepositoryRelease;
+            try {
+                result = transfer.get(500, TimeUnit.MILLISECONDS);
+                returnedBeforeRepositoryRelease = true;
+            } catch (TimeoutException expectedWhileCharacterizingOldBehavior) {
+                returnedBeforeRepositoryRelease = false;
+            }
+
+            releaseRepository.countDown();
+            if (!returnedBeforeRepositoryRelease) {
+                transfer.get(2, TimeUnit.SECONDS);
+            }
+            assertTrue(returnedBeforeRepositoryRelease,
+                    "a cold transfer must reject without waiting for the repository");
+            assertEquals(new BigDecimal("-1"), result, "cold transfer returns the existing failure sentinel");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while ((!facade.hasInMemory(sender) || !facade.hasInMemory(receiver))
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            assertEquals(new BigDecimal("100.00"), facade.getBalance(sender),
+                    "cold receiver state must never cause the sender to be debited first");
+            assertEquals(new BigDecimal("40.00"), facade.getBalance(receiver));
+            assertEquals(0, queue.size(), "a cold transfer must not enqueue either leg");
+        } finally {
+            releaseRepository.countDown();
+            caller.shutdownNow();
+        }
     }
 
     @Test

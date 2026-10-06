@@ -67,6 +67,10 @@ class EconomyFacadeTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
 
+        // These facade tests exercise ordinary ready-state behavior. Recovery-gate
+        // tests configure the local handler explicitly in their own fixtures.
+        when(mockLocalEconomyHandler.isRecoveryReady()).thenReturn(true);
+
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
         // Inject a mock OverflowLog via the full constructor so the test does not

@@ -51,6 +51,7 @@ public final class EconomyWriteQueue {
     private final ConcurrentMap<UUID, AtomicInteger> acceptedWriteCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, AtomicInteger> committedWriteCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<Long, AcceptedWrite> acceptedWrites = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, Reservation> reservations = new ConcurrentHashMap<>();
     private final Map<EconomyEvent, Long> reservationsByEvent =
             Collections.synchronizedMap(new IdentityHashMap<>());
     private final AtomicLong nextReservationId = new AtomicLong();
@@ -62,6 +63,7 @@ public final class EconomyWriteQueue {
         private final UUID uuid;
         private final long acceptedAtMillis;
         private volatile boolean committed;
+        private volatile EconomyEvent event;
 
         private AcceptedWrite(UUID uuid, long acceptedAtMillis) {
             this.uuid = uuid;
@@ -125,6 +127,7 @@ public final class EconomyWriteQueue {
             if (completionResource != null) {
                 completionResources.put(id, completionResource);
             }
+            acceptedWrite.event = event;
             acceptedWrite.committed = true;
             incrementCount(committedWriteCounts, uuid);
 
@@ -148,6 +151,7 @@ public final class EconomyWriteQueue {
             }
 
             committed = true;
+            reservations.remove(id, this);
             return true;
         }
 
@@ -155,6 +159,7 @@ public final class EconomyWriteQueue {
         public synchronized void close() {
             if (!committed && !closed) {
                 closed = true;
+                reservations.remove(id, this);
                 releaseOwnership(id, true);
             }
         }
@@ -372,13 +377,54 @@ public final class EconomyWriteQueue {
         return !acceptedWrites.isEmpty();
     }
 
+    void cancelUncommittedReservations() {
+        for (Reservation reservation : reservations.values()) {
+            reservation.close();
+        }
+    }
+
+    List<EconomyEvent> snapshotOutstandingEvents() {
+        List<EconomyEvent> events = new ArrayList<>();
+        for (AcceptedWrite accepted : acceptedWrites.values()) {
+            EconomyEvent event = accepted.event;
+            if (accepted.committed && event != null) {
+                events.add(event);
+            }
+        }
+        events.sort(java.util.Comparator
+                .comparing((EconomyEvent event) -> event.playerUuid().toString())
+                .thenComparingLong(EconomyEvent::version)
+                .thenComparingLong(EconomyEvent::timestamp));
+        return List.copyOf(events);
+    }
+
+    boolean quarantine(EconomyEvent event) {
+        if (event == null) {
+            return false;
+        }
+        Long reservationId;
+        synchronized (reservationsByEvent) {
+            reservationId = reservationsByEvent.remove(event);
+        }
+        if (reservationId == null) {
+            return false;
+        }
+        if (removeQueuedIdentity(event)) {
+            decrementPendingCount(event.playerUuid(), 1);
+        }
+        releaseOwnership(reservationId, false);
+        return true;
+    }
+
     private Reservation registerReservation(UUID uuid) {
         long id = nextReservationId.incrementAndGet();
         AcceptedWrite acceptedWrite = new AcceptedWrite(uuid, System.currentTimeMillis());
         acceptedWrites.put(id, acceptedWrite);
         incrementCount(acceptedWriteCounts, uuid);
         incrementCount(pendingCounts, uuid);
-        return new Reservation(id, uuid, acceptedWrite);
+        Reservation reservation = new Reservation(id, uuid, acceptedWrite);
+        reservations.put(id, reservation);
+        return reservation;
     }
 
     private void removeEventReservation(EconomyEvent event) {
@@ -405,6 +451,7 @@ public final class EconomyWriteQueue {
 
     private void releaseOwnership(long reservationId, boolean releasePendingCount) {
         AcceptedWrite accepted = acceptedWrites.remove(reservationId);
+        reservations.remove(reservationId);
         if (accepted == null) {
             return;
         }

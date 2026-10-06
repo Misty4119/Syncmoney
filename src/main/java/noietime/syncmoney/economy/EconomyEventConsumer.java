@@ -63,7 +63,15 @@ public final class EconomyEventConsumer implements Runnable {
     private final OverflowLogInterface overflowLog;
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
 
-    private record FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime) {
+    private record FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
+            BigDecimal confirmedRedisBalance) {
+        private FailedEvent withConfirmedRedisBalance(BigDecimal balance) {
+            return new FailedEvent(event, retryCount, firstFailureTime, balance);
+        }
+
+        private FailedEvent nextAttempt() {
+            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedRedisBalance);
+        }
     }
 
     public EconomyEventConsumer(Plugin plugin, SyncmoneyConfig config,
@@ -181,24 +189,45 @@ public final class EconomyEventConsumer implements Runnable {
                 continue;
             }
 
-            BigDecimal newBalance = processRedisWrite(failed.event());
-            if (newBalance != null && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
-                failedEvents.remove(key, failed);
-                plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
+            FailedEvent retryState = failed;
+            try {
+                BigDecimal newBalance = retryState.confirmedRedisBalance();
+                if (newBalance == null) {
+                    newBalance = processRedisWrite(failed.event());
+                    if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
+                        FailedEvent nextAttempt = failed.nextAttempt();
+                        failedEvents.replace(key, failed, nextAttempt);
+                        logRetryFailure(failed, nextAttempt, BASE_DELAY_MS, MAX_DELAY_MS);
+                        continue;
+                    }
+
+                    // Persist the confirmed authority result in the retry state before any
+                    // downstream operation can throw. Retrying an already-applied delta
+                    // would create or destroy money.
+                    retryState = failed.withConfirmedRedisBalance(newBalance);
+                    if (!failedEvents.replace(key, failed, retryState)) {
+                        continue;
+                    }
+                }
 
                 processEventSteps(failed.event(), newBalance);
                 queue.complete(failed.event(), newBalance, cacheManager.getVersion(failed.event().playerUuid()));
-            } else {
-                // Atomic CAS bump so a concurrent removal/insert for the same requestId is never lost.
-                failedEvents.replace(key, failed, new FailedEvent(
-                        failed.event(),
-                        failed.retryCount() + 1,
-                        failed.firstFailureTime()));
-                plugin.getLogger().warning("Retry failed for event: " + failed.event().requestId() +
-                        " (attempt " + (failed.retryCount() + 1) + "/" + MAX_RETRY_COUNT +
-                        ", next retry in " + (Math.min(BASE_DELAY_MS * (1L << (failed.retryCount() + 1)), MAX_DELAY_MS)) + "ms)");
+                failedEvents.remove(key, retryState);
+                plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
+            } catch (Exception e) {
+                FailedEvent nextAttempt = retryState.nextAttempt();
+                failedEvents.replace(key, retryState, nextAttempt);
+                logRetryFailure(failed, nextAttempt, BASE_DELAY_MS, MAX_DELAY_MS);
             }
         }
+    }
+
+    private void logRetryFailure(FailedEvent failed, FailedEvent nextAttempt,
+            long baseDelayMs, long maxDelayMs) {
+        long nextRetryDelay = Math.min(baseDelayMs * (1L << nextAttempt.retryCount()), maxDelayMs);
+        plugin.getLogger().warning("Retry failed for event: " + failed.event().requestId() +
+                " (attempt " + nextAttempt.retryCount() + "/" + MAX_RETRY_COUNT +
+                ", next retry in " + nextRetryDelay + "ms)");
     }
 
     private static String failedKey(EconomyEvent event) {
@@ -366,23 +395,28 @@ public final class EconomyEventConsumer implements Runnable {
      * failed work is retained for retry rather than applied through a SQL fallback.
      */
     private void processEvent(EconomyEvent event) {
+        BigDecimal confirmedRedisBalance = null;
+        long firstFailureTime = System.currentTimeMillis();
         try {
             BigDecimal newBalance = processRedisWrite(event);
 
             if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
                 plugin.getLogger().warning("Redis write failed for accepted event " + event.requestId()
                         + "; retaining it for retry after authority recovery");
-                failedEvents.putIfAbsent(failedKey(event), new FailedEvent(event, 0, System.currentTimeMillis()));
+                failedEvents.putIfAbsent(failedKey(event),
+                        new FailedEvent(event, 0, firstFailureTime, null));
                 return;
             }
 
+            confirmedRedisBalance = newBalance;
             processEventSteps(event, newBalance);
             queue.complete(event, newBalance, cacheManager.getVersion(event.playerUuid()));
 
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
-            failedEvents.putIfAbsent(failedKey(event), new FailedEvent(event, 0, System.currentTimeMillis()));
+            failedEvents.putIfAbsent(failedKey(event),
+                    new FailedEvent(event, 0, firstFailureTime, confirmedRedisBalance));
         }
     }
 

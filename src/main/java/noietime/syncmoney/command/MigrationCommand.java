@@ -396,13 +396,13 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (!checkpoint.resume()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.no-checkpoint"));
+        if (!migrationTask.resume()) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("migration.error")
+                    .replace("{error}", "Could not safely resume migration; check the server log"));
             return;
         }
 
         MessageHelper.sendMessage(sender, plugin.getMessage("migration.resuming"));
-        migrationTask.resume();
     }
 
     /**

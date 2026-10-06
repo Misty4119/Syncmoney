@@ -8,6 +8,7 @@ import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -38,7 +39,10 @@ public final class LocalToSyncMigrationTask {
     private final MigrationCheckpoint checkpoint;
     private final MigrationBackup backup;
 
-    private volatile boolean running = false;
+    private final Object lifecycleMonitor = new Object();
+    private volatile boolean running;
+    private boolean scheduling;
+    private ScheduledTask scheduledTask;
     private LocalToSyncProgressCallback progressCallback;
 
     private static final String LOCAL_DB_PREFIX = "jdbc:sqlite:";
@@ -72,118 +76,180 @@ public final class LocalToSyncMigrationTask {
      * Starts migration (async execution).
      */
     public void start(boolean force, boolean createBackup) {
-        if (running) {
+        if (!reserveStart()) {
             plugin.getLogger().warning("Local-to-Sync migration is already running!");
             return;
         }
 
-        if (!force && !validatePrerequisites()) {
-            reportError("Prerequisites validation failed: Redis or Database is not available");
-            return;
+        try {
+            if (economyFacade != null && !economyFacade.isLocalRecoveryReady()) {
+                finishScheduling();
+                reportError("Local-to-Sync migration is unavailable until accepted LOCAL writes are persisted or recovered");
+                return;
+            }
+
+            if (!force && !validatePrerequisites()) {
+                finishScheduling();
+                reportError("Prerequisites validation failed: Redis or Database is not available");
+                return;
+            }
+
+            ScheduledTask submitted = plugin.getServer().getAsyncScheduler().runNow(
+                    plugin, task -> runMigration(task, createBackup));
+            synchronized (lifecycleMonitor) {
+                scheduling = false;
+                if (!running && isScheduledActive(submitted)) {
+                    scheduledTask = submitted;
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            finishScheduling();
+            throw failure;
+        }
+    }
+
+    private void runMigration(ScheduledTask task, boolean createBackup) {
+        synchronized (lifecycleMonitor) {
+            if (task != null && task.getExecutionState() == ScheduledTask.ExecutionState.CANCELLED) {
+                return;
+            }
+            if (running) {
+                return;
+            }
+            scheduling = false;
+            running = true;
+            scheduledTask = task;
         }
 
-        if (config.migration().isMigrationLockEconomy()) {
-            MigrationLock.enable();
-            if (!MigrationLock.lock()) {
+        MigrationLock.MigrationLease migrationLockLease = null;
+        try {
+            // This migration always needs a stable LOCAL snapshot. The legacy optional
+            // setting cannot disable the write fence without allowing accepted writes
+            // after recovery readiness is checked but before SQLite is read.
+            migrationLockLease = MigrationLock.tryAcquireMigrationLease();
+            if (migrationLockLease == null) {
                 plugin.getLogger().warning("Local-to-Sync migration not started because an economy write is still active or another migration holds the lock");
                 reportError("Local-to-Sync migration could not acquire the economy lock; no SQLite snapshot was started");
                 return;
             }
-            plugin.getLogger().fine("Economy operations locked for migration");
-        }
+            plugin.getLogger().fine("Economy operations locked for LOCAL snapshot migration");
 
-        running = true;
+            if (economyFacade != null && !economyFacade.isLocalRecoveryReady()) {
+                reportError("Local-to-Sync migration is unavailable until accepted LOCAL writes are persisted or recovered");
+                return;
+            }
 
-        try {
-            plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            try {
-                String localDbPath = config.local().getLocalSQLitePath();
-                if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
-                    localDbPath = LOCAL_DB_PREFIX + localDbPath;
+            String localDbPath = config.local().getLocalSQLitePath();
+            if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
+                localDbPath = LOCAL_DB_PREFIX + localDbPath;
+            }
+
+            List<LocalPlayerData> players = readLocalPlayers(localDbPath);
+
+            if (players.isEmpty()) {
+                reportError("No player data found in local database");
+                return;
+            }
+
+            int total = players.size();
+            checkpoint.init(total);
+
+            if (createBackup) {
+                for (LocalPlayerData player : players) {
+                    backup.addPlayer(player.name(), player.uuid().toString(), player.balance());
                 }
+            }
 
-                List<LocalPlayerData> players = readLocalPlayers(localDbPath);
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicInteger failedCount = new AtomicInteger(0);
 
-                if (players.isEmpty()) {
-                    reportError("No player data found in local database");
-                    running = false;
-                    return;
-                }
+            for (int i = 0; i < players.size(); i++) {
+                LocalPlayerData player = players.get(i);
 
-                int total = players.size();
-                checkpoint.init(total);
-
-                if (createBackup) {
-                    for (LocalPlayerData player : players) {
-                        backup.addPlayer(player.name(), player.uuid().toString(), player.balance());
-                    }
-                }
-
-                AtomicInteger successCount = new AtomicInteger(0);
-                AtomicInteger failedCount = new AtomicInteger(0);
-
-                for (int i = 0; i < players.size(); i++) {
-                    LocalPlayerData player = players.get(i);
-
-                    try {
-                        databaseManager.insertOrUpdatePlayer(
-                                player.uuid(),
-                                player.name(),
-                                player.balance(),
-                                player.version(),
-                                config.getServerName()
-                        );
-
-                        if (config.migration().isMigrationPopulateRedis()) {
-                            populateRedis(player.uuid(), player.balance(), player.version());
-                        }
-
-                        successCount.incrementAndGet();
-                    } catch (Exception e) {
-                        failedCount.incrementAndGet();
-                        checkpoint.recordFailure(player.uuid().toString(), e.getMessage());
+                try {
+                    if (!databaseManager.tryInsertOrUpdatePlayer(
+                            player.uuid(),
+                            player.name(),
+                            player.balance(),
+                            player.version(),
+                            config.getServerName()
+                    )) {
+                        throw new IllegalStateException("SQL rejected migration write for " + player.uuid());
                     }
 
-                    if ((i + 1) % 100 == 0 || i == players.size() - 1) {
-                        double percent = ((double) (i + 1) / total) * 100;
-                        reportProgress(i + 1, total, percent);
+                    if (config.migration().isMigrationPopulateRedis()) {
+                        populateRedis(player.uuid(), player.balance(), player.version());
                     }
+                    successCount.incrementAndGet();
+                } catch (Exception e) {
+                    failedCount.incrementAndGet();
+                    checkpoint.recordFailure(player.uuid().toString(), e.getMessage());
                 }
 
-                checkpoint.complete();
-
-
-                int migratedTx = migrateTransactions(localDbPath);
-                if (migratedTx >= 0) {
-                    plugin.getLogger().info("[LOCAL-TO-SYNC] Transaction history migration complete: "
-                            + migratedTx + " records migrated to syncmoney_audit_log.");
+                if ((i + 1) % 100 == 0 || i == players.size() - 1) {
+                    double percent = ((double) (i + 1) / total) * 100;
+                    reportProgress(i + 1, total, percent);
                 }
+            }
 
-                validateMigration(players.size(), successCount.get(), failedCount.get());
+            checkpoint.complete();
 
-                reportComplete(successCount.get(), failedCount.get());
+            int migratedTx = migrateTransactions(localDbPath);
+            if (migratedTx >= 0) {
+                plugin.getLogger().info("[LOCAL-TO-SYNC] Transaction history migration complete: "
+                        + migratedTx + " records migrated to syncmoney_audit_log.");
+            }
 
-            } catch (Exception e) {
-                plugin.getLogger().severe("Local-to-Sync migration failed: " + e.getMessage());
-                checkpoint.fail();
-                reportError(e.getMessage());
-            } finally {
+            validateMigration(players.size(), successCount.get(), failedCount.get());
+            reportComplete(successCount.get(), failedCount.get());
+        } catch (Exception e) {
+            plugin.getLogger().severe("Local-to-Sync migration failed: " + e.getMessage());
+            checkpoint.fail();
+            reportError(e.getMessage());
+        } finally {
+            if (migrationLockLease != null) {
+                migrationLockLease.close();
+                plugin.getLogger().fine("Economy operations unlocked after LOCAL snapshot migration");
+            }
+            synchronized (lifecycleMonitor) {
                 running = false;
-                if (config.migration().isMigrationLockEconomy()) {
-                    MigrationLock.unlock();
-                    MigrationLock.disable();
-                    plugin.getLogger().fine("Economy operations unlocked after migration");
+                if (scheduledTask == task) {
+                    scheduledTask = null;
                 }
             }
-            });
-        } catch (RuntimeException | Error failure) {
-            running = false;
-            if (config.migration().isMigrationLockEconomy()) {
-                MigrationLock.unlock();
-                MigrationLock.disable();
-            }
-            throw failure;
         }
+    }
+
+    private boolean reserveStart() {
+        synchronized (lifecycleMonitor) {
+            if (running || scheduling) {
+                return false;
+            }
+            if (scheduledTask != null) {
+                if (isScheduledActive(scheduledTask)) {
+                    return false;
+                }
+                scheduledTask = null;
+            }
+            scheduling = true;
+            return true;
+        }
+    }
+
+    private void finishScheduling() {
+        synchronized (lifecycleMonitor) {
+            scheduling = false;
+        }
+    }
+
+    private boolean isScheduledActive(ScheduledTask task) {
+        if (task == null) {
+            return false;
+        }
+        ScheduledTask.ExecutionState state = task.getExecutionState();
+        return state == ScheduledTask.ExecutionState.IDLE
+                || state == ScheduledTask.ExecutionState.RUNNING
+                || state == ScheduledTask.ExecutionState.CANCELLED_RUNNING;
     }
 
     /**
@@ -193,6 +259,10 @@ public final class LocalToSyncMigrationTask {
      * @return PreviewResult containing migration data preview, or null if error
      */
     public PreviewResult preview() {
+        if (economyFacade != null && !economyFacade.isLocalRecoveryReady()) {
+            plugin.getLogger().warning("LOCAL migration preview is unavailable until accepted writes are persisted or recovered");
+            return null;
+        }
         try {
             String localDbPath = config.local().getLocalSQLitePath();
             if (!localDbPath.startsWith(LOCAL_DB_PREFIX)) {
@@ -454,7 +524,7 @@ public final class LocalToSyncMigrationTask {
     private void populateRedis(UUID uuid, BigDecimal balance, long version) {
         if (redisManager == null || !redisManager.isConnected()) {
             plugin.getLogger().warning("Redis not available, skipping Redis population for: " + uuid);
-            return;
+            throw new IllegalStateException("Redis unavailable while migrating " + uuid);
         }
 
         try (var jedis = redisManager.getResource()) {
@@ -478,6 +548,7 @@ public final class LocalToSyncMigrationTask {
             plugin.getLogger().fine("Redis populated for: " + uuid + " balance: " + balance + " version: " + version);
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to populate Redis for " + uuid + ": " + e.getMessage());
+            throw new IllegalStateException("Redis population failed for " + uuid, e);
         }
     }
 
@@ -608,7 +679,19 @@ public final class LocalToSyncMigrationTask {
      * Checks if migration is running.
      */
     public boolean isRunning() {
-        return running;
+        synchronized (lifecycleMonitor) {
+            if (running || scheduling) {
+                return true;
+            }
+            if (scheduledTask == null) {
+                return false;
+            }
+            if (isScheduledActive(scheduledTask)) {
+                return true;
+            }
+            scheduledTask = null;
+            return false;
+        }
     }
 
     private void reportProgress(int current, int total, double percent) {

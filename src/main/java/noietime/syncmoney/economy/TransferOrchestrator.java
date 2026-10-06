@@ -47,6 +47,10 @@ final class TransferOrchestrator {
     }
 
     private CacheManager.TransferResult executeAtomicTransferAdmitted(UUID fromUuid, UUID toUuid, BigDecimal amount) {
+        if (!facade.ensureAccountsLoaded(fromUuid, toUuid)) {
+            plugin.getLogger().fine("Atomic transfer rejected while one or both accounts are loading");
+            return null;
+        }
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Atomic transfer rejected: one or both players are locked");
             return null;
@@ -101,6 +105,10 @@ final class TransferOrchestrator {
 
     private BigDecimal atomicTransferAdmitted(UUID fromUuid, UUID toUuid, BigDecimal amount,
             EconomyEvent.EventSource source) {
+        if (!facade.ensureAccountsLoaded(fromUuid, toUuid)) {
+            plugin.getLogger().fine("Atomic transfer rejected while one or both accounts are loading");
+            return BigDecimal.valueOf(-1);
+        }
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Atomic transfer rejected: one or both players are locked");
             return BigDecimal.valueOf(-1);
@@ -229,6 +237,10 @@ final class TransferOrchestrator {
 
     private CacheManager.TransferResult pluginAtomicTransferAdmitted(UUID fromUuid, UUID toUuid,
             BigDecimal amount, String pluginName) {
+        if (!facade.ensureAccountsLoaded(fromUuid, toUuid)) {
+            plugin.getLogger().fine("Plugin atomic transfer rejected while one or both accounts are loading");
+            return null;
+        }
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Plugin atomic transfer rejected: one or both players are locked");
             return null;

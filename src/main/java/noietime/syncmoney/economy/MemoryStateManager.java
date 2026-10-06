@@ -97,6 +97,10 @@ final class MemoryStateManager {
         return memoryState.size();
     }
 
+    boolean hasOutstandingWrites() {
+        return writeQueue != null && writeQueue.hasOutstandingWrites();
+    }
+
     Set<UUID> keySet() {
         return memoryState.keySet();
     }

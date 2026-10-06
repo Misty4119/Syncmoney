@@ -76,7 +76,13 @@ public class EventConsumerManager {
                     economyWriteQueue,
                     event -> localEconomyHandler.persistAccepted(
                             event, economyFacade.resolveCachedPlayerName(event.playerUuid())),
-                    plugin.getLogger());
+                    events -> localEconomyHandler.quarantineAcceptedWrites(
+                            events, economyFacade::resolveCachedPlayerName),
+                    plugin.getLogger(), 10_000,
+                    localEconomyHandler::registerPersistenceWorker,
+                    localEconomyHandler::persistenceWorkerStopped,
+                    localEconomyHandler::persistenceWorkerFailed,
+                    localEconomyHandler::persistenceRecoveryHandoffCompleted);
             plugin.getLogger().fine("LocalPersistenceWorker initialized");
             return;
         }

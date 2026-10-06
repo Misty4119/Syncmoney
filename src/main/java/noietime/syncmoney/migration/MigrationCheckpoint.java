@@ -36,6 +36,10 @@ public final class MigrationCheckpoint {
 
     private volatile BigDecimal totalBackupAmount = BigDecimal.ZERO;
 
+    private volatile String sourceIdentity;
+
+    private volatile boolean forceOverwrite;
+
     private volatile Instant startTime;
 
     private volatile Instant lastUpdateTime;
@@ -54,10 +58,22 @@ public final class MigrationCheckpoint {
      * @param totalPlayers total number of players
      */
     public void init(int totalPlayers) {
+        init(totalPlayers, null, false);
+    }
+
+    /** Initializes a migration checkpoint and pins the data source used for resume. */
+    public void init(int totalPlayers, String sourceIdentity) {
+        init(totalPlayers, sourceIdentity, false);
+    }
+
+    /** Initializes a migration checkpoint with the overwrite policy that resume must preserve. */
+    public void init(int totalPlayers, String sourceIdentity, boolean forceOverwrite) {
         this.totalPlayers = totalPlayers;
         this.currentOffset = 0;
         this.migratedCount = 0;
         this.failedCount = 0;
+        this.sourceIdentity = sourceIdentity;
+        this.forceOverwrite = forceOverwrite;
         this.startTime = Instant.now();
         this.lastUpdateTime = Instant.now();
         this.state = MigrationState.RUNNING;
@@ -81,6 +97,8 @@ public final class MigrationCheckpoint {
             this.totalPlayers = data.totalPlayers();
             this.migratedCount = data.migratedCount();
             this.failedCount = data.failedCount();
+            this.sourceIdentity = data.sourceIdentity();
+            this.forceOverwrite = Boolean.TRUE.equals(data.forceOverwrite());
             this.startTime = Instant.parse(data.startTime());
             this.lastUpdateTime = Instant.parse(data.lastUpdateTime());
 
@@ -113,16 +131,33 @@ public final class MigrationCheckpoint {
      * @param reason failure reason
      */
     public void recordFailure(String playerName, String reason) {
-        this.failedCount++;
-        this.failures.put(playerName, reason);
+        if (this.failures.put(playerName, reason) == null) {
+            this.failedCount++;
+        }
         this.lastUpdateTime = Instant.now();
         save();
+    }
+
+    /** Clears a previously recorded row failure after its retry completes successfully. */
+    public void clearFailure(String playerName) {
+        if (playerName != null && failures.remove(playerName) != null) {
+            failedCount = Math.max(0, failedCount - 1);
+            lastUpdateTime = Instant.now();
+            save();
+        }
+    }
+
+    public boolean hasFailure(String playerName) {
+        return playerName != null && failures.containsKey(playerName);
     }
 
     /**
      * Completes migration.
      */
     public void complete() {
+        if (failedCount != 0 || !failures.isEmpty()) {
+            throw new IllegalStateException("Cannot complete migration while player failures remain");
+        }
         this.state = MigrationState.COMPLETED;
         this.lastUpdateTime = Instant.now();
         save();
@@ -155,6 +190,8 @@ public final class MigrationCheckpoint {
         this.totalPlayers = 0;
         this.migratedCount = 0;
         this.failedCount = 0;
+        this.sourceIdentity = null;
+        this.forceOverwrite = false;
         this.startTime = null;
         this.lastUpdateTime = null;
         this.failures.clear();
@@ -176,7 +213,9 @@ public final class MigrationCheckpoint {
                     failedCount,
                     startTime != null ? startTime.toString() : null,
                     lastUpdateTime != null ? lastUpdateTime.toString() : null,
-                    new ConcurrentHashMap<>(failures)
+                    new ConcurrentHashMap<>(failures),
+                    sourceIdentity,
+                    forceOverwrite
             );
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(checkpointFile, data);
         } catch (JsonProcessingException e) {
@@ -222,6 +261,14 @@ public final class MigrationCheckpoint {
 
     public int getFailedCount() {
         return failedCount;
+    }
+
+    public String getSourceIdentity() {
+        return sourceIdentity;
+    }
+
+    public boolean getForceOverwrite() {
+        return forceOverwrite;
     }
 
     public Instant getStartTime() {
@@ -281,6 +328,8 @@ public final class MigrationCheckpoint {
             int failedCount,
             String startTime,
             String lastUpdateTime,
-            ConcurrentHashMap<String, String> failures
+            ConcurrentHashMap<String, String> failures,
+            String sourceIdentity,
+            Boolean forceOverwrite
     ) {}
 }

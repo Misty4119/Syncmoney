@@ -46,6 +46,7 @@ class TransferCompensationTest {
         state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
 
         EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
         when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
         when(facade.resolvePlayerName(sender)).thenReturn("sender");
         when(facade.resolvePlayerName(receiver)).thenReturn("receiver");
@@ -153,6 +154,7 @@ class TransferCompensationTest {
         state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
 
         EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
         when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
         when(facade.resolvePlayerName(sender)).thenReturn("sender");
         when(facade.resolvePlayerName(receiver)).thenReturn("receiver");
