@@ -47,13 +47,16 @@ class MigrationCheckpointFailureTest {
         when(plugin.getDataFolder()).thenReturn(temporaryDirectory.toFile());
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationCheckpointFailureTest"));
         MigrationCheckpoint saved = new MigrationCheckpoint(plugin);
-        saved.init(3, "cmi-single|jdbc:test-db|CMI_Users", true);
+        saved.init(3, "cmi-single|jdbc:test-db|CMI_Users", true,
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         saved.pause();
 
         MigrationCheckpoint resumed = new MigrationCheckpoint(plugin);
         assertTrue(resumed.resume());
         assertEquals("cmi-single|jdbc:test-db|CMI_Users", resumed.getSourceIdentity());
         assertTrue(resumed.getForceOverwrite());
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                resumed.getSourceFingerprint());
     }
 
     @Test
@@ -77,6 +80,7 @@ class MigrationCheckpointFailureTest {
         MigrationCheckpoint legacy = new MigrationCheckpoint(plugin);
         assertTrue(legacy.resume());
         assertNull(legacy.getSourceIdentity(), "legacy checkpoints must not claim a verified source");
+        assertNull(legacy.getSourceFingerprint(), "legacy checkpoints must not claim verified source contents");
         assertFalse(legacy.getForceOverwrite(), "legacy checkpoints without force policy must resume conservatively");
     }
 }

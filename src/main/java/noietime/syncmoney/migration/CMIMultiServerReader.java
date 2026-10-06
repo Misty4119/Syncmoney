@@ -257,7 +257,7 @@ public final class CMIMultiServerReader {
             }
         }
 
-        return mergePlayers(playerMap);
+        return MigrationSourceFingerprint.orderedPlayers(mergePlayers(playerMap));
     }
 
     /**
@@ -267,7 +267,10 @@ public final class CMIMultiServerReader {
         List<CMIDatabaseReader.CMIPlayerData> merged = new ArrayList<>();
 
         for (Map.Entry<String, List<CMIDatabaseReader.CMIPlayerData>> entry : playerMap.entrySet()) {
-            List<CMIDatabaseReader.CMIPlayerData> playerList = entry.getValue();
+            // Query row order is undefined. Stable input order also makes merge-strategy
+            // ties produce the same migration row that the checkpoint fingerprints.
+            List<CMIDatabaseReader.CMIPlayerData> playerList =
+                    MigrationSourceFingerprint.orderedPlayers(entry.getValue());
 
             if (playerList.size() == 1) {
                 merged.add(playerList.get(0));
@@ -340,6 +343,12 @@ public final class CMIMultiServerReader {
      */
     public int getTotalPlayerCount() {
         return readAndMergePlayers().size();
+    }
+
+    /** Computes a stable digest of the merged player rows used by migration. */
+    MigrationSourceFingerprint.Result getSourceSnapshotFingerprint() {
+        List<CMIDatabaseReader.CMIPlayerData> players = readAndMergePlayers();
+        return MigrationSourceFingerprint.fingerprint(players);
     }
 
     /**

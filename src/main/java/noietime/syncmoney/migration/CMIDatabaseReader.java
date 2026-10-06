@@ -188,6 +188,52 @@ public final class CMIDatabaseReader {
     }
 
     /**
+     * Computes a credential-free digest of the migration-relevant source rows.
+     * The query is ordered by all fields that affect the digest so resume checks
+     * remain stable even when the database's natural row order changes.
+     */
+    MigrationSourceFingerprint.Result getSourceSnapshotFingerprint() {
+        ensureInitialized();
+        String sql = String.format(
+                "SELECT %s, %s, %s FROM %s ORDER BY LOWER(%s), %s, %s, %s",
+                USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN, tableName,
+                USERNAME_COLUMN, USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN
+        );
+        java.security.MessageDigest digest = MigrationSourceFingerprint.newDigest();
+        int rowCount = 0;
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                String playerName = rs.getString(USERNAME_COLUMN);
+                if (playerName == null || playerName.isBlank()) {
+                    throw new IllegalStateException("CMI source contains a player row without a username");
+                }
+
+                UUID uuid = null;
+                Object uuidObj = rs.getObject(UUID_COLUMN);
+                if (uuidObj != null) {
+                    try {
+                        uuid = UUID.fromString(uuidObj.toString());
+                    } catch (IllegalArgumentException ignored) {
+                        // CMI migration treats malformed UUIDs as absent and resolves by name.
+                    }
+                }
+
+                BigDecimal balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                MigrationSourceFingerprint.update(digest, new CMIPlayerData(uuid, playerName, balance, 0L));
+                rowCount++;
+            }
+        } catch (SQLException failure) {
+            plugin.getLogger().severe("Failed to fingerprint CMI source rows: " + failure.getMessage());
+            throw new IllegalStateException("Failed to fingerprint CMI source rows", failure);
+        }
+
+        return MigrationSourceFingerprint.finish(digest, rowCount);
+    }
+
+    /**
      * Reads CMI player balance data (paginated).
      * @param offset starting offset
      * @param limit page size
@@ -198,8 +244,8 @@ public final class CMIDatabaseReader {
         List<CMIPlayerData> players = new ArrayList<>();
 
         String sql = String.format(
-                "SELECT * FROM %s LIMIT ? OFFSET ?",
-                tableName
+                "SELECT * FROM %s ORDER BY LOWER(%s), %s, %s, %s LIMIT ? OFFSET ?",
+                tableName, USERNAME_COLUMN, USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN
         );
 
         try (Connection conn = dataSource.getConnection();

@@ -39,6 +39,11 @@ class MigrationSourceQuiescenceTest {
         MigrationLock.disable();
     }
 
+    private static void stubContentFingerprint(CMIDatabaseReader reader) {
+        when(reader.getSourceSnapshotFingerprint())
+                .thenReturn(new MigrationSourceFingerprint.Result(1, "test-cmi-source-fingerprint"));
+    }
+
     @Test
     void cmiSnapshotWaitsUntilNativeEconomyIsDisabledAndReloaded() {
         Plugin plugin = mock(Plugin.class);
@@ -67,6 +72,7 @@ class MigrationSourceQuiescenceTest {
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
 
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(1);
@@ -83,7 +89,7 @@ class MigrationSourceQuiescenceTest {
 
         task.start(false, false);
 
-        verify(cmiReader, never()).getTotalPlayerCount();
+        verify(cmiReader, never()).getSourceSnapshotFingerprint();
         assertNotNull(globalTask.get(), "CMI quiescence must be scheduled before taking a source snapshot");
 
         globalTask.get().run();
@@ -93,7 +99,7 @@ class MigrationSourceQuiescenceTest {
         verify(disabler).reloadCMIAndReport();
         assertNotNull(asyncTask.get(), "snapshot database reads must be scheduled off the global thread");
         asyncTask.get().accept(mock(ScheduledTask.class));
-        verify(cmiReader).getTotalPlayerCount();
+        verify(cmiReader).getSourceSnapshotFingerprint();
     }
 
     @Test
@@ -104,6 +110,7 @@ class MigrationSourceQuiescenceTest {
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(false);
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(reader);
         when(reader.testConnection()).thenReturn(true);
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
@@ -115,7 +122,7 @@ class MigrationSourceQuiescenceTest {
 
         task.start(false, false);
 
-        verify(reader, never()).getTotalPlayerCount();
+        verify(reader, never()).getSourceSnapshotFingerprint();
         verify(disabler, never()).disableEconomyCommands();
         verify(disabler, never()).disableEconomyModule();
         verify(disabler, never()).reloadCMIAndReport();
@@ -153,6 +160,7 @@ class MigrationSourceQuiescenceTest {
 
         UUID account = UUID.randomUUID();
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(1);
@@ -211,6 +219,7 @@ class MigrationSourceQuiescenceTest {
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
         when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(reader);
         when(reader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(reader.testConnection()).thenReturn(true);
         when(reader.getTotalPlayerCount()).thenReturn(1);
@@ -263,6 +272,7 @@ class MigrationSourceQuiescenceTest {
         when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
         UUID account = UUID.randomUUID();
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(reader);
         when(reader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(reader.testConnection()).thenReturn(true);
         when(reader.getTotalPlayerCount()).thenReturn(1);
@@ -322,6 +332,7 @@ class MigrationSourceQuiescenceTest {
         when(config.getServerName()).thenReturn("test-server");
         UUID account = UUID.randomUUID();
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(reader);
         when(reader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(reader.testConnection()).thenReturn(true);
         when(reader.getTotalPlayerCount()).thenReturn(1);

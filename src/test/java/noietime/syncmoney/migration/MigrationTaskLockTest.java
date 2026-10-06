@@ -215,6 +215,7 @@ class MigrationTaskLockTest {
             }
         }, "migration-lock-pre-event-producer");
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader, 0);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         RedisManager migrationRedis = mock(RedisManager.class);
@@ -235,7 +236,7 @@ class MigrationTaskLockTest {
             if (producerFailure.get() != null) {
                 throw new AssertionError("producer failed unexpectedly", producerFailure.get());
             }
-            verify(cmiReader, never()).getTotalPlayerCount();
+            verify(cmiReader, never()).getSourceSnapshotFingerprint();
             assertTrue(!MigrationLock.isLocked(),
                     "migration must leave the economy unlocked when it cannot quiesce an in-flight producer");
             assertEquals(0, writeResult.get().compareTo(new BigDecimal("110.00")),
@@ -264,6 +265,7 @@ class MigrationTaskLockTest {
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
         stubCmiQuiescence(config);
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader, 0);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(0);
@@ -280,7 +282,7 @@ class MigrationTaskLockTest {
     }
 
     @Test
-    void sourceCountFailureReleasesMigrationLock() {
+    void sourceSnapshotFailureReleasesMigrationLock() {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
         Server server = mock(Server.class);
@@ -294,7 +296,7 @@ class MigrationTaskLockTest {
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
-        when(cmiReader.getTotalPlayerCount()).thenThrow(new IllegalStateException("source count failed"));
+        when(cmiReader.getSourceSnapshotFingerprint()).thenThrow(new IllegalStateException("source snapshot failed"));
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), null,
@@ -328,6 +330,7 @@ class MigrationTaskLockTest {
         stubCmiQuiescence(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(1);
@@ -364,6 +367,7 @@ class MigrationTaskLockTest {
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
+        when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
                 mock(EconomyFacade.class), null, null, null, checkpoint, null, successfulDisabler());
 
@@ -395,6 +399,7 @@ class MigrationTaskLockTest {
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|previous-source");
+        when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
         when(reader.isInitialized()).thenReturn(true);
         when(reader.testConnection()).thenReturn(true);
@@ -484,6 +489,135 @@ class MigrationTaskLockTest {
         java.nio.file.Files.delete(databaseFile);
         verify(facade).setBalance(account, new BigDecimal("75.00"), EconomyEvent.EventSource.ADMIN_SET);
         assertEquals(MigrationCheckpoint.MigrationState.COMPLETED, checkpoint.getState());
+    }
+
+    @Test
+    void resumeRejectsSourceContentChangeWhenRowCountIsUnchanged() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
+        Path pluginData = tempDir.resolve("plugins/Syncmoney");
+        Path cmiSettings = tempDir.resolve("plugins/CMI/Settings");
+        Files.createDirectories(pluginData);
+        Files.createDirectories(cmiSettings);
+        Files.writeString(cmiSettings.resolve("DataBaseInfo.yml"), "storage:\n  method: SQLite\n");
+        when(plugin.getDataFolder()).thenReturn(pluginData.toFile());
+
+        Path databaseFile = tempDir.resolve("plugins/CMI/cmi.sqlite.db");
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE users (username TEXT, player_uuid TEXT, Balance TEXT, LastLogoffTime INTEGER)");
+            statement.execute("INSERT INTO users VALUES ('first-player', '00000000-0000-0000-0000-000000000051', '40.00', 1)");
+            statement.execute("INSERT INTO users VALUES ('second-player', '00000000-0000-0000-0000-000000000052', '75.00', 2)");
+        }
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubCmiQuiescence(config);
+        when(config.migration().getMigrationBatchSize()).thenReturn(1);
+        when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
+
+        Server server = mock(Server.class);
+        AsyncScheduler initialScheduler = mock(AsyncScheduler.class);
+        ArrayDeque<java.util.function.Consumer<ScheduledTask>> initialWorkers = new ArrayDeque<>();
+        doAnswer(invocation -> {
+            initialWorkers.add(invocation.getArgument(1));
+            return null;
+        }).when(initialScheduler).runNow(any(Plugin.class), any());
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getAsyncScheduler()).thenReturn(initialScheduler);
+        runGlobalTasksImmediately(plugin, server);
+
+        CMIDatabaseReader initialReader = new CMIDatabaseReader(plugin, config);
+        initialReader.initialize();
+        CMIDatabaseReader.CMIPlayerData first = initialReader.readPlayers(0, 1).get(0);
+        CMIDatabaseReader.CMIPlayerData second = initialReader.readPlayers(1, 1).get(0);
+        java.util.concurrent.ConcurrentHashMap<UUID, BigDecimal> targetBalances = new java.util.concurrent.ConcurrentHashMap<>();
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.getBalance(any(UUID.class))).thenAnswer(invocation ->
+                targetBalances.getOrDefault(invocation.getArgument(0), BigDecimal.ZERO));
+        org.mockito.Mockito.when(facade.setBalance(any(UUID.class), any(BigDecimal.class), any()))
+                .thenAnswer(invocation -> {
+                    targetBalances.put(invocation.getArgument(0), invocation.getArgument(1));
+                    return invocation.getArgument(1);
+                });
+        RedisManager redis = mock(RedisManager.class);
+        when(redis.isConnected()).thenReturn(true);
+        MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
+        MigrationTask initialTask = new MigrationTask(plugin, config, initialReader, facade, null,
+                redis, null, checkpoint, null, successfulDisabler());
+
+        initialTask.start(false, false);
+        initialWorkers.remove().accept(mock(ScheduledTask.class)); // save the initial source checkpoint
+        initialWorkers.remove().accept(mock(ScheduledTask.class)); // migrate one row and advance the checkpoint offset
+        assertEquals(1, checkpoint.getCurrentOffset());
+        initialTask.stop();
+        initialReader.shutdown();
+
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+             var statement = connection.createStatement()) {
+            statement.executeUpdate("UPDATE users SET Balance = '95.00' WHERE username = '" + second.playerName() + "'");
+        }
+
+        MigrationLock.unlock();
+        MigrationLock.disable(); // simulate the static lock state being reset by a process restart
+        AsyncScheduler resumeScheduler = mock(AsyncScheduler.class);
+        ArrayDeque<java.util.function.Consumer<ScheduledTask>> resumeWorkers = new ArrayDeque<>();
+        doAnswer(invocation -> {
+            resumeWorkers.add(invocation.getArgument(1));
+            return null;
+        }).when(resumeScheduler).runNow(any(Plugin.class), any());
+        when(server.getAsyncScheduler()).thenReturn(resumeScheduler);
+        CMIDatabaseReader resumeReader = new CMIDatabaseReader(plugin, config);
+        resumeReader.initialize();
+        MigrationTask resumedTask = new MigrationTask(plugin, config, resumeReader, facade, null,
+                redis, null, checkpoint, null, successfulDisabler());
+
+        try {
+            assertTrue(resumedTask.resume());
+            while (!resumeWorkers.isEmpty()) {
+                resumeWorkers.remove().accept(mock(ScheduledTask.class));
+            }
+
+            assertEquals(MigrationCheckpoint.MigrationState.FAILED, checkpoint.getState(),
+                    "a changed source with the same row count invalidates the old checkpoint");
+            verify(facade, never()).setBalance(second.uuid(), new BigDecimal("95.00"), EconomyEvent.EventSource.ADMIN_SET);
+            assertEquals(BigDecimal.ZERO, targetBalances.getOrDefault(second.uuid(), BigDecimal.ZERO),
+                    "the changed source row must not be copied from the invalidated snapshot");
+        } finally {
+            resumeReader.shutdown();
+        }
+    }
+
+    @Test
+    void resumeRejectsLegacyCheckpointWithoutSourceFingerprint() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
+        Path pluginData = tempDir.resolve("plugins/Syncmoney");
+        Files.createDirectories(pluginData);
+        when(plugin.getDataFolder()).thenReturn(pluginData.toFile());
+        Files.writeString(pluginData.resolve("migration_checkpoint.json"), """
+                {
+                  "state": "PAUSED",
+                  "currentOffset": 1,
+                  "totalPlayers": 2,
+                  "migratedCount": 1,
+                  "failedCount": 0,
+                  "startTime": "2026-10-06T00:00:00Z",
+                  "lastUpdateTime": "2026-10-06T00:00:00Z",
+                  "failures": {},
+                  "sourceIdentity": "cmi-single|legacy-source",
+                  "forceOverwrite": true
+                }
+                """);
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubCmiQuiescence(config);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
+        MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class), mock(EconomyFacade.class), null,
+                null, null, checkpoint, null, successfulDisabler());
+
+        assertFalse(task.resume(), "a legacy CMI checkpoint has no content proof for its prior source snapshot");
+        assertEquals(MigrationCheckpoint.MigrationState.FAILED, checkpoint.getState());
     }
 
     @Test
@@ -603,6 +737,11 @@ class MigrationTaskLockTest {
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn(sourceIdentity);
+        CMIMultiServerReader fingerprintReader = new CMIMultiServerReader(plugin, config);
+        fingerprintReader.initialize();
+        String sourceFingerprint = fingerprintReader.getSourceSnapshotFingerprint().value();
+        fingerprintReader.shutdown();
+        when(checkpoint.getSourceFingerprint()).thenReturn(sourceFingerprint);
         when(checkpoint.getCurrentOffset()).thenReturn(1);
         when(checkpoint.getTotalPlayers()).thenReturn(2);
         when(checkpoint.getMigratedCount()).thenReturn(1);
@@ -624,6 +763,70 @@ class MigrationTaskLockTest {
     }
 
     @Test
+    void multiServerResumeRejectsChangedContentWithTheSameRowCount() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
+        Path pluginData = tempDir.resolve("plugins/Syncmoney");
+        Files.createDirectories(pluginData);
+        when(plugin.getDataFolder()).thenReturn(pluginData.toFile());
+        Path databaseFile = tempDir.resolve("cmi-multi-changed-resume.sqlite");
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE users (username TEXT, player_uuid TEXT, Balance TEXT, LastLogoffTime INTEGER)");
+            statement.execute("INSERT INTO users VALUES ('changed-player', '00000000-0000-0000-0000-000000000071', '40.00', 1)");
+        }
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubCmiQuiescence(config);
+        when(config.migration().getCMISqlitePaths()).thenReturn(List.of(databaseFile.toString()));
+        when(config.migration().getCMIMergeStrategy()).thenReturn("latest");
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        CMIMultiServerReader fingerprintReader = new CMIMultiServerReader(plugin, config);
+        fingerprintReader.initialize();
+        String sourceIdentity = fingerprintReader.getSourceIdentity();
+        String sourceFingerprint = fingerprintReader.getSourceSnapshotFingerprint().value();
+        fingerprintReader.shutdown();
+
+        MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
+        checkpoint.init(1, sourceIdentity, false, sourceFingerprint);
+        checkpoint.pause();
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+             var statement = connection.createStatement()) {
+            statement.executeUpdate("UPDATE users SET Balance = '55.00' WHERE username = 'changed-player'");
+        }
+
+        Server server = mock(Server.class);
+        AsyncScheduler asyncScheduler = mock(AsyncScheduler.class);
+        ArrayDeque<java.util.function.Consumer<ScheduledTask>> workers = new ArrayDeque<>();
+        doAnswer(invocation -> {
+            workers.add(invocation.getArgument(1));
+            return null;
+        }).when(asyncScheduler).runNow(any(Plugin.class), any());
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
+        runGlobalTasksImmediately(plugin, server);
+
+        EconomyFacade facade = mock(EconomyFacade.class);
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, null,
+                null, null, checkpoint, null, successfulDisabler());
+        try {
+            assertTrue(task.resume());
+            workers.remove().accept(mock(ScheduledTask.class));
+
+            assertEquals(MigrationCheckpoint.MigrationState.FAILED, checkpoint.getState(),
+                    "multi-server resume must fail closed when a source balance changes without changing the row count");
+            verify(facade, never()).setBalance(any(UUID.class), any(BigDecimal.class), any());
+        } finally {
+            java.lang.reflect.Field multiReaderField = MigrationTask.class.getDeclaredField("multiServerReader");
+            multiReaderField.setAccessible(true);
+            Object multiReader = multiReaderField.get(task);
+            if (multiReader instanceof CMIMultiServerReader source) {
+                source.shutdown();
+            }
+        }
+    }
+
+    @Test
     void startSchedulerFailureReleasesMigrationLock() {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
@@ -635,6 +838,7 @@ class MigrationTaskLockTest {
         stubCmiQuiescence(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(1);
@@ -672,6 +876,7 @@ class MigrationTaskLockTest {
         stubCmiQuiescence(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(1);
@@ -714,6 +919,7 @@ class MigrationTaskLockTest {
         when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
         UUID account = UUID.randomUUID();
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader, 2);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(2);
@@ -759,6 +965,7 @@ class MigrationTaskLockTest {
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
+        when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
                 mock(EconomyFacade.class), null, null, null, checkpoint, null, null);
 
@@ -835,6 +1042,7 @@ class MigrationTaskLockTest {
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isMigrationPopulateRedis()).thenReturn(false);
         CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        stubContentFingerprint(cmiReader, 11);
         when(cmiReader.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(cmiReader.testConnection()).thenReturn(true);
         when(cmiReader.getTotalPlayerCount()).thenReturn(11);
@@ -887,6 +1095,7 @@ class MigrationTaskLockTest {
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
+        when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
                 mock(EconomyFacade.class), null, null, null, checkpoint, null, successfulDisabler());
 
@@ -910,6 +1119,15 @@ class MigrationTaskLockTest {
         when(disabler.disableEconomyModule()).thenReturn(true);
         when(disabler.reloadCMIAndReport()).thenReturn(true);
         return disabler;
+    }
+
+    private static void stubContentFingerprint(CMIDatabaseReader reader) {
+        stubContentFingerprint(reader, 1);
+    }
+
+    private static void stubContentFingerprint(CMIDatabaseReader reader, int rowCount) {
+        when(reader.getSourceSnapshotFingerprint())
+                .thenReturn(new MigrationSourceFingerprint.Result(rowCount, "test-cmi-source-fingerprint"));
     }
 
     private static void stubCmiQuiescence(SyncmoneyConfig config) {

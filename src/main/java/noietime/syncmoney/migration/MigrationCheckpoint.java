@@ -38,6 +38,8 @@ public final class MigrationCheckpoint {
 
     private volatile String sourceIdentity;
 
+    private volatile String sourceFingerprint;
+
     private volatile boolean forceOverwrite;
 
     private volatile Instant startTime;
@@ -68,11 +70,17 @@ public final class MigrationCheckpoint {
 
     /** Initializes a migration checkpoint with the overwrite policy that resume must preserve. */
     public void init(int totalPlayers, String sourceIdentity, boolean forceOverwrite) {
+        init(totalPlayers, sourceIdentity, forceOverwrite, null);
+    }
+
+    /** Initializes a CMI checkpoint with proof of the source contents used for migration. */
+    void init(int totalPlayers, String sourceIdentity, boolean forceOverwrite, String sourceFingerprint) {
         this.totalPlayers = totalPlayers;
         this.currentOffset = 0;
         this.migratedCount = 0;
         this.failedCount = 0;
         this.sourceIdentity = sourceIdentity;
+        this.sourceFingerprint = sourceFingerprint;
         this.forceOverwrite = forceOverwrite;
         this.startTime = Instant.now();
         this.lastUpdateTime = Instant.now();
@@ -98,6 +106,7 @@ public final class MigrationCheckpoint {
             this.migratedCount = data.migratedCount();
             this.failedCount = data.failedCount();
             this.sourceIdentity = data.sourceIdentity();
+            this.sourceFingerprint = data.sourceFingerprint();
             this.forceOverwrite = Boolean.TRUE.equals(data.forceOverwrite());
             this.startTime = Instant.parse(data.startTime());
             this.lastUpdateTime = Instant.parse(data.lastUpdateTime());
@@ -191,6 +200,7 @@ public final class MigrationCheckpoint {
         this.migratedCount = 0;
         this.failedCount = 0;
         this.sourceIdentity = null;
+        this.sourceFingerprint = null;
         this.forceOverwrite = false;
         this.startTime = null;
         this.lastUpdateTime = null;
@@ -215,7 +225,8 @@ public final class MigrationCheckpoint {
                     lastUpdateTime != null ? lastUpdateTime.toString() : null,
                     new ConcurrentHashMap<>(failures),
                     sourceIdentity,
-                    forceOverwrite
+                    forceOverwrite,
+                    sourceFingerprint
             );
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(checkpointFile, data);
         } catch (JsonProcessingException e) {
@@ -265,6 +276,10 @@ public final class MigrationCheckpoint {
 
     public String getSourceIdentity() {
         return sourceIdentity;
+    }
+
+    String getSourceFingerprint() {
+        return sourceFingerprint;
     }
 
     public boolean getForceOverwrite() {
@@ -330,6 +345,7 @@ public final class MigrationCheckpoint {
             String lastUpdateTime,
             ConcurrentHashMap<String, String> failures,
             String sourceIdentity,
-            Boolean forceOverwrite
+            Boolean forceOverwrite,
+            String sourceFingerprint
     ) {}
 }

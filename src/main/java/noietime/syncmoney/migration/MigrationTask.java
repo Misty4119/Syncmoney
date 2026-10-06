@@ -65,6 +65,14 @@ public final class MigrationTask {
         }
     }
 
+    private static final class SourceFingerprintMismatchException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        SourceFingerprintMismatchException(String message) {
+            super(message);
+        }
+    }
+
     public MigrationTask(Plugin plugin, SyncmoneyConfig config,
                          CMIDatabaseReader cmiReader, EconomyFacade economyFacade,
                          DatabaseManager databaseManager,
@@ -194,6 +202,15 @@ public final class MigrationTask {
             return false;
         }
 
+        String sourceFingerprint = checkpoint.getSourceFingerprint();
+        if (sourceFingerprint == null || sourceFingerprint.isBlank()) {
+            String message = "Cannot safely resume CMI migration: checkpoint has no source content fingerprint; start a fresh migration";
+            plugin.getLogger().warning(message);
+            checkpoint.fail();
+            reportMigrationError(message);
+            return false;
+        }
+
         if (!acquireMigrationLockForExecution()) {
             plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
             checkpoint.pause();
@@ -275,9 +292,10 @@ public final class MigrationTask {
                     return;
                 }
 
-                int totalPlayers = source != null
-                        ? source.getTotalPlayerCount()
-                        : cmiReader.getTotalPlayerCount();
+                MigrationSourceFingerprint.Result sourceSnapshot = source != null
+                        ? source.getSourceSnapshotFingerprint()
+                        : cmiReader.getSourceSnapshotFingerprint();
+                int totalPlayers = sourceSnapshot.playerCount();
                 if (totalPlayers == 0) {
                     running = false;
                     plugin.getLogger().warning("No players found in CMI database!");
@@ -292,7 +310,11 @@ public final class MigrationTask {
                 if (sourceIdentity == null || sourceIdentity.isBlank()) {
                     throw new IllegalStateException("CMI source identity is unavailable; migration cannot be checkpointed safely");
                 }
-                checkpoint.init(totalPlayers, sourceIdentity, force);
+                String sourceFingerprint = sourceSnapshot.value();
+                if (sourceFingerprint == null || sourceFingerprint.isBlank()) {
+                    throw new IllegalStateException("CMI source content fingerprint is unavailable; migration cannot be checkpointed safely");
+                }
+                checkpoint.init(totalPlayers, sourceIdentity, force, sourceFingerprint);
                 checkpointStarted = true;
                 if (createBackup) {
                     createBackup();
@@ -300,7 +322,9 @@ public final class MigrationTask {
                 scheduleMigrationBatch(force, totalPlayers, new AtomicInteger(0),
                         new AtomicInteger(0), false);
             } catch (RuntimeException | Error failure) {
-                if (resuming && checkpointStarted) {
+                if (resuming && failure instanceof SourceFingerprintMismatchException) {
+                    failAndReleaseMigrationLock(failure);
+                } else if (resuming && checkpointStarted) {
                     pauseAndReleaseMigrationLock(failure);
                 } else {
                     failAndReleaseMigrationLock(failure);
@@ -349,11 +373,17 @@ public final class MigrationTask {
             throw new IllegalStateException("CMI migration source changed since the checkpoint was created; refusing to resume at an old offset");
         }
 
-        int currentTotal = multiServerReader != null
-                ? multiServerReader.getTotalPlayerCount()
-                : cmiReader.getTotalPlayerCount();
+        MigrationSourceFingerprint.Result currentSourceSnapshot = multiServerReader != null
+                ? multiServerReader.getSourceSnapshotFingerprint()
+                : cmiReader.getSourceSnapshotFingerprint();
+        int currentTotal = currentSourceSnapshot.playerCount();
         if (currentTotal != checkpoint.getTotalPlayers()) {
             throw new IllegalStateException("CMI source row count changed since the checkpoint was created; refusing to resume at an old offset");
+        }
+
+        if (!checkpoint.getSourceFingerprint().equals(currentSourceSnapshot.value())) {
+            throw new SourceFingerprintMismatchException(
+                    "CMI source contents changed since the checkpoint was created; refusing to resume the partial migration. Start a fresh migration with -force after source writers are quiesced");
         }
     }
 
