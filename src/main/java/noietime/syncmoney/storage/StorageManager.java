@@ -49,7 +49,8 @@ public class StorageManager {
         this.dbWriteQueue = new DbWriteQueue(config.getQueueCapacity());
 
         if (databaseManager != null) {
-            this.dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager);
+            this.dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager,
+                    cacheManager, redisManager);
             this.dbWriterThread = new Thread(dbWriterConsumer, "Syncmoney-DbWriter");
             dbWriterThread.setDaemon(true);
             dbWriterThread.start();

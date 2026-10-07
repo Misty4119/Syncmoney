@@ -78,10 +78,83 @@ public final class SqlSnapshotWriter {
 
     public static void persistPlayers(Connection connection, List<PlayerSnapshot> snapshots, SqlDialect dialect)
             throws SQLException {
+        persistPlayersWithPairStaleDetection(connection, snapshots, dialect);
+    }
+
+    /**
+     * Persist one task's account set. A two-account transfer snapshot is a unit: if
+     * either SQL row has already advanced beyond the confirmed receipt, neither row
+     * from that transfer is applied. The caller can then refresh the authority pair.
+     *
+     * @return {@code false} when a transfer pair was stale and the complete pair was skipped
+     */
+    public static boolean persistPlayersWithPairStaleDetection(Connection connection,
+            List<PlayerSnapshot> snapshots, SqlDialect dialect) throws SQLException {
         Objects.requireNonNull(connection, "connection");
         Objects.requireNonNull(snapshots, "snapshots");
         String sql = upsertSql(Objects.requireNonNull(dialect, "dialect"));
-        for (PlayerSnapshot snapshot : snapshots) persistShared(connection, snapshot, sql, dialect);
+        if (snapshots.size() != 2
+                || snapshots.get(0).account().playerUuid().equals(snapshots.get(1).account().playerUuid())) {
+            for (PlayerSnapshot snapshot : snapshots) persistShared(connection, snapshot, sql, dialect);
+            return true;
+        }
+
+        boolean ownsTransaction = connection.getAutoCommit();
+        if (ownsTransaction) connection.setAutoCommit(false);
+        java.sql.Savepoint savepoint = null;
+        try {
+            if (!ownsTransaction) savepoint = connection.setSavepoint();
+            List<PlayerSnapshot> ordered = snapshots.stream()
+                    .sorted(java.util.Comparator.comparing(snapshot ->
+                            snapshot.account().playerUuid().toString()))
+                    .toList();
+            boolean stalePair = false;
+            for (PlayerSnapshot snapshot : ordered) {
+                persistShared(connection, snapshot, sql, dialect);
+                StoredSnapshot stored = selectStoredSnapshot(connection,
+                        snapshot.account().playerUuid(), dialect);
+                if (stored.version() > snapshot.account().version()) {
+                    // Inspect both rows before classifying the transfer as stale. The
+                    // other row may contain an equal-version/different-balance conflict,
+                    // which must remain an error rather than being hidden by early return.
+                    stalePair = true;
+                }
+            }
+            if (stalePair) {
+                if (ownsTransaction) connection.rollback();
+                else connection.rollback(savepoint);
+                if (ownsTransaction) connection.commit();
+                else connection.releaseSavepoint(savepoint);
+                return false;
+            }
+            if (ownsTransaction) connection.commit();
+            else connection.releaseSavepoint(savepoint);
+            return true;
+        } catch (SQLException | RuntimeException e) {
+            try {
+                if (ownsTransaction) connection.rollback();
+                else if (savepoint != null) connection.rollback(savepoint);
+            } catch (SQLException rollbackFailure) {
+                e.addSuppressed(rollbackFailure);
+            }
+            throw e;
+        } finally {
+            if (ownsTransaction) connection.setAutoCommit(true);
+        }
+    }
+
+    private record StoredSnapshot(BigDecimal balance, long version) { }
+
+    private static StoredSnapshot selectStoredSnapshot(Connection connection, UUID uuid,
+            SqlDialect dialect) throws SQLException {
+        String sql = dialect == SqlDialect.SQLITE ? SELECT_SHARED : SELECT_SHARED_FOR_UPDATE;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, uuid.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Upserted player snapshot row is missing: " + uuid);
+                return new StoredSnapshot(result.getBigDecimal(2), result.getLong(1));
+            }
+        }
     }
 
     /** Explicit maintenance-authorized migration write while the destination authority is quiesced. */

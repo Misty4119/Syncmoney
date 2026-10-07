@@ -426,24 +426,38 @@ public final class DatabaseManager implements AutoCloseable {
      * write consumer) can re-queue and retry the tasks instead of losing them.
      */
     public void batchInsertOrUpdatePlayers(List<DbWriteQueue.DbWriteTask> tasks) {
+        batchInsertOrUpdatePlayersWithStale(tasks);
+    }
+
+    /** Persist accepted write tasks and report transfer pairs skipped as stale. */
+    public List<DbWriteQueue.DbWriteTask> batchInsertOrUpdatePlayersWithStale(
+            List<DbWriteQueue.DbWriteTask> tasks) {
         if (tasks == null || tasks.isEmpty()) {
-            return;
+            return List.of();
         }
 
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
             try {
-                List<PlayerSnapshot> snapshots = tasks.stream()
-                        .flatMap(task -> task.accounts().stream())
-                        .map(account -> new PlayerSnapshot(account.account(), account.playerName(),
-                                account.serverName(), account.timestamp()))
-                        .toList();
-                for (int offset = 0; offset < snapshots.size(); offset += Constants.DB_BATCH_SIZE) {
-                    int batchEnd = Math.min(offset + Constants.DB_BATCH_SIZE, snapshots.size());
-                    SqlSnapshotWriter.persistPlayers(conn, snapshots.subList(offset, batchEnd),
-                            SqlDialect.fromDatabaseType(databaseType));
+                List<DbWriteQueue.DbWriteTask> stalePairs = new ArrayList<>();
+                int snapshotCount = 0;
+                for (DbWriteQueue.DbWriteTask task : tasks) {
+                    List<PlayerSnapshot> snapshots = task.accounts().stream()
+                            .map(account -> new PlayerSnapshot(account.account(), account.playerName(),
+                                    account.serverName(), account.timestamp()))
+                            .toList();
+                    if (snapshots.size() > 2) {
+                        throw new SQLException("A persistence task cannot contain more than one transfer pair");
+                    }
+                    if (!SqlSnapshotWriter.persistPlayersWithPairStaleDetection(conn, snapshots,
+                            SqlDialect.fromDatabaseType(databaseType))) {
+                        stalePairs.add(task);
+                    }
+                    snapshotCount += snapshots.size();
+                    if (snapshotCount >= Constants.DB_BATCH_SIZE) snapshotCount = 0;
                 }
                 conn.commit();
+                return List.copyOf(stalePairs);
             } catch (SQLException | RuntimeException e) {
                 try {
                     conn.rollback();

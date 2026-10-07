@@ -2,6 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
@@ -31,7 +32,171 @@ import static org.mockito.Mockito.*;
 class TransferCompensationTest {
 
     @Test
-    void receiverCancellationRestoresDurableSender() throws Exception {
+    void playerGuardCallbacksRunBeforePairedAccountLocks() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransferCompensationTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransferCompensationTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+                System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+                System.currentTimeMillis()));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
+        when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.resolvePlayerName(sender)).thenReturn("sender");
+        when(facade.resolvePlayerName(receiver)).thenReturn("receiver");
+        PlayerTransactionGuard guard = mock(PlayerTransactionGuard.class);
+        when(facade.getPlayerTransactionGuard()).thenReturn(guard);
+        java.util.concurrent.atomic.AtomicInteger guardCalls = new java.util.concurrent.atomic.AtomicInteger();
+        when(guard.checkTransaction(any(UUID.class), any(BigDecimal.class), any(BigDecimal.class),
+                any(EconomyEvent.EventType.class), any(EconomyEvent.EventSource.class)))
+                .thenAnswer(invocation -> {
+                    guardCalls.incrementAndGet();
+                    CountDownLatch stateMutationCompleted = new CountDownLatch(1);
+                    Thread probe = new Thread(() -> {
+                        state.compute(sender, (uuid, current) -> current);
+                        stateMutationCompleted.countDown();
+                    }, "transfer-guard-lock-probe");
+                    probe.start();
+                    assertTrue(stateMutationCompleted.await(1, TimeUnit.SECONDS),
+                            "guard callbacks must not run while paired account locks are held");
+                    probe.join(1_000);
+                    return PlayerTransactionGuard.CheckResult.ALLOWED;
+                });
+
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)),
+                mock(OverflowLogInterface.class), state, new AtomicLong(), false);
+        TransferOrchestrator orchestrator = new TransferOrchestrator(
+                facade, plugin, config, mock(CacheManager.class), state, writer);
+
+        BigDecimal result = orchestrator.atomicTransfer(sender, receiver,
+                new BigDecimal("10.00"), EconomyEvent.EventSource.TEST);
+
+        assertAll(
+                () -> assertEquals(new BigDecimal("90.00"), result),
+                () -> assertEquals(2, guardCalls.get()),
+                () -> assertEquals(new BigDecimal("90.00"), state.get(sender).balance()),
+                () -> assertEquals(new BigDecimal("10.00"), state.get(receiver).balance())
+        );
+    }
+
+    @Test
+    void pluginAtomicTransferDoesNotHoldMemoryAccountLocksDuringRedisCall() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransferCompensationTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransferCompensationTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+                System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+                System.currentTimeMillis()));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
+        when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        CacheManager cacheManager = mock(CacheManager.class);
+        CountDownLatch redisEntered = new CountDownLatch(1);
+        CountDownLatch releaseRedis = new CountDownLatch(1);
+        when(cacheManager.atomicTransfer(sender, receiver, new BigDecimal("10.00"))).thenAnswer(invocation -> {
+            redisEntered.countDown();
+            if (!releaseRedis.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("test did not release Redis transfer");
+            }
+            return new CacheManager.TransferResult(new BigDecimal("90.00"),
+                    new BigDecimal("10.00"), 8L, 4L);
+        });
+        TransferOrchestrator orchestrator = new TransferOrchestrator(
+                facade, plugin, config, cacheManager, state, null);
+
+        AtomicReference<CacheManager.TransferResult> result = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread transferThread = new Thread(() -> {
+            try {
+                result.set(orchestrator.pluginAtomicTransfer(sender, receiver,
+                        new BigDecimal("10.00"), "test-plugin"));
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        }, "plugin-transfer-redis-test");
+        CountDownLatch readReturned = new CountDownLatch(1);
+        Thread readThread = new Thread(() -> {
+            state.get(sender);
+            readReturned.countDown();
+        }, "plugin-transfer-memory-read-test");
+
+        transferThread.start();
+        try {
+            assertTrue(redisEntered.await(2, TimeUnit.SECONDS), "the transfer should reach Redis");
+            assertTrue(state.isUnavailable(sender) && state.isUnavailable(receiver),
+                    "both accounts must be unavailable while the direct transfer is unresolved");
+            assertNull(state.tryReserveWrite(sender, state.get(sender)),
+                    "ordinary writes must not be admitted during the direct transfer");
+            readThread.start();
+            assertTrue(readReturned.await(250, TimeUnit.MILLISECONDS),
+                    "a warm in-memory read must not wait for the transfer's Redis round trip");
+        } finally {
+            releaseRedis.countDown();
+            transferThread.join(5_000);
+            if (readThread.getState() != Thread.State.NEW) readThread.join(5_000);
+        }
+
+        assertAll(
+                () -> assertFalse(transferThread.isAlive()),
+                () -> assertFalse(readThread.isAlive()),
+                () -> assertNull(failure.get()),
+                () -> assertNotNull(result.get())
+        );
+    }
+
+    @Test
+    void transferAdmissionRejectsWhenSecondAccountCannotReserveBeforeAnyMutation() {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransferCompensationTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        EconomyWriteQueue queue = new EconomyWriteQueue(1, Logger.getLogger("TransferCompensationTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+                System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+                System.currentTimeMillis()));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
+        when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
+        when(facade.resolvePlayerName(sender)).thenReturn("sender");
+        when(facade.resolvePlayerName(receiver)).thenReturn("receiver");
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        FallbackEconomyWrapper fallback = new FallbackEconomyWrapper(plugin, mock(RedisManager.class));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue, fallback,
+                mock(OverflowLogInterface.class), state, new AtomicLong(), false);
+        TransferOrchestrator orchestrator = new TransferOrchestrator(
+                facade, plugin, config, mock(CacheManager.class), state, writer);
+
+        BigDecimal result = orchestrator.atomicTransfer(sender, receiver, new BigDecimal("10.00"),
+                EconomyEvent.EventSource.TEST);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO)),
+                () -> assertEquals(new BigDecimal("100.00"), state.get(sender).balance()),
+                () -> assertEquals(BigDecimal.ZERO, state.get(receiver).balance()),
+                () -> assertEquals(0, queue.size()),
+                () -> assertFalse(queue.hasAcceptedWrite(sender)),
+                () -> assertFalse(queue.hasAcceptedWrite(receiver))
+        );
+    }
+
+    @Test
+    void receiverCancellationDoesNotAcceptEitherTransferLeg() throws Exception {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
@@ -93,7 +258,7 @@ class TransferCompensationTest {
                 null, null, null, null, null, null, null);
         try {
             TransferOrchestrator orchestrator = new TransferOrchestrator(
-                    facade, plugin, config, cacheManager, state);
+                    facade, plugin, config, cacheManager, state, writer);
             BigDecimal transferResult = orchestrator.atomicTransfer(
                     sender, receiver, amount, EconomyEvent.EventSource.TEST);
 
@@ -101,12 +266,14 @@ class TransferCompensationTest {
                     "compensation restores the sender's memory projection");
             assertEquals(0, state.get(receiver).balance().compareTo(BigDecimal.ZERO),
                     "the cancelled receiver deposit must not mutate memory");
-            assertEquals(1, queue.size(), "the accepted sender withdrawal remains queued");
+            boolean noQueuedTransferLeg = queue.size() == 0;
 
             durableWrites.set(new CountDownLatch(1));
             consumer.start();
-            assertTrue(durableWrites.get().await(5, TimeUnit.SECONDS),
-                    "the consumer should apply the accepted sender withdrawal");
+            if (!noQueuedTransferLeg) {
+                assertTrue(durableWrites.get().await(5, TimeUnit.SECONDS),
+                        "the consumer should finish any accepted transfer write");
+            }
             consumer.stop();
             consumer.shutdown();
 
@@ -122,6 +289,8 @@ class TransferCompensationTest {
                 assertAll(
                         () -> assertEquals(-1, transferResult.compareTo(BigDecimal.ZERO),
                                 "receiver cancellation should reject the transfer"),
+                        () -> assertTrue(noQueuedTransferLeg,
+                                "receiver cancellation must not leave one accepted transfer leg"),
                         () -> assertEquals(new BigDecimal("100.00"), reloadedSender,
                                 "reloading should restore the sender's original balance"),
                         () -> assertEquals(0, reloadedReceiver.compareTo(BigDecimal.ZERO)),
@@ -182,7 +351,7 @@ class TransferCompensationTest {
         eventBus.register(PostTransactionEvent.class, throwingObserver);
         try {
             TransferOrchestrator orchestrator = new TransferOrchestrator(
-                    facade, plugin, config, mock(CacheManager.class), state);
+                    facade, plugin, config, mock(CacheManager.class), state, writer);
             BigDecimal result = orchestrator.atomicTransfer(sender, receiver, amount, EconomyEvent.EventSource.TEST);
             List<EconomyEvent> events = new java.util.ArrayList<>();
             EconomyEvent event;

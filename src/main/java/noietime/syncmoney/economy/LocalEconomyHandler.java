@@ -111,12 +111,94 @@ public class LocalEconomyHandler implements AutoCloseable {
         if (entries.isEmpty()) {
             return;
         }
+
+        Map<String, List<LocalPersistenceJournal.Entry>> grouped = new HashMap<>();
         for (LocalPersistenceJournal.Entry entry : entries) {
-            persistAccepted(entry.event(), entry.playerName());
+            String operationId = TransferRequestIds.operationId(entry.event());
+            String key = operationId == null ? "request:" + entry.event().requestId() : operationId;
+            grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(entry);
+        }
+
+        Map<String, List<LocalPersistenceJournal.Entry>> units = new HashMap<>();
+        for (Map.Entry<String, List<LocalPersistenceJournal.Entry>> entry : grouped.entrySet()) {
+            List<LocalPersistenceJournal.Entry> unit = entry.getValue();
+            boolean transfer = unit.stream().anyMatch(value -> TransferRequestIds.isTransferLeg(value.event()));
+            if (transfer && (unit.size() != 2
+                    || !TransferRequestIds.arePair(unit.get(0).event(), unit.get(1).event()))) {
+                throw new java.io.IOException("LOCAL journal contains an incomplete or conflicting transfer pair: "
+                        + entry.getKey());
+            }
+            units.put(entry.getKey(), List.copyOf(unit));
+        }
+
+        for (String key : orderedRecoveryUnits(units)) {
+            List<LocalPersistenceJournal.Entry> unit = units.get(key);
+            if (unit.size() == 1) {
+                LocalPersistenceJournal.Entry entry = unit.get(0);
+                persistAccepted(entry.event(), entry.playerName());
+            } else {
+                LocalPersistenceJournal.Entry out = unit.stream()
+                        .filter(value -> value.event().type() == EconomyEvent.EventType.TRANSFER_OUT)
+                        .findFirst().orElseThrow();
+                LocalPersistenceJournal.Entry in = unit.stream()
+                        .filter(value -> value.event().type() == EconomyEvent.EventType.TRANSFER_IN)
+                        .findFirst().orElseThrow();
+                persistAcceptedTransfer(out.event(), out.playerName(), in.event(), in.playerName());
+            }
         }
         persistenceJournal.clear();
         plugin.getLogger().warning("Recovered " + entries.size()
                 + " accepted LOCAL SQLite write(s) from the shutdown journal");
+    }
+
+    private static List<String> orderedRecoveryUnits(
+            Map<String, List<LocalPersistenceJournal.Entry>> units) throws java.io.IOException {
+        Map<UUID, List<Map.Entry<String, LocalPersistenceJournal.Entry>>> byAccount = new HashMap<>();
+        for (Map.Entry<String, List<LocalPersistenceJournal.Entry>> unit : units.entrySet()) {
+            for (LocalPersistenceJournal.Entry event : unit.getValue()) {
+                byAccount.computeIfAbsent(event.event().playerUuid(), ignored -> new ArrayList<>())
+                        .add(Map.entry(unit.getKey(), event));
+            }
+        }
+
+        Map<String, java.util.Set<String>> outgoing = new HashMap<>();
+        Map<String, Integer> dependencyCounts = new HashMap<>();
+        units.keySet().forEach(key -> {
+            outgoing.put(key, new java.util.HashSet<>());
+            dependencyCounts.put(key, 0);
+        });
+        for (List<Map.Entry<String, LocalPersistenceJournal.Entry>> accountEvents : byAccount.values()) {
+            accountEvents.sort(java.util.Comparator
+                    .comparingLong((Map.Entry<String, LocalPersistenceJournal.Entry> value) -> value.getValue().event().version())
+                    .thenComparingLong(value -> value.getValue().event().timestamp())
+                    .thenComparing(Map.Entry::getKey));
+            for (int i = 1; i < accountEvents.size(); i++) {
+                String before = accountEvents.get(i - 1).getKey();
+                String after = accountEvents.get(i).getKey();
+                if (!before.equals(after) && outgoing.get(before).add(after)) {
+                    dependencyCounts.compute(after, (ignored, count) -> count + 1);
+                }
+            }
+        }
+
+        java.util.PriorityQueue<String> ready = new java.util.PriorityQueue<>(
+                java.util.Comparator.comparingLong((String key) -> units.get(key).stream()
+                                .mapToLong(entry -> entry.event().timestamp()).min().orElse(0L))
+                        .thenComparing(key -> key));
+        dependencyCounts.forEach((key, count) -> { if (count == 0) ready.add(key); });
+        List<String> ordered = new ArrayList<>(units.size());
+        while (!ready.isEmpty()) {
+            String key = ready.remove();
+            ordered.add(key);
+            for (String next : outgoing.get(key)) {
+                int remaining = dependencyCounts.compute(next, (ignored, count) -> count - 1);
+                if (remaining == 0) ready.add(next);
+            }
+        }
+        if (ordered.size() != units.size()) {
+            throw new java.io.IOException("LOCAL journal accepted-write order contains a transfer cycle");
+        }
+        return List.copyOf(ordered);
     }
 
     private void requireRecoveryReady() {
@@ -519,68 +601,107 @@ public class LocalEconomyHandler implements AutoCloseable {
      * was lost.
      */
     synchronized LocalPersistenceReceipt persistAccepted(EconomyEvent event, String playerName) throws SQLException {
-        if (event == null || event.playerUuid() == null || event.requestId() == null) {
-            throw new IllegalArgumentException("Accepted local event requires an account and request id");
+        return persistAcceptedEvents(List.of(new LocalPersistenceInput(event, playerName))).get(0);
+    }
+
+    synchronized LocalTransferPersistenceReceipt persistAcceptedTransfer(EconomyEvent out, String outName,
+            EconomyEvent in, String inName) throws SQLException {
+        if (!TransferRequestIds.arePair(out, in)
+                || out.type() != EconomyEvent.EventType.TRANSFER_OUT
+                || in.type() != EconomyEvent.EventType.TRANSFER_IN) {
+            throw new IllegalArgumentException("Accepted LOCAL transfer requires matching out/in legs");
+        }
+        List<LocalPersistenceReceipt> receipts = persistAcceptedEvents(List.of(
+                new LocalPersistenceInput(out, outName), new LocalPersistenceInput(in, inName)));
+        return new LocalTransferPersistenceReceipt(receipts.get(0), receipts.get(1));
+    }
+
+    private record LocalPersistenceInput(EconomyEvent event, String playerName) { }
+
+    private record LocalPersistenceResult(EconomyEvent event, UUID uuid, String name, String type,
+            double signedAmount, long timestamp, int sequence, long transactionRowId,
+            boolean insertedTransaction, LocalPersistenceReceipt receipt) { }
+
+    private List<LocalPersistenceReceipt> persistAcceptedEvents(List<LocalPersistenceInput> inputs)
+            throws SQLException {
+        if (inputs == null || inputs.isEmpty()) {
+            throw new IllegalArgumentException("Accepted LOCAL persistence requires at least one event");
         }
         if (connection == null || connection.isClosed()) {
             throw new SQLException("Local SQLite connection is unavailable");
         }
 
-        UUID uuid = event.playerUuid();
-        String name = playerName == null || playerName.isBlank() ? uuid.toString() : playerName;
-        BigDecimal balanceAfter = NumericUtil.normalize(event.balanceAfter());
-        BigDecimal balanceBefore = BigDecimal.ZERO;
-        long version = 0L;
-        int sequence = pendingEventSequences.computeIfAbsent(event.requestId(),
-                ignored -> sequenceCounter.incrementAndGet());
-        long timestamp = event.timestamp() > 0 ? event.timestamp() : System.currentTimeMillis();
-        String type = localTransactionType(event.type());
-        BigDecimal transactionAmount = event.type() == EconomyEvent.EventType.SET_BALANCE
-                ? balanceAfter : event.delta().abs();
-        String normalizedType = "PLAYER_TRANSFER".equals(event.source().name()) ? "TRANSFER" : type;
-        double signedAmount = transactionAmount.doubleValue();
-        if (event.type() == EconomyEvent.EventType.WITHDRAW
-                || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
-            signedAmount = -Math.abs(signedAmount);
+        for (LocalPersistenceInput input : inputs) {
+            EconomyEvent event = input == null ? null : input.event();
+            if (event == null || event.playerUuid() == null || event.requestId() == null
+                    || event.requestId().isBlank()) {
+                throw new IllegalArgumentException("Accepted local event requires an account and request id");
+            }
         }
 
-        long transactionRowId = findTransactionRow(event.requestId());
-        if (transactionRowId != 0L
-                && !transactionMatchesAcceptedEvent(transactionRowId, event, normalizedType, signedAmount)) {
-            throw new SQLException("LOCAL request id is already attached to a different accepted payload");
-        }
-        boolean insertedTransaction = false;
-        SQLException failure = null;
+        List<LocalPersistenceResult> results = new ArrayList<>(inputs.size());
+        Exception failure = null;
         try {
             connection.setAutoCommit(false);
-            if (transactionRowId == 0L) {
-                transactionRowId = findTransactionRow(uuid, timestamp, sequence);
-            }
-            if (transactionRowId == 0L) {
-                balanceBefore = readBalanceFromDatabase(uuid);
-                balanceAfter = balanceAfterForAcceptedEvent(event, balanceBefore);
-                long eventVersion;
-                try {
-                    eventVersion = Math.addExact(event.version(), 1L);
-                } catch (ArithmeticException e) {
-                    throw new SQLException("LOCAL account version overflow", e);
+            for (LocalPersistenceInput input : inputs) {
+                EconomyEvent event = input.event();
+                UUID uuid = event.playerUuid();
+                String name = input.playerName() == null || input.playerName().isBlank()
+                        ? uuid.toString() : input.playerName();
+                BigDecimal balanceAfter = NumericUtil.normalize(event.balanceAfter());
+                BigDecimal balanceBefore = BigDecimal.ZERO;
+                int sequence = pendingEventSequences.computeIfAbsent(event.requestId(),
+                        ignored -> sequenceCounter.incrementAndGet());
+                long timestamp = event.timestamp() > 0 ? event.timestamp() : System.currentTimeMillis();
+                String type = localTransactionType(event.type());
+                BigDecimal transactionAmount = event.type() == EconomyEvent.EventType.SET_BALANCE
+                        ? balanceAfter : event.delta().abs();
+                String normalizedType = "PLAYER_TRANSFER".equals(event.source().name()) ? "TRANSFER" : type;
+                double signedAmount = transactionAmount.doubleValue();
+                if (event.type() == EconomyEvent.EventType.WITHDRAW
+                        || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
+                    signedAmount = -Math.abs(signedAmount);
                 }
-                long nextVersion = Math.max((long) getVersionStrict(uuid) + 1L, eventVersion);
-                if (nextVersion > Integer.MAX_VALUE) {
-                    throw new SQLException("LOCAL account version exceeds the legacy SQLite integer range");
+
+                long transactionRowId = findTransactionRow(event.requestId());
+                if (transactionRowId != 0L
+                        && !transactionMatchesAcceptedEvent(transactionRowId, event, normalizedType, signedAmount)) {
+                    throw new SQLException("LOCAL request id is already attached to a different accepted payload");
                 }
-                version = nextVersion;
-                upsertBalance(uuid, name, balanceAfter, (int) version);
-                transactionRowId = insertTransactionStrict(uuid, name, normalizedType, signedAmount,
-                        balanceBefore.doubleValue(), balanceAfter.doubleValue(), event.source().name(),
-                        timestamp, sequence, event.requestId());
-                insertedTransaction = true;
-            } else {
-                balanceAfter = readBalanceFromDatabase(uuid);
-                version = getVersionStrict(uuid);
+                boolean insertedTransaction = false;
+                long version;
+                if (transactionRowId == 0L) {
+                    transactionRowId = findTransactionRow(uuid, timestamp, sequence);
+                }
+                if (transactionRowId == 0L) {
+                    balanceBefore = readBalanceFromDatabase(uuid);
+                    balanceAfter = balanceAfterForAcceptedEvent(event, balanceBefore);
+                    long eventVersion;
+                    try {
+                        eventVersion = Math.addExact(event.version(), 1L);
+                    } catch (ArithmeticException e) {
+                        throw new SQLException("LOCAL account version overflow", e);
+                    }
+                    long nextVersion = Math.max((long) getVersionStrict(uuid) + 1L, eventVersion);
+                    if (nextVersion > Integer.MAX_VALUE) {
+                        throw new SQLException("LOCAL account version exceeds the legacy SQLite integer range");
+                    }
+                    version = nextVersion;
+                    upsertBalance(uuid, name, balanceAfter, (int) version);
+                    transactionRowId = insertTransactionStrict(uuid, name, normalizedType, signedAmount,
+                            balanceBefore.doubleValue(), balanceAfter.doubleValue(), event.source().name(),
+                            timestamp, sequence, event.requestId());
+                    insertedTransaction = true;
+                } else {
+                    balanceAfter = readBalanceFromDatabase(uuid);
+                    version = getVersionStrict(uuid);
+                }
+                results.add(new LocalPersistenceResult(event, uuid, name, normalizedType, signedAmount,
+                        timestamp, sequence, transactionRowId, insertedTransaction,
+                        new LocalPersistenceReceipt(balanceAfter, version)));
             }
             connection.commit();
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             failure = e;
             try {
                 connection.rollback();
@@ -589,33 +710,28 @@ public class LocalEconomyHandler implements AutoCloseable {
             }
         } finally {
             try {
-                if (!connection.getAutoCommit()) {
-                    connection.setAutoCommit(true);
-                }
+                if (!connection.getAutoCommit()) connection.setAutoCommit(true);
             } catch (SQLException restoreFailure) {
-                if (failure == null) {
-                    failure = restoreFailure;
-                } else {
-                    failure.addSuppressed(restoreFailure);
-                }
+                if (failure == null) failure = restoreFailure;
+                else failure.addSuppressed(restoreFailure);
             }
         }
 
-        if (failure != null) {
-            throw failure;
-        }
+        if (failure instanceof SQLException sqlFailure) throw sqlFailure;
+        if (failure instanceof RuntimeException runtimeFailure) throw runtimeFailure;
 
-        pendingEventSequences.remove(event.requestId());
-        balanceCache.put(uuid, balanceAfter);
-        versionCache.put(uuid, version);
-        if (recoveryReady && insertedTransaction && transactionRowId > 0) {
-            broadcastLocalAuditEvent(transactionRowId, uuid, name, normalizedType, signedAmount,
-                    balanceAfter.doubleValue(), event.source().name(), timestamp, sequence);
+        for (LocalPersistenceResult result : results) {
+            pendingEventSequences.remove(result.event().requestId());
+            balanceCache.put(result.uuid(), result.receipt().balance());
+            versionCache.put(result.uuid(), result.receipt().version());
+            if (recoveryReady && result.insertedTransaction() && result.transactionRowId() > 0) {
+                broadcastLocalAuditEvent(result.transactionRowId(), result.uuid(), result.name(), result.type(),
+                        result.signedAmount(), result.receipt().balance().doubleValue(),
+                        result.event().source().name(), result.timestamp(), result.sequence());
+            }
+            if (recoveryReady) updateBaltopRank(result.uuid(), result.receipt().balance().doubleValue());
         }
-        if (recoveryReady) {
-            updateBaltopRank(uuid, balanceAfter.doubleValue());
-        }
-        return new LocalPersistenceReceipt(balanceAfter, version);
+        return results.stream().map(LocalPersistenceResult::receipt).toList();
     }
 
     private BigDecimal balanceAfterForAcceptedEvent(EconomyEvent event, BigDecimal balanceBefore)

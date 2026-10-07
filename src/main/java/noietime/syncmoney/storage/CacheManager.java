@@ -467,6 +467,37 @@ public final class CacheManager {
     }
 
     /**
+     * Read the current Redis authority balance/version pair without consulting the local cache.
+     * This is reserved for reconciliation after Redis has explicitly rejected a mutation.
+     */
+    public java.util.Optional<CachedBalance> readAuthorityBalanceSnapshotStrict(UUID uuid) {
+        if (uuid == null) {
+            throw new IllegalArgumentException("An authority snapshot requires an account UUID");
+        }
+
+        try (var jedis = redisManager.getResource()) {
+            if (jedis == null) {
+                throw new IllegalStateException("Redis resource is unavailable for authority reconciliation");
+            }
+            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            if (values == null || values.size() != 2) {
+                throw new IllegalStateException("Redis returned an invalid account authority snapshot");
+            }
+            if (values.get(0) == null && values.get(1) == null) {
+                return java.util.Optional.empty();
+            }
+
+            CachedBalance snapshot = parseStrictSnapshot(uuid, values.get(0), values.get(1));
+            rememberConfirmedAccount(new ConfirmedAccount(uuid, snapshot.balance(), snapshot.version()));
+            return java.util.Optional.of(snapshot);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to read Redis account authority snapshot", e);
+        }
+    }
+
+    /**
      * Read one unexpired balance/version pair from the local cache without Redis I/O.
      * Legacy publishers use this to avoid attaching a version read separately from
      * the balance they were given.
@@ -519,7 +550,7 @@ public final class CacheManager {
      * @param fromUuid Sender's UUID
      * @param toUuid Receiver's UUID
      * @param amount Amount to transfer
-     * @return TransferResult with new balances and versions, or null if failed
+     * @return TransferResult with new balances and versions
      */
     public TransferResult atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount) {
         if (atomicTransferSha == null) {
@@ -535,7 +566,10 @@ public final class CacheManager {
         amount = NumericUtil.normalize(amount);
 
         Jedis resource = acquireRedisResource("atomic transfer");
-        if (resource == null) return null;
+        if (resource == null) {
+            throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                    "Redis transfer was not sent because no connection was available", null);
+        }
         try (var jedis = resource) {
             Object result = evalScriptWithNoscriptReload(jedis, atomicTransferSha, atomicTransferScript,
                     4, new String[] {fromBalanceKey, fromVersionKey, toBalanceKey, toVersionKey,
@@ -581,6 +615,50 @@ public final class CacheManager {
         } catch (Exception e) {
             throw sentUnknown("Redis atomic transfer outcome is unknown", e);
         }
+    }
+
+    /**
+     * Read both authority balance/version pairs with one Redis command. Used only after a
+     * known no-mutation transfer rejection so stale local projections can be reconciled.
+     */
+    public TransferResult readTransferSnapshotStrict(UUID fromUuid, UUID toUuid) {
+        if (fromUuid == null || toUuid == null || fromUuid.equals(toUuid)) {
+            throw new IllegalArgumentException("A transfer snapshot requires two distinct accounts");
+        }
+        try (var jedis = redisManager.getResource()) {
+            List<String> values = jedis.mget(
+                    KEY_PREFIX_BALANCE + fromUuid, KEY_PREFIX_VERSION + fromUuid,
+                    KEY_PREFIX_BALANCE + toUuid, KEY_PREFIX_VERSION + toUuid);
+            if (values == null || values.size() != 4) {
+                throw new IllegalStateException("Redis returned an invalid transfer authority snapshot");
+            }
+            CachedBalance from = parseStrictSnapshot(fromUuid, values.get(0), values.get(1));
+            CachedBalance to = parseStrictSnapshot(toUuid, values.get(2), values.get(3));
+            ConfirmedAccount fromAccount = new ConfirmedAccount(fromUuid, from.balance(), from.version());
+            ConfirmedAccount toAccount = new ConfirmedAccount(toUuid, to.balance(), to.version());
+            rememberConfirmedAccount(fromAccount);
+            rememberConfirmedAccount(toAccount);
+            return new TransferResult(from.balance(), to.balance(), from.version(), to.version());
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to read Redis transfer authority snapshot", e);
+        }
+    }
+
+    private static CachedBalance parseStrictSnapshot(UUID uuid, String balanceValue, String versionValue) {
+        if (balanceValue == null && versionValue != null) {
+            throw new IllegalStateException("Redis account version exists without a balance for " + uuid);
+        }
+        if (balanceValue == null) {
+            return new CachedBalance(BigDecimal.ZERO, 0L);
+        }
+        BigDecimal balance = NumericUtil.normalize(balanceValue);
+        long version = versionValue == null ? 0L : Long.parseLong(versionValue);
+        if (version < 0L) {
+            throw new IllegalStateException("Redis account version is negative for " + uuid);
+        }
+        return new CachedBalance(balance, version);
     }
 
     /**

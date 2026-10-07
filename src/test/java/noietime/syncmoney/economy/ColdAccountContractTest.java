@@ -21,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,6 +30,7 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -98,6 +100,46 @@ class ColdAccountContractTest {
                 "the stale cold-load result must not replace a newer memory update");
         assertEquals(1, reads.get(), "same-account cold loads must be deduplicated");
         assertEquals(1, reads.get());
+    }
+
+    @Test
+    void placeholderReadReturnsUnavailableWhilePluginTransferWaitsForRedis() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("ColdAccountContractTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        CacheManager cache = mock(CacheManager.class);
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        CountDownLatch redisEntered = new CountDownLatch(1);
+        CountDownLatch releaseRedis = new CountDownLatch(1);
+        when(cache.atomicTransfer(sender, receiver, new BigDecimal("10.00"))).thenAnswer(invocation -> {
+            redisEntered.countDown();
+            assertTrue(releaseRedis.await(5, TimeUnit.SECONDS));
+            return new CacheManager.TransferResult(new BigDecimal("90.00"),
+                    new BigDecimal("10.00"), 8L, 4L);
+        });
+        facade = new EconomyFacade(plugin, config, cache, mock(RedisManager.class),
+                mock(DatabaseManager.class), null, new EconomyWriteQueue(8),
+                mock(FallbackEconomyWrapper.class), null, mock(OverflowLogInterface.class));
+        facade.updateMemoryState(sender, new BigDecimal("100.00"), 7L);
+        facade.updateMemoryState(receiver, BigDecimal.ZERO, 3L);
+
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<CacheManager.TransferResult> transfer = callers.submit(() -> facade.pluginAtomicTransfer(
+                    sender, receiver, new BigDecimal("10.00"), "test-plugin"));
+            assertTrue(redisEntered.await(2, TimeUnit.SECONDS), "the transfer should reach Redis");
+
+            Future<BigDecimal> placeholderRead = callers.submit(() -> facade.getBalanceForPlaceholder(sender));
+            assertNull(placeholderRead.get(1, TimeUnit.SECONDS),
+                    "a transfer in flight must yield unavailable without waiting on its Redis round trip");
+
+            releaseRedis.countDown();
+            assertNotNull(transfer.get(2, TimeUnit.SECONDS), "the confirmed transfer receipt should be returned");
+        } finally {
+            releaseRedis.countDown();
+            callers.shutdownNow();
+        }
     }
 
     @Test

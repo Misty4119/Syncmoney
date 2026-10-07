@@ -160,6 +160,32 @@ class SqlSnapshotWriterIntegrationTest {
         }
         assertRow(connection, first, "CurrentName", "server-b", "100.00", 41, BASE_TIME.plusSeconds(20));
         assertRow(connection, second, "Second", "server-a", "50.00", 41, BASE_TIME);
+
+        assertFalse(SqlSnapshotWriter.persistPlayersWithPairStaleDetection(connection, List.of(
+                snapshot(first, "StalePairFirst", "server-c", "90.00", 40, BASE_TIME.plusSeconds(40)),
+                snapshot(second, "NewerPairSecond", "server-c", "60.00", 42, BASE_TIME.plusSeconds(40))),
+                dialect), "a stale row must prevent either leg of a confirmed pair from persisting");
+        assertRow(connection, first, "CurrentName", "server-b", "100.00", 41, BASE_TIME.plusSeconds(20));
+        assertRow(connection, second, "Second", "server-a", "50.00", 41, BASE_TIME);
+
+        UUID staleFirst = new UUID(0L, 1L);
+        UUID conflictingSecond = new UUID(0L, 2L);
+        SqlSnapshotWriter.persistPlayers(connection, List.of(
+                snapshot(staleFirst, "StaleFirst", "server-a", "100.00", 10, BASE_TIME),
+                snapshot(conflictingSecond, "ConflictSecond", "server-a", "50.00", 10, BASE_TIME)), dialect);
+        SqlSnapshotWriter.persistPlayers(connection,
+                List.of(snapshot(staleFirst, "NewerFirst", "server-b", "110.00", 11,
+                        BASE_TIME.plusSeconds(1))), dialect);
+        assertThrows(SnapshotConflictException.class,
+                () -> SqlSnapshotWriter.persistPlayersWithPairStaleDetection(connection, List.of(
+                        snapshot(staleFirst, "StaleFirst", "server-c", "90.00", 10,
+                                BASE_TIME.plusSeconds(2)),
+                        snapshot(conflictingSecond, "ConflictSecond", "server-c", "55.00", 10,
+                                BASE_TIME.plusSeconds(2))), dialect),
+                "a stale first UUID-sorted leg must not hide an equal-version conflict in the second leg");
+        assertRow(connection, staleFirst, "NewerFirst", "server-b", "110.00", 11,
+                BASE_TIME.plusSeconds(1));
+        assertRow(connection, conflictingSecond, "ConflictSecond", "server-a", "50.00", 10, BASE_TIME);
     }
 
     private static void assertConcurrentSnapshotSemantics(Connection lockHolder, Connection contender,

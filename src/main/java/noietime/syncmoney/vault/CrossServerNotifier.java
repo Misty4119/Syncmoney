@@ -57,6 +57,12 @@ final class CrossServerNotifier {
         }
         message = message.replace("{amount}", FormatUtil.formatCurrency(amount));
         message = message.replace("{balance}", FormatUtil.formatCurrency(balance));
-        MessageHelper.sendMessage(player, message);
+        String scheduledMessage = message;
+        try {
+            player.getScheduler().run(plugin, task -> MessageHelper.sendMessage(player, scheduledMessage), null);
+        } catch (RuntimeException e) {
+            plugin.getLogger().warning("Could not schedule Vault balance message for "
+                    + player.getUniqueId() + ": " + e.getMessage());
+        }
     }
 }

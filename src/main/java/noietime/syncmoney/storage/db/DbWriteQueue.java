@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 
 /**
  * DB write queue.
@@ -20,12 +21,59 @@ public final class DbWriteQueue {
 
     private final BlockingQueue<DbWriteTask> queue;
     private final int capacity;
+    private final Semaphore admissionPermits;
+    private final Object admissionGate = new Object();
 
     private final java.util.concurrent.atomic.AtomicLong writtenCount = new java.util.concurrent.atomic.AtomicLong(0);
 
     public DbWriteQueue(int capacity) {
         this.capacity = capacity;
         this.queue = new LinkedBlockingQueue<>(capacity);
+        this.admissionPermits = new Semaphore(capacity);
+    }
+
+    /** A bounded queue slot reserved before an authority mutation is attempted. */
+    public final class Reservation implements AutoCloseable {
+        private boolean committed;
+        private boolean closed;
+
+        private Reservation() { }
+
+        public boolean commit(DbWriteTask task) {
+            if (task == null) return false;
+            synchronized (admissionGate) {
+                if (closed || committed) return false;
+                if (!queue.offer(task)) {
+                    closed = true;
+                    admissionPermits.release();
+                    return false;
+                }
+                committed = true;
+                return true;
+            }
+        }
+
+        @Override
+        public void close() {
+            synchronized (admissionGate) {
+                if (!closed && !committed) {
+                    closed = true;
+                    admissionPermits.release();
+                }
+            }
+        }
+    }
+
+    /** Reserve one pair-capable task slot without blocking. */
+    public Reservation tryReserve() {
+        synchronized (admissionGate) {
+            int highWatermark = (int) (capacity * Constants.QUEUE_HIGH_USAGE_THRESHOLD);
+            int occupied = capacity - admissionPermits.availablePermits();
+            if (occupied >= highWatermark || !admissionPermits.tryAcquire()) {
+                return null;
+            }
+            return new Reservation();
+        }
     }
 
     /**
@@ -34,26 +82,30 @@ public final class DbWriteQueue {
      * @return true if successfully inserted
      */
     public boolean offer(DbWriteTask task) {
-
-        int currentSize = queue.size();
-        int usageThreshold = (int) (capacity * Constants.QUEUE_HIGH_USAGE_THRESHOLD);
-        
-        if (currentSize >= usageThreshold) {
-            return false;
+        Reservation reservation = tryReserve();
+        if (reservation == null) return false;
+        try (reservation) {
+            return reservation.commit(task);
         }
-        
-        return queue.offer(task);
     }
 
     public boolean requeue(DbWriteTask task) {
-        return queue.offer(task);
+        if (task == null) return false;
+        synchronized (admissionGate) {
+            if (!admissionPermits.tryAcquire()) return false;
+            if (queue.offer(task)) return true;
+            admissionPermits.release();
+            return false;
+        }
     }
 
     /**
      * Retrieves DB write task (blocks until task available or timeout).
      */
     public DbWriteTask poll() throws InterruptedException {
-        return queue.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+        DbWriteTask task = queue.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+        if (task != null) admissionPermits.release();
+        return task;
     }
 
     /**

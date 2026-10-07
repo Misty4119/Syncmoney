@@ -75,6 +75,21 @@ class PayTransferExecutorIdempotencyTest {
     }
 
     @Test
+    void acceptedPairedTransferStartsDuplicateWindowAtAdmissionCompletion() {
+        UUID sender = UUID.randomUUID();
+        String operation = sender + ":target:10.00";
+        Map<UUID, String> keys = new ConcurrentHashMap<>();
+        keys.put(sender, operation + ":IN_FLIGHT");
+
+        PayTransferExecutor.completeAcceptedTransfer(keys, sender, operation, 62_000);
+        PayTransferExecutor.cleanupIdempotencyKeys(keys, sender, operation, 121_999);
+        assertEquals(operation + ":62000", keys.get(sender));
+
+        PayTransferExecutor.cleanupIdempotencyKeys(keys, sender, operation, 122_001);
+        assertNull(keys.get(sender));
+    }
+
+    @Test
     void sentUnknownTransferRemainsQuarantinedPastOrdinaryIdempotencyTtl() {
         UUID sender = UUID.randomUUID();
         String operation = sender + ":target:10.00";

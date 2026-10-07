@@ -146,7 +146,7 @@ class MemoryPendingStateTest {
     }
 
     @Test
-    void deferredRemoteBalanceWinsWhenCompletionReceiptCarriesItsVersion() {
+    void conflictingEqualVersionSnapshotsRemainUnavailableUntilNewerAuthorityArrives() {
         UUID account = UUID.randomUUID();
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
@@ -168,10 +168,274 @@ class MemoryPendingStateTest {
         queue.complete(event, new BigDecimal("110.00"), 9L);
 
         assertAll(
-                () -> assertEquals(new BigDecimal("120.00"), state.get(account).balance(),
-                        "the deferred balance associated with v9 must not be replaced by an earlier write's balance"),
-                () -> assertEquals(9L, state.get(account).version(),
-                        "the visible balance and version must continue to describe the same authority snapshot")
+                () -> assertTrue(state.isUnavailable(account),
+                        "conflicting confirmed balances at the same version must remain quarantined after completion cleanup"),
+                () -> assertEquals(new BigDecimal("100.00"), state.get(account).balance(),
+                        "an unresolved conflicting authority snapshot must not be exposed as spendable state"),
+                () -> assertEquals(7L, state.get(account).version())
+        );
+
+        state.applyRemoteUpdateResult(account, new BigDecimal("120.00"), 9L);
+        assertTrue(state.isUnavailable(account), "a same-version observation does not resolve the conflict");
+        assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
+                state.applyRemoteUpdateResult(account, new BigDecimal("130.00"), 10L),
+                "a newer confirmed authority snapshot supersedes the conflicting version");
+        assertAll(
+                () -> assertFalse(state.isUnavailable(account)),
+                () -> assertEquals(new BigDecimal("130.00"), state.get(account).balance()),
+                () -> assertEquals(10L, state.get(account).version())
+        );
+    }
+
+    @Test
+    void conflictingDeferredSnapshotsRemainQuarantinedAfterWriteCompletion() {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(2);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(account, new EconomyFacade.EconomyState(
+                new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+
+        EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
+        EconomyEvent event = new EconomyEvent(account, new BigDecimal("10.00"), new BigDecimal("110.00"), 8L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
+                "deferred-conflict-write", System.currentTimeMillis());
+        assertNotNull(reservation);
+        assertTrue(reservation.commit(event));
+        state.put(account, new EconomyFacade.EconomyState(
+                new BigDecimal("110.00"), 8L, System.currentTimeMillis()));
+
+        assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
+                state.applyRemoteUpdateResult(account, new BigDecimal("120.00"), 9L));
+        assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
+                state.applyRemoteUpdateResult(account, new BigDecimal("130.00"), 9L));
+        queue.complete(event, new BigDecimal("110.00"), 8L);
+
+        assertAll(
+                () -> assertTrue(state.isUnavailable(account),
+                        "the conflict between two deferred authority snapshots survives completion cleanup"),
+                () -> assertEquals(new BigDecimal("120.00"), state.get(account).balance())
+        );
+        assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
+                state.applyRemoteUpdateResult(account, new BigDecimal("140.00"), 10L));
+        assertAll(
+                () -> assertFalse(state.isUnavailable(account)),
+                () -> assertEquals(new BigDecimal("140.00"), state.get(account).balance())
+        );
+    }
+
+    @Test
+    void pairedCompletionRejectsEqualVersionConflictWithDeferredAuthority() {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(
+                new BigDecimal("90.00"), 8L, System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(
+                new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
+
+        long now = System.currentTimeMillis();
+        String operationId = "transfer:equal-version-pair-conflict";
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-10.00"), new BigDecimal("80.00"), 9L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("10.00"), new BigDecimal("10.00"), 4L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        EconomyWriteQueue.Reservation senderReservation = queue.tryReserve(sender);
+        EconomyWriteQueue.Reservation receiverReservation = queue.tryReserve(receiver);
+        assertNotNull(senderReservation);
+        assertNotNull(receiverReservation);
+        assertTrue(queue.commitPair(senderReservation, out, receiverReservation, in, null));
+        assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
+                state.applyRemoteUpdateResult(sender, new BigDecimal("80.00"), 9L));
+
+        assertTrue(queue.completePair(out, new BigDecimal("85.00"), 9L,
+                in, new BigDecimal("10.00"), 4L));
+        assertAll(
+                () -> assertTrue(state.isUnavailable(sender),
+                        "paired receipt cannot choose one of two conflicting balances at the same version"),
+                () -> assertEquals(new BigDecimal("90.00"), state.get(sender).balance()),
+                () -> assertEquals(8L, state.get(sender).version())
+        );
+
+        assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
+                state.applyRemoteUpdateResult(sender, new BigDecimal("75.00"), 10L));
+        assertAll(
+                () -> assertFalse(state.isUnavailable(sender)),
+                () -> assertEquals(new BigDecimal("75.00"), state.get(sender).balance()),
+                () -> assertEquals(10L, state.get(sender).version())
+        );
+    }
+
+    @Test
+    void completionKeepsAccountUnavailableWhenRejectedAuthorityBaseIsStillUnresolved() {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(account, new EconomyFacade.EconomyState(
+                new BigDecimal("95.00"), 9L, System.currentTimeMillis()));
+        long now = System.currentTimeMillis();
+        EconomyEvent rejected = new EconomyEvent(account, new BigDecimal("-10.00"),
+                new BigDecimal("90.00"), 8L, EconomyEvent.EventType.WITHDRAW,
+                EconomyEvent.EventSource.TEST, "rejected-write", now);
+        EconomyEvent later = new EconomyEvent(account, new BigDecimal("5.00"),
+                new BigDecimal("95.00"), 9L, EconomyEvent.EventType.DEPOSIT,
+                EconomyEvent.EventSource.TEST, "later-write", now + 1);
+        assertTrue(queue.offer(rejected));
+        assertTrue(queue.offer(later));
+
+        assertTrue(queue.completeRejected(rejected, new BigDecimal("100.00"), 7L));
+        assertTrue(state.isUnavailable(account),
+                "a rejected authority base cannot be exposed while a later accepted write remains pending");
+
+        queue.complete(later, new BigDecimal("100.00"), 7L);
+
+        assertAll(
+                () -> assertFalse(queue.hasAcceptedWrite(account)),
+                () -> assertTrue(state.isUnavailable(account),
+                        "a stale completion receipt must not clear an unresolved rejected-authority base"),
+                () -> assertEquals(new BigDecimal("95.00"), state.get(account).balance(),
+                        "the stale completion cannot replace the current projection with an unverified value"),
+                () -> assertEquals(9L, state.get(account).version())
+        );
+    }
+
+    @Test
+    void rejectedTransferReceiptCannotReplaceNewerConfirmedMemoryState() {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(
+                new BigDecimal("120.00"), 21L, System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(
+                new BigDecimal("40.00"), 11L, System.currentTimeMillis()));
+        String operationId = "transfer:" + UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-10.00"),
+                new BigDecimal("90.00"), 8L, EconomyEvent.EventType.TRANSFER_OUT,
+                EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("10.00"),
+                new BigDecimal("10.00"), 4L, EconomyEvent.EventType.TRANSFER_IN,
+                EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        assertTrue(queue.offer(out));
+        assertTrue(queue.offer(in));
+
+        assertTrue(queue.completeRejectedPair(out, new BigDecimal("100.00"), 20L,
+                in, new BigDecimal("50.00"), 10L));
+
+        assertAll(
+                () -> assertEquals(new BigDecimal("120.00"), state.get(sender).balance(),
+                        "a delayed v20 rejection must not roll back a newer confirmed sender snapshot"),
+                () -> assertEquals(21L, state.get(sender).version()),
+                () -> assertEquals(new BigDecimal("40.00"), state.get(receiver).balance(),
+                        "a delayed v10 rejection must not roll back a newer confirmed receiver snapshot"),
+                () -> assertEquals(11L, state.get(receiver).version())
+        );
+    }
+
+    @Test
+    void equalVersionConfirmedSnapshotDuringPendingTransferSurvivesRejectedRebase() {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(
+                new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(
+                new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
+
+        String operationId = "transfer:" + UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-10.00"),
+                new BigDecimal("90.00"), 8L, EconomyEvent.EventType.TRANSFER_OUT,
+                EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("10.00"),
+                new BigDecimal("10.00"), 4L, EconomyEvent.EventType.TRANSFER_IN,
+                EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        assertTrue(queue.offer(out));
+        assertTrue(queue.offer(in));
+        state.put(sender, new EconomyFacade.EconomyState(
+                new BigDecimal("90.00"), 8L, System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(
+                new BigDecimal("10.00"), 4L, System.currentTimeMillis()));
+
+        assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
+                state.applyRemoteUpdateResult(sender, new BigDecimal("90.00"), 8L),
+                "a confirmed snapshot matching the projection's version still belongs to the unresolved rebase");
+        assertTrue(queue.completeRejectedPair(out, new BigDecimal("100.00"), 7L,
+                in, new BigDecimal("0.00"), 3L));
+
+        assertAll(
+                () -> assertEquals(new BigDecimal("90.00"), state.get(sender).balance(),
+                        "the newer confirmed sender snapshot must survive a stale rejection pair"),
+                () -> assertEquals(8L, state.get(sender).version()),
+                () -> assertFalse(state.isUnavailable(sender)),
+                () -> assertEquals(new BigDecimal("0.00"), state.get(receiver).balance()),
+                () -> assertEquals(3L, state.get(receiver).version())
+        );
+    }
+
+    @Test
+    void unresolvedTransferQuarantineSurvivesOtherWriteAndClearsOnlyAfterPairReceipt() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        String operationId = "transfer:unknown-transfer-operation";
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
+        EconomyWriteQueue queue = new EconomyWriteQueue(4);
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(sender, new EconomyFacade.EconomyState(
+                new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(receiver, new EconomyFacade.EconomyState(
+                new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
+        state.markTransferUnavailable(operationId, sender, receiver);
+
+        EconomyEvent unrelated = new EconomyEvent(sender, BigDecimal.ONE,
+                new BigDecimal("101.00"), 8L, EconomyEvent.EventType.DEPOSIT,
+                EconomyEvent.EventSource.TEST, "unrelated-write", System.currentTimeMillis());
+        assertTrue(queue.offer(unrelated));
+        EconomyEvent inFlight = queue.poll(0, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertNotNull(inFlight);
+        queue.complete(inFlight, new BigDecimal("101.00"), 8L);
+        assertTrue(state.isUnavailable(sender),
+                "an earlier queued completion must not clear an ambiguous transfer quarantine");
+
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, BigDecimal.ONE.negate(), new BigDecimal("100.00"), 9L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, BigDecimal.ONE, new BigDecimal("1.00"), 4L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        EconomyWriteQueue.Reservation senderReservation = queue.tryReserve(sender);
+        EconomyWriteQueue.Reservation receiverReservation = queue.tryReserve(receiver);
+        assertNotNull(senderReservation);
+        assertNotNull(receiverReservation);
+        assertTrue(queue.commitPair(senderReservation, out, receiverReservation, in, null));
+        assertTrue(queue.completePair(out, new BigDecimal("100.00"), 9L,
+                in, new BigDecimal("1.00"), 4L));
+
+        assertAll(
+                () -> assertFalse(state.isUnavailable(sender)),
+                () -> assertFalse(state.isUnavailable(receiver)),
+                () -> assertEquals(new BigDecimal("100.00"), state.get(sender).balance()),
+                () -> assertEquals(new BigDecimal("1.00"), state.get(receiver).balance())
         );
     }
 
@@ -198,6 +462,7 @@ class MemoryPendingStateTest {
             reservation.close();
         }
     }
+
 
     @Test
     void readOnlyExpiredStateCanBeEvicted() {

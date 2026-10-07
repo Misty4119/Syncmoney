@@ -5,6 +5,9 @@ import noietime.syncmoney.audit.AuditRecord;
 import noietime.syncmoney.audit.HybridAuditManager;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.event.AsyncPreTransactionEvent;
+import noietime.syncmoney.event.PostTransactionEvent;
+import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.core.port.ReplicationReceipt;
@@ -66,24 +69,49 @@ public final class EconomyEventConsumer implements Runnable {
     private final OverflowLogInterface overflowLog;
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
 
-    private record FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
-            ReplicationReceipt confirmedReceipt, boolean quarantined) {
+    private record FailedEvent(EconomyEvent event, EconomyEvent partner, int retryCount, long firstFailureTime,
+            ReplicationReceipt confirmedReceipt, boolean quarantined, boolean reconciliationOnly) {
         private FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
                 ReplicationReceipt confirmedReceipt) {
-            this(event, retryCount, firstFailureTime, confirmedReceipt, false);
+            this(event, null, retryCount, firstFailureTime, confirmedReceipt, false, false);
+        }
+
+        private FailedEvent(EconomyEvent event, EconomyEvent partner, int retryCount,
+                long firstFailureTime, ReplicationReceipt confirmedReceipt) {
+            this(event, partner, retryCount, firstFailureTime, confirmedReceipt, false, false);
+        }
+
+        private FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
+                ReplicationReceipt confirmedReceipt, boolean quarantined) {
+            this(event, null, retryCount, firstFailureTime, confirmedReceipt, quarantined, false);
         }
 
         private FailedEvent withConfirmedReceipt(ReplicationReceipt receipt) {
-            return new FailedEvent(event, retryCount, firstFailureTime, receipt, false);
+            return new FailedEvent(event, partner, retryCount, firstFailureTime, receipt, false, false);
+        }
+
+        private FailedEvent withReconciliationReceipt(ReplicationReceipt receipt) {
+            return new FailedEvent(event, partner, retryCount, firstFailureTime, receipt, false, true);
         }
 
         private FailedEvent nextAttempt() {
-            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedReceipt, quarantined);
+            return new FailedEvent(event, partner, Math.min(retryCount + 1, MAX_RETRY_COUNT), firstFailureTime,
+                    confirmedReceipt, quarantined, reconciliationOnly);
         }
 
         private FailedEvent asQuarantined() {
-            return new FailedEvent(event, retryCount, firstFailureTime, confirmedReceipt, true);
+            return new FailedEvent(event, partner, retryCount, firstFailureTime,
+                    confirmedReceipt, true, reconciliationOnly);
         }
+    }
+
+    private record TransferWriteResult(ReplicationReceipt receipt, boolean applied) { }
+
+    private enum TransferResolution {
+        CONFIRMED,
+        REJECTED,
+        UNKNOWN,
+        CONFIRMED_QUARANTINED
     }
 
     public EconomyEventConsumer(Plugin plugin, SyncmoneyConfig config,
@@ -191,6 +219,16 @@ public final class EconomyEventConsumer implements Runnable {
                 continue;
             }
 
+            if (failed.partner() != null) {
+                processFailedTransfer(key, failed, now, BASE_DELAY_MS, MAX_DELAY_MS);
+                continue;
+            }
+
+            if (failed.reconciliationOnly()) {
+                processRejectedEventReconciliation(key, failed, now, BASE_DELAY_MS, MAX_DELAY_MS, false);
+                continue;
+            }
+
             if (failed.retryCount() >= MAX_RETRY_COUNT) {
                 handleCriticalFailure(failed);
                 failedEvents.remove(key, failed);
@@ -232,7 +270,10 @@ public final class EconomyEventConsumer implements Runnable {
             } catch (RedisMutationException e) {
                 if (retryState.confirmedReceipt() == null && requiresQuarantine(e.executionState())) {
                     FailedEvent quarantined = retryState.asQuarantined();
-                    failedEvents.replace(key, retryState, quarantined);
+                    queue.markAccountUnavailable(failed.event().playerUuid());
+                    if (!failedEvents.replace(key, retryState, quarantined)) {
+                        failedEvents.putIfAbsent(key, quarantined);
+                    }
                     plugin.getLogger().severe("Quarantined accepted economy event after Redis "
                             + e.executionState() + "; automatic retry is disabled for request "
                             + failed.event().requestId());
@@ -247,6 +288,167 @@ public final class EconomyEventConsumer implements Runnable {
                 logRetryFailure(failed, nextAttempt, BASE_DELAY_MS, MAX_DELAY_MS);
             }
         }
+    }
+
+    private void processRejectedEventReconciliation(String key, FailedEvent failed, long now,
+            long baseDelayMillis, long maxDelayMillis, boolean initialAttempt) {
+        long retryDelay = Math.min(baseDelayMillis * (1L << Math.min(failed.retryCount(), 30)), maxDelayMillis);
+        if (!initialAttempt && now - failed.firstFailureTime() < retryDelay) return;
+
+        FailedEvent retryState = failed;
+        try {
+            ReplicationReceipt receipt = retryState.confirmedReceipt();
+            if (receipt == null) {
+                receipt = readRejectedAuthoritySnapshot(failed.event());
+                retryState = failed.withReconciliationReceipt(receipt);
+                if (!failedEvents.replace(key, failed, retryState)) return;
+            }
+
+            persistRejectedSnapshot(retryState.event(), receipt);
+            ConfirmedAccount account = receipt.accountFor(retryState.event().playerUuid());
+            if (!queue.completeRejected(retryState.event(), account.balance(), account.version())) {
+                throw new IllegalStateException("Rejected accepted write no longer has queue ownership: "
+                        + retryState.event().requestId());
+            }
+            failedEvents.remove(key, retryState);
+            plugin.getLogger().fine("Reconciled Redis-rejected economy event without replay: "
+                    + retryState.event().requestId());
+        } catch (Exception e) {
+            FailedEvent nextAttempt = retryState.nextAttempt();
+            if (!failedEvents.replace(key, retryState, nextAttempt)) {
+                failedEvents.putIfAbsent(key, nextAttempt);
+            }
+            logRetryFailure(retryState, nextAttempt, baseDelayMillis, maxDelayMillis);
+        }
+    }
+
+    private ReplicationReceipt readRejectedAuthoritySnapshot(EconomyEvent event) {
+        CacheManager.CachedBalance snapshot = cacheManager.readAuthorityBalanceSnapshotStrict(event.playerUuid())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Redis has no confirmed account snapshot for rejected write " + event.requestId()));
+        ConfirmedAccount account = new ConfirmedAccount(event.playerUuid(), snapshot.balance(), snapshot.version());
+        return new ReplicationReceipt("reconcile:" + operationId(event), List.of(account));
+    }
+
+    private void persistRejectedSnapshot(EconomyEvent event, ReplicationReceipt receipt) {
+        if (!config.isDbEnabled()) return;
+        ConfirmedAccount account = receipt.accountFor(event.playerUuid());
+        String serverName = config.getServerName() != null ? config.getServerName() : "unknown";
+        java.time.Instant timestamp = java.time.Instant.now();
+        DbWriteQueue.DbWriteTask task = new DbWriteQueue.DbWriteTask(receipt.operationId(), account,
+                nameResolver.getNameCachedOnly(account.playerUuid()), serverName, timestamp);
+        if (dbWriteQueue != null && dbWriteQueue.offer(task)) return;
+        if (databaseManager == null) {
+            throw new IllegalStateException("Rejected authority snapshot has no SQL persistence owner");
+        }
+
+        List<DbWriteQueue.DbWriteTask> stale = databaseManager.batchInsertOrUpdatePlayersWithStale(List.of(task));
+        for (int attempt = 0; !stale.isEmpty() && attempt < 2; attempt++) {
+            ReplicationReceipt latest = readRejectedAuthoritySnapshot(event);
+            ConfirmedAccount latestAccount = latest.accountFor(event.playerUuid());
+            task = new DbWriteQueue.DbWriteTask(latest.operationId(), latestAccount,
+                    nameResolver.getNameCachedOnly(latestAccount.playerUuid()), serverName, timestamp);
+            stale = databaseManager.batchInsertOrUpdatePlayersWithStale(List.of(task));
+        }
+        if (!stale.isEmpty()) {
+            throw new IllegalStateException("Latest rejected-write authority snapshot is still stale in SQL");
+        }
+    }
+
+    private void processFailedTransfer(String key, FailedEvent failed, long now,
+            long baseDelayMillis, long maxDelayMillis) {
+        if (failed.retryCount() >= MAX_RETRY_COUNT && !failed.reconciliationOnly()) {
+            quarantineTransfer(key, failed, "transfer downstream work did not reach a confirmed receipt");
+            return;
+        }
+        long retryDelay = Math.min(baseDelayMillis * (1L << Math.min(failed.retryCount(), 30)), maxDelayMillis);
+        if (now - failed.firstFailureTime() < retryDelay) return;
+
+        FailedEvent retryState = failed;
+        try {
+            if (retryState.confirmedReceipt() == null) {
+                if (retryState.reconciliationOnly()) {
+                    retryState = failed.withReconciliationReceipt(
+                            readTransferAuthorityPair(failed.event(), failed.partner()));
+                } else {
+                    TransferWriteResult write = executeTransferWrite(failed.event(), failed.partner());
+                    if (write.applied()) {
+                        retryState = failed.withConfirmedReceipt(write.receipt());
+                    } else {
+                        ReplicationReceipt receipt = write.receipt() != null
+                                ? write.receipt()
+                                : readTransferAuthorityPair(failed.event(), failed.partner());
+                        retryState = failed.withReconciliationReceipt(receipt);
+                    }
+                }
+                if (!failedEvents.replace(key, failed, retryState)) return;
+            }
+
+            if (retryState.reconciliationOnly()) {
+                persistTransferPair(retryState.event(), retryState.partner(), retryState.confirmedReceipt());
+            } else {
+                processTransferEventSteps(retryState.event(), retryState.partner(), retryState.confirmedReceipt());
+            }
+            completeTransferPair(retryState.event(), retryState.partner(), retryState.confirmedReceipt(),
+                    retryState.reconciliationOnly());
+            failedEvents.remove(key, retryState);
+            plugin.getLogger().fine("Retry successful for transfer: "
+                    + TransferRequestIds.operationId(retryState.event()));
+        } catch (RedisMutationException e) {
+            if (retryState.reconciliationOnly()
+                    || e.executionState() == RedisMutationException.ExecutionState.NOT_SENT
+                            && retryState.confirmedReceipt() == null) {
+                FailedEvent nextAttempt = retryState.nextAttempt();
+                failedEvents.replace(key, retryState, nextAttempt);
+                logRetryFailure(retryState, nextAttempt, baseDelayMillis, maxDelayMillis);
+            } else if (e.executionState() == RedisMutationException.ExecutionState.REJECTED) {
+                FailedEvent rejected = retryState.withReconciliationReceipt(null);
+                if (failedEvents.replace(key, retryState, rejected)) {
+                    processFailedTransfer(key, rejected, now + baseDelayMillis,
+                            baseDelayMillis, maxDelayMillis);
+                }
+            } else {
+                quarantineTransfer(key, retryState,
+                        "transfer authority outcome is " + e.executionState());
+            }
+        } catch (Exception e) {
+            if (retryState.confirmedReceipt() == null && !retryState.reconciliationOnly()) {
+                quarantineTransfer(key, retryState,
+                        "transfer authority reconciliation failed: " + e.getMessage());
+            } else {
+                FailedEvent nextAttempt = retryState.nextAttempt();
+                failedEvents.replace(key, retryState, nextAttempt);
+                logRetryFailure(retryState, nextAttempt, baseDelayMillis, maxDelayMillis);
+            }
+        }
+    }
+
+    private void quarantineTransfer(String key, FailedEvent failed, String reason) {
+        markTransferUnavailable(failed.event(), failed.partner());
+        FailedEvent quarantined = failed.asQuarantined();
+        if (!failedEvents.replace(key, failed, quarantined)) {
+            failedEvents.putIfAbsent(key, quarantined);
+        }
+        ReplicationReceipt receipt = failed.confirmedReceipt();
+        TransferResolution resolution = failed.reconciliationOnly()
+                ? TransferResolution.REJECTED
+                : receipt != null ? TransferResolution.CONFIRMED_QUARANTINED : TransferResolution.UNKNOWN;
+        queue.completeTransferObservation(TransferRequestIds.operationId(failed.event()),
+                switch (resolution) {
+                    case CONFIRMED -> EconomyWriteQueue.TransferOutcome.CONFIRMED;
+                    case REJECTED -> EconomyWriteQueue.TransferOutcome.REJECTED;
+                    case UNKNOWN -> EconomyWriteQueue.TransferOutcome.UNKNOWN;
+                    case CONFIRMED_QUARANTINED -> EconomyWriteQueue.TransferOutcome.CONFIRMED_QUARANTINED;
+                },
+                receipt == null || failed.partner() == null ? null
+                        : receipt.accountFor(failed.event().type() == EconomyEvent.EventType.TRANSFER_OUT
+                                ? failed.event().playerUuid() : failed.partner().playerUuid()).balance(),
+                receipt == null || failed.partner() == null ? null
+                        : receipt.accountFor(failed.event().type() == EconomyEvent.EventType.TRANSFER_IN
+                                ? failed.event().playerUuid() : failed.partner().playerUuid()).balance());
+        publishTransferPostEvents(failed.event(), failed.partner(), receipt, resolution);
+        plugin.getLogger().severe("Quarantined accepted transfer pair "
+                + TransferRequestIds.operationId(failed.event()) + "; both accounts remain unavailable: " + reason);
     }
 
     private void logRetryFailure(FailedEvent failed, FailedEvent nextAttempt,
@@ -422,6 +624,10 @@ public final class EconomyEventConsumer implements Runnable {
      * failed work is retained for retry rather than applied through a SQL fallback.
      */
     private void processEvent(EconomyEvent event) {
+        if (isTransferType(event)) {
+            processTransferEvent(event);
+            return;
+        }
         ReplicationReceipt confirmedReceipt = null;
         long firstFailureTime = System.currentTimeMillis();
         try {
@@ -442,10 +648,20 @@ public final class EconomyEventConsumer implements Runnable {
 
         } catch (RedisMutationException e) {
             if (confirmedReceipt == null && requiresQuarantine(e.executionState())) {
-                failedEvents.putIfAbsent(failedKey(event),
-                        new FailedEvent(event, 0, firstFailureTime, null, true));
-                plugin.getLogger().severe("Quarantined accepted economy event after Redis "
-                        + e.executionState() + "; automatic retry is disabled for request " + event.requestId());
+                queue.markAccountUnavailable(event.playerUuid());
+                if (e.executionState() == RedisMutationException.ExecutionState.REJECTED) {
+                    String key = failedKey(event);
+                    FailedEvent rejected = new FailedEvent(event, null, 0, firstFailureTime,
+                            null, false, true);
+                    FailedEvent existing = failedEvents.putIfAbsent(key, rejected);
+                    processRejectedEventReconciliation(key, existing == null ? rejected : existing,
+                            System.currentTimeMillis(), 100L, 30000L, true);
+                } else {
+                    failedEvents.putIfAbsent(failedKey(event),
+                            new FailedEvent(event, 0, firstFailureTime, null, true));
+                    plugin.getLogger().severe("Quarantined accepted economy event after Redis "
+                            + e.executionState() + "; automatic retry is disabled for request " + event.requestId());
+                }
                 return;
             }
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
@@ -457,6 +673,230 @@ public final class EconomyEventConsumer implements Runnable {
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
             failedEvents.putIfAbsent(failedKey(event),
                     new FailedEvent(event, 0, firstFailureTime, confirmedReceipt));
+        }
+    }
+
+    private void processTransferEvent(EconomyEvent first) {
+        long firstFailureTime = System.currentTimeMillis();
+        EconomyEvent second;
+        try {
+            second = queue.poll(100, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            second = null;
+        }
+        if (!TransferRequestIds.arePair(first, second)) {
+            FailedEvent orphan = new FailedEvent(first, second, 0, firstFailureTime,
+                    null, true, false);
+            markTransferUnavailable(first, second);
+            failedEvents.putIfAbsent(failedTransferKey(first), orphan);
+            publishTransferPostEvents(first, second, null, TransferResolution.UNKNOWN);
+            queue.completeTransferObservation(TransferRequestIds.operationId(first),
+                    EconomyWriteQueue.TransferOutcome.UNKNOWN, null, null);
+            plugin.getLogger().severe("Accepted transfer did not have its matching queue leg; both accounts are unavailable: "
+                    + TransferRequestIds.operationId(first));
+            return;
+        }
+
+        EconomyEvent out = first.type() == EconomyEvent.EventType.TRANSFER_OUT ? first : second;
+        EconomyEvent in = out == first ? second : first;
+        String key = failedTransferKey(out);
+        try {
+            TransferWriteResult write = executeTransferWrite(out, in);
+            if (write.applied()) {
+                try {
+                    processTransferEventSteps(out, in, write.receipt());
+                    completeTransferPair(out, in, write.receipt(), false);
+                } catch (Exception e) {
+                    failedEvents.putIfAbsent(key, new FailedEvent(out, in, 0, firstFailureTime,
+                            write.receipt(), false, false));
+                    plugin.getLogger().severe("Confirmed transfer pair retained for downstream retry: "
+                            + TransferRequestIds.operationId(out) + " - " + e.getMessage());
+                }
+            } else {
+                markTransferUnavailable(out, in);
+                FailedEvent rejected = new FailedEvent(out, in, 0, firstFailureTime,
+                        write.receipt(), false, true);
+                FailedEvent existing = failedEvents.putIfAbsent(key, rejected);
+                processFailedTransfer(key, existing == null ? rejected : existing,
+                        System.currentTimeMillis() + 100L, 100L, 30000L);
+            }
+        } catch (RedisMutationException e) {
+            if (e.executionState() == RedisMutationException.ExecutionState.REJECTED) {
+                markTransferUnavailable(out, in);
+                FailedEvent rejected = new FailedEvent(out, in, 0, firstFailureTime,
+                        null, false, true);
+                FailedEvent existing = failedEvents.putIfAbsent(key, rejected);
+                processFailedTransfer(key, existing == null ? rejected : existing,
+                        System.currentTimeMillis() + 100L, 100L, 30000L);
+            } else if (e.executionState() == RedisMutationException.ExecutionState.NOT_SENT) {
+                failedEvents.putIfAbsent(key, new FailedEvent(out, in, 0, firstFailureTime, null));
+                plugin.getLogger().warning("Transfer pair was not sent to Redis; retaining both accepted legs for retry: "
+                        + TransferRequestIds.operationId(out));
+            } else {
+                quarantineTransfer(key, new FailedEvent(out, in, 0, firstFailureTime,
+                        null, false, false), "transfer authority outcome is " + e.executionState());
+            }
+        } catch (Exception e) {
+            quarantineTransfer(key, new FailedEvent(out, in, 0, firstFailureTime,
+                    null, false, false), "transfer authority reconciliation failed: " + e.getMessage());
+        }
+    }
+
+    private static boolean isTransferType(EconomyEvent event) {
+        return event != null && (event.type() == EconomyEvent.EventType.TRANSFER_OUT
+                || event.type() == EconomyEvent.EventType.TRANSFER_IN);
+    }
+
+    private static String failedTransferKey(EconomyEvent event) {
+        String operationId = TransferRequestIds.operationId(event);
+        return operationId == null ? "orphan-transfer:" + failedKey(event) : operationId;
+    }
+
+    private void markTransferUnavailable(EconomyEvent first, EconomyEvent second) {
+        EconomyEvent primary = first != null ? first : second;
+        String operationId = TransferRequestIds.operationId(primary);
+        queue.markTransferUnavailable(operationId,
+                first == null ? null : first.playerUuid(),
+                second == null ? null : second.playerUuid());
+    }
+
+    private TransferWriteResult executeTransferWrite(EconomyEvent first, EconomyEvent second) {
+        if (!TransferRequestIds.arePair(first, second)) {
+            throw new IllegalArgumentException("Transfer processing requires a matching pair");
+        }
+        EconomyEvent out = first.type() == EconomyEvent.EventType.TRANSFER_OUT ? first : second;
+        EconomyEvent in = out == first ? second : first;
+        BigDecimal amount = out.delta().abs();
+        CacheManager.TransferResult result;
+        result = cacheManager.atomicTransfer(out.playerUuid(), in.playerUuid(), amount);
+        if (result == null) {
+            throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                    "Redis transfer was not sent and returned no execution receipt", null);
+        }
+        if (result == CacheManager.TransferResult.insufficientFunds()) return new TransferWriteResult(null, false);
+        return new TransferWriteResult(transferReceipt(out, in, result), true);
+    }
+
+    private ReplicationReceipt readTransferAuthorityPair(EconomyEvent out, EconomyEvent in) {
+        CacheManager.TransferResult snapshot = cacheManager.readTransferSnapshotStrict(
+                out.playerUuid(), in.playerUuid());
+        return new ReplicationReceipt(TransferRequestIds.operationId(out), List.of(
+                new ConfirmedAccount(out.playerUuid(), snapshot.fromNewBalance, snapshot.fromNewVersion),
+                new ConfirmedAccount(in.playerUuid(), snapshot.toNewBalance, snapshot.toNewVersion)));
+    }
+
+    private static ReplicationReceipt transferReceipt(EconomyEvent out, EconomyEvent in,
+            CacheManager.TransferResult result) {
+        return new ReplicationReceipt(TransferRequestIds.operationId(out), List.of(
+                new ConfirmedAccount(out.playerUuid(), result.fromNewBalance, result.fromNewVersion),
+                new ConfirmedAccount(in.playerUuid(), result.toNewBalance, result.toNewVersion)));
+    }
+
+    private void completeTransferPair(EconomyEvent out, EconomyEvent in, ReplicationReceipt receipt,
+            boolean rejected) {
+        ConfirmedAccount sender = receipt.accountFor(out.playerUuid());
+        ConfirmedAccount receiver = receipt.accountFor(in.playerUuid());
+        boolean completed = rejected
+                ? queue.completeRejectedPair(out, sender.balance(), sender.version(),
+                        in, receiver.balance(), receiver.version())
+                : queue.completePair(out, sender.balance(), sender.version(),
+                        in, receiver.balance(), receiver.version());
+        if (!completed) {
+            throw new IllegalStateException("Accepted transfer pair could not be completed after authority reconciliation");
+        }
+        if (rejected) {
+            plugin.getLogger().warning("Redis rejected accepted transfer pair "
+                    + TransferRequestIds.operationId(out) + " (" + out.playerUuid() + " -> "
+                    + in.playerUuid() + ", " + out.delta().abs().toPlainString()
+                    + "); both accounts were reconciled to confirmed authority balances "
+                    + sender.balance().toPlainString() + " and " + receiver.balance().toPlainString());
+            publishTransferPostEvents(out, in, receipt, TransferResolution.REJECTED);
+        } else {
+            publishTransferPostEvents(out, in, receipt, TransferResolution.CONFIRMED);
+        }
+    }
+
+    private void publishTransferPostEvents(EconomyEvent first, EconomyEvent second,
+            ReplicationReceipt receipt, TransferResolution resolution) {
+        if (!SyncmoneyEventBus.isInitialized() || first == null || !isTransferType(first)) return;
+        EconomyEvent out = first.type() == EconomyEvent.EventType.TRANSFER_OUT ? first : second;
+        EconomyEvent in = out == first ? second : first;
+        if (out == null) return;
+
+        BigDecimal amount = out.delta().abs();
+        ConfirmedAccount sender = receipt == null ? null : receipt.accounts().stream()
+                .filter(account -> account.playerUuid().equals(out.playerUuid())).findFirst().orElse(null);
+        ConfirmedAccount receiver = receipt == null || in == null ? null : receipt.accounts().stream()
+                .filter(account -> account.playerUuid().equals(in.playerUuid())).findFirst().orElse(null);
+        BigDecimal senderBalance = sender == null ? out.balanceAfter() : sender.balance();
+        BigDecimal receiverBalance = in == null ? null
+                : receiver == null ? in.balanceAfter() : receiver.balance();
+        boolean success = resolution == TransferResolution.CONFIRMED
+                || resolution == TransferResolution.CONFIRMED_QUARANTINED;
+        BigDecimal senderBefore = success ? senderBalance.add(amount) : senderBalance;
+        BigDecimal receiverBefore = success && receiverBalance != null
+                ? receiverBalance.subtract(amount) : receiverBalance;
+        String error = switch (resolution) {
+            case CONFIRMED -> null;
+            case REJECTED -> "REJECTED";
+            case UNKNOWN -> "SENT_UNKNOWN";
+            case CONFIRMED_QUARANTINED -> "CONFIRMED_QUARANTINED";
+        };
+        String operationId = TransferRequestIds.operationId(out);
+        String senderName = nameResolver == null ? null : nameResolver.getNameCachedOnly(out.playerUuid());
+        String receiverName = in == null || nameResolver == null
+                ? null : nameResolver.getNameCachedOnly(in.playerUuid());
+        SyncmoneyEventBus eventBus = SyncmoneyEventBus.getInstance();
+        eventBus.callEvent(new PostTransactionEvent(out.playerUuid(), senderName,
+                AsyncPreTransactionEvent.TransactionType.WITHDRAW, amount,
+                senderBefore, senderBalance, out.source().name(),
+                in == null ? null : in.playerUuid(), receiverName, operationId, success, error));
+        if (in != null) {
+            eventBus.callEvent(new PostTransactionEvent(in.playerUuid(), receiverName,
+                    AsyncPreTransactionEvent.TransactionType.DEPOSIT, amount,
+                    receiverBefore, receiverBalance, in.source().name(),
+                    out.playerUuid(), senderName, operationId, success, error));
+        }
+    }
+
+    private void processTransferEventSteps(EconomyEvent out, EconomyEvent in, ReplicationReceipt receipt) {
+        processEventSteps(out, receipt, false);
+        processEventSteps(in, receipt, false);
+        persistTransferPair(out, in, receipt);
+    }
+
+    private void persistTransferPair(EconomyEvent out, EconomyEvent in, ReplicationReceipt receipt) {
+        if (!config.isDbEnabled()) return;
+        ConfirmedAccount sender = receipt.accountFor(out.playerUuid());
+        ConfirmedAccount receiver = receipt.accountFor(in.playerUuid());
+        String serverName = config.getServerName() != null ? config.getServerName() : "unknown";
+        java.time.Instant timestamp = java.time.Instant.now();
+        DbWriteQueue.DbWriteTask task = new DbWriteQueue.DbWriteTask(receipt.operationId(), List.of(
+                new DbWriteQueue.AccountWrite(sender, nameResolver.getNameCachedOnly(sender.playerUuid()),
+                        serverName, timestamp),
+                new DbWriteQueue.AccountWrite(receiver, nameResolver.getNameCachedOnly(receiver.playerUuid()),
+                        serverName, timestamp)));
+        if (dbWriteQueue != null && dbWriteQueue.offer(task)) return;
+
+        plugin.getLogger().severe("DbWriteQueue rejected confirmed transfer pair; attempting one SQL transaction: "
+                + receipt.operationId());
+        if (databaseManager == null) {
+            throw new IllegalStateException("Confirmed transfer pair has no SQL persistence owner");
+        }
+        List<DbWriteQueue.DbWriteTask> stale = databaseManager.batchInsertOrUpdatePlayersWithStale(List.of(task));
+        if (stale.isEmpty()) return;
+
+        ReplicationReceipt latest = readTransferAuthorityPair(out, in);
+        ConfirmedAccount latestSender = latest.accountFor(out.playerUuid());
+        ConfirmedAccount latestReceiver = latest.accountFor(in.playerUuid());
+        DbWriteQueue.DbWriteTask refreshed = new DbWriteQueue.DbWriteTask(latest.operationId(), List.of(
+                new DbWriteQueue.AccountWrite(latestSender, nameResolver.getNameCachedOnly(out.playerUuid()),
+                        serverName, timestamp),
+                new DbWriteQueue.AccountWrite(latestReceiver, nameResolver.getNameCachedOnly(in.playerUuid()),
+                        serverName, timestamp)));
+        if (!databaseManager.batchInsertOrUpdatePlayersWithStale(List.of(refreshed)).isEmpty()) {
+            throw new IllegalStateException("Latest authority transfer pair is still stale in SQL");
         }
     }
 
@@ -481,6 +921,10 @@ public final class EconomyEventConsumer implements Runnable {
      * Process event steps (after Redis write succeeds).
      */
     private void processEventSteps(EconomyEvent event, ReplicationReceipt receipt) {
+        processEventSteps(event, receipt, true);
+    }
+
+    private void processEventSteps(EconomyEvent event, ReplicationReceipt receipt, boolean persistSql) {
         ConfirmedAccount account = receipt.accountFor(event.playerUuid());
         BigDecimal newBalance = account.balance();
 
@@ -488,7 +932,7 @@ public final class EconomyEventConsumer implements Runnable {
             publishUpdate(event, account);
         }
 
-        if (config.isDbEnabled()) {
+        if (persistSql && config.isDbEnabled()) {
             enqueueDbWrite(event, receipt);
         }
 
@@ -518,8 +962,8 @@ public final class EconomyEventConsumer implements Runnable {
         ConfirmedAccount account = switch (event.type()) {
             case DEPOSIT, WITHDRAW -> cacheManager.atomicAddBalanceReceipt(event.playerUuid(), event.delta());
             case SET_BALANCE -> cacheManager.atomicSetBalanceReceipt(event.playerUuid(), event.balanceAfter());
-            case TRANSFER_IN, TRANSFER_OUT -> new ConfirmedAccount(
-                    event.playerUuid(), event.balanceAfter(), event.version());
+            case TRANSFER_IN, TRANSFER_OUT -> throw new IllegalStateException(
+                    "Transfer legs must be processed as one authority pair");
             default -> null;
         };
         return account == null ? null : new ReplicationReceipt(operationId(event), List.of(account));

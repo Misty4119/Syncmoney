@@ -1,12 +1,18 @@
 package noietime.syncmoney.command;
 
 import io.papermc.paper.threadedregions.scheduler.AsyncScheduler;
+import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
+import io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyWriteQueue;
+import noietime.syncmoney.event.AsyncPreTransactionEvent;
+import noietime.syncmoney.event.PostTransactionEvent;
+import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
@@ -35,6 +41,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,6 +52,24 @@ class PayTransferMigrationLockTest {
     void resetMigrationLock() {
         MigrationLock.unlock();
         MigrationLock.disable();
+        if (SyncmoneyEventBus.isInitialized()) SyncmoneyEventBus.getInstance().clearAll();
+    }
+
+    private static SyncmoneyEventBus resetEventBus(Fixture fixture) {
+        if (!SyncmoneyEventBus.isInitialized()) SyncmoneyEventBus.init(fixture.plugin);
+        SyncmoneyEventBus eventBus = SyncmoneyEventBus.getInstance();
+        eventBus.clearAll();
+        return eventBus;
+    }
+
+    private static PostTransactionEvent transferEvent(Fixture fixture, boolean success,
+            BigDecimal senderBalance, String error) {
+        BigDecimal amount = new BigDecimal("10.00");
+        return new PostTransactionEvent(fixture.senderUuid, "sender",
+                AsyncPreTransactionEvent.TransactionType.WITHDRAW, amount,
+                success ? senderBalance.add(amount) : senderBalance,
+                senderBalance, EconomyEvent.EventSource.PLAYER_TRANSFER.name(),
+                fixture.targetUuid, "target", "test-operation", success, error);
     }
 
     @Test
@@ -67,6 +93,92 @@ class PayTransferMigrationLockTest {
         verify(fixture.transferLockManager, never()).acquireDualLock(fixture.senderUuid, fixture.targetUuid);
         verify(fixture.economyFacade, never()).withdraw(any(), any(), any());
         verify(fixture.economyFacade, never()).deposit(any(), any(), any());
+    }
+
+    @Test
+    void sharedPayUsesPairedMemoryAdmissionInsteadOfWritingRedisBeforeQueueingLegs() throws Exception {
+        Fixture fixture = new Fixture(false);
+        SyncmoneyEventBus eventBus = resetEventBus(fixture);
+        when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
+        when(fixture.economyFacade.atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
+                eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER)))
+                .thenReturn(new BigDecimal("90.00"));
+
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+
+        verify(fixture.economyFacade).atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
+                eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER));
+        verify(fixture.luaScriptManager, never()).evalTransfer(any(), any(), any());
+        verify(fixture.economyWriteQueue, never()).offer(any());
+        verify(fixture.plugin, never()).getMessage("pay.success-sender");
+        verify(fixture.plugin, never()).getMessage("pay.transfer-failed");
+        verify(fixture.sender, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
+
+        eventBus.callEvent(transferEvent(fixture, true, new BigDecimal("90.00"), null));
+
+        verify(fixture.plugin).getMessage("pay.success-sender");
+        verify(fixture.sender).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void sharedPayReportsRejectionOnlyAfterAuthorityPairIsReconciled() {
+        Fixture fixture = new Fixture(false);
+        SyncmoneyEventBus eventBus = resetEventBus(fixture);
+        when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
+        when(fixture.economyFacade.atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
+                eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER)))
+                .thenReturn(new BigDecimal("90.00"));
+        when(fixture.plugin.getMessage("pay.insufficient-funds")).thenReturn("Insufficient {balance}/{amount}");
+
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+
+        verify(fixture.plugin, never()).getMessage("pay.insufficient-funds");
+        verify(fixture.plugin, never()).getMessage("pay.success-sender");
+
+        eventBus.callEvent(transferEvent(fixture, false, new BigDecimal("5.00"), "REJECTED"));
+
+        verify(fixture.plugin).getMessage("pay.insufficient-funds");
+        verify(fixture.plugin, never()).getMessage("pay.success-sender");
+        verify(fixture.sender).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void sharedPayUnknownOutcomeQuarantinesFurtherPayAttempts() {
+        Fixture fixture = new Fixture(false);
+        SyncmoneyEventBus eventBus = resetEventBus(fixture);
+        when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
+        when(fixture.economyFacade.atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
+                eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER)))
+                .thenReturn(new BigDecimal("90.00"));
+
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+        eventBus.callEvent(transferEvent(fixture, false, new BigDecimal("90.00"), "SENT_UNKNOWN"));
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+
+        verify(fixture.economyFacade, times(1)).atomicTransfer(
+                eq(fixture.senderUuid), eq(fixture.targetUuid), eq(new BigDecimal("10.00")),
+                eq(EconomyEvent.EventSource.PLAYER_TRANSFER));
+        verify(fixture.plugin, atLeastOnce()).getMessage("pay.transfer-failed");
+        verify(fixture.sender, atLeastOnce()).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void localPayUsesOnePairedFacadeMutationInsteadOfWithdrawThenDeposit() throws Exception {
+        Fixture fixture = new Fixture(true);
+        when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
+        when(fixture.economyFacade.atomicTransfer(fixture.senderUuid, fixture.targetUuid,
+                new BigDecimal("10.00"), EconomyEvent.EventSource.PLAYER_TRANSFER))
+                .thenReturn(new BigDecimal("90.00"));
+
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+
+        verify(fixture.economyFacade).atomicTransfer(fixture.senderUuid, fixture.targetUuid,
+                new BigDecimal("10.00"), EconomyEvent.EventSource.PLAYER_TRANSFER);
+        verify(fixture.economyFacade, never()).withdraw(any(), any(), any());
+        verify(fixture.economyFacade, never()).deposit(any(), any(), any());
+        verify(fixture.luaScriptManager, never()).evalTransfer(any(), any(), any());
+        verify(fixture.redisManager, never()).getResource();
+        verify(fixture.plugin, never()).getMessage("pay.transfer-failed");
     }
 
     @Test
@@ -121,7 +233,10 @@ class PayTransferMigrationLockTest {
         private final EconomyFacade economyFacade = mock(EconomyFacade.class);
         private final NameResolver nameResolver = mock(NameResolver.class);
         private final RedisManager redisManager = mock(RedisManager.class);
+        private final CacheManager cacheManager = mock(CacheManager.class);
         private final TransferLockManager transferLockManager = mock(TransferLockManager.class);
+        private final EconomyWriteQueue economyWriteQueue = mock(EconomyWriteQueue.class);
+        private final PayLuaScriptManager luaScriptManager = mock(PayLuaScriptManager.class);
         private final UUID senderUuid = UUID.randomUUID();
         private final UUID targetUuid = UUID.randomUUID();
         private final Player sender = mock(Player.class);
@@ -134,8 +249,27 @@ class PayTransferMigrationLockTest {
             when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
             when(plugin.getLogger()).thenReturn(Logger.getLogger("PayTransferMigrationLockTest"));
             when(plugin.getMessage("pay.lock-failed")).thenReturn("Transfer unavailable");
+            when(plugin.getMessage("pay.transfer-failed")).thenReturn("Transfer failed: {error}");
+            when(plugin.getMessage("pay.insufficient-funds")).thenReturn("Insufficient funds");
+            when(plugin.getMessage("pay.success-sender")).thenReturn("{player} {amount} {balance}");
+            when(plugin.getMessage("pay.success-receiver")).thenReturn("{player} {amount}");
             when(sender.getUniqueId()).thenReturn(senderUuid);
             when(sender.getName()).thenReturn("sender");
+            EntityScheduler senderScheduler = mock(EntityScheduler.class);
+            when(sender.getScheduler()).thenReturn(senderScheduler);
+            doAnswer(invocation -> {
+                Consumer<ScheduledTask> action = invocation.getArgument(1);
+                action.accept(mock(ScheduledTask.class));
+                return mock(ScheduledTask.class);
+            }).when(senderScheduler).run(eq(plugin), any(), any());
+            GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+            when(server.getGlobalRegionScheduler()).thenReturn(globalScheduler);
+            doAnswer(invocation -> {
+                Consumer<ScheduledTask> action = invocation.getArgument(1);
+                action.accept(mock(ScheduledTask.class));
+                return null;
+            }).when(globalScheduler).run(eq(plugin), any());
+            when(server.getPlayerExact("target")).thenReturn(null);
             when(nameResolver.resolve("target")).thenReturn(Optional.of(targetUuid));
             doAnswer(invocation -> {
                 Consumer<ScheduledTask> action = invocation.getArgument(1);
@@ -144,13 +278,14 @@ class PayTransferMigrationLockTest {
             }).when(asyncScheduler).runNow(eq(plugin), any());
 
             executor = new PayTransferExecutor(plugin, mock(SyncmoneyConfig.class), economyFacade,
-                    mock(CacheManager.class), redisManager, nameResolver, transferLockManager,
-                    mock(DbWriteQueue.class), mock(EconomyWriteQueue.class),
+                    cacheManager, redisManager, nameResolver, transferLockManager,
+                    mock(DbWriteQueue.class), economyWriteQueue,
                     mock(PubsubSubscriber.class), mock(BaltopManager.class),
-                    mock(PayLuaScriptManager.class), localMode);
+                    luaScriptManager, localMode);
         }
 
         private void runWhileLocked() {
+            if (!SyncmoneyEventBus.isInitialized()) SyncmoneyEventBus.init(plugin);
             MigrationLock.enable();
             assertTrue(MigrationLock.lock());
             executor.executeTransferAsync(sender, "target", new BigDecimal("10.00"));

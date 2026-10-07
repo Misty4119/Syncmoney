@@ -133,7 +133,8 @@ public final class EconomyFacade {
         this.stateManager = new MemoryStateManager(plugin, writeQueue);
         this.transactionWriter = new TransactionWriter(this, plugin, config, localEconomyHandler,
                 writeQueue, fallbackWrapper, overflowLog, stateManager, droppedEventCount, isLocalMode);
-        this.transferOrchestrator = new TransferOrchestrator(this, plugin, config, cacheManager, stateManager);
+        this.transferOrchestrator = new TransferOrchestrator(
+                this, plugin, config, cacheManager, stateManager, transactionWriter);
 
         this.cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "EconomyFacade-Cleanup");
@@ -235,10 +236,16 @@ public final class EconomyFacade {
      * Core read path for player balances.
      */
     public BigDecimal getBalance(UUID uuid) {
+        if (stateManager.isUnavailable(uuid)) {
+            throw new IllegalStateException("Account balance is unavailable pending transfer reconciliation: " + uuid);
+        }
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             throw new IllegalStateException("LOCAL balance is unavailable while accepted-write recovery is unresolved");
         }
         EconomyState state = stateManager.get(uuid);
+        if (stateManager.isUnavailable(uuid)) {
+            throw new IllegalStateException("Account balance became unavailable pending transfer reconciliation: " + uuid);
+        }
         if (state != null) {
             return state.balance();
         }
@@ -308,16 +315,19 @@ public final class EconomyFacade {
      */
     public BigDecimal getBalanceForPlaceholder(UUID uuid) {
         if (uuid == null) return null;
+        if (stateManager.isUnavailable(uuid)) return null;
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             return null;
         }
         EconomyState state = stateManager.get(uuid);
+        if (stateManager.isUnavailable(uuid)) return null;
         if (state != null) return state.balance();
         requestPlaceholderBalanceLoad(uuid);
         return null;
     }
 
     private void requestPlaceholderBalanceLoad(UUID uuid) {
+        if (stateManager.isUnavailable(uuid)) return;
         if (!placeholderLoads.add(uuid)) {
             return;
         }
@@ -461,7 +471,7 @@ public final class EconomyFacade {
      * [SYNC-ECO-046] Ensure data is loaded into memory. If not exists, trigger getBalance.
      */
     boolean ensureLoaded(UUID uuid) {
-        if (uuid == null) {
+        if (uuid == null || stateManager.isUnavailable(uuid)) {
             return false;
         }
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {

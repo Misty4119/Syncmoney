@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -91,29 +92,14 @@ class DbWriterConsumerTest {
     }
 
     @Test
-    void testInterruptedException() {
+    void testInterruptedException() throws InterruptedException {
+        when(mockQueue.isEmpty()).thenReturn(false);
+        Thread consumerThread = new Thread(consumer::run);
+        consumerThread.start();
+        consumerThread.interrupt();
+        consumerThread.join(1000);
 
-        Thread mainThread = Thread.currentThread();
-
-        Thread interruptThread = new Thread(() -> {
-            try {
-                Thread.sleep(50);
-                mainThread.interrupt();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        });
-
-        interruptThread.start();
-
-
-
-
-
-
-        consumer.stop();
-
-        assertTrue(true, "Consumer should support graceful stop");
+        assertFalse(consumerThread.isAlive(), "Consumer should exit cleanly when its own thread is interrupted");
     }
 
     @Test
@@ -192,8 +178,8 @@ class DbWriterConsumerTest {
         // Simulate a transient DB outage: the first batch attempt fails,
         // the retry succeeds. The task must not be lost.
         doThrow(new RuntimeException("Simulated DB outage"))
-                .doNothing()
-                .when(failingThenOk).batchInsertOrUpdatePlayers(any());
+                .doReturn(List.of())
+                .when(failingThenOk).batchInsertOrUpdatePlayersWithStale(any());
 
         DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, failingThenOk);
 
@@ -206,7 +192,7 @@ class DbWriterConsumerTest {
         // Deterministically wait for the retry to happen (>= 2 attempts) rather than
         // racing on the transient queue size. Each batch poll window is up to
         // BATCH_TIMEOUT_MS (1s), so allow a generous timeout.
-        verify(failingThenOk, timeout(10000).atLeast(2)).batchInsertOrUpdatePlayers(any());
+        verify(failingThenOk, timeout(10000).atLeast(2)).batchInsertOrUpdatePlayersWithStale(any());
 
         retryConsumer.stop();
         consumerThread.join(3000);
@@ -223,7 +209,7 @@ class DbWriterConsumerTest {
         DatabaseManager alwaysFailing = mock(DatabaseManager.class);
 
         doThrow(new RuntimeException("Permanent DB failure"))
-                .when(alwaysFailing).batchInsertOrUpdatePlayers(any());
+                .when(alwaysFailing).batchInsertOrUpdatePlayersWithStale(any());
 
         DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, alwaysFailing);
 
@@ -238,7 +224,7 @@ class DbWriterConsumerTest {
         // the expected number of attempts instead of racing on queue size.
         verify(alwaysFailing,
                 timeout(15000).atLeast(noietime.syncmoney.util.Constants.DB_WRITE_MAX_RETRIES + 1))
-                .batchInsertOrUpdatePlayers(any());
+                .batchInsertOrUpdatePlayersWithStale(any());
 
         retryConsumer.stop();
         consumerThread.join(3000);

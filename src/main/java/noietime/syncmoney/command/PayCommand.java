@@ -66,8 +66,9 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
         this.minAmount = NumericUtil.normalize(minAmount);
         this.maxAmount = NumericUtil.normalize(maxAmount);
 
-        PayLuaScriptManager luaScriptManager = new PayLuaScriptManager(plugin, redisManager);
-        if (!localMode) {
+        PayLuaScriptManager luaScriptManager = null;
+        if (!localMode && config.isCMIMode()) {
+            luaScriptManager = new PayLuaScriptManager(plugin, redisManager);
             luaScriptManager.load();
         }
 

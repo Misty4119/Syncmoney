@@ -20,6 +20,11 @@ final class LocalPersistenceWorker implements Runnable {
     }
 
     @FunctionalInterface
+    interface TransferPersistenceAction {
+        LocalTransferPersistenceReceipt persist(EconomyEvent out, EconomyEvent in) throws Exception;
+    }
+
+    @FunctionalInterface
     interface QuarantineAction {
         void quarantine(List<EconomyEvent> events) throws Exception;
     }
@@ -31,6 +36,7 @@ final class LocalPersistenceWorker implements Runnable {
 
     private final EconomyWriteQueue queue;
     private final PersistenceAction persistenceAction;
+    private final TransferPersistenceAction transferPersistenceAction;
     private final QuarantineAction quarantineAction;
     private final Logger logger;
     private final long shutdownDrainTimeoutMillis;
@@ -74,8 +80,24 @@ final class LocalPersistenceWorker implements Runnable {
             QuarantineAction quarantineAction, Logger logger, long shutdownDrainTimeoutMillis,
             Consumer<Thread> workerThreadRegistration, Runnable workerStopped,
             Consumer<Boolean> workerFailed, Runnable recoveryHandoffCompleted) {
+        this(queue, persistenceAction, null, quarantineAction, logger, shutdownDrainTimeoutMillis,
+                workerThreadRegistration, workerStopped, workerFailed, recoveryHandoffCompleted);
+    }
+
+    LocalPersistenceWorker(EconomyWriteQueue queue, PersistenceAction persistenceAction,
+            TransferPersistenceAction transferPersistenceAction, QuarantineAction quarantineAction,
+            Logger logger) {
+        this(queue, persistenceAction, transferPersistenceAction, quarantineAction, logger,
+                SHUTDOWN_DRAIN_TIMEOUT_MILLIS, ignored -> { }, () -> { }, ignored -> { }, () -> { });
+    }
+
+    LocalPersistenceWorker(EconomyWriteQueue queue, PersistenceAction persistenceAction,
+            TransferPersistenceAction transferPersistenceAction, QuarantineAction quarantineAction,
+            Logger logger, long shutdownDrainTimeoutMillis, Consumer<Thread> workerThreadRegistration,
+            Runnable workerStopped, Consumer<Boolean> workerFailed, Runnable recoveryHandoffCompleted) {
         this.queue = Objects.requireNonNull(queue, "queue");
         this.persistenceAction = Objects.requireNonNull(persistenceAction, "persistenceAction");
+        this.transferPersistenceAction = transferPersistenceAction;
         this.quarantineAction = Objects.requireNonNull(quarantineAction, "quarantineAction");
         this.logger = logger;
         this.shutdownDrainTimeoutMillis = Math.max(0L, shutdownDrainTimeoutMillis);
@@ -296,17 +318,39 @@ final class LocalPersistenceWorker implements Runnable {
     @Override
     public void run() {
         EconomyEvent retryEvent = null;
+        EconomyEvent retryPartner = null;
+        EconomyEvent deferredEvent = null;
         int retryCount = 0;
         long retryAtMillis = 0;
 
         try {
             while (!terminalAfterQuarantine
-                    && (running || retryEvent != null || !queue.isEmpty() || queue.hasOutstandingWrites())) {
+                    && (running || retryEvent != null || deferredEvent != null
+                        || !queue.isEmpty() || queue.hasOutstandingWrites())) {
                 try {
                     if (retryEvent == null) {
-                        retryEvent = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
+                        retryEvent = deferredEvent != null ? deferredEvent : queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
+                        deferredEvent = null;
                         retryCount = 0;
                         if (retryEvent == null) {
+                            continue;
+                        }
+                    }
+
+                    if (TransferRequestIds.isTransferLeg(retryEvent) && retryPartner == null) {
+                        retryPartner = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
+                        if (retryPartner == null) {
+                            continue;
+                        }
+                        if (!TransferRequestIds.arePair(retryEvent, retryPartner)) {
+                            logSevere("LOCAL transfer queue lost a paired leg; marking "
+                                    + retryEvent.playerUuid() + " unavailable");
+                            queue.markAccountUnavailable(retryEvent.playerUuid());
+                            queue.quarantine(retryEvent);
+                            deferredEvent = retryPartner;
+                            retryEvent = null;
+                            retryPartner = null;
+                            retryCount = 0;
                             continue;
                         }
                     }
@@ -317,12 +361,25 @@ final class LocalPersistenceWorker implements Runnable {
                         continue;
                     }
 
-                    LocalPersistenceReceipt receipt = persistenceAction.persist(retryEvent);
-                    if (terminalAfterQuarantine) {
-                        return;
+                    if (TransferRequestIds.isTransferLeg(retryEvent)) {
+                        if (transferPersistenceAction == null) {
+                            throw new IllegalStateException("LOCAL transfer persistence is not configured");
+                        }
+                        EconomyEvent out = retryEvent.type() == EconomyEvent.EventType.TRANSFER_OUT
+                                ? retryEvent : retryPartner;
+                        EconomyEvent in = out == retryEvent ? retryPartner : retryEvent;
+                        LocalTransferPersistenceReceipt receipt = transferPersistenceAction.persist(out, in);
+                        if (terminalAfterQuarantine) return;
+                        queue.completePair(out, receipt.out().balance(), receipt.out().version(),
+                                in, receipt.in().balance(), receipt.in().version());
+                        retryEvent = null;
+                        retryPartner = null;
+                    } else {
+                        LocalPersistenceReceipt receipt = persistenceAction.persist(retryEvent);
+                        if (terminalAfterQuarantine) return;
+                        queue.complete(retryEvent, receipt.balance(), receipt.version());
+                        retryEvent = null;
                     }
-                    queue.complete(retryEvent, receipt.balance(), receipt.version());
-                    retryEvent = null;
                     retryCount = 0;
                     retryAtMillis = 0;
                 } catch (InterruptedException e) {
@@ -343,7 +400,7 @@ final class LocalPersistenceWorker implements Runnable {
             }
         } finally {
             boolean unexpectedExit = !terminalAfterQuarantine
-                    && (running || queue.hasOutstandingWrites());
+                    && (running || retryEvent != null || retryPartner != null || queue.hasOutstandingWrites());
             if (unexpectedExit) {
                 running = false;
                 queue.closeAdmission();

@@ -452,37 +452,59 @@ public class VaultProviderCore {
                     "One or both accounts are locked");
         }
 
+        boolean sqlRequired = config != null && config.isDbEnabled();
+        if (sqlRequired && dbWriteQueue == null) {
+            return failedMutation(fromUuid, "SQL transfer persistence is unavailable");
+        }
+        DbWriteQueue.Reservation sqlReservation = sqlRequired ? dbWriteQueue.tryReserve() : null;
+        if (sqlRequired && sqlReservation == null) {
+            return failedMutation(fromUuid, "SQL write queue is full; retry shortly");
+        }
+
+        try (sqlReservation) {
         CacheManager.TransferResult result = economyFacade.pluginAtomicTransfer(fromUuid, toUuid, amountBd, pluginName);
 
         if (result == null || result == CacheManager.TransferResult.insufficientFunds()) {
             double balance = readyBalance(fromUuid);
             double receiverBalance = readyBalance(toUuid);
-            String message = Double.isNaN(balance) || Double.isNaN(receiverBalance) ? notReadyMessage()
-                    : result == CacheManager.TransferResult.insufficientFunds()
-                            ? "Insufficient funds"
-                            : "Atomic transfer failed - insufficient funds or locked account";
+            String message;
+            if (result == CacheManager.TransferResult.insufficientFunds()) {
+                message = "Insufficient funds";
+            } else if (Double.isNaN(balance) && Double.isNaN(receiverBalance)) {
+                message = unconfirmedTransferMessage();
+            } else if (Double.isNaN(balance) || Double.isNaN(receiverBalance)) {
+                message = notReadyMessage();
+            } else {
+                message = "Transfer outcome is not confirmed; verify both balances before retrying";
+            }
             return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE, message);
         }
 
-        TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
-                fromUuid, toUuid, result);
+        try {
+            TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
+                    sqlReservation, fromUuid, toUuid, result);
 
-        CrossServerNotifier.notifyBalanceChange(plugin, from, "vault.withdrawn", amountBd, result.fromNewBalance);
-        CrossServerNotifier.notifyBalanceChange(plugin, to, "vault.deposited", amountBd, result.toNewBalance);
+            CrossServerNotifier.notifyBalanceChange(plugin, from, "vault.withdrawn", amountBd, result.fromNewBalance);
+            CrossServerNotifier.notifyBalanceChange(plugin, to, "vault.deposited", amountBd, result.toNewBalance);
 
-        String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
-        if (senderName == null) {
-            senderName = fromUuid.toString();
+            String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
+            if (senderName == null) {
+                senderName = fromUuid.toString();
+            }
+            publishAtomicTransferUpdate(fromUuid, result.fromNewBalance, result.fromNewVersion,
+                    "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
+            publishAtomicTransferUpdate(toUuid, result.toNewBalance, result.toNewVersion,
+                    "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
+        } catch (RuntimeException followUpFailure) {
+            plugin.getLogger().severe("Plugin transfer was confirmed by Redis, but a post-accept receipt or notification step failed; "
+                    + "the balance change remains in effect: " + followUpFailure.getMessage());
         }
-        publishAtomicTransferUpdate(fromUuid, result.fromNewBalance, result.fromNewVersion,
-                "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
-        publishAtomicTransferUpdate(toUuid, result.toNewBalance, result.toNewVersion,
-                "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
 
         plugin.getLogger().info("Plugin atomic transfer completed: " + fromUuid + " -> " + toUuid + " : " + amountBd + " by " + pluginName);
 
         return new EconomyResponse(amountBd.doubleValue(), result.fromNewBalance.doubleValue(),
                 EconomyResponse.ResponseType.SUCCESS, "");
+        }
     }
 
     // =========================================================================
@@ -514,6 +536,10 @@ public class VaultProviderCore {
 
     private String notReadyMessage() {
         return "Account is not ready; retry after it finishes loading";
+    }
+
+    private String unconfirmedTransferMessage() {
+        return "Transfer outcome is not confirmed; do not retry until both account balances are reconciled";
     }
 
     public EconomyResponse deleteBank(String name) {

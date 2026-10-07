@@ -19,8 +19,8 @@ final class TransferReceiptSupport {
     private TransferReceiptSupport() { }
 
     static void accept(Plugin plugin, EconomyFacade economyFacade, DbWriteQueue dbWriteQueue,
-            SyncmoneyConfig config, NameResolver nameResolver, UUID fromUuid, UUID toUuid,
-            CacheManager.TransferResult result) {
+            SyncmoneyConfig config, NameResolver nameResolver, DbWriteQueue.Reservation sqlReservation,
+            UUID fromUuid, UUID toUuid, CacheManager.TransferResult result) {
         ReplicationReceipt receipt = new ReplicationReceipt(UUID.randomUUID().toString(), List.of(
                 new ConfirmedAccount(fromUuid, result.fromNewBalance, result.fromNewVersion),
                 new ConfirmedAccount(toUuid, result.toNewBalance, result.toNewVersion)));
@@ -37,6 +37,11 @@ final class TransferReceiptSupport {
                     + receipt.operationId() + " was not persisted");
             return;
         }
+        if (sqlReservation == null) {
+            plugin.getLogger().severe("Confirmed Vault transfer has no SQL queue reservation; receipt "
+                    + receipt.operationId() + " was not persisted");
+            return;
+        }
 
         String serverName = config.getServerName() != null ? config.getServerName() : "unknown";
         Instant timestamp = Instant.now();
@@ -45,7 +50,7 @@ final class TransferReceiptSupport {
         List<DbWriteQueue.AccountWrite> writes = List.of(
                 new DbWriteQueue.AccountWrite(receipt.accounts().get(0), fromName, serverName, timestamp),
                 new DbWriteQueue.AccountWrite(receipt.accounts().get(1), toName, serverName, timestamp));
-        if (!dbWriteQueue.offer(new DbWriteQueue.DbWriteTask(receipt.operationId(), writes))) {
+        if (!sqlReservation.commit(new DbWriteQueue.DbWriteTask(receipt.operationId(), writes))) {
             plugin.getLogger().severe("DbWriteQueue is full; confirmed Vault transfer receipt "
                     + receipt.operationId() + " was not persisted");
         }

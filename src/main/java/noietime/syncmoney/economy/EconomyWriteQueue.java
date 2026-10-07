@@ -16,6 +16,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
@@ -29,9 +30,49 @@ import java.util.logging.Logger;
  */
 public final class EconomyWriteQueue {
 
+    enum TransferOutcome {
+        CONFIRMED,
+        REJECTED,
+        UNKNOWN,
+        CONFIRMED_QUARANTINED
+    }
+
+    record TransferCompletion(TransferOutcome outcome, BigDecimal senderBalance,
+            BigDecimal receiverBalance) { }
+
+    @FunctionalInterface
+    interface TransferCompletionListener {
+        void onComplete(TransferCompletion completion);
+    }
+
     @FunctionalInterface
     interface WriteCompletionHandler {
         void onComplete(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion);
+
+        /** Run ownership release and reconciliation under the same account mutation lock. */
+        default void withAccountsLocked(UUID firstAccount, UUID secondAccount, Runnable completion) {
+            completion.run();
+        }
+
+        default void onRejected(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
+            onComplete(event, authorityBalance, authorityVersion);
+        }
+
+        default void onCompletePair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+                EconomyEvent second, BigDecimal secondBalance, long secondVersion) {
+            onComplete(first, firstBalance, firstVersion);
+            onComplete(second, secondBalance, secondVersion);
+        }
+
+        default void onRejectedPair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+                EconomyEvent second, BigDecimal secondBalance, long secondVersion) {
+            onCompletePair(first, firstBalance, firstVersion, second, secondBalance, secondVersion);
+        }
+    }
+
+    interface TransferAvailabilityHandler {
+        void markUnavailable(String operationId, UUID firstAccount, UUID secondAccount);
+        void resolve(String operationId, UUID firstAccount, UUID secondAccount);
     }
 
     private final BlockingQueue<EconomyEvent> queue;
@@ -39,6 +80,7 @@ public final class EconomyWriteQueue {
     private final Logger logger;
     private final Semaphore admissionPermits;
     private final Object admissionGate = new Object();
+    private final Object commitGate = new Object();
     private boolean acceptingWrites = true;
     private volatile boolean warnedHighUsage = false;
 
@@ -56,7 +98,11 @@ public final class EconomyWriteQueue {
             Collections.synchronizedMap(new IdentityHashMap<>());
     private final AtomicLong nextReservationId = new AtomicLong();
     private final ConcurrentMap<Long, AutoCloseable> completionResources = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, TransferCompletionListener> transferCompletionListeners =
+            new ConcurrentHashMap<>();
     private volatile WriteCompletionHandler writeCompletionHandler;
+    private volatile TransferAvailabilityHandler transferAvailabilityHandler;
+    private volatile Consumer<UUID> unavailableAccountHandler;
     private volatile long lastHighUsageWarning = 0;
 
     private static final class AcceptedWrite {
@@ -104,7 +150,7 @@ public final class EconomyWriteQueue {
             this.acceptedWrite = acceptedWrite;
         }
 
-        synchronized boolean commit(EconomyEvent event) {
+        boolean commit(EconomyEvent event) {
             return commit(event, null);
         }
 
@@ -112,7 +158,19 @@ public final class EconomyWriteQueue {
          * Commit an event and transfer a resource lease to the consumer. The resource is
          * released only when the consumer completes the accepted event.
          */
-        synchronized boolean commit(EconomyEvent event, AutoCloseable completionResource) {
+        boolean commit(EconomyEvent event, AutoCloseable completionResource) {
+            synchronized (commitGate) {
+                synchronized (this) {
+                    return commitLocked(event, completionResource);
+                }
+            }
+        }
+
+        private boolean canCommit(EconomyEvent event) {
+            return !closed && !committed && event != null && uuid.equals(event.playerUuid());
+        }
+
+        private boolean commitLocked(EconomyEvent event, AutoCloseable completionResource) {
             if (closed || committed || event == null || !uuid.equals(event.playerUuid())) {
                 return false;
             }
@@ -156,11 +214,15 @@ public final class EconomyWriteQueue {
         }
 
         @Override
-        public synchronized void close() {
-            if (!committed && !closed) {
-                closed = true;
-                reservations.remove(id, this);
-                releaseOwnership(id, true);
+        public void close() {
+            synchronized (commitGate) {
+                synchronized (this) {
+                    if (!committed && !closed) {
+                        closed = true;
+                        reservations.remove(id, this);
+                        releaseOwnership(id, true);
+                    }
+                }
             }
         }
     }
@@ -308,6 +370,11 @@ public final class EconomyWriteQueue {
     public EconomyEvent poll(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
         EconomyEvent event = queue.poll(timeout, unit);
         if (event != null) {
+            // A transfer commits both adjacent legs under this same gate. A consumer that
+            // takes the first leg waits until the producer has finished committing the pair.
+            synchronized (commitGate) {
+                // The lock handoff is the visibility barrier for paired admissions.
+            }
             decrementPendingCount(event.playerUuid(), 1);
         }
         return event;
@@ -367,6 +434,56 @@ public final class EconomyWriteQueue {
         }
     }
 
+    /** Commit two reserved legs as one queue admission, with no unrelated commit between them. */
+    boolean commitPair(Reservation firstReservation, EconomyEvent firstEvent,
+            Reservation secondReservation, EconomyEvent secondEvent, AutoCloseable firstCompletionResource) {
+        if (firstReservation == null || secondReservation == null
+                || firstReservation == secondReservation
+                || !TransferRequestIds.arePair(firstEvent, secondEvent)) {
+            return false;
+        }
+
+        synchronized (commitGate) {
+            synchronized (firstReservation) {
+                synchronized (secondReservation) {
+                    if (!firstReservation.canCommit(firstEvent) || !secondReservation.canCommit(secondEvent)) {
+                        return false;
+                    }
+                    // Both permits were reserved before either account is changed. With the
+                    // queue private and all producers serialized here, these offers cannot
+                    // run out of capacity between transfer legs.
+                    if (!firstReservation.commitLocked(firstEvent, firstCompletionResource)) {
+                        return false;
+                    }
+                    return secondReservation.commitLocked(secondEvent, null);
+                }
+            }
+        }
+    }
+
+    boolean registerTransferCompletionListener(String operationId, TransferCompletionListener listener) {
+        if (operationId == null || operationId.isBlank() || listener == null) return false;
+        return transferCompletionListeners.putIfAbsent(operationId, listener) == null;
+    }
+
+    void cancelTransferCompletionListener(String operationId) {
+        if (operationId != null) transferCompletionListeners.remove(operationId);
+    }
+
+    void completeTransferObservation(String operationId, TransferOutcome outcome,
+            BigDecimal senderBalance, BigDecimal receiverBalance) {
+        if (operationId == null || outcome == null) return;
+        TransferCompletionListener listener = transferCompletionListeners.remove(operationId);
+        if (listener == null) return;
+        try {
+            listener.onComplete(new TransferCompletion(outcome, senderBalance, receiverBalance));
+        } catch (RuntimeException e) {
+            if (logger != null) {
+                logger.warning("Transfer completion observer failed for " + operationId + ": " + e.getMessage());
+            }
+        }
+    }
+
     void closeAdmission() {
         synchronized (admissionGate) {
             acceptingWrites = false;
@@ -378,17 +495,24 @@ public final class EconomyWriteQueue {
     }
 
     void cancelUncommittedReservations() {
-        for (Reservation reservation : reservations.values()) {
-            reservation.close();
+        synchronized (commitGate) {
+            for (Reservation reservation : reservations.values()) {
+                reservation.close();
+            }
         }
     }
 
     List<EconomyEvent> snapshotOutstandingEvents() {
         List<EconomyEvent> events = new ArrayList<>();
-        for (AcceptedWrite accepted : acceptedWrites.values()) {
-            EconomyEvent event = accepted.event;
-            if (accepted.committed && event != null) {
-                events.add(event);
+        synchronized (commitGate) {
+            // Paired commits and completions mutate both accepted-write owners under
+            // this gate. Snapshot the same boundary so recovery can never journal one
+            // half of a transfer while the primary worker releases the pair.
+            for (AcceptedWrite accepted : acceptedWrites.values()) {
+                EconomyEvent event = accepted.event;
+                if (accepted.committed && event != null) {
+                    events.add(event);
+                }
             }
         }
         events.sort(java.util.Comparator
@@ -509,12 +633,19 @@ public final class EconomyWriteQueue {
         if (event == null) {
             return;
         }
+        WriteCompletionHandler handler = writeCompletionHandler;
+        withCompletionAccountLocks(handler, event.playerUuid(), null,
+                () -> completeOwnedWrite(event, authorityBalance, authorityVersion, handler, false));
+    }
+
+    private boolean completeOwnedWrite(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion,
+            WriteCompletionHandler handler, boolean rejected) {
         Long reservationId;
         synchronized (reservationsByEvent) {
             reservationId = reservationsByEvent.remove(event);
         }
         if (reservationId == null) {
-            return;
+            return false;
         }
         if (removeQueuedIdentity(event)) {
             decrementPendingCount(event.playerUuid(), 1);
@@ -522,18 +653,126 @@ public final class EconomyWriteQueue {
         AutoCloseable completionResource = completionResources.remove(reservationId);
         releaseOwnership(reservationId, false);
         try {
-            WriteCompletionHandler handler = writeCompletionHandler;
             if (handler != null) {
                 try {
-                    handler.onComplete(event, authorityBalance, authorityVersion);
+                    if (rejected) handler.onRejected(event, authorityBalance, authorityVersion);
+                    else handler.onComplete(event, authorityBalance, authorityVersion);
                 } catch (RuntimeException e) {
-                    if (logger != null) {
-                        logger.warning("Failed to reconcile completed write for " + event.playerUuid() + ": " + e.getMessage());
-                    }
+                    markAccountUnavailable(event.playerUuid());
+                    if (logger != null) logger.warning("Failed to reconcile completed write for "
+                            + event.playerUuid() + ": " + e.getMessage());
                 }
             }
         } finally {
             closeCompletionResource(completionResource);
+        }
+        return true;
+    }
+
+    /** Complete a known-rejected write using its Redis authority snapshot as a rebase point. */
+    boolean completeRejected(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
+        if (event == null || authorityBalance == null || authorityVersion < 0L) {
+            return false;
+        }
+        WriteCompletionHandler handler = writeCompletionHandler;
+        java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
+        withCompletionAccountLocks(handler, event.playerUuid(), null,
+                () -> completed.set(completeOwnedWrite(event, authorityBalance, authorityVersion, handler, true)));
+        return completed.get();
+    }
+
+    /** Complete both accepted transfer legs as one authority reconciliation boundary. */
+    boolean completePair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+            EconomyEvent second, BigDecimal secondBalance, long secondVersion) {
+        return completePair(first, firstBalance, firstVersion, second, secondBalance, secondVersion, false);
+    }
+
+    /** Complete a known-rejected transfer as one pair-wide authority rebase. */
+    boolean completeRejectedPair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+            EconomyEvent second, BigDecimal secondBalance, long secondVersion) {
+        return completePair(first, firstBalance, firstVersion, second, secondBalance, secondVersion, true);
+    }
+
+    private boolean completePair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+            EconomyEvent second, BigDecimal secondBalance, long secondVersion, boolean rejected) {
+        if (!TransferRequestIds.arePair(first, second)
+                || firstBalance == null || secondBalance == null
+                || firstVersion < 0L || secondVersion < 0L) {
+            return false;
+        }
+        EconomyEvent out = first.type() == EconomyEvent.EventType.TRANSFER_OUT ? first : second;
+        String operationId = TransferRequestIds.operationId(out);
+        BigDecimal senderBalance = out == first ? firstBalance : secondBalance;
+        BigDecimal receiverBalance = out == first ? secondBalance : firstBalance;
+        WriteCompletionHandler handler = writeCompletionHandler;
+        java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
+        withCompletionAccountLocks(handler, first.playerUuid(), second.playerUuid(), () -> {
+            Long firstReservationId;
+            Long secondReservationId;
+            AutoCloseable firstResource;
+            AutoCloseable secondResource;
+            synchronized (commitGate) {
+                synchronized (reservationsByEvent) {
+                    firstReservationId = reservationsByEvent.get(first);
+                    secondReservationId = reservationsByEvent.get(second);
+                    if (firstReservationId == null || secondReservationId == null
+                            || firstReservationId.equals(secondReservationId)) {
+                        return;
+                    }
+                    reservationsByEvent.remove(first);
+                    reservationsByEvent.remove(second);
+                }
+
+                boolean firstRemoved = removeQueuedIdentity(first);
+                boolean secondRemoved = removeQueuedIdentity(second);
+                if (firstRemoved) decrementPendingCount(first.playerUuid(), 1);
+                if (secondRemoved) decrementPendingCount(second.playerUuid(), 1);
+
+                firstResource = completionResources.remove(firstReservationId);
+                secondResource = completionResources.remove(secondReservationId);
+                releaseOwnership(firstReservationId, false);
+                releaseOwnership(secondReservationId, false);
+            }
+
+            try {
+                if (handler != null) {
+                    if (rejected) {
+                        handler.onRejectedPair(first, firstBalance, firstVersion,
+                                second, secondBalance, secondVersion);
+                    } else {
+                        handler.onCompletePair(first, firstBalance, firstVersion,
+                                second, secondBalance, secondVersion);
+                    }
+                }
+                resolveTransferUnavailable(operationId, first.playerUuid(), second.playerUuid());
+                completeTransferObservation(operationId,
+                        rejected ? TransferOutcome.REJECTED : TransferOutcome.CONFIRMED,
+                        senderBalance, receiverBalance);
+                completed.set(true);
+            } catch (RuntimeException e) {
+                markAccountUnavailable(first.playerUuid());
+                markAccountUnavailable(second.playerUuid());
+                completeTransferObservation(operationId,
+                        rejected ? TransferOutcome.REJECTED : TransferOutcome.CONFIRMED_QUARANTINED,
+                        senderBalance, receiverBalance);
+                if (logger != null) {
+                    logger.warning("Failed to reconcile completed transfer pair "
+                            + TransferRequestIds.operationId(out) + ": " + e.getMessage());
+                }
+            } finally {
+                closeCompletionResource(firstResource);
+                closeCompletionResource(secondResource);
+            }
+        });
+        return completed.get();
+    }
+
+    private void withCompletionAccountLocks(WriteCompletionHandler handler, UUID firstAccount,
+            UUID secondAccount, Runnable completion) {
+        if (handler == null) {
+            completion.run();
+        } else {
+            handler.withAccountsLocked(firstAccount, secondAccount, completion);
         }
     }
 
@@ -547,6 +786,46 @@ public final class EconomyWriteQueue {
             }
             writeCompletionHandler = handler;
         }
+    }
+
+    void setUnavailableAccountHandler(Consumer<UUID> handler) {
+        if (handler == null) throw new IllegalArgumentException("Unavailable-account handler cannot be null");
+        synchronized (this) {
+            if (unavailableAccountHandler != null && unavailableAccountHandler != handler) {
+                throw new IllegalStateException("EconomyWriteQueue already has an unavailable-account owner");
+            }
+            unavailableAccountHandler = handler;
+        }
+    }
+
+    void setTransferAvailabilityHandler(TransferAvailabilityHandler handler) {
+        if (handler == null) throw new IllegalArgumentException("Transfer availability handler cannot be null");
+        synchronized (this) {
+            if (transferAvailabilityHandler != null && transferAvailabilityHandler != handler) {
+                throw new IllegalStateException("EconomyWriteQueue already has a transfer availability owner");
+            }
+            transferAvailabilityHandler = handler;
+        }
+    }
+
+    void markAccountUnavailable(UUID uuid) {
+        Consumer<UUID> handler = unavailableAccountHandler;
+        if (handler != null && uuid != null) handler.accept(uuid);
+    }
+
+    void markTransferUnavailable(String operationId, UUID firstAccount, UUID secondAccount) {
+        TransferAvailabilityHandler handler = transferAvailabilityHandler;
+        if (handler == null) {
+            markAccountUnavailable(firstAccount);
+            markAccountUnavailable(secondAccount);
+            return;
+        }
+        handler.markUnavailable(operationId, firstAccount, secondAccount);
+    }
+
+    private void resolveTransferUnavailable(String operationId, UUID firstAccount, UUID secondAccount) {
+        TransferAvailabilityHandler handler = transferAvailabilityHandler;
+        if (handler != null) handler.resolve(operationId, firstAccount, secondAccount);
     }
 
     boolean hasAcceptedWrite(UUID uuid) {

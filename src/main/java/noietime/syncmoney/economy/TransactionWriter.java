@@ -128,6 +128,10 @@ final class TransactionWriter {
     }
 
     private boolean ensureAccountLoaded(UUID uuid) {
+        if (stateManager.isUnavailable(uuid)) {
+            plugin.getLogger().warning("Economy mutation rejected while account authority is unresolved for " + uuid);
+            return false;
+        }
         if (stateManager.get(uuid) != null) {
             return !isLocalMode || localEconomyHandler == null || localEconomyHandler.isRecoveryReady();
         }
@@ -136,6 +140,211 @@ final class TransactionWriter {
             return false;
         }
         return facade.ensureLoaded(uuid);
+    }
+
+    /**
+     * Accepts a player transfer as one paired in-memory/queue operation. Policy callbacks
+     * run before account locks and reservations; balances are re-read under UUID-ordered
+     * locks before either leg is committed.
+     */
+    BigDecimal transfer(UUID fromUuid, UUID toUuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        return transfer(fromUuid, toUuid, amount, source, null);
+    }
+
+    private BigDecimal transfer(UUID fromUuid, UUID toUuid, BigDecimal amount, EconomyEvent.EventSource source,
+            String attribution) {
+        if (fromUuid == null || toUuid == null || fromUuid.equals(toUuid)
+                || amount == null || source == null) {
+            return BigDecimal.valueOf(-1);
+        }
+        BigDecimal normalizedAmount = NumericUtil.normalize(amount);
+        if (normalizedAmount.signum() <= 0 || normalizedAmount.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0
+                || rejectIfRedisUnavailable("Transfer")) {
+            return BigDecimal.valueOf(-1);
+        }
+
+        if (!ensureAccountLoaded(fromUuid) || !ensureAccountLoaded(toUuid)) {
+            plugin.getLogger().fine("Transfer rejected because one or both accounts are not ready");
+            return BigDecimal.valueOf(-1);
+        }
+
+        EconomyState initialFrom = stateManager.get(fromUuid);
+        EconomyState initialTo = stateManager.get(toUuid);
+        if (initialFrom == null || initialTo == null || !canAdvanceLocalVersion(fromUuid, initialFrom)
+                || !canAdvanceLocalVersion(toUuid, initialTo)) {
+            return BigDecimal.valueOf(-1);
+        }
+        if (initialFrom.balance().compareTo(normalizedAmount) < 0
+                || initialTo.balance().add(normalizedAmount).compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+            return BigDecimal.valueOf(-1);
+        }
+
+        String fromName = facade.resolvePlayerName(fromUuid);
+        String toName = facade.resolvePlayerName(toUuid);
+        if (!preTransactionChecks(fromUuid, fromName, normalizedAmount, initialFrom.balance(),
+                    AsyncPreTransactionEvent.TransactionType.WITHDRAW, normalizedAmount.negate(),
+                    source, "Transfer withdrawal", attribution)
+                || !preTransactionChecks(toUuid, toName, normalizedAmount, initialTo.balance(),
+                    AsyncPreTransactionEvent.TransactionType.DEPOSIT, normalizedAmount,
+                    source, "Transfer deposit", attribution)) {
+            return BigDecimal.valueOf(-1);
+        }
+        // Guard checks can dispatch notifications (including Web Admin SSE writes), so
+        // run those policy callbacks before acquiring either account mutation lock.
+        if (!transferGuardAllows(fromUuid, initialFrom.balance(), normalizedAmount.negate(),
+                    EconomyEvent.EventType.WITHDRAW, source)
+                || !transferGuardAllows(toUuid, initialTo.balance(), normalizedAmount,
+                    EconomyEvent.EventType.DEPOSIT, source)) {
+            return BigDecimal.valueOf(-1);
+        }
+
+        String operationId = TransferRequestIds.newOperationId();
+        long timestamp = System.currentTimeMillis();
+        BigDecimal[] acceptedBalances = new BigDecimal[2];
+        EconomyState[] acceptedStates = new EconomyState[2];
+        EconomyEvent[] acceptedEvents = new EconomyEvent[2];
+        boolean accepted = false;
+
+        try (MemoryStateManager.AccountMutationLease accountLocks = stateManager.lockAccounts(fromUuid, toUuid)) {
+            EconomyState fromState = stateManager.get(fromUuid);
+            EconomyState toState = stateManager.get(toUuid);
+            if (fromState == null || toState == null || !canAdvanceLocalVersion(fromUuid, fromState)
+                    || !canAdvanceLocalVersion(toUuid, toState)
+                    || fromState.balance().compareTo(normalizedAmount) < 0
+                    || toState.balance().add(normalizedAmount).compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+                return BigDecimal.valueOf(-1);
+            }
+
+            if (!transferGuardStillAllows(fromUuid, toUuid, source)) {
+                return BigDecimal.valueOf(-1);
+            }
+
+            EconomyWriteQueue.Reservation fromReservation = stateManager.tryReserveWrite(fromUuid, fromState);
+            if (fromReservation == null) {
+                plugin.getLogger().warning("Transfer rejected before mutation: write admission is full for " + fromUuid);
+                return BigDecimal.valueOf(-1);
+            }
+            try (fromReservation) {
+                EconomyWriteQueue.Reservation toReservation = stateManager.tryReserveWrite(toUuid, toState);
+                if (toReservation == null) {
+                    plugin.getLogger().warning("Transfer rejected before mutation: write admission is full for " + toUuid);
+                    return BigDecimal.valueOf(-1);
+                }
+                try (toReservation) {
+                    long fromVersion;
+                    long toVersion;
+                    try {
+                        fromVersion = Math.addExact(fromState.version(), 1L);
+                        toVersion = Math.addExact(toState.version(), 1L);
+                    } catch (ArithmeticException e) {
+                        plugin.getLogger().severe("Transfer rejected before mutation because an account version overflowed");
+                        return BigDecimal.valueOf(-1);
+                    }
+
+                    EconomyState nextFrom = new EconomyState(fromState.balance().subtract(normalizedAmount),
+                            fromVersion, timestamp);
+                    EconomyState nextTo = new EconomyState(toState.balance().add(normalizedAmount),
+                            toVersion, timestamp);
+                    EconomyEvent fromEvent = new EconomyEvent(fromUuid, normalizedAmount.negate(),
+                            nextFrom.balance(), fromVersion, EconomyEvent.EventType.TRANSFER_OUT, source,
+                            TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), timestamp,
+                            attribution);
+                    EconomyEvent toEvent = new EconomyEvent(toUuid, normalizedAmount,
+                            nextTo.balance(), toVersion, EconomyEvent.EventType.TRANSFER_IN, source,
+                            TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), timestamp,
+                            attribution);
+
+                    AutoCloseable persistenceLease = null;
+                    if (isLocalMode) {
+                        persistenceLease = MigrationLock.tryAcquireWrite();
+                        if (persistenceLease == null) {
+                            plugin.getLogger().warning("Transfer rejected before mutation: LOCAL migration is locked");
+                            return BigDecimal.valueOf(-1);
+                        }
+                    }
+
+                    boolean committed;
+                    try {
+                        committed = writeQueue.commitPair(fromReservation, fromEvent,
+                                toReservation, toEvent, persistenceLease);
+                    } catch (RuntimeException | Error failure) {
+                        closeQuietly(persistenceLease);
+                        throw failure;
+                    }
+                    if (!committed) {
+                        closeQuietly(persistenceLease);
+                        plugin.getLogger().severe("Transfer rejected because its paired write reservation could not be committed");
+                        return BigDecimal.valueOf(-1);
+                    }
+
+                    // Queue admission is now complete and cannot be rejected. The held
+                    // account locks keep ordinary writers from interleaving between legs.
+                    stateManager.put(fromUuid, nextFrom);
+                    stateManager.put(toUuid, nextTo);
+                    acceptedBalances[0] = nextFrom.balance();
+                    acceptedBalances[1] = nextTo.balance();
+                    acceptedStates[0] = nextFrom;
+                    acceptedStates[1] = nextTo;
+                    acceptedEvents[0] = fromEvent;
+                    acceptedEvents[1] = toEvent;
+                    accepted = true;
+                }
+            }
+        }
+
+        if (!accepted) return BigDecimal.valueOf(-1);
+        writeQueue.reportUsage();
+        if (isLocalMode) {
+            postTransactionEvent(fromUuid, fromName, AsyncPreTransactionEvent.TransactionType.WITHDRAW,
+                    normalizedAmount, acceptedStates[0].balance().add(normalizedAmount), acceptedBalances[0],
+                    source.name(), toUuid, toName, operationId, true, null);
+            postTransactionEvent(toUuid, toName, AsyncPreTransactionEvent.TransactionType.DEPOSIT,
+                    normalizedAmount, acceptedStates[1].balance().subtract(normalizedAmount), acceptedBalances[1],
+                    source.name(), fromUuid, fromName, operationId, true, null);
+        }
+        return acceptedBalances[0];
+    }
+
+    private boolean transferGuardAllows(UUID uuid, BigDecimal balance, BigDecimal delta,
+            EconomyEvent.EventType type, EconomyEvent.EventSource source) {
+        PlayerTransactionGuard guard = facade.getPlayerTransactionGuard();
+        if (isTransferGuardBypassed(source) || guard == null) return true;
+        CheckResult result = guard.checkTransaction(uuid, balance, delta, type, source);
+        if (!result.allowed()) {
+            plugin.getLogger().warning("Transfer rejected by PlayerTransactionGuard: " + result.reason()
+                    + " for " + uuid);
+        }
+        return result.allowed();
+    }
+
+    private boolean transferGuardStillAllows(UUID sender, UUID receiver, EconomyEvent.EventSource source) {
+        PlayerTransactionGuard guard = facade.getPlayerTransactionGuard();
+        if (isTransferGuardBypassed(source) || guard == null) return true;
+        // These checks only read the guard state. The stateful policy check and all
+        // notifications already ran before taking the account locks.
+        return !guard.isGlobalLocked()
+                && !facade.isPlayerLocked(sender)
+                && !facade.isPlayerLocked(receiver)
+                && !guard.isTransferLocked(sender);
+    }
+
+    private boolean isTransferGuardBypassed(EconomyEvent.EventSource source) {
+        if (!isLocalMode) return false;
+        if (!config.playerProtection().isPlayerProtectionEnabledInLocalMode()) return true;
+        boolean isVaultSource = source == EconomyEvent.EventSource.VAULT_DEPOSIT
+                || source == EconomyEvent.EventSource.VAULT_WITHDRAW;
+        if (isVaultSource && config.playerProtection().isPlayerProtectionVaultRelaxedThreshold()) return true;
+        List<String> whitelist = config.playerProtection().getPlayerProtectionVaultBypassWhitelist();
+        return whitelist != null && whitelist.contains(source.name());
+    }
+
+    private static void closeQuietly(AutoCloseable resource) {
+        if (resource == null) return;
+        try {
+            resource.close();
+        } catch (Exception ignored) {
+            // The failed reservation is already rejected; the migration lease is best-effort released here.
+        }
     }
 
     private boolean canAdvanceLocalVersion(UUID uuid, EconomyState currentState) {

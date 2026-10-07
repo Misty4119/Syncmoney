@@ -67,6 +67,55 @@ class SqlMonotonicSnapshotTest {
         }
     }
 
+    @Test
+    void transferPairWithOneStaleRowDoesNotPersistEitherAccount() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        try (Connection connection = newSharedPlayersConnection()) {
+            connection.setAutoCommit(false);
+            SqlSnapshotWriter.persistPlayers(connection, List.of(
+                    snapshot(sender, "Sender", "server-a", "100.00", 10, FIRST_WRITE),
+                    snapshot(receiver, "Receiver", "server-a", "50.00", 10, FIRST_WRITE)), SqlDialect.SQLITE);
+            connection.commit();
+
+            // The sender row has already advanced beyond this transfer receipt, while the
+            // receiver row could still accept it. A transfer snapshot must be all-or-none.
+            SqlSnapshotWriter.persistPlayers(connection, List.of(
+                    snapshot(sender, "Sender", "server-b", "90.00", 9, FIRST_WRITE.plusSeconds(1)),
+                    snapshot(receiver, "Receiver", "server-b", "60.00", 11, FIRST_WRITE.plusSeconds(1))),
+                    SqlDialect.SQLITE);
+            connection.commit();
+
+            assertRow(connection, sender, "Sender", "server-a", "100.00", 10, FIRST_TIME_MILLIS);
+            assertRow(connection, receiver, "Receiver", "server-a", "50.00", 10, FIRST_TIME_MILLIS);
+        }
+    }
+
+    @Test
+    void staleFirstTransferLegDoesNotHideEqualVersionConflictInSecondLeg() throws Exception {
+        UUID staleFirst = new UUID(0L, 1L);
+        UUID conflictingSecond = new UUID(0L, 2L);
+        try (Connection connection = newSharedPlayersConnection()) {
+            SqlSnapshotWriter.persistPlayers(connection, List.of(
+                    snapshot(staleFirst, "First", "server-a", "100.00", 10, FIRST_WRITE),
+                    snapshot(conflictingSecond, "Second", "server-a", "50.00", 10, FIRST_WRITE)),
+                    SqlDialect.SQLITE);
+            SqlSnapshotWriter.persistPlayers(connection,
+                    List.of(snapshot(staleFirst, "First", "server-b", "110.00", 11,
+                                    FIRST_WRITE.plusSeconds(1))), SqlDialect.SQLITE);
+
+            assertThrows(SnapshotConflictException.class, () -> SqlSnapshotWriter.persistPlayers(connection, List.of(
+                    snapshot(staleFirst, "First", "server-c", "90.00", 10, FIRST_WRITE.plusSeconds(2)),
+                    snapshot(conflictingSecond, "Second", "server-c", "55.00", 10,
+                            FIRST_WRITE.plusSeconds(2))), SqlDialect.SQLITE));
+
+            assertRow(connection, staleFirst, "First", "server-b", "110.00", 11,
+                    FIRST_WRITE.plusSeconds(1).toEpochMilli());
+            assertRow(connection, conflictingSecond, "Second", "server-a", "50.00", 10,
+                    FIRST_TIME_MILLIS);
+        }
+    }
+
     private static Connection newSharedPlayersConnection() throws SQLException {
         Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:");
         try (Statement statement = connection.createStatement()) {

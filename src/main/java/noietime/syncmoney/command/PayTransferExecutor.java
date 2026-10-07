@@ -8,6 +8,9 @@ import noietime.syncmoney.core.port.ReplicationReceipt;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyWriteQueue;
+import noietime.syncmoney.event.AsyncPreTransactionEvent;
+import noietime.syncmoney.event.PostTransactionEvent;
+import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
@@ -19,7 +22,6 @@ import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.math.BigDecimal;
@@ -57,6 +59,20 @@ final class PayTransferExecutor {
     private final boolean localMode;
 
     private final Map<UUID, String> idempotencyKeys = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingPayTransfer> pendingPairedTransfers = new ConcurrentHashMap<>();
+    private volatile boolean completionListenerRegistered;
+
+    private enum PayTransferOutcome {
+        CONFIRMED,
+        REJECTED,
+        UNKNOWN,
+        CONFIRMED_QUARANTINED
+    }
+
+    private record PayTransferCompletion(PayTransferOutcome outcome, BigDecimal senderBalance) { }
+
+    private record PendingPayTransfer(Player sender, UUID senderUuid, UUID targetUuid,
+            String targetName, BigDecimal amount, String idempotencyKey) { }
 
     PayTransferExecutor(Syncmoney plugin, SyncmoneyConfig config,
             EconomyFacade economyFacade, CacheManager cacheManager,
@@ -81,10 +97,220 @@ final class PayTransferExecutor {
     }
 
     void executeTransferAsync(Player sender, String targetName, BigDecimal amount) {
-        if (localMode) {
-            executeLocalTransfer(sender, targetName, amount);
+        if (!ensureCompletionListenerRegistered()) {
+            sendTransferMessage(sender, plugin.getMessage("pay.transfer-failed")
+                    .replace("{error}", "Transfer outcome reporting is unavailable; no transfer was accepted"));
             return;
         }
+        if (localMode || config == null || !config.isCMIMode()) {
+            executePairedTransferAsync(sender, targetName, amount);
+            return;
+        }
+
+        // CMI remains the external economy authority and has no paired queue consumer.
+        // Preserve its existing adapter path until a CMI-owned atomic transfer contract exists.
+        executeCmiTransferAsync(sender, targetName, amount);
+    }
+
+    private void executePairedTransferAsync(Player sender, String targetName, BigDecimal amount) {
+        UUID senderUuid = sender.getUniqueId();
+        String senderName = sender.getName();
+        String idempotencyKey = senderUuid + ":" + targetName + ":" + amount.toPlainString();
+
+        cleanupIdempotencyKeys(senderUuid, idempotencyKey);
+        String existingKey = idempotencyKeys.putIfAbsent(senderUuid, idempotencyKey + IN_FLIGHT_SUFFIX);
+        if (existingKey != null) {
+            MessageHelper.sendMessage(sender, isSentUnknownKey(existingKey)
+                    ? unknownTransferMessage()
+                    : isConfirmedQuarantineKey(existingKey)
+                            ? confirmedTransferFollowupFailureMessage()
+                            : plugin.getMessage("pay.duplicate-transfer"));
+            return;
+        }
+
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            MigrationLock.WriteLease migrationWrite = MigrationLock.tryAcquireWrite();
+            if (migrationWrite == null) {
+                sendTransferMessage(sender, plugin.getMessage("pay.lock-failed"));
+                completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                return;
+            }
+
+            try (migrationWrite) {
+                Optional<UUID> targetUuidOpt = resolveTargetPlayer(targetName);
+                if (targetUuidOpt.isEmpty()) {
+                    sendTransferMessage(sender, plugin.getMessage("pay.target-not-found")
+                            .replace("{player}", targetName));
+                    completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                    return;
+                }
+
+                UUID targetUuid = targetUuidOpt.get();
+                if (senderUuid.equals(targetUuid)) {
+                    sendTransferMessage(sender, plugin.getMessage("pay.self-transfer"));
+                    completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                    return;
+                }
+
+                if (!acquireTransferLock(senderUuid, targetUuid)) {
+                    sendTransferMessage(sender, plugin.getMessage("pay.lock-failed"));
+                    completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                    return;
+                }
+
+                boolean accepted = false;
+                PendingPayTransfer pending = null;
+                try {
+                    if (!localMode) {
+                        pending = new PendingPayTransfer(sender, senderUuid, targetUuid,
+                                targetName, amount, idempotencyKey);
+                        PendingPayTransfer existing = pendingPairedTransfers.putIfAbsent(senderUuid, pending);
+                        if (existing != null) {
+                            sendTransferMessage(sender, unknownTransferMessage());
+                            quarantineSentUnknown(idempotencyKeys, senderUuid, idempotencyKey);
+                            return;
+                        }
+                    }
+                    BigDecimal senderBalance = localMode
+                            ? economyFacade.atomicTransfer(senderUuid, targetUuid,
+                                    amount, EconomyEvent.EventSource.PLAYER_TRANSFER)
+                            : economyFacade.atomicTransfer(senderUuid, targetUuid,
+                                    amount, EconomyEvent.EventSource.PLAYER_TRANSFER);
+                    if (senderBalance == null || senderBalance.signum() < 0) {
+                        if (pending != null) pendingPairedTransfers.remove(senderUuid, pending);
+                        BigDecimal currentBalance = economyFacade.getBalanceForPlaceholder(senderUuid);
+                        if (currentBalance != null && currentBalance.compareTo(amount) < 0) {
+                            sendTransferMessage(sender, plugin.getMessage("pay.insufficient-funds")
+                                    .replace("{balance}", FormatUtil.formatCurrency(currentBalance))
+                                    .replace("{amount}", FormatUtil.formatCurrency(amount)));
+                        } else {
+                            sendTransferMessage(sender, plugin.getMessage("pay.transfer-failed")
+                                    .replace("{error}", "Transfer was not accepted; one or both accounts are unavailable"));
+                        }
+                        completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                        return;
+                    }
+
+                    accepted = true;
+                    if (localMode) {
+                        completeAcceptedTransfer(idempotencyKeys, senderUuid, idempotencyKey,
+                                System.currentTimeMillis());
+                        notifyTransferSuccess(sender, targetName, amount, senderBalance.doubleValue());
+                        plugin.getLogger().fine("Accepted LOCAL /pay transfer: " + senderName + " -> " + targetName
+                                + " " + amount.toPlainString() + " (sender balance: " + senderBalance + ")");
+                    } else {
+                        plugin.getLogger().fine("Queued paired /pay transfer pending authority result: "
+                                + senderName + " -> " + targetName + " " + amount.toPlainString());
+                    }
+                } catch (RuntimeException e) {
+                    plugin.getLogger().severe((accepted ? "Paired /pay transfer was accepted but follow-up failed: "
+                            : "Paired /pay transfer failed: ") + e.getMessage());
+                    plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                            "Paired /pay transfer processing stacktrace", e);
+                    if (!localMode && pending != null && pendingPairedTransfers.remove(senderUuid, pending)) {
+                        quarantineSentUnknown(idempotencyKeys, senderUuid, idempotencyKey);
+                        sendTransferMessage(sender, unknownTransferMessage());
+                    } else {
+                        sendTransferMessage(sender, plugin.getMessage("pay.transfer-failed")
+                                .replace("{error}", accepted
+                                        ? "Transfer was accepted; check the account balance before retrying"
+                                        : "Transfer was not confirmed; check the account balance before retrying"));
+                    }
+                    if (!accepted && localMode) {
+                        completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                    }
+                } finally {
+                    releaseTransferLock(senderUuid, targetUuid);
+                }
+            }
+        });
+    }
+
+    private synchronized boolean ensureCompletionListenerRegistered() {
+        if (localMode || config == null || config.isCMIMode()) return true;
+        if (completionListenerRegistered) return true;
+        if (!SyncmoneyEventBus.isInitialized()) return false;
+        SyncmoneyEventBus.getInstance().register(PostTransactionEvent.class, this::onPostTransactionEvent);
+        completionListenerRegistered = true;
+        return true;
+    }
+
+    private void onPostTransactionEvent(PostTransactionEvent event) {
+        if (event == null || event.getType() != AsyncPreTransactionEvent.TransactionType.WITHDRAW
+                || !EconomyEvent.EventSource.PLAYER_TRANSFER.name().equals(event.getSource())
+                || event.getPlayerUuid() == null) {
+            return;
+        }
+        PendingPayTransfer pending = pendingPairedTransfers.get(event.getPlayerUuid());
+        if (pending == null || event.getAmount() == null
+                || pending.amount().compareTo(event.getAmount()) != 0
+                || event.getTargetUuid() != null && !pending.targetUuid().equals(event.getTargetUuid())) {
+            return;
+        }
+        if (!pendingPairedTransfers.remove(pending.senderUuid(), pending)) return;
+
+        String error = event.getErrorMessage();
+        PayTransferOutcome outcome;
+        if (event.isSuccess()) {
+            outcome = "CONFIRMED_QUARANTINED".equals(error)
+                    ? PayTransferOutcome.CONFIRMED_QUARANTINED : PayTransferOutcome.CONFIRMED;
+        } else if ("SENT_UNKNOWN".equals(error)) {
+            outcome = PayTransferOutcome.UNKNOWN;
+        } else {
+            outcome = PayTransferOutcome.REJECTED;
+        }
+        completePairedTransfer(pending, new PayTransferCompletion(outcome, event.getBalanceAfter()));
+    }
+
+    private void completePairedTransfer(PendingPayTransfer pending, PayTransferCompletion completion) {
+        if (completion == null) return;
+        Player sender = pending.sender();
+        UUID senderUuid = pending.senderUuid();
+        String idempotencyKey = pending.idempotencyKey();
+        String targetName = pending.targetName();
+        BigDecimal amount = pending.amount();
+        switch (completion.outcome()) {
+            case CONFIRMED -> {
+                if (completion.senderBalance() == null) {
+                    quarantineSentUnknown(idempotencyKeys, senderUuid, idempotencyKey);
+                    sendTransferMessage(sender, unknownTransferMessage());
+                    return;
+                }
+                completeAcceptedTransfer(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+                notifyTransferSuccess(sender, targetName, amount, completion.senderBalance().doubleValue());
+            }
+            case REJECTED -> {
+                if (completion.senderBalance() != null && completion.senderBalance().compareTo(amount) < 0) {
+                    sendTransferMessage(sender, plugin.getMessage("pay.insufficient-funds")
+                            .replace("{balance}", FormatUtil.formatCurrency(completion.senderBalance()))
+                            .replace("{amount}", FormatUtil.formatCurrency(amount)));
+                } else {
+                    sendTransferMessage(sender, plugin.getMessage("pay.transfer-failed")
+                            .replace("{error}", "Transfer was rejected by authority; no transfer was applied"));
+                }
+                completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
+            }
+            case UNKNOWN -> {
+                quarantineSentUnknown(idempotencyKeys, senderUuid, idempotencyKey);
+                sendTransferMessage(sender, unknownTransferMessage());
+            }
+            case CONFIRMED_QUARANTINED -> {
+                quarantineConfirmedReceipt(idempotencyKeys, senderUuid, idempotencyKey);
+                sendTransferMessage(sender, confirmedTransferFollowupFailureMessage());
+            }
+        }
+    }
+
+    private void sendTransferMessage(Player sender, String message) {
+        if (sender == null || message == null || message.isEmpty()) return;
+        try {
+            sender.getScheduler().run(plugin, task -> MessageHelper.sendMessage(sender, message), null);
+        } catch (RuntimeException e) {
+            plugin.getLogger().warning("Could not schedule /pay status message: " + e.getMessage());
+        }
+    }
+
+    private void executeCmiTransferAsync(Player sender, String targetName, BigDecimal amount) {
 
         UUID senderUuid = sender.getUniqueId();
         String senderName = sender.getName();
@@ -160,100 +386,6 @@ final class PayTransferExecutor {
                     handleTransferException(sender, e, amount, receiptConfirmed);
                 } finally {
                     releaseTransferLock(senderUuid, targetUuid);
-                }
-            }
-        });
-    }
-
-
-
-
-
-    private void executeLocalTransfer(Player sender, String targetName, BigDecimal amount) {
-        UUID senderUuid = sender.getUniqueId();
-        String senderName = sender.getName();
-
-        String idempotencyKey = senderUuid + ":" + targetName + ":" + amount.toPlainString();
-        long currentTime = System.currentTimeMillis();
-
-        cleanupIdempotencyKeys(senderUuid, idempotencyKey);
-
-        String existingKey = idempotencyKeys.putIfAbsent(senderUuid, idempotencyKey + ":" + currentTime);
-        if (existingKey != null && existingKey.startsWith(idempotencyKey)) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("pay.duplicate-transfer"));
-            return;
-        }
-
-        plugin.getServer().getAsyncScheduler().runNow(plugin, (task) -> {
-            MigrationLock.WriteLease migrationWrite = MigrationLock.tryAcquireWrite();
-            if (migrationWrite == null) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
-                cleanupIdempotencyKeys(senderUuid, idempotencyKey);
-                return;
-            }
-
-            try (migrationWrite) {
-                Optional<UUID> targetUuidOpt = nameResolver.resolve(targetName);
-                if (targetUuidOpt.isEmpty()) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
-                            .replace("{player}", targetName));
-                    return;
-                }
-
-                UUID targetUuid = targetUuidOpt.get();
-
-                if (!lockManager.acquireDualLock(senderUuid, targetUuid)) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
-                    return;
-                }
-
-                try {
-                    BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
-
-                    if (senderBalance.compareTo(amount) < 0) {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.insufficient-funds")
-                                .replace("{balance}", FormatUtil.formatCurrency(senderBalance)));
-                        return;
-                    }
-
-                    BigDecimal senderNewBalance = economyFacade.withdraw(senderUuid, amount,
-                            EconomyEvent.EventSource.PLAYER_TRANSFER);
-
-                    if (senderNewBalance.compareTo(BigDecimal.ZERO) < 0) {
-                        if (economyFacade.isPlayerLocked(senderUuid)) {
-                            MessageHelper.sendMessage(sender, plugin.getMessage("pay.account-locked"));
-                        } else {
-                            MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
-                        }
-                        return;
-                    }
-
-                    BigDecimal targetNewBalance = economyFacade.deposit(targetUuid, amount,
-                            EconomyEvent.EventSource.PLAYER_TRANSFER);
-
-                    if (targetNewBalance.compareTo(BigDecimal.ZERO) < 0) {
-                        plugin.getLogger().warning("Local transfer deposit failed for target " + targetUuid
-                                + ", rolling back sender " + senderUuid);
-                        economyFacade.deposit(senderUuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
-                        MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
-                        return;
-                    }
-
-                    if (baltopManager != null) {
-                        baltopManager.updatePlayerRank(senderUuid, senderNewBalance.doubleValue());
-                        baltopManager.updatePlayerRank(targetUuid, targetNewBalance.doubleValue());
-                    }
-
-                    notifyTransferSuccess(sender, targetName, amount, senderNewBalance.doubleValue());
-
-                    plugin.getLogger().fine("Local Transfer: " + senderName + " -> " + targetName +
-                            " " + amount.toPlainString() + " (sender new balance: " + senderNewBalance + ")");
-
-                } catch (Exception e) {
-                    plugin.getLogger().severe("Local transfer error: " + e.getMessage());
-                    MessageHelper.sendMessage(sender, plugin.getMessage("pay.error"));
-                } finally {
-                    lockManager.releaseDualLock(senderUuid, targetUuid);
                 }
             }
         });
@@ -393,13 +525,18 @@ final class PayTransferExecutor {
 
         sender.getScheduler().run(plugin, task -> MessageHelper.sendMessage(sender, senderMsg), null);
 
-        Player target = Bukkit.getServer().getPlayerExact(targetName);
-        if (target != null && target.isOnline()) {
-            String receiverMsg = plugin.getMessage("pay.success-receiver")
-                    .replace("{player}", sender.getName())
-                    .replace("{amount}", amount.toPlainString());
-            target.getScheduler().run(plugin, task -> MessageHelper.sendMessage(target, receiverMsg), null);
-        }
+        org.bukkit.Server server = plugin.getServer();
+        if (server == null) return;
+        String receiverMsg = plugin.getMessage("pay.success-receiver")
+                .replace("{player}", sender.getName())
+                .replace("{amount}", amount.toPlainString());
+        server.getGlobalRegionScheduler().run(plugin, task -> {
+            Player target = server.getPlayerExact(targetName);
+            if (target != null && target.isOnline()) {
+                target.getScheduler().run(plugin,
+                        entityTask -> MessageHelper.sendMessage(target, receiverMsg), null);
+            }
+        });
     }
 
 
@@ -489,6 +626,13 @@ final class PayTransferExecutor {
     static void completeConfirmedTransfer(Map<UUID, String> keys, UUID senderUuid, String operationKey,
             long completedAt) {
         keys.computeIfPresent(senderUuid, (uuid, current) -> current.equals(operationKey + RECEIPT_CONFIRMED_SUFFIX)
+                ? operationKey + ":" + completedAt
+                : current);
+    }
+
+    static void completeAcceptedTransfer(Map<UUID, String> keys, UUID senderUuid, String operationKey,
+            long completedAt) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> current.equals(operationKey + IN_FLIGHT_SUFFIX)
                 ? operationKey + ":" + completedAt
                 : current);
     }

@@ -1,11 +1,10 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
-import noietime.syncmoney.economy.EconomyFacade.PendingRollback;
 import noietime.syncmoney.economy.EconomyFacade.TransferContext;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.migration.MigrationLock;
+import noietime.syncmoney.storage.RedisMutationException;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -21,14 +20,16 @@ final class TransferOrchestrator {
     private final SyncmoneyConfig config;
     private final CacheManager cacheManager;
     private final MemoryStateManager stateManager;
+    private final TransactionWriter transactionWriter;
 
     TransferOrchestrator(EconomyFacade facade, Plugin plugin, SyncmoneyConfig config,
-            CacheManager cacheManager, MemoryStateManager stateManager) {
+            CacheManager cacheManager, MemoryStateManager stateManager, TransactionWriter transactionWriter) {
         this.facade = facade;
         this.plugin = plugin;
         this.config = config;
         this.cacheManager = cacheManager;
         this.stateManager = stateManager;
+        this.transactionWriter = transactionWriter;
     }
 
     /**
@@ -51,6 +52,10 @@ final class TransferOrchestrator {
             plugin.getLogger().fine("Atomic transfer rejected while one or both accounts are loading");
             return null;
         }
+        if (stateManager.isUnavailable(fromUuid) || stateManager.isUnavailable(toUuid)) {
+            plugin.getLogger().warning("Atomic transfer rejected while an account authority outcome is unresolved");
+            return null;
+        }
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
             plugin.getLogger().warning("Atomic transfer rejected: one or both players are locked");
             return null;
@@ -70,9 +75,10 @@ final class TransferOrchestrator {
             }
         }
 
-        CacheManager.TransferResult result = cacheManager.atomicTransfer(fromUuid, toUuid, amount);
+        String operationId = TransferRequestIds.newOperationId();
+        CacheManager.TransferResult result = executeRedisTransfer(fromUuid, toUuid, amount, operationId);
 
-        if (result != null) {
+        if (result != null && result != CacheManager.TransferResult.insufficientFunds()) {
             if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
                 circuitBreaker.onTransactionComplete(fromUuid, result.fromNewBalance.add(amount), result.fromNewBalance);
                 circuitBreaker.onTransactionComplete(toUuid, result.toNewBalance.subtract(amount), result.toNewBalance);
@@ -105,6 +111,9 @@ final class TransferOrchestrator {
 
     private BigDecimal atomicTransferAdmitted(UUID fromUuid, UUID toUuid, BigDecimal amount,
             EconomyEvent.EventSource source) {
+        if (fromUuid == null || toUuid == null || fromUuid.equals(toUuid) || amount == null || source == null) {
+            return BigDecimal.valueOf(-1);
+        }
         if (!facade.ensureAccountsLoaded(fromUuid, toUuid)) {
             plugin.getLogger().fine("Atomic transfer rejected while one or both accounts are loading");
             return BigDecimal.valueOf(-1);
@@ -114,98 +123,38 @@ final class TransferOrchestrator {
             return BigDecimal.valueOf(-1);
         }
 
-        var circuitBreaker = facade.getCircuitBreaker();
-        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
-            var cbFrom = circuitBreaker.checkTransaction(fromUuid, amount.negate(), source);
-            if (!cbFrom.allowed()) {
-                plugin.getLogger().warning("Atomic transfer rejected by CircuitBreaker (from): " + cbFrom.reason());
-                return BigDecimal.valueOf(-1);
-            }
-            var cbTo = circuitBreaker.checkTransaction(toUuid, amount, source);
-            if (!cbTo.allowed()) {
-                plugin.getLogger().warning("Atomic transfer rejected by CircuitBreaker (to): " + cbTo.reason());
-                return BigDecimal.valueOf(-1);
-            }
-        }
-
         String transferId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
-
-        BigDecimal withdrawResult = facade.withdraw(fromUuid, amount, source);
-
-        if (withdrawResult.compareTo(BigDecimal.ZERO) < 0) {
-            plugin.getLogger().warning("Atomic transfer failed at withdraw stage: " + fromUuid + " -> " + toUuid);
+        BigDecimal result = transactionWriter.transfer(fromUuid, toUuid, amount, source);
+        if (result.compareTo(BigDecimal.ZERO) < 0) {
             return BigDecimal.valueOf(-1);
         }
 
-        PendingRollback rollbackInfo = new PendingRollback(fromUuid, amount, transferId, now);
-        stateManager.putPendingRollback(toUuid, rollbackInfo);
+        stateManager.putTransferContext(transferId, new TransferContext(
+                fromUuid, toUuid, amount, now, true, false));
 
-        try {
-            BigDecimal depositResult = facade.deposit(toUuid, amount, source);
-
-            if (depositResult.compareTo(BigDecimal.ZERO) < 0) {
-                plugin.getLogger().warning("Atomic transfer failed at deposit stage, initiating rollback: " + fromUuid + " -> " + toUuid);
-                rollbackWithdraw(fromUuid, amount, source, transferId);
-                return BigDecimal.valueOf(-1);
-            }
-
-            stateManager.putTransferContext(transferId, new TransferContext(
-                fromUuid, toUuid, amount, now, true, false
-            ));
-
-            stateManager.removePendingRollback(toUuid);
-
-            var playerTransactionGuard = facade.getPlayerTransactionGuard();
-            if (playerTransactionGuard != null) {
+        var playerTransactionGuard = facade.getPlayerTransactionGuard();
+        if (playerTransactionGuard != null) {
+            try {
                 playerTransactionGuard.checkAndLockReceiverForTransfer(toUuid, amount);
+            } catch (RuntimeException e) {
+                plugin.getLogger().warning("Transfer accepted but receiver guard notification failed: " + e.getMessage());
             }
+        }
 
-            if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && source != EconomyEvent.EventSource.TEST) {
-                BigDecimal fromBalance = facade.getBalance(fromUuid);
+        var circuitBreaker = facade.getCircuitBreaker();
+        if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()
+                && source != EconomyEvent.EventSource.TEST) {
+            try {
+                BigDecimal fromBalance = result;
                 BigDecimal toBalance = facade.getBalance(toUuid);
                 circuitBreaker.onTransactionComplete(fromUuid, fromBalance.add(amount), fromBalance);
                 circuitBreaker.onTransactionComplete(toUuid, toBalance.subtract(amount), toBalance);
+            } catch (RuntimeException e) {
+                plugin.getLogger().warning("Transfer accepted but circuit-breaker completion failed: " + e.getMessage());
             }
-
-            return withdrawResult;
-
-        } catch (Exception e) {
-
-            plugin.getLogger().severe("Atomic transfer failed with exception, initiating rollback: " + e.getMessage());
-            rollbackWithdraw(fromUuid, amount, source, transferId);
-            return BigDecimal.valueOf(-1);
         }
-    }
-
-    /**
-     * [SYNC-ECO-105] Rollback a withdraw that was made as part of a failed transfer.
-     */
-    private void rollbackWithdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String transferId) {
-        try {
-            facade.getBalance(uuid);
-            long now = System.currentTimeMillis();
-
-            stateManager.compute(uuid, (key, existing) -> {
-                BigDecimal current = (existing != null) ? existing.balance() : BigDecimal.ZERO;
-                long version = (existing != null) ? existing.version() : 0L;
-                return new EconomyState(current.add(amount), version + 1, now);
-            });
-
-            plugin.getLogger().info("Rollback successful: restored " + amount + " to " + uuid + " (transferId: " + transferId + ")");
-
-            stateManager.computeTransferContext(transferId, (k, ctx) -> {
-                if (ctx != null) {
-                    return new TransferContext(
-                        ctx.fromUuid(), ctx.toUuid(), ctx.amount(), ctx.timestamp(), false, true
-                    );
-                }
-                return null;
-            });
-
-        } catch (Exception e) {
-            plugin.getLogger().severe("Failed to rollback withdraw for " + uuid + ": " + e.getMessage());
-        }
+        return result;
     }
 
     /**
@@ -225,6 +174,10 @@ final class TransferOrchestrator {
             plugin.getLogger().warning("Plugin atomic transfer rejected: invalid parameters");
             return null;
         }
+        if (fromUuid.equals(toUuid)) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected: accounts must be distinct");
+            return null;
+        }
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             plugin.getLogger().warning("Plugin atomic transfer rejected: migration in progress");
@@ -239,6 +192,11 @@ final class TransferOrchestrator {
             BigDecimal amount, String pluginName) {
         if (!facade.ensureAccountsLoaded(fromUuid, toUuid)) {
             plugin.getLogger().fine("Plugin atomic transfer rejected while one or both accounts are loading");
+            return null;
+        }
+        if (stateManager.isUnavailable(fromUuid) || stateManager.isUnavailable(toUuid)
+                || stateManager.hasPendingWrite(fromUuid) || stateManager.hasPendingWrite(toUuid)) {
+            plugin.getLogger().warning("Plugin atomic transfer rejected while either account is unavailable or has accepted writes pending");
             return null;
         }
         if (facade.isPlayerLocked(fromUuid) || facade.isPlayerLocked(toUuid)) {
@@ -260,9 +218,10 @@ final class TransferOrchestrator {
             }
         }
 
-        CacheManager.TransferResult result = cacheManager.atomicTransfer(fromUuid, toUuid, amount);
+        String operationId = TransferRequestIds.newOperationId();
+        CacheManager.TransferResult result = executeRedisTransfer(fromUuid, toUuid, amount, operationId);
 
-        if (result != null) {
+        if (result != null && result != CacheManager.TransferResult.insufficientFunds()) {
             if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled()) {
                 circuitBreaker.onTransactionComplete(fromUuid, result.fromNewBalance.add(amount), result.fromNewBalance);
                 circuitBreaker.onTransactionComplete(toUuid, result.toNewBalance.subtract(amount), result.toNewBalance);
@@ -271,5 +230,59 @@ final class TransferOrchestrator {
         }
 
         return result;
+    }
+
+    private CacheManager.TransferResult executeRedisTransfer(UUID fromUuid, UUID toUuid,
+            BigDecimal amount, String operationId) {
+        if (!stateManager.beginDirectTransferMutation(operationId, fromUuid, toUuid)) {
+            plugin.getLogger().warning("Atomic transfer rejected because an account is unavailable or has accepted writes pending: "
+                    + fromUuid + " -> " + toUuid);
+            return null;
+        }
+        try {
+            CacheManager.TransferResult result = cacheManager.atomicTransfer(fromUuid, toUuid, amount);
+            if (result == CacheManager.TransferResult.insufficientFunds()) {
+                reconcileRejectedTransfer(operationId, fromUuid, toUuid);
+            } else if (hasConfirmedReceipt(result)) {
+                stateManager.completeDirectTransferMutation(operationId, fromUuid,
+                        result.fromNewBalance, result.fromNewVersion, toUuid,
+                        result.toNewBalance, result.toNewVersion);
+            } else {
+                plugin.getLogger().severe("Atomic transfer returned an invalid receipt; both accounts remain unavailable: "
+                        + fromUuid + " -> " + toUuid);
+            }
+            return result;
+        } catch (RedisMutationException e) {
+            if (e.executionState() == RedisMutationException.ExecutionState.SENT_UNKNOWN) {
+                plugin.getLogger().severe("Atomic transfer outcome is unknown; both accounts are unavailable pending reconciliation: "
+                        + fromUuid + " -> " + toUuid);
+            } else if (e.executionState() == RedisMutationException.ExecutionState.REJECTED) {
+                reconcileRejectedTransfer(operationId, fromUuid, toUuid);
+            } else {
+                stateManager.cancelDirectTransferMutation(operationId, fromUuid, toUuid);
+            }
+            plugin.getLogger().warning("Atomic transfer did not return a confirmed receipt: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean hasConfirmedReceipt(CacheManager.TransferResult result) {
+        return result != null && result.fromNewBalance != null && result.toNewBalance != null
+                && result.fromNewVersion >= 0L && result.toNewVersion >= 0L;
+    }
+
+    private void reconcileRejectedTransfer(String operationId, UUID fromUuid, UUID toUuid) {
+        try {
+            CacheManager.TransferResult snapshot = cacheManager.readTransferSnapshotStrict(fromUuid, toUuid);
+            if (!hasConfirmedReceipt(snapshot)) {
+                throw new IllegalStateException("Redis returned an invalid transfer authority snapshot");
+            }
+            stateManager.completeDirectTransferMutation(operationId, fromUuid,
+                    snapshot.fromNewBalance, snapshot.fromNewVersion, toUuid,
+                    snapshot.toNewBalance, snapshot.toNewVersion);
+        } catch (RuntimeException e) {
+            plugin.getLogger().severe("Rejected transfer could not refresh its authority pair; both accounts are unavailable: "
+                    + e.getMessage());
+        }
     }
 }

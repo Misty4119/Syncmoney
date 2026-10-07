@@ -76,6 +76,9 @@ public class EventConsumerManager {
                     economyWriteQueue,
                     event -> localEconomyHandler.persistAccepted(
                             event, economyFacade.resolveCachedPlayerName(event.playerUuid())),
+                    (out, in) -> localEconomyHandler.persistAcceptedTransfer(
+                            out, economyFacade.resolveCachedPlayerName(out.playerUuid()),
+                            in, economyFacade.resolveCachedPlayerName(in.playerUuid())),
                     events -> localEconomyHandler.quarantineAcceptedWrites(
                             events, economyFacade::resolveCachedPlayerName),
                     plugin.getLogger(), 10_000,
