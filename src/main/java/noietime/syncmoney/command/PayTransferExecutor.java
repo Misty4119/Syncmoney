@@ -11,6 +11,7 @@ import noietime.syncmoney.economy.EconomyWriteQueue;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.TransferLockManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.PubsubSubscriber;
@@ -36,6 +37,10 @@ import java.util.concurrent.ConcurrentHashMap;
 final class PayTransferExecutor {
 
     private static final long IDEMPOTENCY_KEY_TTL_MILLIS = 60_000;
+    private static final String IN_FLIGHT_SUFFIX = ":IN_FLIGHT";
+    private static final String RECEIPT_CONFIRMED_SUFFIX = ":RECEIPT_CONFIRMED";
+    private static final String SENT_UNKNOWN_SUFFIX = ":SENT_UNKNOWN";
+    private static final String CONFIRMED_QUARANTINE_SUFFIX = ":CONFIRMED_QUARANTINE";
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -89,9 +94,15 @@ final class PayTransferExecutor {
 
         cleanupIdempotencyKeys(senderUuid, idempotencyKey);
 
-        String existingKey = idempotencyKeys.putIfAbsent(senderUuid, idempotencyKey + ":" + currentTime);
-        if (existingKey != null && existingKey.startsWith(idempotencyKey)) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("pay.duplicate-transfer"));
+        String existingKey = idempotencyKeys.putIfAbsent(senderUuid, idempotencyKey + IN_FLIGHT_SUFFIX);
+        if (existingKey != null) {
+            if (isSentUnknownKey(existingKey)) {
+                MessageHelper.sendMessage(sender, unknownTransferMessage());
+            } else if (isConfirmedQuarantineKey(existingKey)) {
+                MessageHelper.sendMessage(sender, confirmedTransferFollowupFailureMessage());
+            } else {
+                MessageHelper.sendMessage(sender, plugin.getMessage("pay.duplicate-transfer"));
+            }
             return;
         }
 
@@ -99,7 +110,7 @@ final class PayTransferExecutor {
             MigrationLock.WriteLease migrationWrite = MigrationLock.tryAcquireWrite();
             if (migrationWrite == null) {
                 MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
-                cleanupIdempotencyKeys(senderUuid, idempotencyKey);
+                completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
                 return;
             }
 
@@ -108,6 +119,7 @@ final class PayTransferExecutor {
                 if (targetUuidOpt.isEmpty()) {
                     MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
                             .replace("{player}", targetName));
+                    completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
                     return;
                 }
 
@@ -116,21 +128,36 @@ final class PayTransferExecutor {
                 boolean lockAcquired = acquireTransferLock(senderUuid, targetUuid);
                 if (!lockAcquired) {
                     MessageHelper.sendMessage(sender, plugin.getMessage("pay.lock-failed"));
+                    completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey, System.currentTimeMillis());
                     return;
                 }
 
+                boolean receiptConfirmed = false;
                 try {
                     Object result = executeLuaTransfer(senderUuid, targetUuid, amount);
 
                     if (result instanceof java.util.List) {
-                        handleTransferSuccess(sender, senderName, targetName, amount, result);
+                        receiptConfirmed = true;
+                        markReceiptConfirmed(idempotencyKeys, senderUuid, idempotencyKey);
+                        handleTransferSuccess(sender, senderName, targetName, targetUuid, amount, result);
+                        completeConfirmedTransfer(idempotencyKeys, senderUuid, idempotencyKey,
+                                System.currentTimeMillis());
                     } else if (result instanceof String) {
                         BigDecimal senderBalance = economyFacade.getBalance(senderUuid);
                         handleTransferError(sender, result, senderBalance, amount);
+                        completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey,
+                                System.currentTimeMillis());
                     }
                 } catch (Exception e) {
-                    handleTransferException(sender, e);
-                    cleanupIdempotencyKeys(senderUuid, idempotencyKey);
+                    if (receiptConfirmed) {
+                        quarantineConfirmedReceipt(idempotencyKeys, senderUuid, idempotencyKey);
+                    } else if (isSentUnknown(e) || !isKnownNoMutationFailure(e)) {
+                        quarantineSentUnknown(idempotencyKeys, senderUuid, idempotencyKey);
+                    } else {
+                        completeNotApplied(idempotencyKeys, senderUuid, idempotencyKey,
+                                System.currentTimeMillis());
+                    }
+                    handleTransferException(sender, e, amount, receiptConfirmed);
                 } finally {
                     releaseTransferLock(senderUuid, targetUuid);
                 }
@@ -237,21 +264,10 @@ final class PayTransferExecutor {
 
 
     private Object executeLuaTransfer(UUID senderUuid, UUID targetUuid, BigDecimal amount) throws Exception {
-        String senderKey = "syncmoney:balance:" + senderUuid;
-        String senderVersionKey = "syncmoney:version:" + senderUuid;
-        String targetKey = "syncmoney:balance:" + targetUuid;
-        String targetVersionKey = "syncmoney:version:" + targetUuid;
-
-        try (var jedis = redisManager.getResource()) {
-            return jedis.evalsha(
-                    luaScriptManager.getTransferScriptSha(),
-                    4,
-                    senderKey, senderVersionKey, targetKey, targetVersionKey,
-                    amount.toPlainString());
-        }
+        return luaScriptManager.evalTransfer(senderUuid, targetUuid, amount);
     }
 
-    private void handleTransferSuccess(Player sender, String senderName, String targetName,
+    private void handleTransferSuccess(Player sender, String senderName, String targetName, UUID targetUuid,
             BigDecimal amount, Object result) {
         @SuppressWarnings("unchecked")
         var list = (java.util.List<?>) result;
@@ -269,31 +285,6 @@ final class PayTransferExecutor {
         long targetVersion = Long.parseLong(list.get(3).toString());
 
         UUID senderUuid = sender.getUniqueId();
-        UUID targetUuid = sender.getServer().getPlayerUniqueId(targetName);
-        if (targetUuid == null) {
-            try {
-                if (list.size() > 4) {
-                    targetUuid = UUID.fromString(list.get(4).toString());
-                } else {
-                    var offlinePlayer = plugin.getServer().getOfflinePlayerIfCached(targetName);
-                    if (offlinePlayer != null) {
-                        targetUuid = offlinePlayer.getUniqueId();
-                    }
-                }
-            } catch (Exception e) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-uuid-not-found")
-                        .replace("{player}", targetName));
-                plugin.getLogger().warning("Failed to get UUID for player " + targetName + ": " + e.getMessage());
-                return;
-            }
-        }
-
-        if (targetUuid == null) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("pay.target-not-found")
-                    .replace("{player}", targetName));
-            return;
-        }
-
         economyFacade.updateMemoryState(senderUuid, senderNewBalanceBD, senderVersion);
         economyFacade.updateMemoryState(targetUuid, targetNewBalanceBD, targetVersion);
         cacheManager.updateMemoryCache(senderUuid, senderNewBalanceBD, senderVersion);
@@ -353,15 +344,29 @@ final class PayTransferExecutor {
         }
     }
 
-    private void handleTransferException(Player sender, Exception e) {
+    private void handleTransferException(Player sender, Exception e, BigDecimal amount, boolean receiptConfirmed) {
+        if (receiptConfirmed) {
+            plugin.getLogger().severe("/pay transfer was confirmed by Redis, but post-receipt processing failed; "
+                    + "sender is quarantined from further /pay operations until reconciliation or restart");
+            MessageHelper.sendMessage(sender, confirmedTransferFollowupFailureMessage());
+            return;
+        }
+        if (isUnknownOutcome(e)) {
+            plugin.getLogger().severe("/pay transfer outcome is unknown; sender is quarantined from further /pay "
+                    + "operations until reconciliation or restart");
+            MessageHelper.sendMessage(sender, unknownTransferMessage());
+            return;
+        }
         String errorMsg = e.getMessage();
-
+        if (e.getCause() != null && e.getCause().getMessage() != null) {
+            errorMsg = (errorMsg == null ? "" : errorMsg + ": ") + e.getCause().getMessage();
+        }
 
         if (errorMsg != null && errorMsg.contains("INSUFFICIENT_FUNDS")) {
             double senderBalance = economyFacade.getBalanceAsDouble(sender.getUniqueId());
             String msg = plugin.getMessage("pay.insufficient-funds")
                     .replace("{balance}", FormatUtil.formatCurrency(senderBalance))
-                    .replace("{amount}", "?");
+                    .replace("{amount}", FormatUtil.formatCurrency(amount));
             MessageHelper.sendMessage(sender, msg);
             return;
         }
@@ -463,23 +468,108 @@ final class PayTransferExecutor {
     }
 
     private void cleanupIdempotencyKeys(UUID senderUuid, String currentKey) {
-        idempotencyKeys.compute(senderUuid, (uuid, existingKey) -> {
+        cleanupIdempotencyKeys(idempotencyKeys, senderUuid, currentKey, System.currentTimeMillis());
+    }
+
+    static void quarantineSentUnknown(Map<UUID, String> keys, UUID senderUuid, String operationKey) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> belongsToOperation(current, operationKey)
+                ? operationKey + SENT_UNKNOWN_SUFFIX
+                : current);
+    }
+
+    static void markReceiptConfirmed(Map<UUID, String> keys, UUID senderUuid, String operationKey) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> {
+            if (!belongsToOperation(current, operationKey) || isSentUnknownKey(current)) {
+                return current;
+            }
+            return operationKey + RECEIPT_CONFIRMED_SUFFIX;
+        });
+    }
+
+    static void completeConfirmedTransfer(Map<UUID, String> keys, UUID senderUuid, String operationKey,
+            long completedAt) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> current.equals(operationKey + RECEIPT_CONFIRMED_SUFFIX)
+                ? operationKey + ":" + completedAt
+                : current);
+    }
+
+    static void completeNotApplied(Map<UUID, String> keys, UUID senderUuid, String operationKey, long completedAt) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> current.equals(operationKey + IN_FLIGHT_SUFFIX)
+                ? operationKey + ":" + completedAt
+                : current);
+    }
+
+    static void quarantineConfirmedReceipt(Map<UUID, String> keys, UUID senderUuid, String operationKey) {
+        keys.computeIfPresent(senderUuid, (uuid, current) -> belongsToOperation(current, operationKey)
+                ? operationKey + CONFIRMED_QUARANTINE_SUFFIX
+                : current);
+    }
+
+    static void cleanupIdempotencyKeys(Map<UUID, String> keys, UUID senderUuid, String currentKey, long now) {
+        keys.compute(senderUuid, (uuid, existingKey) -> {
             if (existingKey == null) {
                 return null;
             }
-            String[] parts = existingKey.split(":");
-            if (parts.length > 3) {
-                try {
-                    long timestamp = Long.parseLong(parts[parts.length - 1]);
-                    if (System.currentTimeMillis() - timestamp > IDEMPOTENCY_KEY_TTL_MILLIS
-                            || !existingKey.startsWith(currentKey)) {
-                        return null;
-                    }
-                } catch (NumberFormatException e) {
-                    return null;
-                }
+            if (isNonExpiringKey(existingKey)) {
+                return existingKey;
             }
-            return existingKey;
+            String prefix = currentKey + ":";
+            if (!existingKey.startsWith(prefix)) {
+                return null;
+            }
+            try {
+                long timestamp = Long.parseLong(existingKey.substring(prefix.length()));
+                return now - timestamp > IDEMPOTENCY_KEY_TTL_MILLIS ? null : existingKey;
+            } catch (NumberFormatException e) {
+                return null;
+            }
         });
+    }
+
+    static boolean isSentUnknownKey(String key) {
+        return key != null && key.endsWith(SENT_UNKNOWN_SUFFIX);
+    }
+
+    static boolean isConfirmedQuarantineKey(String key) {
+        return key != null && key.endsWith(CONFIRMED_QUARANTINE_SUFFIX);
+    }
+
+    private static boolean isNonExpiringKey(String key) {
+        return key.endsWith(IN_FLIGHT_SUFFIX) || key.endsWith(RECEIPT_CONFIRMED_SUFFIX)
+                || isSentUnknownKey(key) || isConfirmedQuarantineKey(key);
+    }
+
+    private static boolean belongsToOperation(String current, String operationKey) {
+        return current.equals(operationKey + IN_FLIGHT_SUFFIX)
+                || current.equals(operationKey + RECEIPT_CONFIRMED_SUFFIX)
+                || current.equals(operationKey + SENT_UNKNOWN_SUFFIX)
+                || current.equals(operationKey + CONFIRMED_QUARANTINE_SUFFIX)
+                || current.startsWith(operationKey + ":");
+    }
+
+    private static boolean isSentUnknown(Exception failure) {
+        return failure instanceof RedisMutationException mutation
+                && mutation.executionState() == RedisMutationException.ExecutionState.SENT_UNKNOWN;
+    }
+
+    private static boolean isKnownNoMutationFailure(Exception failure) {
+        return failure instanceof RedisMutationException mutation
+                && (mutation.executionState() == RedisMutationException.ExecutionState.NOT_SENT
+                        || mutation.executionState() == RedisMutationException.ExecutionState.REJECTED);
+    }
+
+    private static boolean isUnknownOutcome(Exception failure) {
+        return isSentUnknown(failure) || !isKnownNoMutationFailure(failure);
+    }
+
+    private String unknownTransferMessage() {
+        return plugin.getMessage("pay.transfer-failed").replace("{error}",
+                "Previous transfer outcome is unknown. Further /pay operations are blocked until reconciliation.");
+    }
+
+    private String confirmedTransferFollowupFailureMessage() {
+        return plugin.getMessage("pay.transfer-failed").replace("{error}",
+                "Redis confirmed the transfer, but follow-up processing failed. Further /pay operations are blocked "
+                        + "until reconciliation or restart; do not retry this transfer.");
     }
 }

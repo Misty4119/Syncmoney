@@ -4,11 +4,13 @@ import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
+import redis.clients.jedis.Jedis;
 import redis.clients.jedis.exceptions.JedisConnectionException;
+import redis.clients.jedis.exceptions.JedisDataException;
+import redis.clients.jedis.exceptions.JedisNoScriptException;
 
 import java.math.BigDecimal;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
@@ -26,8 +28,6 @@ public final class CacheManager {
 
     private static final String KEY_PREFIX_BALANCE = "syncmoney:balance:";
     private static final String KEY_PREFIX_VERSION = "syncmoney:version:";
-    private static final long MIN_RELOAD_INTERVAL_MS = 60000;
-
     /**
      * [TASK-444 FIX] Maximum cache size for LRU eviction.
      */
@@ -44,16 +44,12 @@ public final class CacheManager {
 
     private final boolean redisRequired;
 
-    private String atomicSetBalanceSha;
-    private String atomicAddBalanceSha;
-    private String atomicTransferSha;
-    private volatile boolean setScriptBlocked = false;
-    private volatile boolean addScriptBlocked = false;
-    private volatile boolean transferScriptBlocked = false;
-
-    private volatile long lastReloadTime = 0;
-
-    private volatile boolean isReloading = false;
+    private volatile String atomicSetBalanceSha;
+    private volatile String atomicAddBalanceSha;
+    private volatile String atomicTransferSha;
+    private volatile String atomicSetBalanceScript;
+    private volatile String atomicAddBalanceScript;
+    private volatile String atomicTransferScript;
 
     private final java.util.concurrent.atomic.AtomicLong cacheHits = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong cacheMisses = new java.util.concurrent.atomic.AtomicLong(0);
@@ -132,13 +128,13 @@ public final class CacheManager {
      */
     private void loadLuaScripts() {
         try {
-            String atomicSetScript = loadScript("atomic_set_balance.lua");
-            String atomicAddScript = loadScript("atomic_add_balance.lua");
-            String atomicTransferScript = loadScript("atomic_transfer.lua");
+            atomicSetBalanceScript = loadScript("atomic_set_balance.lua");
+            atomicAddBalanceScript = loadScript("atomic_add_balance.lua");
+            atomicTransferScript = loadScript("atomic_transfer.lua");
 
             try (var jedis = redisManager.getResource()) {
-                atomicSetBalanceSha = jedis.scriptLoad(atomicSetScript);
-                atomicAddBalanceSha = jedis.scriptLoad(atomicAddScript);
+                atomicSetBalanceSha = jedis.scriptLoad(atomicSetBalanceScript);
+                atomicAddBalanceSha = jedis.scriptLoad(atomicAddBalanceScript);
                 atomicTransferSha = jedis.scriptLoad(atomicTransferScript);
                 plugin.getLogger().fine("Lua scripts loaded successfully (including atomic_transfer).");
             }
@@ -267,8 +263,13 @@ public final class CacheManager {
      * @return New version number
      */
     public long atomicSetBalance(UUID uuid, BigDecimal newBalance) {
-        ConfirmedAccount receipt = atomicSetBalanceReceipt(uuid, newBalance);
-        return receipt == null ? -1L : receipt.version();
+        try {
+            ConfirmedAccount receipt = atomicSetBalanceReceipt(uuid, newBalance);
+            return receipt == null ? -1L : receipt.version();
+        } catch (RedisMutationException e) {
+            plugin.getLogger().warning("Atomic set did not return a confirmed receipt: " + e.getMessage());
+            return -1L;
+        }
     }
 
     /** Apply a set and return the exact balance/version pair returned by this mutation. */
@@ -283,82 +284,94 @@ public final class CacheManager {
         String keyVersion = KEY_PREFIX_VERSION + uuid;
         BigDecimal confirmedBalance = NumericUtil.normalize(newBalance);
 
-        if (setScriptBlocked) reloadLuaScripts();
-
-        try (var jedis = redisManager.getResource()) {
-            Object result = jedis.evalsha(atomicSetBalanceSha, 2, keyVersion, keyBalance,
-                    confirmedBalance.toPlainString());
+        Jedis resource = acquireRedisResource("atomic set");
+        if (resource == null) return null;
+        try (var jedis = resource) {
+            Object result = evalScriptWithNoscriptReload(jedis, atomicSetBalanceSha, atomicSetBalanceScript,
+                    2, new String[] {keyVersion, keyBalance, confirmedBalance.toPlainString()},
+                    sha -> atomicSetBalanceSha = sha);
             long confirmedVersion = Long.parseLong(result.toString());
             ConfirmedAccount confirmed = new ConfirmedAccount(uuid, confirmedBalance, confirmedVersion);
             rememberConfirmedAccount(confirmed);
             return confirmed;
+        } catch (RedisMutationException e) {
+            throw e;
+        } catch (JedisDataException e) {
+            if (isKnownNoMutationError(e.getMessage())) {
+                plugin.getLogger().warning("Redis rejected atomic set for " + uuid + ": " + e.getMessage());
+                throw rejected("Redis explicitly rejected atomic set without mutation", e);
+            }
+            throw sentUnknown("Redis atomic set outcome is unknown for " + uuid, e);
+        } catch (Exception e) {
+            throw sentUnknown("Redis atomic set outcome is unknown for " + uuid, e);
+        }
+    }
+
+    private Jedis acquireRedisResource(String operation) {
+        try {
+            return redisManager.getResource();
         } catch (Exception e) {
             markDegradedOnRedisTransportFailure(e);
-            String errorMsg = e.getMessage();
-            if (handleLuaScriptError(errorMsg)) {
-                plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg
-                        + " (script reloaded, please retry)");
-            } else {
-                plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg);
-            }
+            plugin.getLogger().warning("Redis " + operation + " was not sent: " + e.getMessage());
             return null;
         }
     }
-    public void reloadLuaScripts() {
-        synchronized (this) {
-            if (isReloading) {
-                plugin.getLogger().warning("Lua script reload already in progress, skipping");
-                return;
-            }
 
-            long now = System.currentTimeMillis();
-
-            if (now - lastReloadTime < MIN_RELOAD_INTERVAL_MS) {
-                plugin.getLogger().warning("Skipping Lua script reload - too soon since last reload");
-                return;
-            }
-
-            isReloading = true;
-            lastReloadTime = now;
-        }
-
-        CompletableFuture.runAsync(this::doReloadLuaScripts);
-    }
-
-    private void doReloadLuaScripts() {
+    private Object evalScriptWithNoscriptReload(Jedis jedis, String sha, String script,
+            int keyCount, String[] parameters, java.util.function.Consumer<String> shaUpdater) {
         try {
-            plugin.getLogger().warning("Reloading Lua scripts due to previous blocking...");
-
-            String atomicSetScript = loadScript("atomic_set_balance.lua");
-            String atomicAddScript = loadScript("atomic_add_balance.lua");
-
-            try (var jedis = redisManager.getResource()) {
-                atomicSetBalanceSha = jedis.scriptLoad(atomicSetScript);
-                atomicAddBalanceSha = jedis.scriptLoad(atomicAddScript);
-                setScriptBlocked = false;
-                addScriptBlocked = false;
-                plugin.getLogger().fine("Lua scripts reloaded successfully.");
+            return jedis.evalsha(sha, keyCount, parameters);
+        } catch (JedisNoScriptException missingScript) {
+            final String reloadedSha;
+            try {
+                reloadedSha = jedis.scriptLoad(script);
+                shaUpdater.accept(reloadedSha);
+            } catch (Exception reloadFailure) {
+                throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                        "Redis script reload failed before mutation", reloadFailure);
             }
-        } catch (Exception e) {
-            plugin.getLogger().severe("Failed to reload Lua scripts: " + e.getMessage());
-        } finally {
-            isReloading = false;
+
+            try {
+                return jedis.evalsha(reloadedSha, keyCount, parameters);
+            } catch (JedisNoScriptException stillMissing) {
+                throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                        "Redis script remained unavailable after reload", stillMissing);
+            } catch (JedisDataException rejected) {
+                if (isKnownNoMutationError(rejected.getMessage())) throw rejected;
+                throw sentUnknown("Redis script response was an unexpected error", rejected);
+            } catch (Exception failure) {
+                throw sentUnknown("Redis script retry outcome is unknown", failure);
+            }
+        } catch (JedisDataException rejected) {
+            if (isKnownNoMutationError(rejected.getMessage())) throw rejected;
+            throw sentUnknown("Redis script response was an unexpected error", rejected);
+        } catch (Exception failure) {
+            throw sentUnknown("Redis script execution outcome is unknown", failure);
         }
     }
 
-    /**
-     * Check and handle Lua script error.
-     * @param errorMessage Error message
-     * @return true if retry is needed, false if error is unrecoverable
-     */
-    private boolean handleLuaScriptError(String errorMessage) {
-        if (errorMessage != null && errorMessage.contains("not allowed from script")) {
-            plugin.getLogger().severe("Lua script blocked by Redis, will attempt to reload...");
-            addScriptBlocked = true;
-            reloadLuaScripts();
-            return true;
-        }
-        return false;
+    private static boolean isKnownNoMutationError(String message) {
+        if (message == null) return false;
+        return message.contains("INVALID_AMOUNT")
+                || message.contains("INSUFFICIENT_FUNDS")
+                || message.contains("NEGATIVE_BALANCE")
+                || message.contains("INVALID_KEY_TYPE")
+                || message.contains("INVALID_BALANCE")
+                || message.contains("INVALID_VERSION")
+                || message.contains("VERSION_OVERFLOW")
+                || message.contains("SELF_TRANSFER");
+    }
+
+    private RedisMutationException sentUnknown(String message, Throwable cause) {
+        markDegradedOnRedisTransportFailure(cause);
+        return new RedisMutationException(RedisMutationException.ExecutionState.SENT_UNKNOWN, message, cause);
+    }
+
+    private static RedisMutationException rejected(String message, Throwable cause) {
+        return new RedisMutationException(RedisMutationException.ExecutionState.REJECTED, message, cause);
+    }
+    public synchronized void reloadLuaScripts() {
+        loadLuaScripts();
     }
 
     /**
@@ -367,8 +380,13 @@ public final class CacheManager {
      * @return New balance, or -1 if failed
      */
     public BigDecimal atomicAddBalance(UUID uuid, BigDecimal amount) {
-        ConfirmedAccount receipt = atomicAddBalanceReceipt(uuid, amount);
-        return receipt == null ? BigDecimal.valueOf(-1) : receipt.balance();
+        try {
+            ConfirmedAccount receipt = atomicAddBalanceReceipt(uuid, amount);
+            return receipt == null ? BigDecimal.valueOf(-1) : receipt.balance();
+        } catch (RedisMutationException e) {
+            plugin.getLogger().warning("Atomic add did not return a confirmed receipt: " + e.getMessage());
+            return BigDecimal.valueOf(-1);
+        }
     }
 
     /** Apply an add and retain the balance/version pair returned by the same Lua execution. */
@@ -383,15 +401,15 @@ public final class CacheManager {
         String keyVersion = KEY_PREFIX_VERSION + uuid;
         BigDecimal normalizedAmount = NumericUtil.normalize(amount);
 
-        if (addScriptBlocked) reloadLuaScripts();
-
-        try (var jedis = redisManager.getResource()) {
-            Object result = jedis.evalsha(atomicAddBalanceSha, 2, keyBalance, keyVersion,
-                    normalizedAmount.toPlainString());
+        Jedis resource = acquireRedisResource("atomic add");
+        if (resource == null) return null;
+        try (var jedis = resource) {
+            Object result = evalScriptWithNoscriptReload(jedis, atomicAddBalanceSha, atomicAddBalanceScript,
+                    2, new String[] {keyBalance, keyVersion, normalizedAmount.toPlainString()},
+                    sha -> atomicAddBalanceSha = sha);
             if (result instanceof List<?> values) {
                 if (values.size() < 2) {
-                    plugin.getLogger().severe("Lua script returned insufficient elements: " + values.size());
-                    return null;
+                    throw sentUnknown("Lua add returned an incomplete authority receipt", null);
                 }
                 BigDecimal confirmedBalance = NumericUtil.normalize(values.get(0).toString());
                 long confirmedVersion = Long.parseLong(values.get(1).toString());
@@ -400,20 +418,22 @@ public final class CacheManager {
                 return confirmed;
             }
             if (result instanceof String errorMessage) {
-                if (handleLuaScriptError(errorMessage)) return null;
-                throw new IllegalStateException("Lua error: " + errorMessage);
+                if (isKnownNoMutationError(errorMessage)) {
+                    throw rejected("Redis explicitly rejected atomic add without mutation: " + errorMessage, null);
+                }
+                throw sentUnknown("Lua add returned an unrecognized error response", null);
             }
-            return null;
+            throw sentUnknown("Lua add returned an invalid authority receipt", null);
+        } catch (RedisMutationException e) {
+            throw e;
+        } catch (JedisDataException e) {
+            if (isKnownNoMutationError(e.getMessage())) {
+                plugin.getLogger().warning("Redis rejected atomic add for " + uuid + ": " + e.getMessage());
+                throw rejected("Redis explicitly rejected atomic add without mutation", e);
+            }
+            throw sentUnknown("Redis atomic add outcome is unknown for " + uuid, e);
         } catch (Exception e) {
-            markDegradedOnRedisTransportFailure(e);
-            String errorMsg = e.getMessage();
-            if (handleLuaScriptError(errorMsg)) {
-                plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg
-                        + " (script reloaded, please retry)");
-            } else {
-                plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg);
-            }
-            return null;
+            throw sentUnknown("Redis atomic add outcome is unknown for " + uuid, e);
         }
     }
     public java.util.Optional<CachedBalance> getBalanceSnapshotStrict(UUID uuid) {
@@ -507,10 +527,6 @@ public final class CacheManager {
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        if (transferScriptBlocked) {
-            reloadLuaScripts();
-        }
-
         String fromBalanceKey = KEY_PREFIX_BALANCE + fromUuid.toString();
         String fromVersionKey = KEY_PREFIX_VERSION + fromUuid.toString();
         String toBalanceKey = KEY_PREFIX_BALANCE + toUuid.toString();
@@ -518,20 +534,19 @@ public final class CacheManager {
 
         amount = NumericUtil.normalize(amount);
 
-        try (var jedis = redisManager.getResource()) {
-            Object result = jedis.evalsha(
-                    atomicTransferSha,
-                    4,
-                    fromBalanceKey, fromVersionKey, toBalanceKey, toVersionKey,
-                    amount.toPlainString()
-            );
+        Jedis resource = acquireRedisResource("atomic transfer");
+        if (resource == null) return null;
+        try (var jedis = resource) {
+            Object result = evalScriptWithNoscriptReload(jedis, atomicTransferSha, atomicTransferScript,
+                    4, new String[] {fromBalanceKey, fromVersionKey, toBalanceKey, toVersionKey,
+                            amount.toPlainString()},
+                    sha -> atomicTransferSha = sha);
 
             if (result instanceof java.util.List) {
                 @SuppressWarnings("unchecked")
                 var list = (java.util.List<?>) result;
                 if (list.size() < 4) {
-                    plugin.getLogger().severe("Lua transfer script returned insufficient elements: " + list.size());
-                    return null;
+                    throw sentUnknown("Lua transfer returned an incomplete authority receipt", null);
                 }
 
                 BigDecimal fromNewBalance = NumericUtil.normalize(list.get(0).toString());
@@ -545,23 +560,26 @@ public final class CacheManager {
                 return new TransferResult(fromNewBalance, toNewBalance, fromNewVersion, toNewVersion);
             } else if (result instanceof String) {
                 String errorMsg = result.toString();
-                handleLuaScriptError(errorMsg);
-                if (errorMsg.contains("INSUFFICIENT_FUNDS")) {
-                    return TransferResult.insufficientFunds();
+                if (isKnownNoMutationError(errorMsg)) {
+                    if (errorMsg.contains("INSUFFICIENT_FUNDS")) return TransferResult.insufficientFunds();
+                    throw rejected("Redis explicitly rejected atomic transfer without mutation: " + errorMsg,
+                            null);
                 }
-                plugin.getLogger().severe("Lua transfer error: " + errorMsg);
-                return null;
+                throw sentUnknown("Lua transfer returned an unrecognized error response", null);
             }
 
-            return null;
-        } catch (Exception e) {
-            String errorMsg = e.getMessage();
-            if (handleLuaScriptError(errorMsg)) {
-                plugin.getLogger().severe("Failed to atomic transfer: " + errorMsg + " (script reloaded, please retry)");
-            } else {
-                plugin.getLogger().severe("Failed to atomic transfer: " + errorMsg);
+            throw sentUnknown("Lua transfer returned an invalid authority receipt", null);
+        } catch (RedisMutationException e) {
+            throw e;
+        } catch (JedisDataException e) {
+            if (isKnownNoMutationError(e.getMessage())) {
+                if (e.getMessage().contains("INSUFFICIENT_FUNDS")) return TransferResult.insufficientFunds();
+                plugin.getLogger().warning("Redis rejected atomic transfer: " + e.getMessage());
+                throw rejected("Redis explicitly rejected atomic transfer without mutation", e);
             }
-            return null;
+            throw sentUnknown("Redis atomic transfer outcome is unknown", e);
+        } catch (Exception e) {
+            throw sentUnknown("Redis atomic transfer outcome is unknown", e);
         }
     }
 
@@ -646,8 +664,9 @@ public final class CacheManager {
             String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
 
 
-            Object result = jedis.evalsha(atomicSetBalanceSha, 2,
-                    keyVersion, keyBalance, balance.toPlainString());
+            Object result = evalScriptWithNoscriptReload(jedis, atomicSetBalanceSha, atomicSetBalanceScript,
+                    2, new String[] {keyVersion, keyBalance, balance.toPlainString()},
+                    sha -> atomicSetBalanceSha = sha);
 
             long newVersion = Long.parseLong(result.toString());
 

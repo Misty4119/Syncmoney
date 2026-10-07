@@ -4,6 +4,7 @@ import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
@@ -27,6 +28,39 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class ConsumerFailureSemanticsTest {
+
+    @Test
+    void rejectedAuthorityMutationIsQuarantinedInsteadOfRetried() throws Exception {
+        UUID account = UUID.randomUUID();
+        ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest-rejected");
+        CountDownLatch firstAttempt = new CountDownLatch(1);
+        EconomyEvent event = event(account, new BigDecimal("10.00"), new BigDecimal("110.00"),
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.ADMIN_GIVE, "deposit-rejected");
+        RedisMutationException rejected = new RedisMutationException(
+                RedisMutationException.ExecutionState.REJECTED,
+                "Redis explicitly rejected the mutation without applying it", null);
+        doAnswer(invocation -> {
+            firstAttempt.countDown();
+            throw rejected;
+        }).when(harness.cacheManager).atomicAddBalanceReceipt(eq(account), any(BigDecimal.class));
+
+        try {
+            harness.startWith(event);
+            assertTrue(firstAttempt.await(5, TimeUnit.SECONDS), "the accepted event should reach Redis once");
+            Thread.sleep(350);
+
+            assertAll(
+                    () -> verify(harness.cacheManager, times(1))
+                            .atomicAddBalanceReceipt(eq(account), any(BigDecimal.class)),
+                    () -> assertTrue(harness.queue.hasOutstandingWrites(),
+                            "a rejected accepted event stays owned for reconciliation")
+            );
+        } finally {
+            harness.consumer.stop();
+            harness.queue.complete(event, new BigDecimal("100.00"), 7L);
+            harness.close();
+        }
+    }
 
     @Test
     void degradedRedisRetainsSignedWithdrawalUntilRecovery() throws Exception {

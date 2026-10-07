@@ -10,6 +10,7 @@ import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.core.port.ReplicationReceipt;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.PubSubMessage;
@@ -66,13 +67,22 @@ public final class EconomyEventConsumer implements Runnable {
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
 
     private record FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
-            ReplicationReceipt confirmedReceipt) {
+            ReplicationReceipt confirmedReceipt, boolean quarantined) {
+        private FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
+                ReplicationReceipt confirmedReceipt) {
+            this(event, retryCount, firstFailureTime, confirmedReceipt, false);
+        }
+
         private FailedEvent withConfirmedReceipt(ReplicationReceipt receipt) {
-            return new FailedEvent(event, retryCount, firstFailureTime, receipt);
+            return new FailedEvent(event, retryCount, firstFailureTime, receipt, false);
         }
 
         private FailedEvent nextAttempt() {
-            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedReceipt);
+            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedReceipt, quarantined);
+        }
+
+        private FailedEvent asQuarantined() {
+            return new FailedEvent(event, retryCount, firstFailureTime, confirmedReceipt, true);
         }
     }
 
@@ -177,6 +187,10 @@ public final class EconomyEventConsumer implements Runnable {
             String key = entry.getKey();
             FailedEvent failed = entry.getValue();
 
+            if (failed.quarantined()) {
+                continue;
+            }
+
             if (failed.retryCount() >= MAX_RETRY_COUNT) {
                 handleCriticalFailure(failed);
                 failedEvents.remove(key, failed);
@@ -215,6 +229,18 @@ public final class EconomyEventConsumer implements Runnable {
                 queue.complete(failed.event(), account.balance(), account.version());
                 failedEvents.remove(key, retryState);
                 plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
+            } catch (RedisMutationException e) {
+                if (retryState.confirmedReceipt() == null && requiresQuarantine(e.executionState())) {
+                    FailedEvent quarantined = retryState.asQuarantined();
+                    failedEvents.replace(key, retryState, quarantined);
+                    plugin.getLogger().severe("Quarantined accepted economy event after Redis "
+                            + e.executionState() + "; automatic retry is disabled for request "
+                            + failed.event().requestId());
+                    continue;
+                }
+                FailedEvent nextAttempt = retryState.nextAttempt();
+                failedEvents.replace(key, retryState, nextAttempt);
+                logRetryFailure(failed, nextAttempt, BASE_DELAY_MS, MAX_DELAY_MS);
             } catch (Exception e) {
                 FailedEvent nextAttempt = retryState.nextAttempt();
                 failedEvents.replace(key, retryState, nextAttempt);
@@ -414,12 +440,29 @@ public final class EconomyEventConsumer implements Runnable {
             ConfirmedAccount account = receipt.accountFor(event.playerUuid());
             queue.complete(event, account.balance(), account.version());
 
+        } catch (RedisMutationException e) {
+            if (confirmedReceipt == null && requiresQuarantine(e.executionState())) {
+                failedEvents.putIfAbsent(failedKey(event),
+                        new FailedEvent(event, 0, firstFailureTime, null, true));
+                plugin.getLogger().severe("Quarantined accepted economy event after Redis "
+                        + e.executionState() + "; automatic retry is disabled for request " + event.requestId());
+                return;
+            }
+            plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
+            failedEvents.putIfAbsent(failedKey(event),
+                    new FailedEvent(event, 0, firstFailureTime, confirmedReceipt));
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
             failedEvents.putIfAbsent(failedKey(event),
                     new FailedEvent(event, 0, firstFailureTime, confirmedReceipt));
         }
+    }
+
+    private static boolean requiresQuarantine(RedisMutationException.ExecutionState executionState) {
+        return executionState == RedisMutationException.ExecutionState.REJECTED
+                || executionState == RedisMutationException.ExecutionState.SENT_UNKNOWN;
     }
     /**
      * Try direct DB write as fallback when Redis is unavailable.
