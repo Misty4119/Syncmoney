@@ -7,6 +7,7 @@ import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.FormatUtil;
@@ -51,6 +52,7 @@ public class VaultProviderCore {
     private CrossServerSyncManager syncManager;
     private SyncmoneyConfig config;
     private NameResolver nameResolver;
+    private volatile DbWriteQueue dbWriteQueue;
 
     public VaultProviderCore(Plugin plugin, EconomyFacade economyFacade,
                            VaultPlayerHandler playerHandler, VaultTransferHandler transferHandler,
@@ -80,6 +82,9 @@ public class VaultProviderCore {
      */
     public void setSyncManager(CrossServerSyncManager syncManager) {
         this.syncManager = syncManager;
+        if (transferHandler != null) {
+            transferHandler.setSyncManager(syncManager);
+        }
     }
 
     /**
@@ -87,6 +92,9 @@ public class VaultProviderCore {
      */
     public void setConfig(SyncmoneyConfig config) {
         this.config = config;
+        if (transferHandler != null) {
+            transferHandler.setConfig(config);
+        }
     }
 
     /**
@@ -94,6 +102,10 @@ public class VaultProviderCore {
      */
     public void setNameResolver(NameResolver nameResolver) {
         this.nameResolver = nameResolver;
+    }
+
+    public void setDbWriteQueue(DbWriteQueue dbWriteQueue) {
+        this.dbWriteQueue = dbWriteQueue;
     }
 
     public void setCmiHandler(CMIEconomyHandler cmiHandler) {
@@ -119,7 +131,7 @@ public class VaultProviderCore {
         }
         String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
         if (config.isSyncMode()) {
-            syncManager.publishAndNotify(uuid, newBalance, syncModeEventType, amount, resolvedPlugin, sourcePlayerName);
+            syncManager.notifyLocalBalanceChange(uuid, syncModeEventType, amount, resolvedPlugin);
         } else if (config.isCMIMode()) {
             long version = (cmiHandler != null)
                     ? cmiHandler.mintCmiVersion()
@@ -131,6 +143,22 @@ public class VaultProviderCore {
                         + " balance=" + newBalance + " v" + version
                         + " amount=" + amount + " sourcePlugin=" + resolvedPlugin);
             }
+        }
+    }
+
+    private void publishAtomicTransferUpdate(UUID uuid, BigDecimal newBalance, long version,
+                                             String eventType, double amount,
+                                             String sourcePlugin, String sourcePlayerName) {
+        if (syncManager == null || config == null) {
+            return;
+        }
+        if (config.isSyncMode()) {
+            String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
+            syncManager.publishAndNotify(uuid, newBalance, version, eventType, amount,
+                    resolvedPlugin, sourcePlayerName);
+        } else {
+            publishCrossServerUpdate(uuid, newBalance, eventType, amount,
+                    sourcePlugin, sourcePlayerName);
         }
     }
 
@@ -279,13 +307,15 @@ public class VaultProviderCore {
 
         BigDecimal amountBd = NumericUtil.normalize(amount);
         UUID uuid = player.getUniqueId();
+        String sourcePlugin = pluginDetector.detectCallingPlugin();
 
         if (LockingHelper.isLocked(economyFacade, uuid)) {
             return new EconomyResponse(0, 0.0, EconomyResponse.ResponseType.FAILURE,
                     "Target account is locked");
         }
 
-        BigDecimal newBalance = economyFacade.deposit(uuid, amountBd, EconomyEvent.EventSource.VAULT_DEPOSIT);
+        BigDecimal newBalance = economyFacade.deposit(uuid, amountBd,
+                EconomyEvent.EventSource.VAULT_DEPOSIT, sourcePlugin);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
             return failedMutation(uuid, "Failed to deposit");
@@ -293,7 +323,7 @@ public class VaultProviderCore {
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.deposited", amountBd, newBalance);
 
-        publishCrossServerUpdate(uuid, newBalance, "VAULT_DEPOSIT", amount, null, null);
+        publishCrossServerUpdate(uuid, newBalance, "VAULT_DEPOSIT", amount, sourcePlugin, null);
 
         return new EconomyResponse(amount, newBalance.doubleValue(), EconomyResponse.ResponseType.SUCCESS, "");
     }
@@ -424,13 +454,18 @@ public class VaultProviderCore {
 
         CacheManager.TransferResult result = economyFacade.pluginAtomicTransfer(fromUuid, toUuid, amountBd, pluginName);
 
-        if (result == null) {
+        if (result == null || result == CacheManager.TransferResult.insufficientFunds()) {
             double balance = readyBalance(fromUuid);
             double receiverBalance = readyBalance(toUuid);
             String message = Double.isNaN(balance) || Double.isNaN(receiverBalance) ? notReadyMessage()
-                    : "Atomic transfer failed - insufficient funds or locked account";
+                    : result == CacheManager.TransferResult.insufficientFunds()
+                            ? "Insufficient funds"
+                            : "Atomic transfer failed - insufficient funds or locked account";
             return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE, message);
         }
+
+        TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
+                fromUuid, toUuid, result);
 
         CrossServerNotifier.notifyBalanceChange(plugin, from, "vault.withdrawn", amountBd, result.fromNewBalance);
         CrossServerNotifier.notifyBalanceChange(plugin, to, "vault.deposited", amountBd, result.toNewBalance);
@@ -439,8 +474,10 @@ public class VaultProviderCore {
         if (senderName == null) {
             senderName = fromUuid.toString();
         }
-        publishCrossServerUpdate(fromUuid, result.fromNewBalance, "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
-        publishCrossServerUpdate(toUuid, result.toNewBalance, "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
+        publishAtomicTransferUpdate(fromUuid, result.fromNewBalance, result.fromNewVersion,
+                "PLUGIN_WITHDRAW", -amountBd.doubleValue(), pluginName, senderName);
+        publishAtomicTransferUpdate(toUuid, result.toNewBalance, result.toNewVersion,
+                "PLUGIN_DEPOSIT", amountBd.doubleValue(), pluginName, senderName);
 
         plugin.getLogger().info("Plugin atomic transfer completed: " + fromUuid + " -> " + toUuid + " : " + amountBd + " by " + pluginName);
 

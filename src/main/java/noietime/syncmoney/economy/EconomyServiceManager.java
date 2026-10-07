@@ -89,7 +89,8 @@ public class EconomyServiceManager {
                 plugin,
                 economyFacade,
                 storageManager.getRedisManager(),
-                nameResolver
+                nameResolver,
+                storageManager.getDbWriteQueue()
         );
         if (mode == EconomyMode.CMI) {
             plugin.getLogger().info(

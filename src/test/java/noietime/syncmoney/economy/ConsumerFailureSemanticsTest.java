@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
@@ -46,8 +47,8 @@ class ConsumerFailureSemanticsTest {
         doAnswer(invocation -> {
             redisWrites.incrementAndGet();
             redisDelta.set(invocation.getArgument(1));
-            return new BigDecimal("90.00");
-        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, new BigDecimal("90.00"), 9L);
+        }).when(harness.cacheManager).atomicAddBalanceReceipt(eq(account), any(BigDecimal.class));
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
@@ -92,8 +93,8 @@ class ConsumerFailureSemanticsTest {
         doAnswer(invocation -> {
             redisWrites.incrementAndGet();
             redisDelta.set(invocation.getArgument(1));
-            return new BigDecimal("110.00");
-        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, new BigDecimal("110.00"), 9L);
+        }).when(harness.cacheManager).atomicAddBalanceReceipt(eq(account), any(BigDecimal.class));
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
@@ -138,10 +139,10 @@ class ConsumerFailureSemanticsTest {
         AtomicReference<BigDecimal> redisTarget = new AtomicReference<>();
         doAnswer(invocation -> {
             redisWrites.incrementAndGet();
-            if (redisDegraded.get()) return 0L;
+            if (redisDegraded.get()) return null;
             redisTarget.set(invocation.getArgument(1));
-            return 1L;
-        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, redisTarget.get(), 9L);
+        }).when(harness.cacheManager).atomicSetBalanceReceipt(eq(account), any(BigDecimal.class));
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
@@ -192,10 +193,10 @@ class ConsumerFailureSemanticsTest {
             if (redisWrites.incrementAndGet() == 1) {
                 redisDegraded.set(true);
                 firstRedisAttempt.countDown();
-                return 0L;
+                return null;
             }
-            return 1L;
-        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, invocation.getArgument(1), 9L);
+        }).when(harness.cacheManager).atomicSetBalanceReceipt(eq(account), any(BigDecimal.class));
 
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
@@ -246,18 +247,18 @@ class ConsumerFailureSemanticsTest {
             BigDecimal target = invocation.getArgument(1);
             redisOperations.add("SET:" + target.toPlainString());
             if (setAttempts.incrementAndGet() == 1) {
-                return 0L;
+                return null;
             }
             authorityBalance.set(target);
-            return 9L;
-        }).when(harness.cacheManager).atomicSetBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, target, 9L);
+        }).when(harness.cacheManager).atomicSetBalanceReceipt(eq(account), any(BigDecimal.class));
         doAnswer(invocation -> {
             BigDecimal delta = invocation.getArgument(1);
             redisOperations.add("ADD:" + delta.toPlainString());
             BigDecimal updated = authorityBalance.updateAndGet(balance -> balance.add(delta));
             laterMutationApplied.countDown();
-            return updated;
-        }).when(harness.cacheManager).atomicAddBalance(eq(account), any(BigDecimal.class));
+            return new ConfirmedAccount(account, updated, 10L);
+        }).when(harness.cacheManager).atomicAddBalanceReceipt(eq(account), any(BigDecimal.class));
 
         EconomyEvent set = event(account, new BigDecimal("-40.00"), new BigDecimal("40.00"),
                 EconomyEvent.EventType.SET_BALANCE, EconomyEvent.EventSource.ADMIN_SET, "set-before-add");
@@ -295,10 +296,10 @@ class ConsumerFailureSemanticsTest {
         AtomicInteger redisMutations = new AtomicInteger();
         AtomicInteger dbOffers = new AtomicInteger();
         CountDownLatch dbOfferAttempts = new CountDownLatch(2);
-        when(harness.cacheManager.atomicAddBalance(account, new BigDecimal("10.00"))).thenAnswer(invocation -> {
+        when(harness.cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00"))).thenAnswer(invocation -> {
             redisMutations.incrementAndGet();
             BigDecimal after = durableBalance.updateAndGet(balance -> balance.add(new BigDecimal("10.00")));
-            return after;
+            return new ConfirmedAccount(account, after, 9L);
         });
         when(harness.dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
             dbOfferAttempts.countDown();
@@ -340,9 +341,9 @@ class ConsumerFailureSemanticsTest {
         CountDownLatch dbOfferEntered = new CountDownLatch(1);
         CountDownLatch allowDbFailure = new CountDownLatch(1);
         CountDownLatch dbOfferAttempts = new CountDownLatch(2);
-        when(harness.cacheManager.atomicAddBalance(account, new BigDecimal("10.00"))).thenAnswer(invocation -> {
+        when(harness.cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00"))).thenAnswer(invocation -> {
             redisMutations.incrementAndGet();
-            return new BigDecimal("110.00");
+            return new ConfirmedAccount(account, new BigDecimal("110.00"), 9L);
         });
         when(harness.dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
             int attempt = dbOffers.incrementAndGet();

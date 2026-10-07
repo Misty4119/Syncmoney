@@ -107,7 +107,7 @@ public final class DbWriterConsumer implements Runnable {
     private void processBatch(List<DbWriteQueue.DbWriteTask> tasks) {
         try {
             dbManager.batchInsertOrUpdatePlayers(tasks);
-            queue.incrementWrittenCountBy(tasks.size());
+            queue.incrementWrittenCountBy(tasks.stream().mapToInt(DbWriteQueue.DbWriteTask::accountCount).sum());
             for (DbWriteQueue.DbWriteTask task : tasks) {
                 retryCounts.remove(task);
             }

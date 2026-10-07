@@ -332,33 +332,54 @@ public final class PubsubSubscriber {
     }
 
     /**
-     * Publish balance change to cross-server channel.
-     * @param uuid Player UUID
-     * @param newBalance New balance
+     * Legacy balance publisher retained for integrations that do not pass a version.
+     * It publishes only when the supplied balance matches one current cached pair.
      */
     public void publishBalanceChange(UUID uuid, BigDecimal newBalance) {
-        publishTransferEvent(uuid, newBalance, null, 0, null);
+        publishLegacyTransferEvent(uuid, newBalance, null, 0, null);
     }
 
     /**
-     * Publish transfer event to cross-server channel.
-     * Used for /pay command to notify receiver on other server.
+     * Legacy transfer publisher retained for binary/reflection compatibility.
+     * It publishes only when the supplied balance matches one current cached pair.
+     */
+    public void publishTransferEvent(UUID uuid, BigDecimal newBalance, String eventType,
+                                     double amount, String sourcePlayerName) {
+        publishLegacyTransferEvent(uuid, newBalance, eventType, amount, sourcePlayerName);
+    }
+
+    private void publishLegacyTransferEvent(UUID uuid, BigDecimal newBalance, String eventType,
+                                            double amount, String sourcePlayerName) {
+        if (!running.get() || uuid == null || newBalance == null || cacheManager == null) {
+            return;
+        }
+        CacheManager.CachedBalance snapshot = cacheManager.getCachedBalanceSnapshot(uuid).orElse(null);
+        if (snapshot == null || snapshot.balance().compareTo(newBalance) != 0) {
+            return;
+        }
+        publishTransferEvent(uuid, newBalance, snapshot.version(), eventType, amount, sourcePlayerName);
+    }
+
+    /**
+     * Publish an authority-confirmed transfer snapshot to cross-server channel.
+     * The balance and version must come from the same atomic mutation result.
      *
      * @param uuid Player UUID
      * @param newBalance New balance after transfer
+     * @param version Version paired with {@code newBalance} by the authority mutation
      * @param eventType Event type (TRANSFER_IN or TRANSFER_OUT)
      * @param amount Transfer amount
      * @param sourcePlayerName Name of the player who initiated the transfer (for TRANSFER_IN)
      */
-    public void publishTransferEvent(UUID uuid, BigDecimal newBalance, String eventType, double amount, String sourcePlayerName) {
-        if (!running.get()) {
+    public void publishTransferEvent(UUID uuid, BigDecimal newBalance, long version,
+                                     String eventType, double amount, String sourcePlayerName) {
+        if (!running.get() || uuid == null || newBalance == null) {
             return;
         }
         try {
-            long version = cacheManager.getVersion(uuid);
             PubSubMessage message = new PubSubMessage(
                     uuid.toString(),
-                    newBalance.doubleValue(),
+                    newBalance,
                     version,
                     config.getServerName(),
                     UUID.randomUUID().toString(),

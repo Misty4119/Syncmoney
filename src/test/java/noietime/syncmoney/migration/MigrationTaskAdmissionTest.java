@@ -97,7 +97,7 @@ class MigrationTaskAdmissionTest {
 
         UUID account = UUID.randomUUID();
         DatabaseManager databaseManager = mock(DatabaseManager.class);
-        when(databaseManager.tryInsertOrUpdatePlayer(any(UUID.class), anyString(), any(BigDecimal.class),
+        when(databaseManager.tryReplacePlayerForMigration(any(UUID.class), anyString(), any(BigDecimal.class),
                 anyLong(), nullable(String.class))).thenReturn(false);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
         EconomyFacade facade = mock(EconomyFacade.class);
@@ -114,7 +114,7 @@ class MigrationTaskAdmissionTest {
 
         assertTrue(failure.getCause() instanceof IllegalStateException);
         verify(checkpoint, never()).addBackupAmount(any(BigDecimal.class));
-        verify(databaseManager).tryInsertOrUpdatePlayer(any(UUID.class), anyString(), any(BigDecimal.class),
+        verify(databaseManager).tryReplacePlayerForMigration(any(UUID.class), anyString(), any(BigDecimal.class),
                 anyLong(), nullable(String.class));
     }
 

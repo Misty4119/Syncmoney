@@ -156,7 +156,7 @@ final class TransactionWriter {
         return deposit(uuid, amount, source, null);
     }
 
-    private BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
+    BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             plugin.getLogger().warning("Deposit rejected: migration in progress and economy is locked");
@@ -235,7 +235,7 @@ final class TransactionWriter {
                 EconomyEvent event = new EconomyEvent(
                         uuid, amount, next.balance(), next.version(),
                         EconomyEvent.EventType.DEPOSIT, source,
-                        UUID.randomUUID().toString(), System.currentTimeMillis());
+                        UUID.randomUUID().toString(), System.currentTimeMillis(), attribution);
                 if (!commitAcceptedWrite(reservation, event)) {
                     plugin.getLogger().severe("Deposit rejected because its reserved write slot could not be committed for " + uuid);
                     return existing;
@@ -280,7 +280,7 @@ final class TransactionWriter {
         return withdraw(uuid, amount, source, null);
     }
 
-    private BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
+    BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source, String attribution) {
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             plugin.getLogger().warning("Withdraw rejected: migration in progress and economy is locked");
@@ -367,7 +367,7 @@ final class TransactionWriter {
                 EconomyEvent event = new EconomyEvent(
                         uuid, amount.negate(), next.balance(), next.version(),
                         EconomyEvent.EventType.WITHDRAW, source,
-                        UUID.randomUUID().toString(), System.currentTimeMillis());
+                        UUID.randomUUID().toString(), System.currentTimeMillis(), attribution);
                 if (!commitAcceptedWrite(reservation, event)) {
                     plugin.getLogger().severe("Withdraw rejected because its reserved write slot could not be committed for " + uuid);
                     return existing;

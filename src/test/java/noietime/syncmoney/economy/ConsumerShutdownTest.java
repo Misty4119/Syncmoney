@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
 import org.bukkit.plugin.Plugin;
@@ -48,8 +49,8 @@ class ConsumerShutdownTest {
         EconomyWriteQueue queue = new EconomyWriteQueue(10);
         EconomyWriteQueue.Reservation acceptedBeforeShutdown = queue.tryReserve(player);
         assertNotNull(acceptedBeforeShutdown);
-        when(cache.atomicSetBalance(player, BigDecimal.TEN)).thenReturn(1L);
-        when(cache.getVersion(player)).thenReturn(1L);
+        when(cache.atomicSetBalanceReceipt(player, BigDecimal.TEN))
+                .thenReturn(new ConfirmedAccount(player, BigDecimal.TEN, 1L));
 
         EconomyEventConsumer consumer = new EconomyEventConsumer(plugin, config, queue, cache,
                 null, null, null, null, null, null, null, null, null);
@@ -83,7 +84,7 @@ class ConsumerShutdownTest {
             shutdown.join(5_000);
             assertFalse(shutdown.isAlive(), "shutdown must return after the accepted write is completed");
             assertFalse(queue.hasOutstandingWrites(), "completed accepted write ownership must be released");
-            verify(cache).atomicSetBalance(player, BigDecimal.TEN);
+            verify(cache).atomicSetBalanceReceipt(player, BigDecimal.TEN);
         } finally {
             queue.closeAdmission();
             acceptedBeforeShutdown.close();
@@ -101,7 +102,8 @@ class ConsumerShutdownTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, RETURNS_DEEP_STUBS);
         CacheManager cache = mock(CacheManager.class);
         UUID player = UUID.randomUUID();
-        when(cache.atomicSetBalance(player, BigDecimal.TEN)).thenReturn(1L);
+        when(cache.atomicSetBalanceReceipt(player, BigDecimal.TEN))
+                .thenReturn(new ConfirmedAccount(player, BigDecimal.TEN, 1L));
         EconomyWriteQueue queue = new EconomyWriteQueue(100);
         for (int i = 0; i < 20; i++) assertTrue(queue.offer(new EconomyEvent(player,
                 BigDecimal.TEN, BigDecimal.TEN, i, EconomyEvent.EventType.SET_BALANCE,
@@ -111,6 +113,6 @@ class ConsumerShutdownTest {
         consumer.start();
         consumer.shutdown();
         assertTrue(queue.isEmpty());
-        verify(cache, times(20)).atomicSetBalance(player, BigDecimal.TEN);
+        verify(cache, times(20)).atomicSetBalanceReceipt(player, BigDecimal.TEN);
     }
 }

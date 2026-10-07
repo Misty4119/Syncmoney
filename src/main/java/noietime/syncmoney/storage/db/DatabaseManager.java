@@ -3,10 +3,14 @@ package noietime.syncmoney.storage.db;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.exception.DatabaseException;
 import noietime.syncmoney.exception.SyncmoneyException;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
+import noietime.syncmoney.storage.persistence.PlayerSnapshot;
+import noietime.syncmoney.storage.persistence.SqlDialect;
+import noietime.syncmoney.storage.persistence.SqlSnapshotWriter;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -97,28 +101,6 @@ public final class DatabaseManager implements AutoCloseable {
             ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version
             """;
 
-    private static final String INSERT_OR_UPDATE_SQL_MYSQL = """
-            INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-                player_name = VALUES(player_name),
-                balance = VALUES(balance),
-                version = VALUES(version),
-                last_server = VALUES(last_server),
-                updated_at = VALUES(updated_at)
-            """;
-
-    private static final String INSERT_OR_UPDATE_SQL_PGSQL = """
-            INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT (player_uuid) DO UPDATE SET
-                player_name = EXCLUDED.player_name,
-                balance = EXCLUDED.balance,
-                version = EXCLUDED.version,
-                last_server = EXCLUDED.last_server,
-                updated_at = EXCLUDED.updated_at
-            """;
-
     private static final String SELECT_PLAYER_SQL = """
             SELECT player_uuid, player_name, balance, version, last_server, updated_at
             FROM players WHERE player_uuid = ?
@@ -174,13 +156,6 @@ public final class DatabaseManager implements AutoCloseable {
      */
     private String getCreateTableSql() {
         return "mysql".equals(databaseType) ? CREATE_TABLE_SQL_MYSQL : CREATE_TABLE_SQL_PGSQL;
-    }
-
-    /**
-     * Get current SQL insert or update statement.
-     */
-    private String getInsertOrUpdateSql() {
-        return "mysql".equals(databaseType) ? INSERT_OR_UPDATE_SQL_MYSQL : INSERT_OR_UPDATE_SQL_PGSQL;
     }
 
     /**
@@ -374,42 +349,67 @@ public final class DatabaseManager implements AutoCloseable {
         return dataSource.getConnection();
     }
 
-    /**
-     * Insert or update player data.
-     */
+    /** Persist one authority snapshot without allowing an older version to replace it. */
     public void insertOrUpdatePlayer(UUID uuid, String name, BigDecimal balance, long version, String server) {
-        try (Connection conn = getConnection();
-                PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
-            stmt.setString(1, uuid.toString());
-            stmt.setString(2, name);
-            stmt.setBigDecimal(3, NumericUtil.normalize(balance));
-            stmt.setLong(4, version);
-            stmt.setString(5, server);
-            stmt.setTimestamp(6, java.sql.Timestamp.from(Instant.now()));
-            stmt.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            writePlayerSnapshot(new PlayerSnapshot(
+                    new ConfirmedAccount(uuid, balance, version), name, server, Instant.now()), false);
+        } catch (SQLException | RuntimeException e) {
             plugin.getLogger().severe("Failed to insert/update player " + uuid + ": " + e.getMessage());
         }
     }
 
-    /** Insert or update player data and return whether SQL accepted the write. */
+    /** Insert/update a snapshot and return whether the persistence transaction accepted it. */
     public boolean tryInsertOrUpdatePlayer(UUID uuid, String name, BigDecimal balance, long version, String server) {
-        try (Connection conn = getConnection();
-                PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
-            stmt.setString(1, uuid.toString());
-            stmt.setString(2, name);
-            stmt.setBigDecimal(3, NumericUtil.normalize(balance));
-            stmt.setLong(4, version);
-            stmt.setString(5, server);
-            stmt.setTimestamp(6, java.sql.Timestamp.from(Instant.now()));
-            stmt.executeUpdate();
+        try {
+            writePlayerSnapshot(new PlayerSnapshot(
+                    new ConfirmedAccount(uuid, balance, version), name, server, Instant.now()), false);
             return true;
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             plugin.getLogger().severe("Failed to insert/update player " + uuid + ": " + e.getMessage());
             return false;
         }
     }
 
+    /**
+     * Replace a player row only for an explicit, quiesced migration workflow.
+     * Ordinary economy writers must use the monotonic version-guarded path.
+     */
+    public boolean tryReplacePlayerForMigration(UUID uuid, String name, BigDecimal balance, long version, String server) {
+        try {
+            writePlayerSnapshot(new PlayerSnapshot(
+                    new ConfirmedAccount(uuid, balance, version), name, server, Instant.now()), true);
+            return true;
+        } catch (SQLException | RuntimeException e) {
+            plugin.getLogger().severe("Failed to replace player during migration " + uuid + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void writePlayerSnapshot(PlayerSnapshot snapshot, boolean migrationOverride) throws SQLException {
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                if (migrationOverride) {
+                    SqlSnapshotWriter.replacePlayerForMigration(conn, snapshot,
+                            SqlDialect.fromDatabaseType(databaseType));
+                } else {
+                    SqlSnapshotWriter.persistPlayers(conn, List.of(snapshot),
+                            SqlDialect.fromDatabaseType(databaseType));
+                }
+                conn.commit();
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackFailure) {
+                    e.addSuppressed(rollbackFailure);
+                }
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        }
+    }
     /**
      * Insert or update player data (double-compatible version).
      */
@@ -432,30 +432,24 @@ public final class DatabaseManager implements AutoCloseable {
 
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
-
-            try (PreparedStatement stmt = conn.prepareStatement(getInsertOrUpdateSql())) {
-                int pending = 0;
-                for (DbWriteQueue.DbWriteTask task : tasks) {
-                    stmt.setString(1, task.playerUuid().toString());
-                    stmt.setString(2, task.playerName());
-                    stmt.setBigDecimal(3, NumericUtil.normalize(task.balance()));
-                    stmt.setLong(4, task.version());
-                    stmt.setString(5, task.serverName());
-                    stmt.setTimestamp(6, java.sql.Timestamp.from(Instant.now()));
-                    stmt.addBatch();
-
-                    if (++pending >= Constants.DB_BATCH_SIZE) {
-                        stmt.executeBatch();
-                        pending = 0;
-                    }
-                }
-
-                if (pending > 0) {
-                    stmt.executeBatch();
+            try {
+                List<PlayerSnapshot> snapshots = tasks.stream()
+                        .flatMap(task -> task.accounts().stream())
+                        .map(account -> new PlayerSnapshot(account.account(), account.playerName(),
+                                account.serverName(), account.timestamp()))
+                        .toList();
+                for (int offset = 0; offset < snapshots.size(); offset += Constants.DB_BATCH_SIZE) {
+                    int batchEnd = Math.min(offset + Constants.DB_BATCH_SIZE, snapshots.size());
+                    SqlSnapshotWriter.persistPlayers(conn, snapshots.subList(offset, batchEnd),
+                            SqlDialect.fromDatabaseType(databaseType));
                 }
                 conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackFailure) {
+                    e.addSuppressed(rollbackFailure);
+                }
                 throw e;
             } finally {
                 conn.setAutoCommit(true);
@@ -465,10 +459,6 @@ public final class DatabaseManager implements AutoCloseable {
             throw DatabaseException.updateFailed("players", e);
         }
     }
-
-    /**
-     * Get player data.
-     */
     public Optional<PlayerRecord> getPlayer(UUID uuid) {
         try {
             return getPlayerStrict(uuid);

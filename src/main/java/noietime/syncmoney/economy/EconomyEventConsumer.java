@@ -6,6 +6,8 @@ import noietime.syncmoney.audit.HybridAuditManager;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.shadow.ShadowSyncTask;
+import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.core.port.ReplicationReceipt;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
@@ -64,13 +66,13 @@ public final class EconomyEventConsumer implements Runnable {
     private final noietime.syncmoney.storage.db.DatabaseManager databaseManager;
 
     private record FailedEvent(EconomyEvent event, int retryCount, long firstFailureTime,
-            BigDecimal confirmedRedisBalance) {
-        private FailedEvent withConfirmedRedisBalance(BigDecimal balance) {
-            return new FailedEvent(event, retryCount, firstFailureTime, balance);
+            ReplicationReceipt confirmedReceipt) {
+        private FailedEvent withConfirmedReceipt(ReplicationReceipt receipt) {
+            return new FailedEvent(event, retryCount, firstFailureTime, receipt);
         }
 
         private FailedEvent nextAttempt() {
-            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedRedisBalance);
+            return new FailedEvent(event, retryCount + 1, firstFailureTime, confirmedReceipt);
         }
     }
 
@@ -191,27 +193,26 @@ public final class EconomyEventConsumer implements Runnable {
 
             FailedEvent retryState = failed;
             try {
-                BigDecimal newBalance = retryState.confirmedRedisBalance();
-                if (newBalance == null) {
-                    newBalance = processRedisWrite(failed.event());
-                    if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
+                ReplicationReceipt receipt = retryState.confirmedReceipt();
+                if (receipt == null) {
+                    receipt = processRedisWrite(failed.event());
+                    if (receipt == null) {
                         FailedEvent nextAttempt = failed.nextAttempt();
                         failedEvents.replace(key, failed, nextAttempt);
                         logRetryFailure(failed, nextAttempt, BASE_DELAY_MS, MAX_DELAY_MS);
                         continue;
                     }
 
-                    // Persist the confirmed authority result in the retry state before any
-                    // downstream operation can throw. Retrying an already-applied delta
-                    // would create or destroy money.
-                    retryState = failed.withConfirmedRedisBalance(newBalance);
+                    // Keep the exact authority receipt before any downstream operation can throw.
+                    retryState = failed.withConfirmedReceipt(receipt);
                     if (!failedEvents.replace(key, failed, retryState)) {
                         continue;
                     }
                 }
 
-                processEventSteps(failed.event(), newBalance);
-                queue.complete(failed.event(), newBalance, cacheManager.getVersion(failed.event().playerUuid()));
+                processEventSteps(failed.event(), receipt);
+                ConfirmedAccount account = receipt.accountFor(failed.event().playerUuid());
+                queue.complete(failed.event(), account.balance(), account.version());
                 failedEvents.remove(key, retryState);
                 plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
             } catch (Exception e) {
@@ -232,7 +233,7 @@ public final class EconomyEventConsumer implements Runnable {
 
     private static String failedKey(EconomyEvent event) {
         String id = event.requestId();
-        return id != null ? id : event.playerUuid() + ":" + event.timestamp();
+        return id != null && !id.isBlank() ? id : operationId(event);
     }
 
     /**
@@ -395,12 +396,12 @@ public final class EconomyEventConsumer implements Runnable {
      * failed work is retained for retry rather than applied through a SQL fallback.
      */
     private void processEvent(EconomyEvent event) {
-        BigDecimal confirmedRedisBalance = null;
+        ReplicationReceipt confirmedReceipt = null;
         long firstFailureTime = System.currentTimeMillis();
         try {
-            BigDecimal newBalance = processRedisWrite(event);
+            ReplicationReceipt receipt = processRedisWrite(event);
 
-            if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
+            if (receipt == null) {
                 plugin.getLogger().warning("Redis write failed for accepted event " + event.requestId()
                         + "; retaining it for retry after authority recovery");
                 failedEvents.putIfAbsent(failedKey(event),
@@ -408,18 +409,18 @@ public final class EconomyEventConsumer implements Runnable {
                 return;
             }
 
-            confirmedRedisBalance = newBalance;
-            processEventSteps(event, newBalance);
-            queue.complete(event, newBalance, cacheManager.getVersion(event.playerUuid()));
+            confirmedReceipt = receipt;
+            processEventSteps(event, receipt);
+            ConfirmedAccount account = receipt.accountFor(event.playerUuid());
+            queue.complete(event, account.balance(), account.version());
 
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to process economy event: " + e.getMessage());
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "Economy event processing stacktrace", e);
             failedEvents.putIfAbsent(failedKey(event),
-                    new FailedEvent(event, 0, firstFailureTime, confirmedRedisBalance));
+                    new FailedEvent(event, 0, firstFailureTime, confirmedReceipt));
         }
     }
-
     /**
      * Try direct DB write as fallback when Redis is unavailable.
      * [STORE-03 FIX] This prevents data loss when Redis is down.
@@ -436,18 +437,23 @@ public final class EconomyEventConsumer implements Runnable {
     /**
      * Process event steps (after Redis write succeeds).
      */
-    private void processEventSteps(EconomyEvent event, BigDecimal newBalance) {
+    private void processEventSteps(EconomyEvent event, ReplicationReceipt receipt) {
+        ConfirmedAccount account = receipt.accountFor(event.playerUuid());
+        BigDecimal newBalance = account.balance();
+
         if (config.isPubsubEnabled()) {
-            publishUpdate(event, newBalance);
+            publishUpdate(event, account);
         }
 
         if (config.isDbEnabled()) {
-            enqueueDbWrite(event, newBalance);
+            enqueueDbWrite(event, receipt);
         }
 
-        if (hybridAuditManager != null && hybridAuditManager.isEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
+        if (hybridAuditManager != null && hybridAuditManager.isEnabled()
+                && event.source() != EconomyEvent.EventSource.TEST) {
             recordAuditLog(event, newBalance);
-        } else if (auditLogger != null && auditLogger.isEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
+        } else if (auditLogger != null && auditLogger.isEnabled()
+                && event.source() != EconomyEvent.EventSource.TEST) {
             recordAuditLog(event, newBalance);
         }
 
@@ -455,7 +461,8 @@ public final class EconomyEventConsumer implements Runnable {
             updateBaltop(event.playerUuid(), newBalance.doubleValue());
         }
 
-        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled() && event.source() != EconomyEvent.EventSource.TEST) {
+        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled()
+                && event.source() != EconomyEvent.EventSource.TEST) {
             String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
             if (playerName != null) {
                 shadowSyncTask.enqueueSyncEvent(event.playerUuid(), playerName, newBalance);
@@ -463,50 +470,28 @@ public final class EconomyEventConsumer implements Runnable {
         }
     }
 
-    /**
-     * Execute Redis atomic write.
-     */
-    private BigDecimal processRedisWrite(EconomyEvent event) {
-        BigDecimal newBalance;
-
-        switch (event.type()) {
-            case DEPOSIT, WITHDRAW -> {
-                newBalance = cacheManager.atomicAddBalance(event.playerUuid(), event.delta());
-            }
-            case SET_BALANCE -> {
-                long version = cacheManager.atomicSetBalance(event.playerUuid(), event.balanceAfter());
-                newBalance = version > 0 ? event.balanceAfter() : null;
-            }
-            case TRANSFER_IN -> {
-                newBalance = cacheManager.getBalance(event.playerUuid());
-            }
-            case TRANSFER_OUT -> {
-                newBalance = cacheManager.getBalance(event.playerUuid());
-            }
-            default -> newBalance = null;
-        }
-
-        return newBalance;
+    /** Execute Redis atomic write and preserve the pair returned by that same authority operation. */
+    private ReplicationReceipt processRedisWrite(EconomyEvent event) {
+        ConfirmedAccount account = switch (event.type()) {
+            case DEPOSIT, WITHDRAW -> cacheManager.atomicAddBalanceReceipt(event.playerUuid(), event.delta());
+            case SET_BALANCE -> cacheManager.atomicSetBalanceReceipt(event.playerUuid(), event.balanceAfter());
+            case TRANSFER_IN, TRANSFER_OUT -> new ConfirmedAccount(
+                    event.playerUuid(), event.balanceAfter(), event.version());
+            default -> null;
+        };
+        return account == null ? null : new ReplicationReceipt(operationId(event), List.of(account));
     }
 
-    /**
-     * Publish Pub/Sub message.
-     */
-    private void publishUpdate(EconomyEvent event, BigDecimal newBalance) {
-        long version = cacheManager.getVersion(event.playerUuid());
-        String serverName = config.getServerName();
-        String messageId = event.requestId();
-        long timestamp = event.timestamp();
+    private static String operationId(EconomyEvent event) {
+        String requestId = event.requestId();
+        if (requestId != null && !requestId.isBlank()) return requestId;
+        return "event:" + event.playerUuid() + ":" + event.timestamp() + ":" + event.type() + ":" + event.version();
+    }
 
-        PubSubMessage message = new PubSubMessage(
-                event.playerUuid().toString(),
-                newBalance.doubleValue(),
-                version,
-                serverName != null ? serverName : "unknown",
-                messageId,
-                timestamp,
-                event.type().name(),
-                event.delta().doubleValue());
+    /** Publish the exact balance/version pair confirmed by the authority write. */
+    private void publishUpdate(EconomyEvent event, ConfirmedAccount account) {
+        String serverName = config.getServerName();
+        PubSubMessage message = createPubSubMessage(event, account, serverName);
 
         try (var jedis = redisManager.getResource()) {
             jedis.publish(PUBSUB_CHANNEL, message.toJson());
@@ -515,58 +500,59 @@ public final class EconomyEventConsumer implements Runnable {
         }
     }
 
-    /**
-     * Enqueue DB write operation.
-     */
-    private void enqueueDbWrite(EconomyEvent event, BigDecimal newBalance) {
-        long version = cacheManager.getVersion(event.playerUuid());
-        String serverName = config.getServerName();
+    static PubSubMessage createPubSubMessage(EconomyEvent event, ConfirmedAccount account,
+            String serverName) {
+        String sourcePlugin = event.sourcePlugin() == null || event.sourcePlugin().isBlank()
+                ? "Syncmoney"
+                : event.sourcePlugin();
+        return new PubSubMessage(
+                event.playerUuid().toString(),
+                account.balance(),
+                account.version(),
+                serverName != null ? serverName : "unknown",
+                event.requestId(),
+                event.timestamp(),
+                event.type().name(),
+                event.delta().doubleValue(),
+                sourcePlugin,
+                null);
+    }
 
+    /** Enqueue the authority receipt without reading cache state again. */
+    private void enqueueDbWrite(EconomyEvent event, ReplicationReceipt receipt) {
+        ConfirmedAccount account = receipt.accountFor(event.playerUuid());
+        String serverName = config.getServerName();
         String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
 
-        var task = new DbWriteQueue.DbWriteTask(
-                event.playerUuid(),
-                playerName,
-                newBalance.doubleValue(),
-                version,
-                serverName != null ? serverName : "unknown",
-                java.time.Instant.now());
+        var task = new DbWriteQueue.DbWriteTask(receipt.operationId(), account, playerName,
+                serverName != null ? serverName : "unknown", java.time.Instant.now());
 
         if (!dbWriteQueue.offer(task)) {
-
             plugin.getLogger().severe("CRITICAL: DbWriteQueue is full, attempting fallback for " + event.playerUuid());
-
-
-            boolean directWriteSuccess = tryDirectDbWrite(event.playerUuid(), playerName, newBalance, version, serverName);
-
+            boolean directWriteSuccess = tryDirectDbWrite(account, playerName, serverName);
             if (!directWriteSuccess) {
-
-                plugin.getLogger().severe("CRITICAL: DbWriteQueue is full, direct DB write failed, writing to overflow log for "
-                        + event.playerUuid() + ". This may cause data loss on restart.");
-
+                plugin.getLogger().severe("CRITICAL: DbWriteQueue is full, direct DB write failed, "
+                        + "writing to overflow log for " + event.playerUuid()
+                        + ". This may cause data loss on restart.");
                 logEventToOverflowLog(event);
             }
         }
     }
 
-    /**
-     * [STORE-02 FIX] Try direct synchronous DB write as fallback.
-     */
-    private boolean tryDirectDbWrite(UUID uuid, String playerName, BigDecimal balance, long version, String serverName) {
+    /** Try a direct database write when the bounded queue rejects the confirmed snapshot. */
+    private boolean tryDirectDbWrite(ConfirmedAccount account, String playerName, String serverName) {
         try {
             if (databaseManager != null) {
-                databaseManager.insertOrUpdatePlayer(uuid, playerName, balance, version, serverName);
-                plugin.getLogger().info("STORE-02: Direct DB write succeeded for " + uuid);
-                return true;
+                return databaseManager.tryInsertOrUpdatePlayer(account.playerUuid(), playerName,
+                        account.balance(), account.version(), serverName);
             }
         } catch (Exception e) {
             plugin.getLogger().severe("STORE-02: Direct DB write failed: " + e.getMessage());
         }
         return false;
     }
-
     /**
-     * [STORE-02 FIX] Log event to overflow log for later recovery.
+     * Execute Redis atomic write.
      */
     private void logEventToOverflowLog(EconomyEvent event) {
         try {

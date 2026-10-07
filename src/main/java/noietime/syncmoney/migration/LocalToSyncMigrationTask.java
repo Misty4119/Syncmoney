@@ -167,7 +167,7 @@ public final class LocalToSyncMigrationTask {
                 LocalPlayerData player = players.get(i);
 
                 try {
-                    if (!databaseManager.tryInsertOrUpdatePlayer(
+                    if (!databaseManager.tryReplacePlayerForMigration(
                             player.uuid(),
                             player.name(),
                             player.balance(),

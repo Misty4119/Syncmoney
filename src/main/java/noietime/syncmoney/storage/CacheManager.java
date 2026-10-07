@@ -1,5 +1,6 @@
 package noietime.syncmoney.storage;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
@@ -266,52 +267,43 @@ public final class CacheManager {
      * @return New version number
      */
     public long atomicSetBalance(UUID uuid, BigDecimal newBalance) {
+        ConfirmedAccount receipt = atomicSetBalanceReceipt(uuid, newBalance);
+        return receipt == null ? -1L : receipt.version();
+    }
+
+    /** Apply a set and return the exact balance/version pair returned by this mutation. */
+    public ConfirmedAccount atomicSetBalanceReceipt(UUID uuid, BigDecimal newBalance) {
         if (atomicSetBalanceSha == null) {
-            plugin.getLogger().severe("Lua script atomicSetBalance not loaded! Mode: " + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
+            plugin.getLogger().severe("Lua script atomicSetBalance not loaded! Mode: "
+                    + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        String keyBalance = KEY_PREFIX_BALANCE + uuid.toString();
-        String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
+        String keyBalance = KEY_PREFIX_BALANCE + uuid;
+        String keyVersion = KEY_PREFIX_VERSION + uuid;
+        BigDecimal confirmedBalance = NumericUtil.normalize(newBalance);
 
-        newBalance = NumericUtil.normalize(newBalance);
-
-        if (setScriptBlocked) {
-            reloadLuaScripts();
-        }
+        if (setScriptBlocked) reloadLuaScripts();
 
         try (var jedis = redisManager.getResource()) {
-            Object result = jedis.evalsha(
-                    atomicSetBalanceSha,
-                    2,
-                    keyVersion,
-                    keyBalance,
-                    newBalance.toPlainString()
-            );
-
-            long newVersion = Long.parseLong(result.toString());
-
-            final BigDecimal finalBalance = newBalance;
-            final long finalVersion = newVersion;
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(finalBalance, finalVersion));
-
-            return newVersion;
+            Object result = jedis.evalsha(atomicSetBalanceSha, 2, keyVersion, keyBalance,
+                    confirmedBalance.toPlainString());
+            long confirmedVersion = Long.parseLong(result.toString());
+            ConfirmedAccount confirmed = new ConfirmedAccount(uuid, confirmedBalance, confirmedVersion);
+            rememberConfirmedAccount(confirmed);
+            return confirmed;
         } catch (Exception e) {
             markDegradedOnRedisTransportFailure(e);
             String errorMsg = e.getMessage();
             if (handleLuaScriptError(errorMsg)) {
-                plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg + " (script reloaded, please retry)");
+                plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg
+                        + " (script reloaded, please retry)");
             } else {
                 plugin.getLogger().severe("Failed to atomic set balance for " + uuid + ": " + errorMsg);
             }
-            return -1;
+            return null;
         }
     }
-
-    /**
-     * Reload Lua scripts (called when script is flagged as dangerous by Redis).
-     * Prevents infinite loop from repeated reloads in short time.
-     */
     public void reloadLuaScripts() {
         synchronized (this) {
             if (isReloading) {
@@ -375,68 +367,55 @@ public final class CacheManager {
      * @return New balance, or -1 if failed
      */
     public BigDecimal atomicAddBalance(UUID uuid, BigDecimal amount) {
+        ConfirmedAccount receipt = atomicAddBalanceReceipt(uuid, amount);
+        return receipt == null ? BigDecimal.valueOf(-1) : receipt.balance();
+    }
+
+    /** Apply an add and retain the balance/version pair returned by the same Lua execution. */
+    public ConfirmedAccount atomicAddBalanceReceipt(UUID uuid, BigDecimal amount) {
         if (atomicAddBalanceSha == null) {
-            plugin.getLogger().severe("Lua script atomicAddBalance not loaded! Mode: " + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
+            plugin.getLogger().severe("Lua script atomicAddBalance not loaded! Mode: "
+                    + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        String keyBalance = KEY_PREFIX_BALANCE + uuid.toString();
-        String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
+        String keyBalance = KEY_PREFIX_BALANCE + uuid;
+        String keyVersion = KEY_PREFIX_VERSION + uuid;
+        BigDecimal normalizedAmount = NumericUtil.normalize(amount);
 
-        amount = NumericUtil.normalize(amount);
-
-        if (addScriptBlocked) {
-            reloadLuaScripts();
-        }
+        if (addScriptBlocked) reloadLuaScripts();
 
         try (var jedis = redisManager.getResource()) {
-            Object result = jedis.evalsha(
-                    atomicAddBalanceSha,
-                    2,
-                    keyBalance,
-                    keyVersion,
-                    amount.toPlainString()
-            );
-
-            if (result instanceof java.util.List) {
-                @SuppressWarnings("unchecked")
-                var list = (java.util.List<?>) result;
-                if (list.size() < 2) {
-                    plugin.getLogger().severe("Lua script returned insufficient elements: " + list.size());
-                    return BigDecimal.valueOf(-1);
+            Object result = jedis.evalsha(atomicAddBalanceSha, 2, keyBalance, keyVersion,
+                    normalizedAmount.toPlainString());
+            if (result instanceof List<?> values) {
+                if (values.size() < 2) {
+                    plugin.getLogger().severe("Lua script returned insufficient elements: " + values.size());
+                    return null;
                 }
-                BigDecimal newBalance = NumericUtil.normalize(list.get(0).toString());
-                long newVersion = Long.parseLong(list.get(1).toString());
-
-                memoryCache.compute(uuid, (k, v) -> new CachedBalance(newBalance, newVersion));
-
-                return newBalance;
-            } else if (result instanceof String) {
-                String errorMsg = result.toString();
-                if (handleLuaScriptError(errorMsg)) {
-                    return BigDecimal.valueOf(-1);
-                }
-                throw new RuntimeException("Lua error: " + errorMsg);
+                BigDecimal confirmedBalance = NumericUtil.normalize(values.get(0).toString());
+                long confirmedVersion = Long.parseLong(values.get(1).toString());
+                ConfirmedAccount confirmed = new ConfirmedAccount(uuid, confirmedBalance, confirmedVersion);
+                rememberConfirmedAccount(confirmed);
+                return confirmed;
             }
-
-            return BigDecimal.valueOf(-1);
+            if (result instanceof String errorMessage) {
+                if (handleLuaScriptError(errorMessage)) return null;
+                throw new IllegalStateException("Lua error: " + errorMessage);
+            }
+            return null;
         } catch (Exception e) {
             markDegradedOnRedisTransportFailure(e);
             String errorMsg = e.getMessage();
             if (handleLuaScriptError(errorMsg)) {
-                plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg + " (script reloaded, please retry)");
+                plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg
+                        + " (script reloaded, please retry)");
             } else {
                 plugin.getLogger().severe("Failed to atomic add balance for " + uuid + ": " + errorMsg);
             }
-            return BigDecimal.valueOf(-1);
+            return null;
         }
     }
-
-    /**
-     * Load the Redis balance/version pair without converting a backend failure to zero.
-     * Callers that need to distinguish unavailable storage from a confirmed absent
-     * account use this method on an I/O worker and handle the exception themselves.
-     */
     public java.util.Optional<CachedBalance> getBalanceSnapshotStrict(UUID uuid) {
         CachedBalance cached = memoryCache.get(uuid);
         if (cached != null && !cached.isExpired(expirationMinutes)) {
@@ -465,6 +444,21 @@ public final class CacheManager {
             memoryCache.compute(uuid, (k, v) -> snapshot);
             return java.util.Optional.of(snapshot);
         }
+    }
+
+    /**
+     * Read one unexpired balance/version pair from the local cache without Redis I/O.
+     * Legacy publishers use this to avoid attaching a version read separately from
+     * the balance they were given.
+     */
+    public Optional<CachedBalance> getCachedBalanceSnapshot(UUID uuid) {
+        if (uuid == null) {
+            return Optional.empty();
+        }
+        CachedBalance cached = memoryCache.get(uuid);
+        return cached != null && !cached.isExpired(expirationMinutes)
+                ? Optional.of(cached)
+                : Optional.empty();
     }
 
     private void markDegradedOnRedisTransportFailure(Throwable failure) {
@@ -608,6 +602,22 @@ public final class CacheManager {
             return existing;
         });
         return updated[0];
+    }
+
+    /** Remember a confirmed Redis pair without letting a delayed response regress this node's cache. */
+    private void rememberConfirmedAccount(ConfirmedAccount confirmed) {
+        memoryCache.compute(confirmed.playerUuid(), (key, existing) -> {
+            if (existing != null && existing.version() > confirmed.version()) {
+                return existing;
+            }
+            if (existing != null && existing.version() == confirmed.version()
+                    && existing.balance().compareTo(confirmed.balance()) != 0) {
+                plugin.getLogger().severe("Conflicting Redis receipt for " + confirmed.playerUuid()
+                        + " at version " + confirmed.version() + "; retaining the cached balance");
+                return existing;
+            }
+            return new CachedBalance(confirmed.balance(), confirmed.version());
+        });
     }
 
     /**

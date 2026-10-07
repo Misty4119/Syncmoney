@@ -35,6 +35,8 @@ repositories {
 }
 
 dependencies {
+    implementation project(':syncmoney-core')
+    implementation project(':syncmoney-storage')
     compileOnly("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
 
     // VaultUnlockedAPI contains both the legacy Vault 1.7 contracts and the
@@ -93,9 +95,6 @@ jacocoTestReport {
 
 shadowJar {
     archiveFileName = "Syncmoney-${version}.jar"
-    
-    dependencies {
-    }
     
     relocate('org.apache.commons', 'noietime.libs.apache.commons')
     relocate('com.zaxxer.hikari', 'noietime.libs.hikari')

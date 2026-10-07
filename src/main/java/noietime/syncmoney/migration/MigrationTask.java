@@ -619,7 +619,7 @@ public final class MigrationTask {
             if (isCmiSourceChanged()) {
                 return;
             }
-            if (!databaseManager.tryInsertOrUpdatePlayer(
+            if (!databaseManager.tryReplacePlayerForMigration(
                     uuid,
                     playerName,
                     balance,

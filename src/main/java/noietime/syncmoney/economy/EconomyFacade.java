@@ -495,6 +495,12 @@ public final class EconomyFacade {
         return transactionWriter.deposit(uuid, amount, source);
     }
 
+    /** Deposit with caller attribution retained through the confirmed Redis receipt. */
+    public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
+            String sourcePlugin) {
+        return transactionWriter.deposit(uuid, amount, source, sourcePlugin);
+    }
+
     /**
      * [SYNC-ECO-048] Deposit - optimistic update flow (double-compatible version).
      */
@@ -508,6 +514,12 @@ public final class EconomyFacade {
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
         return transactionWriter.withdraw(uuid, amount, source);
+    }
+
+    /** Withdraw with caller attribution retained through the confirmed Redis receipt. */
+    public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
+            String sourcePlugin) {
+        return transactionWriter.withdraw(uuid, amount, source, sourcePlugin);
     }
 
     /**

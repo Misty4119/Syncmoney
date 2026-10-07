@@ -192,7 +192,6 @@ public class CommandServiceManager {
                 config,
                 economyFacade,
                 redisManager,
-                pubsubSubscriber,
                 circuitBreaker,
                 nameResolver,
                 baltopManager,

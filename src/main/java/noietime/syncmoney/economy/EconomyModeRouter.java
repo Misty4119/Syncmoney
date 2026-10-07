@@ -166,8 +166,8 @@ public class EconomyModeRouter {
         public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
             if (syncmoneyFacade != null && syncManager != null) {
                 BigDecimal result = syncmoneyFacade.deposit(uuid, amount, source);
-                syncManager.publishAndNotify(uuid, result,
-                    source.name(), amount.doubleValue(), "Syncmoney", null);
+                syncManager.notifyLocalBalanceChange(uuid,
+                    source.name(), amount.doubleValue(), "Syncmoney");
                 return result;
             }
             return BigDecimal.ZERO;
@@ -177,8 +177,8 @@ public class EconomyModeRouter {
         public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
             if (syncmoneyFacade != null && syncManager != null) {
                 BigDecimal result = syncmoneyFacade.withdraw(uuid, amount, source);
-                syncManager.publishAndNotify(uuid, result,
-                    source.name(), -amount.doubleValue(), "Syncmoney", null);
+                syncManager.notifyLocalBalanceChange(uuid,
+                    source.name(), -amount.doubleValue(), "Syncmoney");
                 return result;
             }
             return BigDecimal.ZERO;
@@ -196,8 +196,8 @@ public class EconomyModeRouter {
         public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
             if (syncmoneyFacade != null && syncManager != null) {
                 BigDecimal result = syncmoneyFacade.setBalance(uuid, newBalance, source);
-                syncManager.publishAndNotify(uuid, result,
-                    "SET_BALANCE", newBalance.doubleValue(), "Syncmoney", null);
+                syncManager.notifyLocalBalanceChange(uuid,
+                    "SET_BALANCE", newBalance.doubleValue(), "Syncmoney");
                 return result;
             }
             return BigDecimal.ZERO;

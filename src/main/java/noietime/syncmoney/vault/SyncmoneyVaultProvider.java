@@ -7,6 +7,7 @@ import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.Plugin;
@@ -34,6 +35,11 @@ public class SyncmoneyVaultProvider implements Economy {
 
     public SyncmoneyVaultProvider(Plugin plugin, EconomyFacade economyFacade, RedisManager redisManager,
             NameResolver nameResolver) {
+        this(plugin, economyFacade, redisManager, nameResolver, null);
+    }
+
+    public SyncmoneyVaultProvider(Plugin plugin, EconomyFacade economyFacade, RedisManager redisManager,
+            NameResolver nameResolver, DbWriteQueue dbWriteQueue) {
         this.plugin = plugin;
 
         VaultLuaScriptManager luaScriptManager = new VaultLuaScriptManager(plugin);
@@ -41,12 +47,14 @@ public class SyncmoneyVaultProvider implements Economy {
         VaultPlayerHandler playerHandler = new VaultPlayerHandler(economyFacade, nameResolver, plugin);
         VaultTransferHandler transferHandler = new VaultTransferHandler(
                 plugin, economyFacade, null, pluginDetector, null, playerHandler, nameResolver);
+        transferHandler.setDbWriteQueue(dbWriteQueue);
         VaultBankHandler bankHandler = new VaultBankHandler(plugin, redisManager, luaScriptManager);
 
         this.core = new VaultProviderCore(
                 plugin, economyFacade,
                 playerHandler, transferHandler, bankHandler,
                 pluginDetector, luaScriptManager, nameResolver);
+        this.core.setDbWriteQueue(dbWriteQueue);
     }
 
     /**

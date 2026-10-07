@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
  */
 public class CrossServerSyncManager {
 
-    private static final String SYNC_CHANNEL = noietime.syncmoney.sync.PubSubChannels.BALANCE_UPDATE;
     private static final String CMI_CHANNEL = noietime.syncmoney.sync.PubSubChannels.CMI_BALANCE_UPDATE;
     private static final long VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
     private static final long MS_PER_TICK = 50L;
@@ -54,35 +53,54 @@ public class CrossServerSyncManager {
         this.discordWebhookNotifier = discordWebhookNotifier;
     }
 
+    /** Notify the originating server locally; shared Pub/Sub is emitted after the Redis receipt. */
+    public void notifyLocalBalanceChange(UUID uuid, String eventType, double amount, String sourcePlugin) {
+        String currentServer = config.getServerName();
+
+        if (config.crossServer().isCrossServerNotificationsEnabled()) {
+            notifyLocalPlayer(uuid, currentServer, eventType, amount, sourcePlugin);
+        }
+    }
+
     /**
-     * [SYNC-ECO-031] Publish balance update to Redis Pub/Sub channel and notify local player.
+     * Legacy publisher retained for integrations that do not yet pass an authority version.
+     * It publishes only when one current cached balance/version snapshot matches the supplied balance.
      */
     public void publishAndNotify(UUID uuid, BigDecimal newBalance,
                                 String eventType, double amount, String sourcePlugin, String sourcePlayerName) {
+        CacheManager.CachedBalance snapshot = cacheManager == null || uuid == null
+                ? null
+                : cacheManager.getCachedBalanceSnapshot(uuid).orElse(null);
+        if (snapshot != null && newBalance != null && snapshot.balance().compareTo(newBalance) == 0) {
+            publishAndNotify(uuid, newBalance, snapshot.version(), eventType, amount,
+                    sourcePlugin, sourcePlayerName);
+            return;
+        }
+
+        notifyLocalBalanceChange(uuid, eventType, amount, sourcePlugin);
+    }
+
+    /**
+     * Publish an authority-confirmed balance/version pair and notify the originating server.
+     * The caller must pass the version returned with the balance by the same mutation.
+     */
+    public void publishAndNotify(UUID uuid, BigDecimal newBalance, long version,
+                                String eventType, double amount, String sourcePlugin, String sourcePlayerName) {
+        if (uuid == null || newBalance == null) {
+            return;
+        }
         String currentServer = config.getServerName();
-
-        String channel = eventType != null && eventType.startsWith("CMI_") ? CMI_CHANNEL : SYNC_CHANNEL;
-
-        long version = cacheManager.getVersion(uuid);
+        String channel = eventType != null && eventType.startsWith("CMI_") ? CMI_CHANNEL
+                : noietime.syncmoney.sync.PubSubChannels.BALANCE_UPDATE;
         PubSubMessage message = new PubSubMessage(
-            uuid.toString(),
-            newBalance.doubleValue(),
-            version,
-            currentServer,
-            UUID.randomUUID().toString(),
-            System.currentTimeMillis(),
-            eventType,
-            amount,
-            sourcePlugin,
-            sourcePlayerName
-        );
-
+                uuid.toString(), newBalance, version, currentServer,
+                UUID.randomUUID().toString(), System.currentTimeMillis(), eventType, amount,
+                sourcePlugin, sourcePlayerName);
         try (var jedis = redisManager.getResource()) {
             jedis.publish(channel, message.toJson());
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to publish to Pub/Sub: " + e.getMessage());
         }
-
         if (config.crossServer().isCrossServerNotificationsEnabled()) {
             notifyLocalPlayer(uuid, currentServer, eventType, amount, sourcePlugin);
         }
@@ -100,7 +118,7 @@ public class CrossServerSyncManager {
 
         PubSubMessage message = new PubSubMessage(
             uuid.toString(),
-            newBalance.doubleValue(),
+            newBalance,
             version,
             currentServer,
             UUID.randomUUID().toString(),

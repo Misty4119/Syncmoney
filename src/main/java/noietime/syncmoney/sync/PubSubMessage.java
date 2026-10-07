@@ -27,7 +27,7 @@ public final class PubSubMessage {
     }
 
     private final String uuid;
-    private final double balance;
+    private final BigDecimal balance;
     private final long version;
     private final String sourceServer;
     private final String messageId;
@@ -39,10 +39,21 @@ public final class PubSubMessage {
 
     public PubSubMessage(String uuid, double balance, long version,
                         String sourceServer, String messageId, long timestamp) {
+        this(uuid, BigDecimal.valueOf(balance), version, sourceServer, messageId, timestamp, null, 0, null, null);
+    }
+
+    public PubSubMessage(String uuid, BigDecimal balance, long version,
+                        String sourceServer, String messageId, long timestamp) {
         this(uuid, balance, version, sourceServer, messageId, timestamp, null, 0, null, null);
     }
 
     public PubSubMessage(String uuid, double balance, long version,
+                        String sourceServer, String messageId, long timestamp,
+                        String eventType, double amount) {
+        this(uuid, BigDecimal.valueOf(balance), version, sourceServer, messageId, timestamp, eventType, amount, null, null);
+    }
+
+    public PubSubMessage(String uuid, BigDecimal balance, long version,
                         String sourceServer, String messageId, long timestamp,
                         String eventType, double amount) {
         this(uuid, balance, version, sourceServer, messageId, timestamp, eventType, amount, null, null);
@@ -51,10 +62,23 @@ public final class PubSubMessage {
     public PubSubMessage(String uuid, double balance, long version,
                         String sourceServer, String messageId, long timestamp,
                         String eventType, double amount, String sourcePlugin) {
+        this(uuid, BigDecimal.valueOf(balance), version, sourceServer, messageId, timestamp, eventType, amount, sourcePlugin, null);
+    }
+
+    public PubSubMessage(String uuid, BigDecimal balance, long version,
+                        String sourceServer, String messageId, long timestamp,
+                        String eventType, double amount, String sourcePlugin) {
         this(uuid, balance, version, sourceServer, messageId, timestamp, eventType, amount, sourcePlugin, null);
     }
 
     public PubSubMessage(String uuid, double balance, long version,
+                        String sourceServer, String messageId, long timestamp,
+                        String eventType, double amount, String sourcePlugin, String sourcePlayerName) {
+        this(uuid, BigDecimal.valueOf(balance), version, sourceServer, messageId, timestamp,
+                eventType, amount, sourcePlugin, sourcePlayerName);
+    }
+
+    public PubSubMessage(String uuid, BigDecimal balance, long version,
                         String sourceServer, String messageId, long timestamp,
                         String eventType, double amount, String sourcePlugin, String sourcePlayerName) {
         this.uuid = uuid;
@@ -99,7 +123,7 @@ public final class PubSubMessage {
     }
 
     public double getBalance() {
-        return balance;
+        return balance.doubleValue();
     }
 
     /**
@@ -159,7 +183,7 @@ public final class PubSubMessage {
 
     public static class Builder {
         private String uuid;
-        private double balance;
+        private BigDecimal balance = BigDecimal.ZERO;
         private long version;
         private String sourceServer;
         private String messageId;
@@ -170,7 +194,8 @@ public final class PubSubMessage {
         private String sourcePlayerName;
 
         public Builder uuid(String uuid) { this.uuid = uuid; return this; }
-        public Builder balance(double balance) { this.balance = balance; return this; }
+        public Builder balance(double balance) { this.balance = BigDecimal.valueOf(balance); return this; }
+        public Builder balance(BigDecimal balance) { this.balance = balance; return this; }
         public Builder version(long version) { this.version = version; return this; }
         public Builder sourceServer(String sourceServer) { this.sourceServer = sourceServer; return this; }
         public Builder messageId(String messageId) { this.messageId = messageId; return this; }

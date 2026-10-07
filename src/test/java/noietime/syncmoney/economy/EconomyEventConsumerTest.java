@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.audit.AuditLogger;
 import noietime.syncmoney.audit.HybridAuditManager;
 import noietime.syncmoney.baltop.BaltopManager;
@@ -79,7 +80,8 @@ class EconomyEventConsumerTest {
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
         // Keep processing on the success path and avoid NPEs in the downstream steps.
-        when(mockCacheManager.atomicAddBalance(any(), any())).thenReturn(BigDecimal.TEN);
+        when(mockCacheManager.atomicAddBalanceReceipt(any(), any())).thenAnswer(invocation ->
+                new ConfirmedAccount(invocation.getArgument(0), BigDecimal.TEN, 1L));
         when(mockConfig.shadowSync()).thenReturn(mock(noietime.syncmoney.config.ShadowSyncConfig.class));
 
         consumer = new EconomyEventConsumer(
@@ -126,7 +128,8 @@ class EconomyEventConsumerTest {
         when(mockConfig.isPubsubEnabled()).thenReturn(false);
         when(mockConfig.isDbEnabled()).thenReturn(false);
         when(mockRedisManager.isDegraded()).thenReturn(false);
-        when(mockCacheManager.atomicAddBalance(account, BigDecimal.ONE)).thenReturn(new BigDecimal("101.00"));
+        when(mockCacheManager.atomicAddBalanceReceipt(account, BigDecimal.ONE))
+                .thenReturn(new ConfirmedAccount(account, new BigDecimal("101.00"), 8L));
         EconomyEventConsumer worker = new EconomyEventConsumer(
                 mockPlugin, mockConfig, queue, mockCacheManager, mockRedisManager,
                 null, null, null, null, null, null, null, null);

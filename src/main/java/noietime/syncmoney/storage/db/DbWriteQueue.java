@@ -1,8 +1,11 @@
 package noietime.syncmoney.storage.db;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.util.Constants;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -105,12 +108,69 @@ public final class DbWriteQueue {
      * @param serverName server name
      * @param timestamp timestamp
      */
-    public record DbWriteTask(
-            UUID playerUuid,
-            String playerName,
-            double balance,
-            long version,
-            String serverName,
-            Instant timestamp
-    ) {}
+    public record DbWriteTask(String operationId, List<AccountWrite> accounts) {
+        public DbWriteTask {
+            if (operationId == null || operationId.isBlank()) {
+                throw new IllegalArgumentException("operationId must not be blank");
+            }
+            accounts = List.copyOf(java.util.Objects.requireNonNull(accounts, "accounts"));
+            if (accounts.isEmpty()) {
+                throw new IllegalArgumentException("accounts must not be empty");
+            }
+        }
+
+        public DbWriteTask(String operationId, ConfirmedAccount account, String playerName,
+                String serverName, Instant timestamp) {
+            this(operationId, List.of(new AccountWrite(account, playerName, serverName, timestamp)));
+        }
+
+        /** Compatibility constructor for non-receipt maintenance and test callers. */
+        public DbWriteTask(UUID playerUuid, String playerName, double balance, long version,
+                String serverName, Instant timestamp) {
+            this("legacy-" + playerUuid + "-" + version,
+                    new ConfirmedAccount(playerUuid, BigDecimal.valueOf(balance), version),
+                    playerName, serverName, timestamp);
+        }
+
+        /** Compatibility accessors for consumers that handle a single-account task. */
+        public ConfirmedAccount account() {
+            return accounts.get(0).account();
+        }
+
+        public String playerName() {
+            return accounts.get(0).playerName();
+        }
+
+        public String serverName() {
+            return accounts.get(0).serverName();
+        }
+
+        public Instant timestamp() {
+            return accounts.get(0).timestamp();
+        }
+
+        public UUID playerUuid() {
+            return account().playerUuid();
+        }
+
+        public double balance() {
+            return account().balance().doubleValue();
+        }
+
+        public long version() {
+            return account().version();
+        }
+
+        public int accountCount() {
+            return accounts.size();
+        }
+    }
+
+    public record AccountWrite(ConfirmedAccount account, String playerName, String serverName,
+            Instant timestamp) {
+        public AccountWrite {
+            java.util.Objects.requireNonNull(account, "account");
+            java.util.Objects.requireNonNull(timestamp, "timestamp");
+        }
+    }
 }

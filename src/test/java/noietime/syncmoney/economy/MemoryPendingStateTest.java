@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.CacheManager;
@@ -124,8 +125,8 @@ class MemoryPendingStateTest {
                 "the accepted local projection remains visible until its worker finishes");
 
         CacheManager cache = mock(CacheManager.class);
-        when(cache.atomicAddBalance(account, new BigDecimal("10.00"))).thenReturn(new BigDecimal("130.00"));
-        when(cache.getVersion(account)).thenReturn(10L);
+        when(cache.atomicAddBalanceReceipt(account, new BigDecimal("10.00")))
+                .thenReturn(new ConfirmedAccount(account, new BigDecimal("130.00"), 10L));
         SyncmoneyConfig consumerConfig = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(consumerConfig.isPubsubEnabled()).thenReturn(false);
         when(consumerConfig.isDbEnabled()).thenReturn(false);

@@ -7,6 +7,7 @@ import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.NumericUtil;
@@ -26,11 +27,12 @@ public class VaultTransferHandler {
 
     private final Plugin plugin;
     private final EconomyFacade economyFacade;
-    private final CrossServerSyncManager syncManager;
+    private volatile CrossServerSyncManager syncManager;
     private final VaultPluginDetector pluginDetector;
-    private final SyncmoneyConfig config;
+    private volatile SyncmoneyConfig config;
     private final VaultPlayerHandler playerHandler;
     private final NameResolver nameResolver;
+    private volatile DbWriteQueue dbWriteQueue;
 
     private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
 
@@ -53,19 +55,31 @@ public class VaultTransferHandler {
         this.cmiHandler = cmiHandler;
     }
 
+    public void setSyncManager(CrossServerSyncManager syncManager) {
+        this.syncManager = syncManager;
+    }
+
+    public void setConfig(SyncmoneyConfig config) {
+        this.config = config;
+    }
+
+    public void setDbWriteQueue(DbWriteQueue dbWriteQueue) {
+        this.dbWriteQueue = dbWriteQueue;
+    }
+
     /**
      * [FIX-CMI-VAULT-PUBLISH] Emit a cross-server balance update for the Vault transfer handler.
      *
      * <p>Routes the publish to the right channel for the active economy mode:
      * <ul>
-     *   <li>SYNC / LOCAL_REDIS → {@code publishAndNotify} on the SYNC channel (legacy behavior).</li>
+     *   <li>SYNC / LOCAL_REDIS → local notification; the accepted-write receipt publishes the shared update.</li>
      *   <li>CMI → {@code publishCMIUpdate} on the CMI channel with a CMI versioning counter.</li>
      *   <li>LOCAL → no-op (no cross-server transport).</li>
      * </ul>
      *
      * @param uuid             player whose balance changed
      * @param newBalance       authoritative post-transaction balance
-     * @param syncModeEventType event type used when publishing to {@code publishAndNotify}
+     * @param syncModeEventType event type used for the local notification in SYNC mode
      *                          (e.g. {@code VAULT_WITHDRAW}, {@code VAULT_DEPOSIT})
      * @param amount           signed delta ({@code +amount} for deposit, {@code -amount} for withdraw)
      * @param sourcePlugin     name of the calling plugin (best-effort, {@code null} falls through
@@ -80,7 +94,7 @@ public class VaultTransferHandler {
         }
         String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
         if (config.isSyncMode()) {
-            syncManager.publishAndNotify(uuid, newBalance, syncModeEventType, amount, resolvedPlugin, sourcePlayerName);
+            syncManager.notifyLocalBalanceChange(uuid, syncModeEventType, amount, resolvedPlugin);
         } else if (config.isCMIMode()) {
             long version = (cmiHandler != null)
                     ? cmiHandler.mintCmiVersion()
@@ -92,6 +106,22 @@ public class VaultTransferHandler {
                         + " balance=" + newBalance + " v" + version
                         + " amount=" + amount + " sourcePlugin=" + resolvedPlugin);
             }
+        }
+    }
+
+    private void publishAtomicTransferUpdate(UUID uuid, BigDecimal newBalance, long version,
+                                             String eventType, double amount,
+                                             String sourcePlugin, String sourcePlayerName) {
+        if (syncManager == null || config == null) {
+            return;
+        }
+        if (config.isSyncMode()) {
+            String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
+            syncManager.publishAndNotify(uuid, newBalance, version, eventType, amount,
+                    resolvedPlugin, sourcePlayerName);
+        } else {
+            publishCrossServerUpdate(uuid, newBalance, eventType, amount,
+                    sourcePlugin, sourcePlayerName);
         }
     }
 
@@ -139,15 +169,15 @@ public class VaultTransferHandler {
             return executeAtomicTransfer(player, uuid, toUuid, amountBd);
         }
 
-        BigDecimal newBalance = economyFacade.withdraw(uuid, amountBd, EconomyEvent.EventSource.VAULT_WITHDRAW);
+        String sourcePlugin = pluginDetector.detectCallingPlugin();
+        BigDecimal newBalance = economyFacade.withdraw(uuid, amountBd,
+                EconomyEvent.EventSource.VAULT_WITHDRAW, sourcePlugin);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
             double currentBalance = readyBalance(uuid);
             return new EconomyResponse(0, currentBalance, EconomyResponse.ResponseType.FAILURE,
                     Double.isNaN(currentBalance) ? notReadyMessage() : "Insufficient funds");
         }
-
-        String sourcePlugin = pluginDetector.detectCallingPlugin();
 
         CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, newBalance);
 
@@ -175,6 +205,9 @@ public class VaultTransferHandler {
                         Double.isNaN(currentBalance) ? notReadyMessage() : "Insufficient funds");
             }
 
+            TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
+                    fromUuid, toUuid, result);
+
             CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, result.fromNewBalance);
 
             Player receiverPlayer = plugin.getServer().getPlayer(toUuid);
@@ -186,8 +219,10 @@ public class VaultTransferHandler {
             if (senderName == null) {
                 senderName = fromUuid.toString();
             }
-            publishCrossServerUpdate(fromUuid, result.fromNewBalance, "VAULT_WITHDRAW", -amountBd.doubleValue(), sourcePlugin, senderName);
-            publishCrossServerUpdate(toUuid, result.toNewBalance, "VAULT_DEPOSIT", amountBd.doubleValue(), sourcePlugin, senderName);
+            publishAtomicTransferUpdate(fromUuid, result.fromNewBalance, result.fromNewVersion,
+                    "VAULT_WITHDRAW", -amountBd.doubleValue(), sourcePlugin, senderName);
+            publishAtomicTransferUpdate(toUuid, result.toNewBalance, result.toNewVersion,
+                    "VAULT_DEPOSIT", amountBd.doubleValue(), sourcePlugin, senderName);
 
             plugin.getLogger().info("Atomic transfer completed (Lua): " + fromUuid + " -> " + toUuid + " : " + amountBd);
 

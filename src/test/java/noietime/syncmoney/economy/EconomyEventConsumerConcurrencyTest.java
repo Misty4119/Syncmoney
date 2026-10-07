@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
@@ -67,11 +68,11 @@ class EconomyEventConsumerConcurrencyTest {
 
         // Record each processed event by its (unique) UUID. A positive return value keeps
         // processEvent on the success path. Duplicates would bump the per-UUID counter above 1.
-        when(mockCacheManager.atomicAddBalance(any(UUID.class), any(BigDecimal.class)))
+        when(mockCacheManager.atomicAddBalanceReceipt(any(UUID.class), any(BigDecimal.class)))
                 .thenAnswer(invocation -> {
                     UUID uuid = invocation.getArgument(0);
                     processed.computeIfAbsent(uuid, k -> new AtomicInteger()).incrementAndGet();
-                    return BigDecimal.TEN;
+                    return new ConfirmedAccount(uuid, BigDecimal.TEN, 1L);
                 });
 
         // Real queue with the production default capacity (50000). audit/baltop/shadow/overflow

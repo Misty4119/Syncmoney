@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
@@ -77,14 +78,14 @@ class TransferCompensationTest {
         Map<UUID, BigDecimal> durableBalances = new ConcurrentHashMap<>(Map.of(
                 sender, new BigDecimal("100.00"), receiver, BigDecimal.ZERO));
         AtomicReference<CountDownLatch> durableWrites = new AtomicReference<>();
-        when(cacheManager.atomicAddBalance(any(UUID.class), any(BigDecimal.class))).thenAnswer(invocation -> {
+        when(cacheManager.atomicAddBalanceReceipt(any(UUID.class), any(BigDecimal.class))).thenAnswer(invocation -> {
             UUID uuid = invocation.getArgument(0);
             BigDecimal delta = invocation.getArgument(1);
             BigDecimal after = durableBalances.compute(uuid,
                     (key, current) -> (current == null ? BigDecimal.ZERO : current).add(delta));
             CountDownLatch writes = durableWrites.get();
             if (writes != null) writes.countDown();
-            return after;
+            return new ConfirmedAccount(uuid, after, 8L);
         });
 
         EconomyEventConsumer consumer = new EconomyEventConsumer(

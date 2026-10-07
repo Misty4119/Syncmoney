@@ -2,13 +2,16 @@ package noietime.syncmoney.vault;
 
 import net.milkbowl.vault.economy.EconomyResponse;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.economy.EconomyWriteQueue;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.economy.OverflowLogInterface;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.OfflinePlayer;
@@ -50,9 +53,8 @@ import static org.mockito.Mockito.when;
  * provider handlers: standard Vault operations must remain independent, while
  * explicit transfers retain their atomic failure semantics.
  *
- * <p>{@code syncManager} and {@code config} are passed as {@code null} to mirror how
- * {@link SyncmoneyVaultProvider} constructs the handler in production, which keeps the
- * cross-server publish path disabled and the units isolated.
+ * <p>{@code syncManager} and {@code config} are passed as {@code null} in the fixture so the
+ * provider core's runtime dependency injection remains explicit in tests for cross-server paths.
  */
 class VaultTest {
 
@@ -145,6 +147,38 @@ class VaultTest {
     }
 
     @Test
+    void directVaultTransferReceiptUpdatesBothMemoryAccountsAndQueuesOneSqlOperation() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        CacheManager.TransferResult result = new CacheManager.TransferResult(
+                new BigDecimal("90.00"), new BigDecimal("60.00"), 8L, 12L);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isDbEnabled()).thenReturn(true);
+        when(config.getServerName()).thenReturn("server-a");
+        when(nameResolver.getNameCachedOnly(fromUuid)).thenReturn("sender");
+        when(nameResolver.getNameCachedOnly(toUuid)).thenReturn("receiver");
+        DbWriteQueue dbWriteQueue = mock(DbWriteQueue.class);
+        when(dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenReturn(true);
+
+        TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
+                fromUuid, toUuid, result);
+
+        verify(economyFacade).updateMemoryState(fromUuid, new BigDecimal("90.00"), 8L);
+        verify(economyFacade).updateMemoryState(toUuid, new BigDecimal("60.00"), 12L);
+        org.mockito.ArgumentCaptor<DbWriteQueue.DbWriteTask> taskCaptor =
+                org.mockito.ArgumentCaptor.forClass(DbWriteQueue.DbWriteTask.class);
+        verify(dbWriteQueue).offer(taskCaptor.capture());
+        DbWriteQueue.DbWriteTask task = taskCaptor.getValue();
+        assertEquals(2, task.accountCount());
+        assertEquals(new ConfirmedAccount(fromUuid, new BigDecimal("90.00"), 8L),
+                task.accounts().get(0).account());
+        assertEquals(new ConfirmedAccount(toUuid, new BigDecimal("60.00"), 12L),
+                task.accounts().get(1).account());
+        assertEquals("sender", task.accounts().get(0).playerName());
+        assertEquals("receiver", task.accounts().get(1).playerName());
+    }
+
+    @Test
     void pluginTransfer_coldReceiverReportsNotReadyAndPreservesKnownSenderBalance() {
         UUID fromUuid = UUID.randomUUID();
         UUID toUuid = UUID.randomUUID();
@@ -165,6 +199,96 @@ class VaultTest {
         assertEquals("Account is not ready; retry after it finishes loading", response.errorMessage);
         assertEquals(125.0, response.balance, 0.0001,
                 "the known sender balance remains useful even while the receiver is cold");
+    }
+
+    @Test
+    void directVaultAtomicTransferPublishesBothAuthorityVersions() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        OfflinePlayer from = mock(OfflinePlayer.class);
+        when(from.getUniqueId()).thenReturn(fromUuid);
+        when(economyFacade.isPlayerLocked(fromUuid)).thenReturn(false);
+        when(economyFacade.executeAtomicTransfer(eq(fromUuid), eq(toUuid), any(BigDecimal.class)))
+                .thenReturn(new CacheManager.TransferResult(new BigDecimal("90.00"),
+                        new BigDecimal("40.00"), 7L, 12L));
+        when(pluginDetector.detectCallingPlugin()).thenReturn("example-plugin");
+        when(nameResolver.getName(fromUuid)).thenReturn("Sender");
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isSyncMode()).thenReturn(true);
+        CrossServerSyncManager syncManager = mock(CrossServerSyncManager.class);
+        Server server = mock(Server.class);
+        when(plugin.getServer()).thenReturn(server);
+        VaultTransferHandler syncTransferHandler = new VaultTransferHandler(
+                plugin, economyFacade, syncManager, pluginDetector, config, playerHandler, nameResolver);
+
+        EconomyResponse response = syncTransferHandler.withdrawPlayer(from, 10.0, toUuid);
+
+        assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
+        verify(syncManager).publishAndNotify(fromUuid, new BigDecimal("90.00"), 7L,
+                "VAULT_WITHDRAW", -10.0, "example-plugin", "Sender");
+        verify(syncManager).publishAndNotify(toUuid, new BigDecimal("40.00"), 12L,
+                "VAULT_DEPOSIT", 10.0, "example-plugin", "Sender");
+    }
+
+    @Test
+    void providerCoreInjectsSyncDependenciesIntoDirectVaultAtomicTransferHandler() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        OfflinePlayer from = mock(OfflinePlayer.class);
+        when(from.getUniqueId()).thenReturn(fromUuid);
+        when(economyFacade.isPlayerLocked(fromUuid)).thenReturn(false);
+        when(economyFacade.executeAtomicTransfer(eq(fromUuid), eq(toUuid), any(BigDecimal.class)))
+                .thenReturn(new CacheManager.TransferResult(new BigDecimal("90.00"),
+                        new BigDecimal("40.00"), 7L, 12L));
+        when(pluginDetector.detectCallingPlugin()).thenReturn("example-plugin");
+        when(nameResolver.getName(fromUuid)).thenReturn("Sender");
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isSyncMode()).thenReturn(true);
+        CrossServerSyncManager syncManager = mock(CrossServerSyncManager.class);
+        providerCore.setConfig(config);
+        providerCore.setSyncManager(syncManager);
+        Server server = mock(Server.class);
+        when(plugin.getServer()).thenReturn(server);
+
+        EconomyResponse response = providerCore.withdrawPlayer(from, 10.0, toUuid);
+
+        assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
+        verify(syncManager).publishAndNotify(fromUuid, new BigDecimal("90.00"), 7L,
+                "VAULT_WITHDRAW", -10.0, "example-plugin", "Sender");
+        verify(syncManager).publishAndNotify(toUuid, new BigDecimal("40.00"), 12L,
+                "VAULT_DEPOSIT", 10.0, "example-plugin", "Sender");
+    }
+
+    @Test
+    void directVaultProviderAtomicTransferPublishesBothAuthorityVersions() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        OfflinePlayer from = mock(OfflinePlayer.class);
+        OfflinePlayer to = mock(OfflinePlayer.class);
+        when(from.getUniqueId()).thenReturn(fromUuid);
+        when(to.getUniqueId()).thenReturn(toUuid);
+        when(economyFacade.isPlayerLocked(fromUuid)).thenReturn(false);
+        when(economyFacade.isPlayerLocked(toUuid)).thenReturn(false);
+        when(economyFacade.pluginAtomicTransfer(eq(fromUuid), eq(toUuid), any(BigDecimal.class), eq("example-plugin")))
+                .thenReturn(new CacheManager.TransferResult(new BigDecimal("90.00"),
+                        new BigDecimal("40.00"), 7L, 12L));
+        when(nameResolver.getName(fromUuid)).thenReturn("Sender");
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isSyncMode()).thenReturn(true);
+        CrossServerSyncManager syncManager = mock(CrossServerSyncManager.class);
+        providerCore.setConfig(config);
+        providerCore.setSyncManager(syncManager);
+
+        EconomyResponse response = providerCore.pluginTransfer(from, to, 10.0, "example-plugin");
+
+        assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
+        verify(syncManager).publishAndNotify(fromUuid, new BigDecimal("90.00"), 7L,
+                "PLUGIN_WITHDRAW", -10.0, "example-plugin", "Sender");
+        verify(syncManager).publishAndNotify(toUuid, new BigDecimal("40.00"), 12L,
+                "PLUGIN_DEPOSIT", 10.0, "example-plugin", "Sender");
     }
 
     @Test
@@ -217,13 +341,14 @@ class VaultTest {
 
         when(recipient.getUniqueId()).thenReturn(recipientUuid);
         when(economyFacade.isPlayerLocked(recipientUuid)).thenReturn(false);
-        when(economyFacade.deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT))
+        when(economyFacade.deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT,
+                (String) null))
                 .thenReturn(new BigDecimal("100.00"));
 
         EconomyResponse response = providerCore.depositPlayer(recipient, amount.doubleValue());
 
         assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type);
-        verify(economyFacade).deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT);
+        verify(economyFacade).deposit(recipientUuid, amount, EconomyEvent.EventSource.VAULT_DEPOSIT, null);
         verify(economyFacade, never()).pluginDeposit(any(UUID.class), any(BigDecimal.class), any(String.class));
     }
 
@@ -233,7 +358,8 @@ class VaultTest {
         OfflinePlayer recipient = mock(OfflinePlayer.class);
         when(recipient.getUniqueId()).thenReturn(account);
         when(economyFacade.isPlayerLocked(account)).thenReturn(false);
-        when(economyFacade.deposit(account, new BigDecimal("10.00"), EconomyEvent.EventSource.VAULT_DEPOSIT))
+        when(economyFacade.deposit(account, new BigDecimal("10.00"), EconomyEvent.EventSource.VAULT_DEPOSIT,
+                (String) null))
                 .thenReturn(new BigDecimal("-1"));
         when(economyFacade.getBalanceForPlaceholder(account)).thenReturn(null);
 

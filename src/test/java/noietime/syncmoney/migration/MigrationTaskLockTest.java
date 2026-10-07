@@ -416,7 +416,7 @@ class MigrationTaskLockTest {
         verify(reader, never()).readPlayers(anyInt(), anyInt());
         verify(facade, never()).getBalance(any(UUID.class));
         verify(facade, never()).setBalance(any(UUID.class), any(BigDecimal.class), any());
-        verify(database, never()).tryInsertOrUpdatePlayer(any(UUID.class), any(), any(), anyLong(), any());
+        verify(database, never()).tryReplacePlayerForMigration(any(UUID.class), any(), any(), anyLong(), any());
         verify(redis, never()).getResource();
         verify(checkpoint).pause();
         verify(checkpoint, never()).complete();

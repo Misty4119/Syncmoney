@@ -8,7 +8,6 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
-import noietime.syncmoney.sync.PubsubSubscriber;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import noietime.syncmoney.util.MessageHelper;
@@ -44,7 +43,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     private final SyncmoneyConfig config;
     private final EconomyFacade economyFacade;
     private final RedisManager redisManager;
-    private final PubsubSubscriber pubsubSubscriber;
     private final EconomicCircuitBreaker circuitBreaker;
     private final NameResolver nameResolver;
     private final BaltopManager baltopManager;
@@ -61,7 +59,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
 
     public AdminCommand(Syncmoney plugin, SyncmoneyConfig config,
                         EconomyFacade economyFacade, RedisManager redisManager,
-                        PubsubSubscriber pubsubSubscriber,
                         EconomicCircuitBreaker circuitBreaker,
                         NameResolver nameResolver,
                         BaltopManager baltopManager,
@@ -70,7 +67,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         this.config = config;
         this.economyFacade = economyFacade;
         this.redisManager = redisManager;
-        this.pubsubSubscriber = pubsubSubscriber;
         this.circuitBreaker = circuitBreaker;
         this.nameResolver = nameResolver;
         this.baltopManager = baltopManager;
@@ -202,8 +198,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        publishBalanceChange(uuid, newBalance);
-
         String message = plugin.getMessage("admin.set-success")
                 .replace("{player}", playerName)
                 .replace("{balance}", FormatUtil.formatCurrency(newBalance));
@@ -309,8 +303,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
         }
 
-        publishBalanceChange(uuid, newBalance);
-
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.error"));
             return;
@@ -408,8 +400,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             BigDecimal oldBalance = newBalance.add(amount);
             circuitBreaker.onTransactionComplete(uuid, oldBalance, newBalance);
         }
-
-        publishBalanceChange(uuid, newBalance);
 
         String message = plugin.getMessage("admin.take-success")
                 .replace("{player}", playerName)
@@ -517,15 +507,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         }
 
         return null;
-    }
-
-    /**
-     * Publish balance change to cross-server channel.
-     */
-    private void publishBalanceChange(UUID uuid, BigDecimal newBalance) {
-        if (config.isPubsubEnabled() && pubsubSubscriber != null) {
-            pubsubSubscriber.publishBalanceChange(uuid, newBalance);
-        }
     }
 
     /**

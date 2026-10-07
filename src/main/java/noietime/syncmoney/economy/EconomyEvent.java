@@ -17,8 +17,15 @@ public record EconomyEvent(
     EventType type,
     EventSource source,
     String requestId,
-    long timestamp
+    long timestamp,
+    String sourcePlugin
 ) {
+
+    /** Source-compatible constructor for events without explicit plugin attribution. */
+    public EconomyEvent(UUID playerUuid, BigDecimal delta, BigDecimal balanceAfter, long version,
+            EventType type, EventSource source, String requestId, long timestamp) {
+        this(playerUuid, delta, balanceAfter, version, type, source, requestId, timestamp, null);
+    }
 
     public enum EventType {
 

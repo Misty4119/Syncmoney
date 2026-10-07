@@ -3,6 +3,7 @@ package noietime.syncmoney.economy;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.util.NumericUtil;
+import noietime.syncmoney.storage.persistence.SqlSnapshotWriter;
 import noietime.syncmoney.web.websocket.SseManager;
 import org.bukkit.Bukkit;
 
@@ -663,27 +664,8 @@ public class LocalEconomyHandler implements AutoCloseable {
     }
 
     private void upsertBalance(UUID uuid, String name, BigDecimal balance, int version) throws SQLException {
-        String sql = """
-                INSERT INTO player_balances (uuid, name, balance, version, last_update, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(uuid) DO UPDATE SET
-                    name = excluded.name,
-                    balance = excluded.balance,
-                    version = excluded.version,
-                    last_update = excluded.last_update
-                """;
-        long now = System.currentTimeMillis();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, uuid.toString());
-            pstmt.setString(2, name);
-            pstmt.setBigDecimal(3, balance);
-            pstmt.setInt(4, version);
-            pstmt.setLong(5, now);
-            pstmt.setLong(6, now);
-            pstmt.executeUpdate();
-        }
+        SqlSnapshotWriter.persistLocalBalance(connection, uuid, name, balance, version, System.currentTimeMillis());
     }
-
     private long findTransactionRow(UUID uuid, long timestamp, int sequence) throws SQLException {
         String sql = "SELECT id FROM transactions WHERE uuid = ? AND timestamp = ? AND sequence = ? LIMIT 1";
         try (PreparedStatement pstmt = connection.prepareStatement(sql)) {

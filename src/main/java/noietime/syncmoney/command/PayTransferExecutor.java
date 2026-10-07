@@ -3,6 +3,8 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.core.port.ReplicationReceipt;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyWriteQueue;
@@ -20,6 +22,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -261,8 +265,6 @@ final class PayTransferExecutor {
 
         BigDecimal senderNewBalanceBD = NumericUtil.normalize(list.get(0).toString());
         BigDecimal targetNewBalanceBD = NumericUtil.normalize(list.get(1).toString());
-        double senderNewBalance = senderNewBalanceBD.doubleValue();
-        double targetNewBalance = targetNewBalanceBD.doubleValue();
         long senderVersion = Long.parseLong(list.get(2).toString());
         long targetVersion = Long.parseLong(list.get(3).toString());
 
@@ -292,38 +294,44 @@ final class PayTransferExecutor {
             return;
         }
 
-        economyFacade.updateMemoryState(senderUuid, senderNewBalance, senderVersion);
-        economyFacade.updateMemoryState(targetUuid, targetNewBalance, targetVersion);
-        cacheManager.updateMemoryCache(senderUuid, senderNewBalance, senderVersion);
-        cacheManager.updateMemoryCache(targetUuid, targetNewBalance, targetVersion);
+        economyFacade.updateMemoryState(senderUuid, senderNewBalanceBD, senderVersion);
+        economyFacade.updateMemoryState(targetUuid, targetNewBalanceBD, targetVersion);
+        cacheManager.updateMemoryCache(senderUuid, senderNewBalanceBD, senderVersion);
+        cacheManager.updateMemoryCache(targetUuid, targetNewBalanceBD, targetVersion);
 
         if (dbWriteQueue != null) {
             String serverName = config.getServerName();
-            dbWriteQueue.offer(createDbTask(senderUuid, senderName, senderNewBalance, senderVersion, serverName));
-            dbWriteQueue.offer(createDbTask(targetUuid, targetName, targetNewBalance, targetVersion, serverName));
+            DbWriteQueue.DbWriteTask task = createTransferDbTask(senderUuid, senderName,
+                    senderNewBalanceBD, senderVersion, targetUuid, targetName,
+                    targetNewBalanceBD, targetVersion, serverName, Instant.now());
+            if (!dbWriteQueue.offer(task)) {
+                plugin.getLogger().severe("DbWriteQueue is full; confirmed /pay receipt was not persisted for "
+                        + senderUuid + " -> " + targetUuid);
+            }
         }
 
-        notifyTransferSuccess(sender, targetName, amount, senderNewBalance);
+        notifyTransferSuccess(sender, targetName, amount, senderNewBalanceBD.doubleValue());
         plugin.getLogger().fine("Transfer: " + senderName + " -> " + targetName +
-                " " + amount.toPlainString() + " (sender new balance: " + senderNewBalance + ")");
+                " " + amount.toPlainString() + " (sender new balance: " + senderNewBalanceBD + ")");
 
-        publishTransferEvents(senderUuid, senderName, targetUuid, senderNewBalance, targetNewBalance, amount);
+        publishTransferEvents(senderUuid, senderName, senderVersion,
+                targetUuid, targetVersion, senderNewBalanceBD, targetNewBalanceBD, amount);
 
         if (baltopManager != null) {
-            baltopManager.updatePlayerRank(senderUuid, senderNewBalance);
-            baltopManager.updatePlayerRank(targetUuid, targetNewBalance);
+            baltopManager.updatePlayerRank(senderUuid, senderNewBalanceBD.doubleValue());
+            baltopManager.updatePlayerRank(targetUuid, targetNewBalanceBD.doubleValue());
         }
 
         if (writeQueue != null) {
             try {
-                if (!writeQueue.offer(createTransferEvent(senderUuid, amount.negate(), senderNewBalance, senderVersion, "TRANSFER_OUT"))) {
+                if (!writeQueue.offer(createTransferEvent(senderUuid, amount.negate(), senderNewBalanceBD, senderVersion, "TRANSFER_OUT"))) {
                     plugin.getLogger().warning("EconomyWriteQueue full: failed to queue TRANSFER_OUT event for " + senderName);
                 }
             } catch (Exception e) {
                 plugin.getLogger().warning("Failed to queue TRANSFER_OUT event: " + e.getMessage());
             }
             try {
-                if (!writeQueue.offer(createTransferEvent(targetUuid, amount, targetNewBalance, targetVersion, "TRANSFER_IN"))) {
+                if (!writeQueue.offer(createTransferEvent(targetUuid, amount, targetNewBalanceBD, targetVersion, "TRANSFER_IN"))) {
                     plugin.getLogger().warning("EconomyWriteQueue full: failed to queue TRANSFER_IN event for " + targetName);
                 }
             } catch (Exception e) {
@@ -393,28 +401,36 @@ final class PayTransferExecutor {
 
 
 
-    private void publishTransferEvents(UUID senderUuid, String senderName, UUID targetUuid,
-            double senderNewBalance, double targetNewBalance, BigDecimal amount) {
+    private void publishTransferEvents(UUID senderUuid, String senderName, long senderVersion,
+            UUID targetUuid, long targetVersion,
+            BigDecimal senderNewBalance, BigDecimal targetNewBalance, BigDecimal amount) {
         if (pubsubSubscriber != null && config.isPubsubEnabled()) {
-            pubsubSubscriber.publishTransferEvent(senderUuid, BigDecimal.valueOf(senderNewBalance),
-                    "TRANSFER_OUT", amount.doubleValue(), senderName);
-            pubsubSubscriber.publishTransferEvent(targetUuid, BigDecimal.valueOf(targetNewBalance),
-                    "TRANSFER_IN", amount.doubleValue(), senderName);
+            pubsubSubscriber.publishTransferEvent(senderUuid, senderNewBalance,
+                    senderVersion, "TRANSFER_OUT", amount.doubleValue(), senderName);
+            pubsubSubscriber.publishTransferEvent(targetUuid, targetNewBalance,
+                    targetVersion, "TRANSFER_IN", amount.doubleValue(), senderName);
         }
     }
 
-    private DbWriteQueue.DbWriteTask createDbTask(UUID uuid, String name, double balance,
-            long version, String serverName) {
-        return new DbWriteQueue.DbWriteTask(
-                uuid, name, balance, version,
-                serverName != null ? serverName : "unknown",
-                java.time.Instant.now());
+    static DbWriteQueue.DbWriteTask createTransferDbTask(UUID senderUuid, String senderName,
+            BigDecimal senderBalance, long senderVersion, UUID targetUuid, String targetName,
+            BigDecimal targetBalance, long targetVersion, String serverName, Instant timestamp) {
+        ReplicationReceipt receipt = new ReplicationReceipt(UUID.randomUUID().toString(), List.of(
+                new ConfirmedAccount(senderUuid, senderBalance, senderVersion),
+                new ConfirmedAccount(targetUuid, targetBalance, targetVersion)));
+        String normalizedServerName = serverName != null ? serverName : "unknown";
+        List<DbWriteQueue.AccountWrite> accountWrites = List.of(
+                new DbWriteQueue.AccountWrite(receipt.accounts().get(0), senderName,
+                        normalizedServerName, timestamp),
+                new DbWriteQueue.AccountWrite(receipt.accounts().get(1), targetName,
+                        normalizedServerName, timestamp));
+        return new DbWriteQueue.DbWriteTask(receipt.operationId(), accountWrites);
     }
 
-    private EconomyEvent createTransferEvent(UUID uuid, BigDecimal delta, double newBalance,
+    private EconomyEvent createTransferEvent(UUID uuid, BigDecimal delta, BigDecimal newBalance,
             long version, String type) {
         return new EconomyEvent(
-                uuid, delta, BigDecimal.valueOf(newBalance), version,
+                uuid, delta, newBalance, version,
                 EconomyEvent.EventType.valueOf(type),
                 EconomyEvent.EventSource.PLAYER_TRANSFER,
                 UUID.randomUUID().toString(),
