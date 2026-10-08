@@ -1,5 +1,6 @@
 package noietime.syncmoney.storage;
 
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.util.Constants;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.params.SetParams;
@@ -16,8 +17,6 @@ import java.util.concurrent.ConcurrentMap;
  * [AsyncScheduler] All Redis operations should be executed on non-main threads.
  */
 public final class TransferLockManager {
-
-    private static final String LOCK_PREFIX = Constants.LOCK_PREFIX;
 
     private static final String SAFE_UNLOCK_SCRIPT =
         "if redis.call('get', KEYS[1]) == ARGV[1] then " +
@@ -107,7 +106,7 @@ public final class TransferLockManager {
             return acquireMemoryLock(uuid);
         }
         
-        String lockKey = LOCK_PREFIX + uuid.toString();
+        String lockKey = RedisKeys.lock(uuid);
         String lockValue = UUID.randomUUID().toString();
 
         long deadline = System.currentTimeMillis() + Constants.LOCK_TIMEOUT_SECONDS * 1000L;
@@ -188,7 +187,7 @@ public final class TransferLockManager {
             return;
         }
         
-        String lockKey = LOCK_PREFIX + uuid.toString();
+        String lockKey = RedisKeys.lock(uuid);
         String lockValue = lockValues.remove(uuid);
 
         if (lockValue == null) {

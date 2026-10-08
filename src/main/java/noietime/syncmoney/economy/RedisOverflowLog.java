@@ -2,6 +2,7 @@ package noietime.syncmoney.economy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import noietime.syncmoney.PluginContext;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
@@ -23,7 +24,7 @@ import java.util.*;
  */
 public final class RedisOverflowLog implements OverflowLogInterface {
 
-    private static final String REDIS_KEY = "syncmoney:overflow:events";
+    private static final String REDIS_KEY = RedisKeys.OVERFLOW_EVENTS;
     private final RedisManager redisManager;
     private final Plugin plugin;
     private final ObjectMapper objectMapper;

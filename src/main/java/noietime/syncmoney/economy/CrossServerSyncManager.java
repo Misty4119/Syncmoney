@@ -2,9 +2,12 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.protocol.RedisChannels;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.sync.PubSubMessage;
+import noietime.syncmoney.sync.MessageKeys;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.breaker.DiscordWebhookNotifier;
@@ -23,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class CrossServerSyncManager {
 
-    private static final String CMI_CHANNEL = noietime.syncmoney.sync.PubSubChannels.CMI_BALANCE_UPDATE;
+    private static final String CMI_CHANNEL = RedisChannels.CMI_BALANCE_UPDATE;
     private static final long VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
     private static final long MS_PER_TICK = 50L;
     private static final long VERSION_CHECK_INTERVAL_TICKS = VERSION_CHECK_INTERVAL_MS / MS_PER_TICK;
@@ -91,7 +94,7 @@ public class CrossServerSyncManager {
         }
         String currentServer = config.getServerName();
         String channel = eventType != null && eventType.startsWith("CMI_") ? CMI_CHANNEL
-                : noietime.syncmoney.sync.PubSubChannels.BALANCE_UPDATE;
+                : RedisChannels.BALANCE_UPDATE;
         PubSubMessage message = new PubSubMessage(
                 uuid.toString(), newBalance, version, currentServer,
                 UUID.randomUUID().toString(), System.currentTimeMillis(), eventType, amount,
@@ -217,30 +220,7 @@ public class CrossServerSyncManager {
      * Now uses eventType to determine message key, matching PubsubSubscriber.notifyPlayerIfOnline logic.
      */
     private void notifyPlayerViaSse(Player player, String sourceServer, String eventType, double amount, String sourcePlugin) {
-        String messageKey;
-        
-        
-        
-        if ("VAULT_DEPOSIT".equals(eventType)) {
-            messageKey = "cross-server.money-received";
-        } else if ("VAULT_WITHDRAW".equals(eventType)) {
-            messageKey = "cross-server.money-spent";
-        } else if ("DEPOSIT".equals(eventType) || "ADMIN_GIVE".equals(eventType)) {
-            
-            
-            
-            messageKey = "admin.money-received";
-        } else if ("WITHDRAW".equals(eventType) || "ADMIN_TAKE".equals(eventType)) {
-            messageKey = "admin.money-taken";
-        } else if ("SET_BALANCE".equals(eventType)) {
-            messageKey = "admin.balance-set-by-admin";
-        } else if ("TRANSFER_IN".equals(eventType)) {
-            messageKey = "pay.success-receiver";
-        } else {
-            
-            
-            messageKey = amount > 0 ? "cross-server.money-received" : "cross-server.money-spent";
-        }
+        String messageKey = notificationMessageKey(eventType, amount);
 
         String message = plugin.getMessage(messageKey);
         if (message != null) {
@@ -266,6 +246,14 @@ public class CrossServerSyncManager {
                     config.crossServer().getActionbarDuration());
             }
         }
+    }
+
+    static String notificationMessageKey(String eventType, double amount) {
+        String messageKey = MessageKeys.forEventType(eventType);
+        if (messageKey != null) {
+            return messageKey;
+        }
+        return amount > 0 ? "cross-server.money-received" : "cross-server.money-spent";
     }
 
     /**
@@ -369,7 +357,7 @@ public class CrossServerSyncManager {
 
                 long localVersion = cacheManager.getVersion(uuid);
                 if (redisVersion > localVersion) {
-                    String balanceKey = "syncmoney:balance:" + uuid.toString();
+                    String balanceKey = RedisKeys.balance(uuid);
                     String balanceStr = jedis.get(balanceKey);
                     if (balanceStr != null) {
                         BigDecimal redisBalance = new BigDecimal(balanceStr);
@@ -381,8 +369,8 @@ public class CrossServerSyncManager {
                 } else if (localVersion > redisVersion) {
                     BigDecimal localBalance = economyFacade.getBalance(uuid);
 
-                    String balanceKey = "syncmoney:balance:" + uuid.toString();
-                    String versionKey = "syncmoney:version:" + uuid.toString();
+                    String balanceKey = RedisKeys.balance(uuid);
+                    String versionKey = RedisKeys.version(uuid);
                     jedis.set(balanceKey, localBalance.toString());
                     jedis.set(versionKey, String.valueOf(localVersion));
 

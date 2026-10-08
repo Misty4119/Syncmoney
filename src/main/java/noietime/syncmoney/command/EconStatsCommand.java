@@ -3,6 +3,7 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
 import org.bukkit.command.Command;
@@ -171,7 +172,7 @@ public final class EconStatsCommand implements CommandExecutor, TabCompleter {
                 plugin.getLogger().fine("Rich count skipped - LOCAL mode or Redis unavailable");
             } else {
                 try (var jedis = redisManager.getResource()) {
-                    var count = jedis.zcount("syncmoney:baltop", 100000000, Double.POSITIVE_INFINITY);
+                    var count = jedis.zcount(RedisKeys.BALTOP, 100000000, Double.POSITIVE_INFINITY);
                     richCount = count;
                 }
             }

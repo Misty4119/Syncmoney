@@ -36,6 +36,7 @@ repositories {
 
 dependencies {
     implementation project(':syncmoney-core')
+    implementation project(':syncmoney-protocol')
     implementation project(':syncmoney-storage')
     compileOnly("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
 
@@ -133,6 +134,9 @@ java {
 
 // A separate acceptance plugin, never included in the distributable Syncmoney JAR.
 sourceSets {
+    main {
+        resources.srcDir file('syncmoney-protocol/src/main/resources')
+    }
     acceptance {
         compileClasspath += sourceSets.main.output + configurations.compileClasspath
     }

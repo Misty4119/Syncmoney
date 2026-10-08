@@ -1,6 +1,7 @@
 package noietime.syncmoney.storage;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
@@ -26,8 +27,6 @@ import java.util.UUID;
  */
 public final class CacheManager {
 
-    private static final String KEY_PREFIX_BALANCE = "syncmoney:balance:";
-    private static final String KEY_PREFIX_VERSION = "syncmoney:version:";
     /**
      * [TASK-444 FIX] Maximum cache size for LRU eviction.
      */
@@ -179,7 +178,7 @@ public final class CacheManager {
         cacheMisses.incrementAndGet();
 
         try (var jedis = redisManager.getResource()) {
-            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            List<String> values = jedis.mget(RedisKeys.balance(uuid), RedisKeys.version(uuid));
             if (values == null || values.size() != 2) {
                 throw new IllegalStateException("Redis returned an invalid balance/version pair");
             }
@@ -212,7 +211,7 @@ public final class CacheManager {
         }
 
         try (var jedis = redisManager.getResource()) {
-            String versionStr = jedis.get(KEY_PREFIX_VERSION + uuid.toString());
+            String versionStr = jedis.get(RedisKeys.version(uuid));
             return versionStr != null ? Long.parseLong(versionStr) : 0L;
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to get version for " + uuid + ": " + e.getMessage());
@@ -235,7 +234,7 @@ public final class CacheManager {
 
         try (var jedis = redisManager.getResource()) {
             String[] keys = uuids.stream()
-                    .map(uuid -> KEY_PREFIX_VERSION + uuid.toString())
+                    .map(RedisKeys::version)
                     .toArray(String[]::new);
 
             List<String> values = jedis.mget(keys);
@@ -280,8 +279,8 @@ public final class CacheManager {
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        String keyBalance = KEY_PREFIX_BALANCE + uuid;
-        String keyVersion = KEY_PREFIX_VERSION + uuid;
+        String keyBalance = RedisKeys.balance(uuid);
+        String keyVersion = RedisKeys.version(uuid);
         BigDecimal confirmedBalance = NumericUtil.normalize(newBalance);
 
         Jedis resource = acquireRedisResource("atomic set");
@@ -397,8 +396,8 @@ public final class CacheManager {
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        String keyBalance = KEY_PREFIX_BALANCE + uuid;
-        String keyVersion = KEY_PREFIX_VERSION + uuid;
+        String keyBalance = RedisKeys.balance(uuid);
+        String keyVersion = RedisKeys.version(uuid);
         BigDecimal normalizedAmount = NumericUtil.normalize(amount);
 
         Jedis resource = acquireRedisResource("atomic add");
@@ -446,7 +445,7 @@ public final class CacheManager {
 
         cacheMisses.incrementAndGet();
         try (var jedis = redisManager.getResource()) {
-            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            List<String> values = jedis.mget(RedisKeys.balance(uuid), RedisKeys.version(uuid));
             if (values == null || values.size() != 2) {
                 throw new IllegalStateException("Redis returned an invalid cold account snapshot");
             }
@@ -479,7 +478,7 @@ public final class CacheManager {
             if (jedis == null) {
                 throw new IllegalStateException("Redis resource is unavailable for authority reconciliation");
             }
-            List<String> values = jedis.mget(KEY_PREFIX_BALANCE + uuid, KEY_PREFIX_VERSION + uuid);
+            List<String> values = jedis.mget(RedisKeys.balance(uuid), RedisKeys.version(uuid));
             if (values == null || values.size() != 2) {
                 throw new IllegalStateException("Redis returned an invalid account authority snapshot");
             }
@@ -558,10 +557,10 @@ public final class CacheManager {
             throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
         }
 
-        String fromBalanceKey = KEY_PREFIX_BALANCE + fromUuid.toString();
-        String fromVersionKey = KEY_PREFIX_VERSION + fromUuid.toString();
-        String toBalanceKey = KEY_PREFIX_BALANCE + toUuid.toString();
-        String toVersionKey = KEY_PREFIX_VERSION + toUuid.toString();
+        String fromBalanceKey = RedisKeys.balance(fromUuid);
+        String fromVersionKey = RedisKeys.version(fromUuid);
+        String toBalanceKey = RedisKeys.balance(toUuid);
+        String toVersionKey = RedisKeys.version(toUuid);
 
         amount = NumericUtil.normalize(amount);
 
@@ -627,8 +626,8 @@ public final class CacheManager {
         }
         try (var jedis = redisManager.getResource()) {
             List<String> values = jedis.mget(
-                    KEY_PREFIX_BALANCE + fromUuid, KEY_PREFIX_VERSION + fromUuid,
-                    KEY_PREFIX_BALANCE + toUuid, KEY_PREFIX_VERSION + toUuid);
+                    RedisKeys.balance(fromUuid), RedisKeys.version(fromUuid),
+                    RedisKeys.balance(toUuid), RedisKeys.version(toUuid));
             if (values == null || values.size() != 4) {
                 throw new IllegalStateException("Redis returned an invalid transfer authority snapshot");
             }
@@ -738,8 +737,8 @@ public final class CacheManager {
         }
 
         try (var jedis = redisManager.getResource()) {
-            String keyBalance = KEY_PREFIX_BALANCE + uuid.toString();
-            String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
+            String keyBalance = RedisKeys.balance(uuid);
+            String keyVersion = RedisKeys.version(uuid);
 
 
             Object result = evalScriptWithNoscriptReload(jedis, atomicSetBalanceSha, atomicSetBalanceScript,

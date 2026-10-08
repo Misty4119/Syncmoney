@@ -8,7 +8,7 @@ java { toolchain.languageVersion = JavaLanguageVersion.of(25) }
 sourceSets {
     integrationTest {
         java.srcDir file('src/integrationTest/java')
-        resources.srcDir rootProject.file('src/main/resources/lua')
+        resources.srcDir rootProject.file('syncmoney-protocol/src/main/resources/lua')
         compileClasspath += sourceSets.main.output + rootProject.sourceSets.main.output + rootProject.configurations.compileClasspath
         runtimeClasspath += output + compileClasspath + rootProject.configurations.runtimeClasspath
     }

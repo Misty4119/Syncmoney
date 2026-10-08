@@ -1,6 +1,7 @@
 package noietime.syncmoney.storage;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.util.Constants;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
@@ -315,7 +316,7 @@ public final class RedisManager implements AutoCloseable {
 
         BigDecimal total = BigDecimal.ZERO;
         try (Jedis jedis = jedisPool.getResource()) {
-            ScanParams params = new ScanParams().match("syncmoney:balance:*").count(100);
+            ScanParams params = new ScanParams().match(RedisKeys.balancePattern()).count(100);
             String cursor = ScanParams.SCAN_POINTER_START;
 
             do {

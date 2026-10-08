@@ -5,6 +5,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.migration.CMIDatabaseReader.CMIPlayerData;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
@@ -668,8 +669,8 @@ public final class MigrationTask {
             if (isCmiSourceChanged()) {
                 return false;
             }
-            String keyBalance = "syncmoney:balance:" + uuid.toString();
-            String keyVersion = "syncmoney:version:" + uuid.toString();
+            String keyBalance = RedisKeys.balance(uuid);
+            String keyVersion = RedisKeys.version(uuid);
 
             jedis.set(keyBalance, balance.toPlainString());
             if (isCmiSourceChanged()) {
@@ -727,8 +728,8 @@ public final class MigrationTask {
             try {
                 if (redisManager != null && redisManager.isConnected()) {
                     try (var jedis = redisManager.getResource()) {
-                        String keyBalance = "syncmoney:balance:" + entry.uuid.toString();
-                        String keyVersion = "syncmoney:version:" + entry.uuid.toString();
+                        String keyBalance = RedisKeys.balance(entry.uuid);
+                        String keyVersion = RedisKeys.version(entry.uuid);
 
                         jedis.set(keyBalance, entry.balance.toPlainString());
                         jedis.set(keyVersion, String.valueOf(entry.version));

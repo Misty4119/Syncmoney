@@ -2,6 +2,7 @@ package noietime.syncmoney.command;
 
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.RedisMutationException;
+import noietime.syncmoney.protocol.RedisKeys;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.exceptions.JedisDataException;
@@ -90,10 +91,10 @@ final class PayLuaScriptManager {
     }
 
     Object evalTransfer(UUID senderUuid, UUID targetUuid, BigDecimal amount) throws Exception {
-        String senderKey = "syncmoney:balance:" + senderUuid;
-        String senderVersionKey = "syncmoney:version:" + senderUuid;
-        String targetKey = "syncmoney:balance:" + targetUuid;
-        String targetVersionKey = "syncmoney:version:" + targetUuid;
+        String senderKey = RedisKeys.balance(senderUuid);
+        String senderVersionKey = RedisKeys.version(senderUuid);
+        String targetKey = RedisKeys.balance(targetUuid);
+        String targetVersionKey = RedisKeys.version(targetUuid);
         String script = getTransferScriptSource();
 
         Jedis resource;

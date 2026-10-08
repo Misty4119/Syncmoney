@@ -1,5 +1,6 @@
 package noietime.syncmoney.config;
 
+import noietime.syncmoney.protocol.RedisKeys;
 import org.bukkit.configuration.file.FileConfiguration;
 
 /**
@@ -18,7 +19,7 @@ public final class CMIConfig {
      * [SYNC-CONFIG-136] Gets CMI Redis prefix
      */
     public String getCMIRedisPrefix() {
-        return config.getString("economy.cmi.redis-prefix", "syncmoney:cmi");
+        return config.getString("economy.cmi.redis-prefix", RedisKeys.CMI_DEFAULT_PREFIX);
     }
 
     /**

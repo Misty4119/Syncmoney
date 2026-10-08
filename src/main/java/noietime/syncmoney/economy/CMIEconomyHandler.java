@@ -2,6 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.sync.CMIApi;
@@ -229,7 +230,7 @@ public class CMIEconomyHandler {
         if (redisManager == null || redisManager.isDegraded()) {
             return null;
         }
-        String versionKey = redisPrefix + ":" + uuid + ":version";
+        String versionKey = RedisKeys.cmiVersion(redisPrefix, uuid);
         try (var jedis = redisManager.getResource()) {
             String value = jedis.get(versionKey);
             if (value == null) {
@@ -253,7 +254,7 @@ public class CMIEconomyHandler {
         if (redisManager == null || redisManager.isDegraded()) {
             return null;
         }
-        String key = redisPrefix + ":" + uuid.toString();
+        String key = RedisKeys.cmiBalance(redisPrefix, uuid);
         try (var jedis = redisManager.getResource()) {
             String value = jedis.get(key);
             return value != null ? NumericUtil.normalize(value) : null;
@@ -271,8 +272,8 @@ public class CMIEconomyHandler {
      */
     private long setRedisBalanceWithVersion(UUID uuid, BigDecimal balance) {
         long version = generateNewVersion();
-        String key = redisPrefix + ":" + uuid.toString();
-        String versionKey = key + ":version";
+        String key = RedisKeys.cmiBalance(redisPrefix, uuid);
+        String versionKey = RedisKeys.cmiVersion(redisPrefix, uuid);
 
         try (var jedis = redisManager.getResource()) {
             jedis.set(key, balance.toPlainString());

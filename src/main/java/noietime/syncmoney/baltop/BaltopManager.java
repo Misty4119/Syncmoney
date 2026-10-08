@@ -3,6 +3,7 @@ package noietime.syncmoney.baltop;
 import com.zaxxer.hikari.HikariDataSource;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.LocalEconomyHandler;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.FormatUtil;
@@ -27,8 +28,8 @@ import java.util.logging.Logger;
  */
 public final class BaltopManager {
 
-    private static final String BALTOP_KEY = "syncmoney:baltop";
-    private static final String TOTAL_SUPPLY_KEY = "syncmoney:baltop:total";
+    private static final String BALTOP_KEY = RedisKeys.BALTOP;
+    private static final String TOTAL_SUPPLY_KEY = RedisKeys.BALTOP_TOTAL;
 
     private static final int MAX_TOP_CACHE_ENTRIES = 30;
 

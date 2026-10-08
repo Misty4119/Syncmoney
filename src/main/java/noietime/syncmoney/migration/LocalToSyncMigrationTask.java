@@ -6,6 +6,7 @@ import noietime.syncmoney.audit.AuditRecord;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
@@ -46,9 +47,6 @@ public final class LocalToSyncMigrationTask {
     private LocalToSyncProgressCallback progressCallback;
 
     private static final String LOCAL_DB_PREFIX = "jdbc:sqlite:";
-    private static final String KEY_PREFIX_BALANCE = "syncmoney:balance:";
-    private static final String KEY_PREFIX_VERSION = "syncmoney:version:";
-    private static final String BALTOP_KEY = "syncmoney:baltop";
 
     public LocalToSyncMigrationTask(Plugin plugin, SyncmoneyConfig config,
                                     EconomyFacade economyFacade,
@@ -528,14 +526,14 @@ public final class LocalToSyncMigrationTask {
         }
 
         try (var jedis = redisManager.getResource()) {
-            String keyBalance = KEY_PREFIX_BALANCE + uuid.toString();
-            String keyVersion = KEY_PREFIX_VERSION + uuid.toString();
+            String keyBalance = RedisKeys.balance(uuid);
+            String keyVersion = RedisKeys.version(uuid);
 
             jedis.set(keyBalance, balance.toPlainString());
             jedis.set(keyVersion, String.valueOf(version));
 
             // Update baltop ZSET for leaderboard
-            jedis.zadd(BALTOP_KEY, balance.doubleValue(), uuid.toString());
+            jedis.zadd(RedisKeys.BALTOP, balance.doubleValue(), uuid.toString());
 
             // Use the force path only while this maintenance workflow has stopped producers.
             // Without the configured lock, use normal monotonic version acceptance.
@@ -639,7 +637,7 @@ public final class LocalToSyncMigrationTask {
     private BigDecimal calculateRedisTotalBalance(int expectedCount) {
         BigDecimal total = BigDecimal.ZERO;
         try (var jedis = redisManager.getResource()) {
-            String pattern = KEY_PREFIX_BALANCE + "*";
+            String pattern = RedisKeys.balancePattern();
             ScanParams params = new ScanParams().match(pattern).count(1000);
 
             String cursor = ScanParams.SCAN_POINTER_START;

@@ -2,6 +2,7 @@ package noietime.syncmoney.uuid;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -17,8 +18,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class OnlinePlayerRegistry {
 
-    private static final String ONLINE_SET_KEY = "syncmoney:online:players";
-    private static final String PLAYER_HASH_PREFIX = "syncmoney:online:player:";
+    private static final String ONLINE_SET_KEY = RedisKeys.ONLINE_PLAYERS;
     private static final String FIELD_NAME = "name";
     private static final String FIELD_SERVER = "server";
 
@@ -68,7 +68,7 @@ public final class OnlinePlayerRegistry {
             return;
         }
         String uuidStr = uuid.toString();
-        String hashKey = PLAYER_HASH_PREFIX + uuidStr;
+        String hashKey = RedisKeys.onlinePlayer(uuidStr);
         try (var jedis = redisManager.getResource()) {
             jedis.sadd(ONLINE_SET_KEY, uuidStr);
             Map<String, String> data = new HashMap<>();
@@ -95,7 +95,7 @@ public final class OnlinePlayerRegistry {
             }
             try (var jedis = redisManager.getResource()) {
                 jedis.srem(ONLINE_SET_KEY, uuidStr);
-                jedis.del(PLAYER_HASH_PREFIX + uuidStr);
+                jedis.del(RedisKeys.onlinePlayer(uuidStr));
             } catch (Exception e) {
                 plugin.getLogger().fine("OnlinePlayerRegistry unregister failed for " + uuidStr + ": " + e.getMessage());
             }
@@ -135,7 +135,7 @@ public final class OnlinePlayerRegistry {
         try (var jedis = redisManager.getResource()) {
             for (Map.Entry<UUID, String> entry : snapshot.entrySet()) {
                 String uuidStr = entry.getKey().toString();
-                String hashKey = PLAYER_HASH_PREFIX + uuidStr;
+                String hashKey = RedisKeys.onlinePlayer(uuidStr);
                 jedis.sadd(ONLINE_SET_KEY, uuidStr);
                 Map<String, String> data = new HashMap<>();
                 data.put(FIELD_NAME, entry.getValue());
@@ -160,7 +160,7 @@ public final class OnlinePlayerRegistry {
             }
             List<String> stale = new ArrayList<>();
             for (String uuidStr : uuids) {
-                String name = jedis.hget(PLAYER_HASH_PREFIX + uuidStr, FIELD_NAME);
+                String name = jedis.hget(RedisKeys.onlinePlayer(uuidStr), FIELD_NAME);
                 if (name == null || name.isBlank()) {
                     stale.add(uuidStr);
                     continue;

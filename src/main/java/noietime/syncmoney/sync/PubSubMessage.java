@@ -1,7 +1,8 @@
 package noietime.syncmoney.sync;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import noietime.syncmoney.protocol.LegacyBalanceMessage;
+import noietime.syncmoney.protocol.LegacyCmiMessage;
+import noietime.syncmoney.protocol.LegacyProtocolCodec;
 import noietime.syncmoney.util.NumericUtil;
 
 import java.math.BigDecimal;
@@ -14,8 +15,6 @@ import java.util.UUID;
  * [AsyncScheduler] This class is a data structure, not involving threads.
  */
 public final class PubSubMessage {
-
-    private static final Gson GSON = new GsonBuilder().create();
 
     public enum EventType {
         UNKNOWN,
@@ -97,21 +96,36 @@ public final class PubSubMessage {
      * Parses JSON to PubSubMessage.
      */
     public static PubSubMessage fromJson(String json) {
-        if (json == null || json.isBlank()) {
-            return null;
-        }
-        try {
-            return GSON.fromJson(json, PubSubMessage.class);
-        } catch (Exception e) {
-            return null;
-        }
+        return LegacyProtocolCodec.decodeBalance(json)
+                .map(PubSubMessage::fromLegacy)
+                .orElse(null);
+    }
+
+    static PubSubMessage fromCmiJson(String json) {
+        return LegacyProtocolCodec.decodeCmi(json)
+                .map(PubSubMessage::fromLegacy)
+                .orElse(null);
     }
 
     /**
      * Converts to JSON.
      */
     public String toJson() {
-        return GSON.toJson(this);
+        return LegacyProtocolCodec.encodeBalance(new LegacyBalanceMessage(
+                uuid, balance, version, sourceServer, messageId, timestamp, eventType, amount,
+                sourcePlugin, sourcePlayerName));
+    }
+
+    private static PubSubMessage fromLegacy(LegacyBalanceMessage message) {
+        return new PubSubMessage(message.uuid(), message.balance(), message.version(),
+                message.sourceServer(), message.messageId(), message.timestamp(), message.eventType(),
+                message.amount(), message.sourcePlugin(), message.sourcePlayerName());
+    }
+
+    private static PubSubMessage fromLegacy(LegacyCmiMessage message) {
+        return new PubSubMessage(message.uuid(), message.balance(), message.version(),
+                message.sourceServer(), message.messageId(), message.timestamp(), message.eventType(),
+                message.amount(), message.sourcePlugin(), message.sourcePlayerName());
     }
 
     public String getUuid() {

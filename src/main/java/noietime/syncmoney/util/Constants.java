@@ -1,5 +1,8 @@
 package noietime.syncmoney.util;
 
+import noietime.syncmoney.protocol.RedisChannels;
+import noietime.syncmoney.protocol.RedisKeys;
+
 /**
  * Centralized constants for the Syncmoney plugin.
  * Contains all magic numbers and configuration constants to improve maintainability.
@@ -93,10 +96,10 @@ public final class Constants {
     public static final int MAX_RETRY_COUNT = 3;
 
     /** Pub/Sub channel name */
-    public static final String PUBSUB_CHANNEL = "syncmoney:balance:update";
+    public static final String PUBSUB_CHANNEL = RedisChannels.BALANCE_UPDATE;
     
     /** Lock prefix for Redis */
-    public static final String LOCK_PREFIX = "syncmoney:lock:";
+    public static final String LOCK_PREFIX = RedisKeys.LOCK_PREFIX;
 
     /** Default GitHub repository for web frontend */
     public static final String DEFAULT_GITHUB_REPO = "Misty4119/Syncmoney-web";

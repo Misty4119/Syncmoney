@@ -14,6 +14,7 @@ import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.core.port.ReplicationReceipt;
+import noietime.syncmoney.protocol.RedisChannels;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.RedisMutationException;
@@ -59,7 +60,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class EconomyEventConsumer implements Runnable {
 
-    private static final String PUBSUB_CHANNEL = "syncmoney:balance:update";
+    private static final String PUBSUB_CHANNEL = RedisChannels.BALANCE_UPDATE;
     private static final int MAX_RETRY_COUNT = 3;
     private static final long SQL_WRITE_ACK_TIMEOUT_MILLIS = 8_000L;
 

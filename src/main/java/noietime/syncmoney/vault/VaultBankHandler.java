@@ -1,6 +1,7 @@
 package noietime.syncmoney.vault;
 
 import net.milkbowl.vault.economy.EconomyResponse;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.Plugin;
@@ -18,9 +19,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class VaultBankHandler {
 
-    private static final String BANK_KEY_PREFIX = "syncmoney:bank:";
-    private static final String BANK_OWNER_PREFIX = "syncmoney:bank:owner:";
-    private static final String BANK_VERSION_PREFIX = "syncmoney:bank:version:";
     private static final long BANK_CACHE_DURATION_MS = 60000;
 
     private final ConcurrentHashMap<String, CacheEntry> bankBalanceCache = new ConcurrentHashMap<>();
@@ -103,9 +101,9 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player not found");
         }
 
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
-        String ownerKey = BANK_OWNER_PREFIX + name.toLowerCase();
-        String versionKey = BANK_VERSION_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
+        String ownerKey = RedisKeys.bankOwner(name.toLowerCase());
+        String versionKey = RedisKeys.bankVersion(name.toLowerCase());
 
         try (Jedis jedis = redisManager.getResource()) {
             if (jedis.exists(bankKey)) {
@@ -131,7 +129,7 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Bank system unavailable");
         }
 
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
 
         try (Jedis jedis = redisManager.getResource()) {
             if (!jedis.exists(bankKey)) {
@@ -139,8 +137,8 @@ public class VaultBankHandler {
             }
 
             jedis.del(bankKey);
-            jedis.del(BANK_OWNER_PREFIX + name.toLowerCase());
-            jedis.del(BANK_VERSION_PREFIX + name.toLowerCase());
+            jedis.del(RedisKeys.bankOwner(name.toLowerCase()));
+            jedis.del(RedisKeys.bankVersion(name.toLowerCase()));
 
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.SUCCESS, "");
         } catch (Exception e) {
@@ -157,7 +155,7 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Bank system unavailable");
         }
 
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
         String cacheKey = name.toLowerCase();
 
         CacheEntry cached = bankBalanceCache.get(cacheKey);
@@ -208,8 +206,8 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot withdraw negative amount");
         }
 
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
-        String versionKey = BANK_VERSION_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
+        String versionKey = RedisKeys.bankVersion(name.toLowerCase());
         String cacheKey = name.toLowerCase();
 
         try (Jedis jedis = redisManager.getResource()) {
@@ -254,7 +252,7 @@ public class VaultBankHandler {
      * [SYNC-VAULT-006] Fallback method for bank withdrawal (non-atomic).
      */
     public EconomyResponse bankWithdrawFallback(Jedis jedis, String name, double amount) {
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
         String cacheKey = name.toLowerCase();
 
         try {
@@ -287,8 +285,8 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot deposit negative amount");
         }
 
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
-        String versionKey = BANK_VERSION_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
+        String versionKey = RedisKeys.bankVersion(name.toLowerCase());
         String cacheKey = name.toLowerCase();
 
         try (Jedis jedis = redisManager.getResource()) {
@@ -326,7 +324,7 @@ public class VaultBankHandler {
      * [SYNC-VAULT-007] Fallback method for bank deposit (non-atomic).
      */
     public EconomyResponse bankDepositFallback(Jedis jedis, String name, double amount) {
-        String bankKey = BANK_KEY_PREFIX + name.toLowerCase();
+        String bankKey = RedisKeys.bankBalance(name.toLowerCase());
         String cacheKey = name.toLowerCase();
 
         try {
@@ -362,10 +360,10 @@ public class VaultBankHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot transfer to the same bank");
         }
 
-        String fromBankKey = BANK_KEY_PREFIX + fromBankName.toLowerCase();
-        String toBankKey = BANK_KEY_PREFIX + toBankName.toLowerCase();
-        String fromVersionKey = BANK_VERSION_PREFIX + fromBankName.toLowerCase();
-        String toVersionKey = BANK_VERSION_PREFIX + toBankName.toLowerCase();
+        String fromBankKey = RedisKeys.bankBalance(fromBankName.toLowerCase());
+        String toBankKey = RedisKeys.bankBalance(toBankName.toLowerCase());
+        String fromVersionKey = RedisKeys.bankVersion(fromBankName.toLowerCase());
+        String toVersionKey = RedisKeys.bankVersion(toBankName.toLowerCase());
 
         try (Jedis jedis = redisManager.getResource()) {
 
@@ -409,8 +407,8 @@ public class VaultBankHandler {
      * [SYNC-VAULT-009] Fallback method for bank transfer (non-atomic).
      */
     public EconomyResponse bankTransferFallback(Jedis jedis, String fromBankName, String toBankName, double amount) {
-        String fromBankKey = BANK_KEY_PREFIX + fromBankName.toLowerCase();
-        String toBankKey = BANK_KEY_PREFIX + toBankName.toLowerCase();
+        String fromBankKey = RedisKeys.bankBalance(fromBankName.toLowerCase());
+        String toBankKey = RedisKeys.bankBalance(toBankName.toLowerCase());
 
         try {
             double currentSourceBalance = Double.parseDouble(jedis.get(fromBankKey));
@@ -451,7 +449,7 @@ public class VaultBankHandler {
                     "Bank system unavailable or player not found");
         }
 
-        String ownerKey = BANK_OWNER_PREFIX + name.toLowerCase();
+        String ownerKey = RedisKeys.bankOwner(name.toLowerCase());
 
         try (Jedis jedis = redisManager.getResource()) {
             if (!jedis.exists(ownerKey)) {
@@ -493,7 +491,7 @@ public class VaultBankHandler {
 
         try (Jedis jedis = redisManager.getResource()) {
             List<String> banks = new ArrayList<>();
-            ScanParams scanParams = new ScanParams().match(BANK_KEY_PREFIX + "*").count(100);
+            ScanParams scanParams = new ScanParams().match(RedisKeys.bankBalancePattern()).count(100);
 
             String cursor = ScanParams.SCAN_POINTER_START;
             do {
@@ -501,7 +499,7 @@ public class VaultBankHandler {
                 List<String> keys = scanResult.getResult();
 
                 for (String key : keys) {
-                    String bankName = key.substring(BANK_KEY_PREFIX.length());
+                    String bankName = key.substring(RedisKeys.BANK_BALANCE_PREFIX.length());
                     banks.add(bankName);
                 }
 

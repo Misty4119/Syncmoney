@@ -7,6 +7,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.web.websocket.SseManager;
@@ -35,8 +36,8 @@ import java.util.logging.Logger;
 public final class HybridAuditManager {
 
 
-    private static final String AUDIT_LIST_KEY = "syncmoney:audit:recent";
-    private static final String AUDIT_INDEX_KEY = "syncmoney:audit:index";
+    private static final String AUDIT_LIST_KEY = RedisKeys.AUDIT_RECENT;
+    private static final String AUDIT_INDEX_KEY = RedisKeys.AUDIT_INDEX;
     private static final String CONFIRMED_AUDIT_SCRIPT = """
             local entries = redis.call('LRANGE', KEYS[1], 0, -1)
             for _, value in ipairs(entries) do
@@ -264,7 +265,8 @@ public final class HybridAuditManager {
 
         try (var jedis = redisManager.getResource()) {
 
-            String dedupKey = "syncmoney:audit:dedup:" + record.timestamp() + ":" + record.type() + ":" + record.playerUuid() + ":" + record.amount();
+            String dedupKey = RedisKeys.auditDedup(
+                    record.timestamp(), String.valueOf(record.type()), record.playerUuid(), record.amount());
 
 
             Long added = jedis.setnx(dedupKey, String.valueOf(record.timestamp()));

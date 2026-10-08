@@ -2,6 +2,7 @@ package noietime.syncmoney.sync;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.protocol.RedisChannels;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.MessageHelper;
@@ -25,8 +26,8 @@ import java.util.logging.Level;
  */
 public final class PubsubSubscriber {
 
-    private static final String CHANNEL = PubSubChannels.BALANCE_UPDATE;
-    private static final String CMI_CHANNEL = PubSubChannels.CMI_BALANCE_UPDATE;
+    private static final String CHANNEL = RedisChannels.BALANCE_UPDATE;
+    private static final String CMI_CHANNEL = RedisChannels.CMI_BALANCE_UPDATE;
     private static final long INITIAL_RETRY_DELAY_MS = 1000;
     private static final long MAX_RETRY_DELAY_MS = 30000;
 
@@ -209,7 +210,7 @@ public final class PubsubSubscriber {
             return;
         }
         try {
-            PubSubMessage msg = PubSubMessage.fromJson(message);
+            PubSubMessage msg = PubSubMessage.fromCmiJson(message);
             if (msg == null) {
                 plugin.getLogger().warning("Failed to parse CMI Pub/Sub message: " + message);
                 return;

@@ -1,5 +1,7 @@
 package noietime.syncmoney.sync;
 
+import noietime.syncmoney.protocol.RedisChannels;
+
 /**
  * Cross-server Redis Pub/Sub channel names.
  *
@@ -10,9 +12,9 @@ package noietime.syncmoney.sync;
  */
 public final class PubSubChannels {
 
-    public static final String BALANCE_UPDATE = "syncmoney:balance:update";
+    public static final String BALANCE_UPDATE = RedisChannels.BALANCE_UPDATE;
 
-    public static final String CMI_BALANCE_UPDATE = "syncmoney:cmi:balance:update";
+    public static final String CMI_BALANCE_UPDATE = RedisChannels.CMI_BALANCE_UPDATE;
 
     private PubSubChannels() {
     }

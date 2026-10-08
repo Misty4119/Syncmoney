@@ -2,6 +2,7 @@ package noietime.syncmoney.sync;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
@@ -193,8 +194,8 @@ public final class CMIPubsubHandler {
         }
         try (var jedis = redisManager.getResource()) {
             Transaction tx = jedis.multi();
-            tx.set(redisPrefix + ":" + uuid, balance.toPlainString());
-            tx.set(redisPrefix + ":" + uuid + ":version", String.valueOf(version));
+            tx.set(RedisKeys.cmiBalance(redisPrefix, uuid), balance.toPlainString());
+            tx.set(RedisKeys.cmiVersion(redisPrefix, uuid), String.valueOf(version));
             tx.exec();
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to update CMI Redis mirror: " + e.getMessage());
