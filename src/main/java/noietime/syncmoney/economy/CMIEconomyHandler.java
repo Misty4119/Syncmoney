@@ -6,6 +6,7 @@ import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.sync.CMIApi;
+import noietime.syncmoney.sync.CMIRedisMirror;
 import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.util.NumericUtil;
 
@@ -21,11 +22,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>Design (see {@code reference/CMIEconomySync}): CMI is the local economy authority. This
  * handler does NOT query CMI's database at runtime; it reads balances from the in-memory CMI API
  * (via {@link CMIApi}) and uses Redis purely as the sync transport + mirror. Outbound changes are
- * published as absolute balances with a monotonic version; inbound updates are applied back into
- * CMI by {@code CMIPubsubHandler}.
+ * published as absolute balances with the legacy timestamp-derived version; inbound updates are
+ * applied back into CMI by {@code CMIPubsubHandler}. The version is not globally monotonic across
+ * clock rollback, restart, or multiple servers.
  *
- * [ThreadSafe] Redis I/O is performed on async threads by callers; CMI writes go through the
- * global region scheduler.
+ * [ThreadSafe] Redis I/O is performed on async threads by callers; CMI player writes go through
+ * the owning entity scheduler.
  */
 public class CMIEconomyHandler {
 
@@ -35,6 +37,7 @@ public class CMIEconomyHandler {
     private final CrossServerSyncManager syncManager;
     private final CMIApi cmiApi;
     private final String redisPrefix;
+    private final CMIRedisMirror redisMirror;
 
     private record BalanceObservation(BigDecimal syncBaseline, BigDecimal apiAuthorityBalance) {
     }
@@ -53,6 +56,7 @@ public class CMIEconomyHandler {
         this.syncManager = syncManager;
         this.cmiApi = cmiApi;
         this.redisPrefix = config.cmi().getCMIRedisPrefix();
+        this.redisMirror = new CMIRedisMirror(redisManager, redisPrefix);
         plugin.getLogger().fine("CMI Economy Handler initialized (CMI API available: " + cmiApi.isAvailable() + ")");
     }
 
@@ -226,11 +230,12 @@ public class CMIEconomyHandler {
         if (!cmiApi.isAvailable()) {
             return;
         }
-        BigDecimal mirror = getRedisBalanceIfPresent(uuid);
-        Long mirrorVersion = getRedisVersionIfPresent(uuid);
-        if (mirror == null || mirrorVersion == null) {
+        Optional<CMIRedisMirror.Snapshot> snapshot = redisMirror.read(uuid);
+        if (snapshot.isEmpty()) {
             return;
         }
+        BigDecimal mirror = snapshot.orElseThrow().balance();
+        long mirrorVersion = snapshot.orElseThrow().version();
 
         noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
                 player -> applyJoinMirror(uuid, mirror, mirrorVersion));
@@ -292,22 +297,6 @@ public class CMIEconomyHandler {
         reconcileOnJoin(uuid);
     }
 
-    private Long getRedisVersionIfPresent(UUID uuid) {
-        if (redisManager == null || redisManager.isDegraded()) {
-            return null;
-        }
-        String versionKey = RedisKeys.cmiVersion(redisPrefix, uuid);
-        try (var jedis = redisManager.getResource()) {
-            String value = jedis.get(versionKey);
-            if (value == null) {
-                return null;
-            }
-            return Long.parseLong(value);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     /**
      * Reads the mirrored balance from Redis.
      */
@@ -330,7 +319,7 @@ public class CMIEconomyHandler {
     }
 
     /**
-     * Sets the Redis mirror balance together with an explicit, monotonic version.
+     * Sets the Redis mirror balance together with the explicit legacy timestamp-derived version.
      * Used by the unified CMI publish path so the published version and the stored
      * version key always agree (see {@link CMIVersioning}).
      *
@@ -338,13 +327,7 @@ public class CMIEconomyHandler {
      */
     private long setRedisBalanceWithVersion(UUID uuid, BigDecimal balance) {
         long version = generateNewVersion();
-        String key = RedisKeys.cmiBalance(redisPrefix, uuid);
-        String versionKey = RedisKeys.cmiVersion(redisPrefix, uuid);
-
-        try (var jedis = redisManager.getResource()) {
-            jedis.set(key, balance.toPlainString());
-            jedis.set(versionKey, String.valueOf(version));
-        }
+        redisMirror.write(uuid, balance, version);
         return version;
     }
 

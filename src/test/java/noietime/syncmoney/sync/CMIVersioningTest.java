@@ -2,6 +2,9 @@ package noietime.syncmoney.sync;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -13,11 +16,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CMIVersioningTest {
 
     @Test
-    void generateVersion_isStrictlyIncreasing_forSameCounter() {
+    void generateVersion_isStrictlyIncreasingWithinOneMillisecondBeforeCounterWrap() {
         AtomicLong counter = new AtomicLong(0L);
+        Clock clock = Clock.fixed(Instant.ofEpochMilli(1_791_043_200_000L), ZoneOffset.UTC);
         long previous = Long.MIN_VALUE;
         for (int i = 0; i < 1000; i++) {
-            long version = CMIVersioning.generateVersion(counter);
+            long version = CMIVersioning.generateVersion(counter, clock);
             assertTrue(version > previous,
                     "version must be strictly increasing: " + version + " <= " + previous);
             previous = version;

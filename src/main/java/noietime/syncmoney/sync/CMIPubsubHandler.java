@@ -2,7 +2,6 @@ package noietime.syncmoney.sync;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
@@ -11,9 +10,8 @@ import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
-import redis.clients.jedis.Transaction;
-
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -33,7 +31,8 @@ public final class CMIPubsubHandler {
     private final RedisManager redisManager;
     private final CMIApi cmiApi;
     private final noietime.syncmoney.economy.CMIEconomyHandler cmiHandler;
-    private final String redisPrefix;
+    private final CMIRedisMirror redisMirror;
+    private final Clock clock;
 
     private final Map<UUID, VersionEntry> lastUpdateVersion = new ConcurrentHashMap<>();
     private volatile long lastCleanupTime = 0L;
@@ -48,12 +47,19 @@ public final class CMIPubsubHandler {
 
     public CMIPubsubHandler(Syncmoney plugin, SyncmoneyConfig config, RedisManager redisManager,
                             CMIApi cmiApi, noietime.syncmoney.economy.CMIEconomyHandler cmiHandler) {
+        this(plugin, config, redisManager, cmiApi, cmiHandler, Clock.systemUTC());
+    }
+
+    CMIPubsubHandler(Syncmoney plugin, SyncmoneyConfig config, RedisManager redisManager,
+                     CMIApi cmiApi, noietime.syncmoney.economy.CMIEconomyHandler cmiHandler,
+                     Clock clock) {
         this.plugin = plugin;
         this.config = config;
         this.redisManager = redisManager;
         this.cmiApi = cmiApi;
         this.cmiHandler = cmiHandler;
-        this.redisPrefix = config.cmi().getCMIRedisPrefix();
+        this.redisMirror = new CMIRedisMirror(redisManager, config.cmi().getCMIRedisPrefix());
+        this.clock = clock;
         if (!cmiApi.isAvailable()) {
             plugin.getLogger().fine("CMI inbound handler: CMI API unavailable, Redis mirror only.");
         }
@@ -96,7 +102,7 @@ public final class CMIPubsubHandler {
             boolean leaseTransferred = false;
             try {
             updateRedisMirror(uuid, balance, incoming);
-            lastUpdateVersion.put(uuid, new VersionEntry(incoming, System.currentTimeMillis()));
+            lastUpdateVersion.put(uuid, new VersionEntry(incoming, clock.millis()));
             maybeCleanup();
 
             if (cmiApi.isAvailable()) {
@@ -180,7 +186,7 @@ public final class CMIPubsubHandler {
     }
 
     private void maybeCleanup() {
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         if (lastUpdateVersion.size() <= MAX_VERSION_ENTRIES && now - lastCleanupTime < CLEANUP_INTERVAL_MS) {
             return;
         }
@@ -205,11 +211,8 @@ public final class CMIPubsubHandler {
         if (redisManager == null || redisManager.isDegraded()) {
             return;
         }
-        try (var jedis = redisManager.getResource()) {
-            Transaction tx = jedis.multi();
-            tx.set(RedisKeys.cmiBalance(redisPrefix, uuid), balance.toPlainString());
-            tx.set(RedisKeys.cmiVersion(redisPrefix, uuid), String.valueOf(version));
-            tx.exec();
+        try {
+            redisMirror.write(uuid, balance, version);
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to update CMI Redis mirror: " + e.getMessage());
         }
@@ -227,7 +230,7 @@ public final class CMIPubsubHandler {
         if (Math.abs(delta) < 0.01) {
             return;
         }
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         Long cooldownUntil = notificationCooldownUntilMs.get(uuid);
         if (cooldownUntil != null && now < cooldownUntil) {
             return;

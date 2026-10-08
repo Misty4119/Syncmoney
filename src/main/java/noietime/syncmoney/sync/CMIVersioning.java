@@ -1,5 +1,6 @@
 package noietime.syncmoney.sync;
 
+import java.time.Clock;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class CMIVersioning {
@@ -10,7 +11,11 @@ public final class CMIVersioning {
     }
 
     public static long generateVersion(AtomicLong counter) {
-        long millis = System.currentTimeMillis();
+        return generateVersion(counter, Clock.systemUTC());
+    }
+
+    static long generateVersion(AtomicLong counter, Clock clock) {
+        long millis = clock.millis();
         long c = counter.incrementAndGet() % COUNTER_MODULO;
         return millis * COUNTER_MODULO + c;
     }
