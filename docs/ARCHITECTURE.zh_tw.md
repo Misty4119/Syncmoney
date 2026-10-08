@@ -22,7 +22,7 @@ Syncmoney 是 Vault-compatible Minecraft economy，對 Vault 提供同步 API，
 
 1. **Vault call 是同步的。** Vault balance read 通常必須直接由 memory 完成；Redis、SQL 或其他 network I/O 不得插入 hot server/entity path。
 2. **資金不能遺失或重複。** 已接受的 mutation 有明確的 async persistence path 與 shutdown drain semantics。
-3. **分散式 state 有版本。** Balance update 攜帶 monotonic version；較舊的 remote work 不得覆蓋較新的 local state。
+3. **分散式 state 有版本。** Redis-backed economy update 使用 per-account Redis version。CMI 保留 legacy timestamp-derived version，遇到 clock rollback、restart 或多伺服器時不保證 global monotonic；延遲 CMI callback 仍會在 mutation 前重新檢查本機 watermark。
 4. **Folia ownership 必須正確。** Player/entity work 要在 owning entity scheduler 執行；純 I/O 才能直接放到 async path。
 5. **Optional module 有明確 owner。** Disabled feature 不應啟動只屬於該功能的 executor、schema、listener、subscription 或 HTTP service。
 
@@ -115,7 +115,7 @@ Cache miss 或 reconcile 依既有 async 路徑處理。
 
 ### 5.1 Versions
 
-Balance state 帶 monotonic version；remote/delayed update 套用前必須比較 version，避免舊 Pub/Sub delivery 或 async callback 覆蓋新狀態。
+Redis-backed economy balance update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived numeric version；wall-clock rollback、restart、counter wrap 或 server clock skew 可能令版本重複或倒退，因此不代表 global ordering。CMI entity callback 套用 balance 前會重新檢查 handler 的 current watermark。
 
 ### 5.2 Redis
 
@@ -279,7 +279,7 @@ Architecture-affecting change 應能回答：
 2. 每個 Bukkit/CMI entity mutation 由哪個 scheduler owner 執行？
 3. 是否把 blocking I/O 加入 sync/hot path？
 4. accepted-write boundary 在哪裡，shutdown 如何排空？
-5. monotonic version 與 stale work 如何處理？
+5. per-account Redis version 與 stale work 如何處理？
 6. Optional feature 停用時是否保持低成本？
 7. Config change 是否需要 restart？
 8. 英文/繁中 docs、REST contract、frontend client 與 tests 是否仍一致？

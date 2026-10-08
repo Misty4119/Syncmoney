@@ -57,7 +57,7 @@ Vault API 是同步的，因此 hot-path read 刻意由 memory 提供。不要�
 - `TransferOrchestrator`：cross-account transfer；
 - `EconomyModeRouter` 與 mode strategy：authority/persistence 決策。
 
-保留單調 balance version、duplicate/echo suppression、insufficient-funds 行為、queue backpressure/recovery、shutdown 時已接受寫入的 draining。延遲 remote/CMI update 套用前要重新檢查 version freshness。
+Redis-backed economy update 要保留 per-account version ordering、duplicate/echo suppression、insufficient-funds 行為、queue backpressure/recovery、shutdown 時已接受寫入的 draining。CMI 保留 legacy timestamp-derived version，不保證 global ordering；延遲 CMI update 套用前仍須重新檢查本機已觀察到的 freshness。
 
 `cmi` mode 由 CMI 維持 economy authority。Migration 與 Shadow Sync 不得變成隱性的 live-authority switch。
 

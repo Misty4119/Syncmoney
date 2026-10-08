@@ -25,7 +25,7 @@ The implementation is shaped by five constraints:
 
 1. **Vault calls are synchronous.** Balance reads used by Vault must normally complete from memory. Redis/SQL/network work must not be inserted into hot server or entity paths.
 2. **Money must not be lost or duplicated.** Accepted mutations have an explicit asynchronous persistence path and shutdown drain semantics.
-3. **Distributed state is versioned.** Balance updates carry monotonic versions; stale remote work must not overwrite newer local state.
+3. **Distributed state is versioned.** Redis-backed economy updates use per-account Redis versions. CMI retains a legacy timestamp-derived version that is not globally monotonic across clock rollback, restart, or multiple servers; delayed CMI callbacks still re-check the locally observed watermark before mutation.
 4. **Folia ownership matters.** Player/entity work runs on the owning entity scheduler, while pure I/O can run asynchronously.
 5. **Optional modules have explicit owners.** Disabled features should not start unrelated executors, schemas, listeners, subscriptions, or HTTP services.
 
@@ -124,7 +124,7 @@ Important semantics:
 
 ### 5.1 Versions
 
-Balance state carries a monotonically increasing version. Remote or delayed updates must compare versions before replacing state. This prevents an older Pub/Sub delivery or asynchronous callback from overwriting newer data.
+Redis-backed economy balance updates use per-account Redis versions. CMI retains its legacy timestamp-derived numeric version; it can repeat or regress across wall-clock rollback, restart, counter wrap, or server clock skew and does not establish global order. CMI entity callbacks re-check the handler's current watermark before applying a balance.
 
 ### 5.2 Redis
 
@@ -311,7 +311,7 @@ Architecture-affecting changes should answer:
 2. Which scheduler owns every Bukkit/CMI entity mutation?
 3. Can this introduce blocking I/O into a synchronous/hot path?
 4. Where is the accepted-write boundary and how is it drained?
-5. How are monotonic versions and stale work handled?
+5. How are per-account Redis versions and stale work handled?
 6. Is the feature optional, and is disabled state cheap?
 7. Does a configuration change require restart?
 8. Do the English and Traditional Chinese docs, REST contract, frontend client, and tests still agree?

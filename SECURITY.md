@@ -37,7 +37,7 @@ Reports are especially useful when they involve:
 
 - creation, duplication, loss, or unauthorized transfer of currency;
 - bypass of transaction limits, player protection, or circuit-breaker controls;
-- stale/replayed cross-server updates defeating monotonic balance versions;
+- stale/replayed cross-server updates bypassing per-account version checks, including CMI's legacy non-global timestamp ordering;
 - Pub/Sub spoofing, echo loops, or duplicate-message handling that changes balances;
 - queue saturation or shutdown behavior that silently drops accepted economic writes;
 - unsafe scheduler access that can corrupt state on Folia/Canvas;
@@ -73,7 +73,7 @@ If a real credential was committed, deleting it in a later commit does not revok
 
 ## Security expectations for changes
 
-Economic changes must preserve `BigDecimal` normalization, insufficient-funds checks, atomic/ordered transfer semantics, monotonic versions, accepted-write durability, and echo/duplicate suppression. Hot Vault/placeholder/entity paths must not add blocking network or database I/O.
+Economic changes must preserve `BigDecimal` normalization, insufficient-funds checks, atomic/ordered transfer semantics, per-account Redis version ordering, accepted-write durability, and echo/duplicate suppression. CMI retains a legacy timestamp-derived version that is not globally monotonic. Hot Vault/placeholder/entity paths must not add blocking network or database I/O.
 
 Scheduler-sensitive changes must respect Paper/Folia entity ownership. CMI mutations and player/entity operations must execute on the owning entity scheduler.
 

@@ -6,7 +6,7 @@
 
 Syncmoney 是相容 Vault 的 Minecraft 經濟插件，支援選用 VaultUnlocked/CMI 整合、Redis 跨伺服器同步、SQL/本機持久化、稽核與保護模組、Undertow Web 管理服務，以及獨立的 PlaceholderAPI 擴充。
 
-正確性優先順序為：不得憑空增減資金、分散式狀態版本必須單調、區域執行緒安全、生命週期擁有權清楚、熱門路徑不得阻塞，之後才是易用性與效能改善。
+正確性優先順序為：不得憑空增減資金、保留 Redis-backed per-account ordering 並明確記錄 CMI legacy timestamp version 不具 global ordering、區域執行緒安全、生命週期擁有權清楚、熱門路徑不得阻塞，之後才是易用性與效能改善。
 
 ## 真實來源
 
@@ -28,8 +28,8 @@ Syncmoney 是相容 Vault 的 Minecraft 經濟插件，支援選用 VaultUnlocke
 - Vault 面向的讀取必須維持記憶體優先，不得加入阻塞 Redis、SQL 或網路 I/O。
 - 寫入應走既有 facade / state / writer / orchestrator 路徑。
 - 已接受的寫入在玩家登出與關機流程中必須可被妥善排空。
-- 保留單調版本與 Pub/Sub 回音抑制。
-- 延遲的非同步工作套用前要重新檢查新鮮度。
+- 保留 Redis-backed per-account version ordering 與 Pub/Sub 回音抑制。CMI 維持 legacy timestamp-derived version，不保證 global monotonic。
+- 延遲的非同步工作（含 CMI entity callback）套用前要重新檢查本機已觀察到的新鮮度。
 - `cmi` 模式由 CMI 維持經濟權威；玩家異動必須在該玩家的 entity scheduler 上執行。
 - Migration 與 Shadow Sync 是明確工作流程，不是透明切換即時權威的機制。
 

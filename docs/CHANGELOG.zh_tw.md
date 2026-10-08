@@ -111,7 +111,7 @@ Paper 1.20.4、Paper 26.2、Folia 26.2 BETA、Canvas 26.2 — 多後端（Postgr
 ### 已修復 (Fixed)
 
 #### CMI 模式跨伺服器同步
-- **權威性與發布機制**：重寫 CMI 同步，將 CMI API 作為本地權威（Authority）；發布帶有單調遞增版本號的絕對餘額，而非在執行期查詢 CMI 資料庫。
+- **權威性與發布機制**：重寫 CMI 同步，將 CMI API 作為本地權威（Authority）；發布帶有 legacy timestamp-derived version 的絕對餘額，而非在執行期查詢 CMI 資料庫。Clock rollback、restart 或多伺服器時不保證全域單調排序。
 - **防止迴圈廣播（Echo Loop）**：新增 `suppressOutbound` 標記，在將遠端餘額套用至本地 CMI 時停止重複發布迴圈。
 - **加入伺服器同步（Join Reconcile）**：玩家加入時進行具版本意識的餘額對帳，修復跨伺服器餘額偏差問題。
 - **事件與輪詢切換**：當 CMI 事件可用時停用輪詢，防止在頻繁洗板 `/cmi pay` 時發生重複發布。

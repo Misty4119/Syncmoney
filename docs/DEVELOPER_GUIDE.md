@@ -115,7 +115,7 @@ On a cache miss, use the existing asynchronous warm/reconcile approach and retur
 
 ### 5.4 Versions and cross-server state
 
-Preserve monotonic versions. A delayed Pub/Sub message or async callback must not replace a newer balance.
+Redis-backed economy updates use per-account Redis versions. CMI retains a legacy timestamp-derived version that is not globally monotonic across clock rollback, restart, or multiple servers. CMI callbacks must still re-check the locally observed watermark before applying a balance.
 
 Primary channels:
 

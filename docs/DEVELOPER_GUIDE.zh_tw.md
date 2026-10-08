@@ -103,7 +103,7 @@ Vault 是 synchronous，因此 Vault-facing read 必須保持 memory-backed；ca
 
 ### 5.4 Versions and cross-server state
 
-保留 monotonic version。Delayed Pub/Sub/async callback 套用前重新比對 freshness。主要 channel：
+Redis-backed economy update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived version，clock rollback、restart 或多伺服器時不保證 global monotonic。CMI callback 套用前仍須重新比對本機已觀察到的 freshness。主要 channel：
 
 - `syncmoney:balance:update`
 - `syncmoney:cmi:balance:update`

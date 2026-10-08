@@ -112,7 +112,7 @@ These entries summarize tagged Git history and are not newly reimplemented featu
 ### Fixed
 
 #### CMI Mode Cross-Server Sync
-- **Authority & Publishing**: Rewrote CMI sync to use CMI API as the local authority; publishes absolute balances with monotonic version numbers instead of runtime CMI database queries.
+- **Authority & Publishing**: Rewrote CMI sync to use CMI API as the local authority; publishes absolute balances with legacy timestamp-derived versions instead of runtime CMI database queries. These versions are not globally monotonic across clock rollback, restart, or multiple servers.
 - **Echo Loop Prevention**: Added `suppressOutbound` to stop re-publish loops when applying remote balances into local CMI.
 - **Join Reconcile**: Version-aware balance reconcile on player join to fix cross-server balance drift.
 - **Event vs Polling**: Disables polling when CMI events are available, preventing duplicate publishes during rapid `/cmi pay` spam.

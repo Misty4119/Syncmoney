@@ -57,7 +57,7 @@ Use the existing architecture:
 - `TransferOrchestrator` for cross-account transfers;
 - `EconomyModeRouter` and mode strategies for authority/persistence decisions.
 
-Preserve monotonic balance versions, duplicate/echo suppression, insufficient-funds behavior, queue backpressure/recovery, and shutdown draining of accepted writes. Re-check version freshness before applying delayed remote or CMI updates.
+Preserve per-account Redis version ordering for Redis-backed economy updates, duplicate/echo suppression, insufficient-funds behavior, queue backpressure/recovery, and shutdown draining of accepted writes. CMI retains its legacy timestamp-derived version, which is not globally monotonic; delayed CMI work must re-check locally observed freshness without claiming global ordering.
 
 CMI remains the economy authority in `cmi` mode. Do not convert migration or Shadow Sync into implicit live-authority changes.
 

@@ -39,7 +39,7 @@ Never print credentials while reviewing configuration.
 - `EconomyFacade` is memory-first because Vault methods are synchronous. Do not add blocking Redis, SQL, Mojang, filesystem, or other network I/O to Vault hot paths, placeholders, tab completion, entity tasks, or player-message paths.
 - Follow `EconomyFacade`, `MemoryStateManager`, `TransactionWriter`, `TransferOrchestrator`, and the economy mode router instead of bypassing their state/version contracts.
 - Accepted queued writes must survive ordinary logout/teleport timing and be drained during shutdown while their dependencies remain alive.
-- Preserve monotonic versions and Pub/Sub echo suppression. Delayed remote/CMI work must re-check freshness before changing player state.
+- Preserve Redis-backed version ordering and Pub/Sub echo suppression. CMI keeps its legacy timestamp-derived version, which is not globally monotonic; delayed CMI work must still re-check locally observed freshness before changing player state.
 - Treat insufficient funds, concurrent writes, queue saturation, partial persistence failure, and recovery as correctness cases.
 - CMI mode leaves CMI as economy authority. CMI player mutations must run on the owning entity scheduler.
 - Migration and Shadow Sync are explicit workflows, not implicit live-authority switches.

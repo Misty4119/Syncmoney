@@ -41,7 +41,7 @@ root `build.gradle` release metadata 目前仍為 `1.3.2`，待 release task 更
 - `EconomyFacade` 是 memory-first；Vault hot path、placeholder、tab completion、entity task、player-message path 不得加入 blocking Redis/SQL/Mojang/filesystem/network I/O。
 - 遵循 `EconomyFacade`、`MemoryStateManager`、`TransactionWriter`、`TransferOrchestrator` 與 mode router 的 state/version contract。
 - 已接受 queued write 要能跨一般 logout/teleport timing，shutdown 時在 dependency 存活期間排空。
-- 保留 monotonic version、Pub/Sub echo suppression；延遲 remote/CMI work 套用前重新檢查 freshness。
+- 保留 Redis-backed version ordering 與 Pub/Sub echo suppression。CMI 維持 legacy timestamp-derived version，不保證 global monotonic；延遲 CMI work 仍要在修改 player state 前重新檢查本機已觀察到的 freshness。
 - insufficient funds、concurrent write、queue saturation、partial persistence failure、recovery 都是 correctness case。
 - `cmi` mode 由 CMI 維持 authority；CMI player mutation 在 owning entity scheduler 執行。
 - Migration 與 Shadow Sync 是明確 workflow，不是隱式 live-authority switch。

@@ -6,7 +6,7 @@ This file gives Claude-family coding agents a compact repository-specific operat
 
 Syncmoney is a Vault-compatible Minecraft economy with optional VaultUnlocked/CMI integration, Redis cross-server synchronization, SQL/local persistence, audit and protection modules, an Undertow web administration service, and a separate PlaceholderAPI expansion.
 
-Correctness priorities are: no fund creation/loss, monotonic distributed state, region-thread safety, clean lifecycle ownership, non-blocking hot paths, and then ergonomics/performance improvements.
+Correctness priorities are: no fund creation/loss, preserve Redis-backed per-account ordering while documenting CMI's legacy non-global timestamp ordering, region-thread safety, clean lifecycle ownership, non-blocking hot paths, and then ergonomics/performance improvements.
 
 ## Ground truth
 
@@ -28,8 +28,8 @@ Public docs live in `README.md` and `docs/`. If behavior changes, update both En
 - Vault-facing reads must remain memory-backed and must not introduce blocking Redis/SQL/network I/O.
 - Writes go through the existing facade/state/writer/orchestrator path.
 - Preserve accepted-write durability across logout and shutdown.
-- Preserve monotonic versions and Pub/Sub echo suppression.
-- Re-check freshness before applying delayed asynchronous work.
+- Preserve Redis-backed per-account version ordering and Pub/Sub echo suppression. CMI retains its legacy timestamp-derived version, which is not globally monotonic.
+- Re-check locally observed freshness before applying delayed asynchronous work, including CMI entity callbacks.
 - CMI remains authority in `cmi` mode; player mutations run on the player's owning entity scheduler.
 - Migration and Shadow Sync are explicit workflows, not transparent authority changes.
 

@@ -36,7 +36,7 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 
 - **Standard Economy Compatibility**: Integrates seamlessly with Vault 1.7 and VaultUnlocked (Vault2 API).
 - **Flexible Economy Modes**: Supports standalone SQLite (`local`), Redis-only sync (`local_redis`), Redis + SQL database persistence (`sync`), and CMI-authoritative sync (`cmi`).
-- **Distributed Synchronization**: Redis Pub/Sub with atomic Lua scripts, monotonic versioning, and echo suppression to eliminate race conditions.
+- **Distributed Synchronization**: Redis-backed balance updates use atomic Lua scripts and per-account versions. CMI retains its legacy timestamp-derived version, which is not globally monotonic; inbound updates still use local freshness checks and echo suppression.
 - **In-Memory Performance**: O(1) balance reads served directly from memory; persistent storage writes handled asynchronously off the tick thread.
 - **Multi-Layer Circuit Breaker**: Real-time per-transaction limits, anomaly rate detection, and an independent per-player guard (L1–L4 states).
 - **Comprehensive Auditing & Analytics**: High-throughput asynchronous audit log pipeline with search, stats, automated cleanup, and external export.

@@ -37,7 +37,7 @@ Syncmoney 是經濟插件；安全問題可能影響餘額、憑證、跨服同�
 
 - 貨幣被建立、複製、遺失或未授權轉移；
 - transaction limit、player protection、circuit breaker 被繞過；
-- stale/replayed update 破壞單調 balance version；
+- stale/replayed cross-server update 繞過 per-account version 檢查，包括 CMI legacy timestamp version 不具 global ordering 的限制；
 - Pub/Sub spoofing、echo loop 或 duplicate handling 改變餘額；
 - queue saturation 或 shutdown 靜默遺失已接受的 economic write；
 - Folia/Canvas 上不安全的 scheduler 存取造成狀態損壞；
@@ -73,7 +73,7 @@ Web Admin 是特權管理介面：
 
 ## 變更的安全要求
 
-經濟相關變更必須保留 `BigDecimal` normalization、insufficient-funds check、transfer ordering/atomicity、單調 version、已接受寫入 durability、echo/duplicate suppression。Vault/placeholder/entity hot path 不得加入阻塞 network/database I/O。
+經濟相關變更必須保留 `BigDecimal` normalization、insufficient-funds check、transfer ordering/atomicity、per-account Redis version ordering、已接受寫入 durability、echo/duplicate suppression。CMI 維持 legacy timestamp-derived version，不保證 global monotonic。Vault/placeholder/entity hot path 不得加入阻塞 network/database I/O。
 
 Scheduler-sensitive 變更要遵守 Paper/Folia entity ownership；CMI mutation 與 player/entity 操作必須在 owning entity scheduler 上執行。
 
