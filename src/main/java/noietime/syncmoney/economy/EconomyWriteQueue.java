@@ -671,7 +671,7 @@ public final class EconomyWriteQueue {
 
     /** Complete a known-rejected write using its Redis authority snapshot as a rebase point. */
     boolean completeRejected(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
-        if (event == null || authorityBalance == null || authorityVersion < 0L) {
+        if (event == null || !validAuthorityAccount(authorityBalance, authorityVersion, true)) {
             return false;
         }
         WriteCompletionHandler handler = writeCompletionHandler;
@@ -696,7 +696,7 @@ public final class EconomyWriteQueue {
     /** Reconcile a durable receipt recovered after its original queue ownership ended with the old process. */
     void reconcileRecovered(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion,
             boolean rejected) {
-        if (event == null || authorityBalance == null || authorityVersion < 0L) {
+        if (event == null || !validAuthorityAccount(authorityBalance, authorityVersion, rejected)) {
             throw new IllegalArgumentException("Recovered account receipt is incomplete");
         }
         WriteCompletionHandler handler = writeCompletionHandler;
@@ -715,8 +715,9 @@ public final class EconomyWriteQueue {
     /** Reconcile a paired receipt after restart without inventing queue reservations for either transfer leg. */
     void reconcileRecoveredPair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
             EconomyEvent second, BigDecimal secondBalance, long secondVersion, boolean rejected) {
-        if (!TransferRequestIds.arePair(first, second) || firstBalance == null || secondBalance == null
-                || firstVersion < 0L || secondVersion < 0L) {
+        if (!TransferRequestIds.arePair(first, second)
+                || !validAuthorityAccount(firstBalance, firstVersion, rejected)
+                || !validAuthorityAccount(secondBalance, secondVersion, rejected)) {
             throw new IllegalArgumentException("Recovered transfer receipt is incomplete");
         }
         String operationId = TransferRequestIds.operationId(first.type() == EconomyEvent.EventType.TRANSFER_OUT
@@ -742,11 +743,15 @@ public final class EconomyWriteQueue {
         resolveTransferUnavailable(operationId, first.playerUuid(), second.playerUuid());
     }
 
+    private static boolean validAuthorityAccount(BigDecimal balance, long version, boolean allowAbsent) {
+        return balance != null ? version >= 0L : allowAbsent && version == -1L;
+    }
+
     private boolean completePair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
             EconomyEvent second, BigDecimal secondBalance, long secondVersion, boolean rejected) {
         if (!TransferRequestIds.arePair(first, second)
-                || firstBalance == null || secondBalance == null
-                || firstVersion < 0L || secondVersion < 0L) {
+                || !validAuthorityAccount(firstBalance, firstVersion, rejected)
+                || !validAuthorityAccount(secondBalance, secondVersion, rejected)) {
             return false;
         }
         EconomyEvent out = first.type() == EconomyEvent.EventType.TRANSFER_OUT ? first : second;
@@ -783,6 +788,10 @@ public final class EconomyWriteQueue {
                 releaseOwnership(secondReservationId, false);
             }
 
+            if (rejected) {
+                cancelUncommittedReservations(first.playerUuid(), second.playerUuid());
+            }
+
             try {
                 if (handler != null) {
                     if (rejected) {
@@ -814,6 +823,22 @@ public final class EconomyWriteQueue {
             }
         });
         return completed.get();
+    }
+
+    /**
+     * Known authority rejection invalidates producers that reserved capacity but have not
+     * committed an event. Such reservations have not crossed the accepted-write boundary and
+     * cannot safely continue against the rejected provisional account state.
+     */
+    private void cancelUncommittedReservations(UUID firstAccount, UUID secondAccount) {
+        synchronized (commitGate) {
+            for (Reservation reservation : List.copyOf(reservations.values())) {
+                if (reservation.uuid.equals(firstAccount)
+                        || reservation.uuid.equals(secondAccount)) {
+                    reservation.close();
+                }
+            }
+        }
     }
 
     private void withCompletionAccountLocks(WriteCompletionHandler handler, UUID firstAccount,

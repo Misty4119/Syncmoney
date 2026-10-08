@@ -252,11 +252,13 @@ export async function prepareProfile(args, env = process.env) {
   const options = validateOptions(args, env.SYNCMONEY_CANDIDATE_VERSION ?? DEFAULT_CANDIDATE_VERSION);
   const candidateJar = join(ROOT, "build", "libs", `Syncmoney-${options.candidateVersion}.jar`);
   const acceptanceJar = join(ROOT, "build", "acceptance", "SyncmoneyAcceptance.jar");
+  const apiConsumerJar = join(ROOT, "build", "acceptance", "SyncmoneyApiConsumer.jar");
   const run = join(ROOT, ".plugdev", "run");
   const plugins = join(run, "plugins");
   const pluginData = join(plugins, "Syncmoney");
   await access(candidateJar);
   await access(acceptanceJar);
+  await access(apiConsumerJar);
   await assertStopped(ROOT);
 
   const plugdevRoot = env.PLUGDEV_ROOT ?? resolve(ROOT, "../plugdev-main");
@@ -271,12 +273,14 @@ export async function prepareProfile(args, env = process.env) {
   await writeFile(join(ROOT, ".plugdev", "profile.yml"), YAML.stringify(profile), "utf8");
   await writeFile(join(pluginData, "config.yml"), YAML.stringify(settings), "utf8");
   await copyFile(acceptanceJar, join(plugins, "SyncmoneyAcceptance.jar"));
+  await copyFile(apiConsumerJar, join(plugins, "SyncmoneyApiConsumer.jar"));
 
   return {
     ...options,
     candidateJar,
     candidateSha256: await sha256(candidateJar),
     acceptanceJar,
+    apiConsumerJar,
     profilePath: join(ROOT, ".plugdev", "profile.yml"),
   };
 }

@@ -11,13 +11,14 @@ $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 $env:PLUGDEV_ROOT = 'C:\path\to\plugdev-main'
 
-.\gradlew.bat -PreleaseVersion=1.4.0-alpha.1 test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+.\gradlew.bat -PreleaseVersion=1.4.0-alpha.1 test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
 node tools/plugdev/prepare.mjs paper 1.21.6 local off 1.4.0-alpha.1
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server start --config .plugdev/profile.yml
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "version"
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "plugins"
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "smaccept"
 Select-String .plugdev/run/logs/latest.log -Pattern 'ACCEPTANCE PASS|ACCEPTANCE FAIL'
+Select-String .plugdev/run/logs/latest.log -Pattern 'API CLASSLOADER PASS|API CLASSLOADER FAIL'
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server stop
 
 # Start the same profile again after the first graceful stop.

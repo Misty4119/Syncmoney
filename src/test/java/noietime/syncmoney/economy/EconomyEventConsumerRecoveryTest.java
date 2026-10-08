@@ -153,6 +153,171 @@ class EconomyEventConsumerRecoveryTest {
     }
 
     @Test
+    void recoveredRejectedTransferRefreshesStoredAbsenceBeforeReconcilingNewerAcceptedAccount() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        String operationId = TransferRequestIds.newOperationId();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-70.00"), BigDecimal.ZERO, 8L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("70.00"), new BigDecimal("70.00"), 1L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        ReplicationReceipt oldAbsentReceipt = new ReplicationReceipt(operationId, List.of());
+
+        Plugin plugin = plugin();
+        CacheManager cache = mock(CacheManager.class);
+        when(cache.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
+                new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("5.00"),
+                        8L, 1L, true, true));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10);
+        MemoryStateManager memory = new MemoryStateManager(plugin, queue);
+        memory.put(sender, new EconomyFacade.EconomyState(new BigDecimal("20.00"), 8L, now));
+        // This is a later accepted write restored first after restart; it may share the
+        // absent receiver's initial authority version while having a different balance.
+        memory.put(receiver, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        queue.markTransferUnavailable(operationId, sender, receiver);
+        DbWriteQueue dbQueue = mock(DbWriteQueue.class);
+        when(dbQueue.offerAndTrack(any())).thenReturn(CompletableFuture.completedFuture(true));
+        EconomyEventConsumer consumer = consumer(plugin, config(), queue, cache,
+                dbQueue, mock(NameResolver.class), null);
+
+        Class<?> failedEventType = Class.forName(EconomyEventConsumer.class.getName() + "$FailedEvent");
+        var constructor = failedEventType.getDeclaredConstructor(EconomyEvent.class, EconomyEvent.class,
+                int.class, long.class, ReplicationReceipt.class, boolean.class, boolean.class, boolean.class);
+        constructor.setAccessible(true);
+        Object failed = constructor.newInstance(out, in, 0, now - 5_000L, oldAbsentReceipt,
+                false, true, true);
+        Field failedEventsField = EconomyEventConsumer.class.getDeclaredField("failedEvents");
+        failedEventsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var failedEvents = (java.util.concurrent.ConcurrentMap<String, Object>) failedEventsField.get(consumer);
+        String key = operationId;
+        failedEvents.put(key, failed);
+
+        Method process = EconomyEventConsumer.class.getDeclaredMethod("processFailedTransfer",
+                String.class, failedEventType, long.class, long.class, long.class);
+        process.setAccessible(true);
+        process.invoke(consumer, key, failed, System.currentTimeMillis(), 1_000L, 30_000L);
+
+        assertAll(
+                () -> verify(cache).readRejectedTransferSnapshotStrict(sender, receiver),
+                () -> assertEquals(new BigDecimal("20.00"), memory.get(sender).balance()),
+                () -> assertEquals(new BigDecimal("5.00"), memory.get(receiver).balance(),
+                        "the stored absence must not erase a later confirmed account snapshot"),
+                () -> assertFalse(memory.isUnavailable(sender)),
+                () -> assertFalse(memory.isUnavailable(receiver)),
+                () -> assertTrue(failedEvents.isEmpty(), "successful fresh reconciliation acknowledges the old checkpoint")
+        );
+    }
+
+    @Test
+    void recoveredRejectedTransferPersistsReceiptFreeCheckpointBeforeRefreshingAuthority() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        String operationId = TransferRequestIds.newOperationId();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-70.00"), BigDecimal.ZERO, 8L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("70.00"), new BigDecimal("70.00"), 1L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        ReplicationReceipt storedReceipt = new ReplicationReceipt(operationId, List.of(
+                new ConfirmedAccount(sender, new BigDecimal("20.00"), 8L),
+                new ConfirmedAccount(receiver, new BigDecimal("70.00"), 1L)));
+        RecoverySpool spool = new RecoverySpool(temp.resolve("rejected-transfer-refresh.jsonl"));
+        Plugin plugin = plugin();
+        SyncmoneyConfig config = config();
+        when(config.isDbEnabled()).thenReturn(false);
+        CacheManager cache = mock(CacheManager.class);
+        when(cache.readRejectedTransferSnapshotStrict(sender, receiver)).thenAnswer(invocation -> {
+            JsonNode checkpoint = new ObjectMapper().readTree(pending(spool).get(0).payload());
+            assertEquals("RECONCILE", checkpoint.path("stage").asText());
+            assertTrue(checkpoint.path("receipt").isNull(),
+                    "a refresh-in-progress checkpoint must satisfy the recovery validator");
+            return new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("5.00"),
+                    8L, 1L, true, true);
+        });
+        EconomyWriteQueue queue = new EconomyWriteQueue(10);
+        MemoryStateManager memory = new MemoryStateManager(plugin, queue);
+        memory.put(sender, new EconomyFacade.EconomyState(new BigDecimal("20.00"), 8L, now));
+        memory.put(receiver, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        queue.markTransferUnavailable(operationId, sender, receiver);
+        EconomyEventConsumer consumer = consumer(plugin, config, queue, cache, mock(DbWriteQueue.class),
+                mock(NameResolver.class), spool);
+
+        Class<?> failedEventType = Class.forName(EconomyEventConsumer.class.getName() + "$FailedEvent");
+        var constructor = failedEventType.getDeclaredConstructor(EconomyEvent.class, EconomyEvent.class,
+                int.class, long.class, ReplicationReceipt.class, boolean.class, boolean.class, boolean.class);
+        constructor.setAccessible(true);
+        Object failed = constructor.newInstance(out, in, 0, now - 5_000L, storedReceipt,
+                false, true, true);
+        Field failedEventsField = EconomyEventConsumer.class.getDeclaredField("failedEvents");
+        failedEventsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var failedEvents = (java.util.concurrent.ConcurrentMap<String, Object>) failedEventsField.get(consumer);
+        failedEvents.put(operationId, failed);
+
+        Method process = EconomyEventConsumer.class.getDeclaredMethod("processFailedTransfer",
+                String.class, failedEventType, long.class, long.class, long.class);
+        process.setAccessible(true);
+        process.invoke(consumer, operationId, failed, System.currentTimeMillis(), 1_000L, 30_000L);
+
+        assertTrue(pending(spool).isEmpty(), "the refreshed authority receipt should complete reconciliation");
+        verify(cache).readRejectedTransferSnapshotStrict(sender, receiver);
+        assertEquals(new BigDecimal("5.00"), memory.get(receiver).balance());
+        assertFalse(memory.isUnavailable(receiver));
+    }
+
+    @Test
+    void recoveredRejectedAccountRefreshesAnOlderAbsentAuthorityReceipt() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        EconomyEvent rejected = new EconomyEvent(uuid, new BigDecimal("70.00"), new BigDecimal("70.00"), 1L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
+                "rejected-first-deposit", now);
+        ReplicationReceipt oldAbsentReceipt = new ReplicationReceipt(rejected.requestId(), List.of());
+
+        Plugin plugin = plugin();
+        SyncmoneyConfig config = config();
+        when(config.isDbEnabled()).thenReturn(false);
+        CacheManager cache = mock(CacheManager.class);
+        when(cache.readAuthorityBalanceSnapshotStrict(uuid)).thenReturn(java.util.Optional.of(
+                new CacheManager.CachedBalance(new BigDecimal("5.00"), 1L, now + 1L)));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10);
+        MemoryStateManager memory = new MemoryStateManager(plugin, queue);
+        memory.put(uuid, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        memory.markUnavailable(uuid);
+        EconomyEventConsumer consumer = consumer(plugin, config, queue, cache, mock(DbWriteQueue.class),
+                mock(NameResolver.class), null);
+
+        Class<?> failedEventType = Class.forName(EconomyEventConsumer.class.getName() + "$FailedEvent");
+        var constructor = failedEventType.getDeclaredConstructor(EconomyEvent.class, EconomyEvent.class,
+                int.class, long.class, ReplicationReceipt.class, boolean.class, boolean.class, boolean.class);
+        constructor.setAccessible(true);
+        Object failed = constructor.newInstance(rejected, null, 0, now - 5_000L, oldAbsentReceipt,
+                false, true, true);
+        Field failedEventsField = EconomyEventConsumer.class.getDeclaredField("failedEvents");
+        failedEventsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var failedEvents = (java.util.concurrent.ConcurrentMap<String, Object>) failedEventsField.get(consumer);
+        failedEvents.put(rejected.requestId(), failed);
+
+        Method process = EconomyEventConsumer.class.getDeclaredMethod("processRejectedEventReconciliation",
+                String.class, failedEventType, long.class, long.class, long.class, boolean.class);
+        process.setAccessible(true);
+        process.invoke(consumer, rejected.requestId(), failed, System.currentTimeMillis(),
+                1_000L, 30_000L, false);
+
+        verify(cache).readAuthorityBalanceSnapshotStrict(uuid);
+        assertEquals(new BigDecimal("5.00"), memory.get(uuid).balance());
+        assertFalse(memory.isUnavailable(uuid), "fresh authority should restore the later accepted account");
+        assertTrue(failedEvents.isEmpty(), "the rejection checkpoint should be acknowledged after refresh");
+    }
+
+    @Test
     void confirmedCheckpointRemainsPendingWhenDbQueueAndDirectFallbackFailAndSkipsLegacyOverflow() throws Exception {
         UUID uuid = UUID.randomUUID();
         EconomyEvent event = event(uuid, "sql-fallback-failed-1");

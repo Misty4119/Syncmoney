@@ -35,6 +35,7 @@ repositories {
 }
 
 dependencies {
+    implementation project(':syncmoney-api')
     implementation project(':syncmoney-core')
     implementation project(':syncmoney-protocol')
     implementation project(':syncmoney-storage')
@@ -140,9 +141,23 @@ sourceSets {
     acceptance {
         compileClasspath += sourceSets.main.output + configurations.compileClasspath
     }
+    apiConsumer {
+        java.srcDir file('src/api-consumer/java')
+        resources.srcDir file('src/api-consumer/resources')
+    }
+}
+dependencies {
+    apiConsumerCompileOnly project(':syncmoney-api')
+    apiConsumerCompileOnly("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
+}
+tasks.register('apiConsumerJar', Jar) {
+    dependsOn apiConsumerClasses
+    archiveFileName = 'SyncmoneyApiConsumer.jar'
+    destinationDirectory = layout.buildDirectory.dir('acceptance')
+    from sourceSets.apiConsumer.output
 }
 tasks.register('acceptanceJar', Jar) {
-    dependsOn acceptanceClasses
+    dependsOn acceptanceClasses, apiConsumerJar
     archiveFileName = 'SyncmoneyAcceptance.jar'
     destinationDirectory = layout.buildDirectory.dir('acceptance')
     from sourceSets.acceptance.output

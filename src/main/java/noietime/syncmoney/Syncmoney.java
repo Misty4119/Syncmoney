@@ -1,6 +1,7 @@
 package noietime.syncmoney;
 
 import net.kyori.adventure.text.Component;
+import noietime.syncmoney.api.bukkit.BukkitApiProvider;
 import noietime.syncmoney.command.CommandServiceManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
@@ -82,6 +83,7 @@ public final class Syncmoney extends JavaPlugin {
 
     private StorageManager storageManager;
     private EconomyServiceManager economyServiceManager;
+    private BukkitApiProvider apiProvider;
     private ListenerServiceManager listenerServiceManager;
     private AuditServiceManager auditServiceManager;
     private CommandServiceManager commandServiceManager;
@@ -352,14 +354,24 @@ public final class Syncmoney extends JavaPlugin {
 
         initializePluginContext();
 
+        initBstats();
+
+        this.apiProvider = new BukkitApiProvider(
+                this,
+                economyServiceManager.getEconomyFacade(),
+                economyServiceManager.getCmiHandler());
+        apiProvider.register();
+
         getLogger().log(Level.FINE, "Syncmoney Economy system enabled.");
         getLogger().info("Syncmoney enabled successfully.");
-
-        initBstats();
     }
 
     @Override
     public void onDisable() {
+
+        if (apiProvider != null) {
+            apiProvider.close();
+        }
 
         if (webServiceManager != null) {
             webServiceManager.shutdown();

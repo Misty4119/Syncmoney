@@ -2,9 +2,12 @@ package noietime.syncmoney.sync;
 
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import noietime.syncmoney.util.NumericUtil;
 
+import java.math.BigDecimal;
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -97,6 +100,32 @@ public final class CMIApi {
                 logger.fine("CMI getBalance failed for " + uuid + ": " + t.getMessage());
             }
             return null;
+        }
+    }
+
+    /**
+     * Reads an already available CMI user's balance without loading or creating an offline user.
+     * Callers must invoke this on the owning entity scheduler for online players.
+     */
+    public Optional<BigDecimal> getExistingBalance(UUID uuid) {
+        if (!available || uuid == null) {
+            return Optional.empty();
+        }
+        try {
+            Object user = resolveUser(uuid, false);
+            if (user == null) {
+                return Optional.empty();
+            }
+            Number balance = (Number) userGetBalance.invoke(user);
+            if (balance == null) {
+                return Optional.empty();
+            }
+            return Optional.of(NumericUtil.normalize(balance.doubleValue()));
+        } catch (Throwable t) {
+            if (logger != null) {
+                logger.fine("CMI existing-user balance read failed for " + uuid + ": " + t.getMessage());
+            }
+            return Optional.empty();
         }
     }
 

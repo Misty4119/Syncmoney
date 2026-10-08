@@ -14,6 +14,9 @@ import java.math.BigDecimal;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -86,6 +89,12 @@ public final class EconomyFacade {
 
     private final ScheduledExecutorService cleanupExecutor;
     private final ThreadPoolExecutor balanceLoadExecutor;
+    private final ConcurrentHashMap<UUID, CompletableFuture<java.util.Optional<BigDecimal>>> apiBalanceLoads =
+            new ConcurrentHashMap<>();
+    private volatile boolean shuttingDown;
+
+    private record ColdBalance(BigDecimal balance, long version) {
+    }
 
     public EconomyFacade(Plugin plugin, SyncmoneyConfig config,
             CacheManager cacheManager, RedisManager redisManager,
@@ -294,8 +303,10 @@ public final class EconomyFacade {
         final BigDecimal finalBalance = balance;
         final long finalVersion = version;
         long now = System.currentTimeMillis();
-        EconomyState loadedState = stateManager.computeIfAbsent(uuid,
-                key -> new EconomyState(finalBalance, finalVersion, now));
+        EconomyState loadedState = finalBalance.compareTo(BigDecimal.ZERO) == 0 && finalVersion == 0L
+                ? stateManager.computeIfAbsentUnverified(uuid,
+                        key -> new EconomyState(finalBalance, finalVersion, now))
+                : stateManager.computeIfAbsent(uuid, key -> new EconomyState(finalBalance, finalVersion, now));
         return loadedState.balance();
     }
 
@@ -326,6 +337,117 @@ public final class EconomyFacade {
         return null;
     }
 
+    /** Returns an in-memory balance without performing storage or network I/O. */
+    public java.util.Optional<BigDecimal> getCachedBalanceForApi(UUID uuid) {
+        if (uuid == null) {
+            throw new IllegalArgumentException("Account UUID must not be null");
+        }
+        if (shuttingDown || stateManager.isUnavailable(uuid)) {
+            return java.util.Optional.empty();
+        }
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            return java.util.Optional.empty();
+        }
+        EconomyState state = stateManager.getConfirmedStateForApi(uuid);
+        if (shuttingDown || stateManager.isUnavailable(uuid) || state == null) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(state.balance());
+    }
+
+    /**
+     * Loads a snapshot using the bounded account-loader worker. A confirmed absent
+     * account is not inserted into memory and is not written to storage as zero.
+     */
+    public CompletionStage<java.util.Optional<BigDecimal>> loadBalanceForApi(UUID uuid) {
+        if (uuid == null) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Account UUID must not be null"));
+        }
+        if (shuttingDown) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Economy provider is shutting down"));
+        }
+        if (stateManager.isUnavailable(uuid)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Account balance is unavailable pending reconciliation"));
+        }
+        if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("LOCAL accepted-write recovery is unresolved"));
+        }
+
+        java.util.Optional<BigDecimal> cached = getCachedBalanceForApi(uuid);
+        if (cached.isPresent()) {
+            return CompletableFuture.completedFuture(cached);
+        }
+
+        CompletableFuture<java.util.Optional<BigDecimal>> pending = new CompletableFuture<>();
+        CompletableFuture<java.util.Optional<BigDecimal>> existing = apiBalanceLoads.putIfAbsent(uuid, pending);
+        if (existing != null) {
+            return existing.minimalCompletionStage();
+        }
+        if (shuttingDown) {
+            pending.completeExceptionally(new IllegalStateException("Economy provider is shutting down"));
+            apiBalanceLoads.remove(uuid, pending);
+            return pending.minimalCompletionStage();
+        }
+
+        try {
+            balanceLoadExecutor.execute(() -> loadBalanceForApi(uuid, pending));
+        } catch (RejectedExecutionException rejected) {
+            pending.completeExceptionally(rejected);
+            apiBalanceLoads.remove(uuid, pending);
+        }
+        return pending.minimalCompletionStage();
+    }
+
+    private void loadBalanceForApi(UUID uuid, CompletableFuture<java.util.Optional<BigDecimal>> result) {
+        try {
+            if (shuttingDown) {
+                throw new IllegalStateException("Economy provider is shutting down");
+            }
+            if (stateManager.isUnavailable(uuid)) {
+                throw new IllegalStateException("Account balance is unavailable pending reconciliation");
+            }
+            java.util.Optional<BigDecimal> ready = getCachedBalanceForApi(uuid);
+            if (ready.isPresent()) {
+                result.complete(ready);
+                return;
+            }
+
+            java.util.Optional<ColdBalance> loaded;
+            if (isLocalMode && localEconomyHandler != null) {
+                LocalEconomyHandler.AccountSnapshot account = localEconomyHandler.findAccountSnapshot(uuid)
+                        .orElse(null);
+                loaded = account == null ? java.util.Optional.empty()
+                        : java.util.Optional.of(new ColdBalance(account.balance(), account.version()));
+            } else {
+                loaded = readColdSharedAccount(uuid);
+            }
+
+            if (shuttingDown) {
+                throw new IllegalStateException("Economy provider shut down during balance query");
+            }
+            if (stateManager.isUnavailable(uuid)) {
+                throw new IllegalStateException("Account balance became unavailable during balance query");
+            }
+            if (loaded.isEmpty()) {
+                // A concurrent accepted write may have initialized the account while
+                // the backend read was in flight; prefer that current local state.
+                result.complete(getCachedBalanceForApi(uuid));
+                return;
+            }
+
+            ColdBalance account = loaded.get();
+            cacheColdAccount(uuid, account.balance(), account.version());
+            java.util.Optional<BigDecimal> current = getCachedBalanceForApi(uuid);
+            result.complete(current.isPresent() ? current : java.util.Optional.of(account.balance()));
+        } catch (Throwable failure) {
+            result.completeExceptionally(failure);
+        } finally {
+            apiBalanceLoads.remove(uuid, result);
+        }
+    }
+
     private void requestPlaceholderBalanceLoad(UUID uuid) {
         if (stateManager.isUnavailable(uuid)) return;
         if (!placeholderLoads.add(uuid)) {
@@ -342,8 +464,12 @@ public final class EconomyFacade {
                             throw new IllegalStateException("LOCAL accepted-write recovery is unresolved");
                         }
                         LocalEconomyHandler.AccountSnapshot account = localEconomyHandler.findAccountSnapshot(uuid)
-                                .orElse(new LocalEconomyHandler.AccountSnapshot(BigDecimal.ZERO, 0L));
-                        cacheColdAccount(uuid, account.balance(), account.version());
+                                .orElse(null);
+                        if (account == null) {
+                            cacheUnverifiedLegacyZero(uuid);
+                        } else {
+                            cacheColdAccount(uuid, account.balance(), account.version());
+                        }
                     } else {
                         loadColdSharedAccount(uuid);
                     }
@@ -360,6 +486,16 @@ public final class EconomyFacade {
     }
 
     private void loadColdSharedAccount(UUID uuid) throws Exception {
+        java.util.Optional<ColdBalance> loaded = readColdSharedAccount(uuid);
+        if (loaded.isPresent()) {
+            ColdBalance account = loaded.get();
+            cacheColdAccount(uuid, account.balance(), account.version());
+        } else {
+            cacheUnverifiedLegacyZero(uuid);
+        }
+    }
+
+    private java.util.Optional<ColdBalance> readColdSharedAccount(UUID uuid) throws Exception {
         Exception redisFailure = null;
         boolean redisReadSucceeded = false;
         CacheManager.CachedBalance redisSnapshot = null;
@@ -376,8 +512,7 @@ public final class EconomyFacade {
 
         if (redisSnapshot != null && (redisSnapshot.version() != 0L
                 || !config.isDbEnabled() || databaseManager == null)) {
-            cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
-            return;
+            return java.util.Optional.of(new ColdBalance(redisSnapshot.balance(), redisSnapshot.version()));
         }
 
         if (config.isDbEnabled() && databaseManager != null) {
@@ -386,13 +521,11 @@ public final class EconomyFacade {
                 if (record.isPresent()) {
                     var account = record.get();
                     fallbackWrapper.logDegradedOperation("getBalance from DB");
-                    cacheColdAccount(uuid, account.balance(), account.version());
-                    return;
+                    return java.util.Optional.of(new ColdBalance(account.balance(), account.version()));
                 }
             } catch (Exception databaseFailure) {
                 if (redisSnapshot != null) {
-                    cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
-                    return;
+                    return java.util.Optional.of(new ColdBalance(redisSnapshot.balance(), redisSnapshot.version()));
                 }
                 if (redisFailure != null) {
                     databaseFailure.addSuppressed(redisFailure);
@@ -402,13 +535,11 @@ public final class EconomyFacade {
         }
 
         if (redisSnapshot != null) {
-            cacheColdAccount(uuid, redisSnapshot.balance(), redisSnapshot.version());
-            return;
+            return java.util.Optional.of(new ColdBalance(redisSnapshot.balance(), redisSnapshot.version()));
         }
         if (redisReadSucceeded) {
             // Both Redis keys and the configured SQL row were confirmed absent.
-            cacheColdAccount(uuid, BigDecimal.ZERO, 0L);
-            return;
+            return java.util.Optional.empty();
         }
 
         throw redisFailure != null ? redisFailure : new IllegalStateException(
@@ -417,7 +548,12 @@ public final class EconomyFacade {
 
     private void cacheColdAccount(UUID uuid, BigDecimal balance, long version) {
         long now = System.currentTimeMillis();
-        stateManager.computeIfAbsent(uuid, key -> new EconomyState(balance, version, now));
+        stateManager.cacheConfirmedBalance(uuid, balance, version, now);
+    }
+
+    private void cacheUnverifiedLegacyZero(UUID uuid) {
+        long now = System.currentTimeMillis();
+        stateManager.computeIfAbsentUnverified(uuid, key -> new EconomyState(BigDecimal.ZERO, 0L, now));
     }
 
     String resolveCachedPlayerName(UUID uuid) {
@@ -756,6 +892,10 @@ public final class EconomyFacade {
      * [SYNC-ECO-069] Shutdown the EconomyFacade and release resources.
      */
     public void shutdown() {
+        shuttingDown = true;
+        IllegalStateException shutdownFailure = new IllegalStateException("Economy provider has shut down");
+        apiBalanceLoads.forEach((uuid, future) -> future.completeExceptionally(shutdownFailure));
+        apiBalanceLoads.clear();
         balanceLoadExecutor.shutdown();
         try {
             if (!balanceLoadExecutor.awaitTermination(10, TimeUnit.SECONDS)) {

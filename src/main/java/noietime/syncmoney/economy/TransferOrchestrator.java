@@ -267,22 +267,35 @@ final class TransferOrchestrator {
     }
 
     private boolean hasConfirmedReceipt(CacheManager.TransferResult result) {
-        return result != null && result.fromNewBalance != null && result.toNewBalance != null
+        return result != null && result.fromAccountPresent && result.toAccountPresent
+                && result.fromNewBalance != null && result.toNewBalance != null
                 && result.fromNewVersion >= 0L && result.toNewVersion >= 0L;
     }
 
     private void reconcileRejectedTransfer(String operationId, UUID fromUuid, UUID toUuid) {
         try {
-            CacheManager.TransferResult snapshot = cacheManager.readTransferSnapshotStrict(fromUuid, toUuid);
-            if (!hasConfirmedReceipt(snapshot)) {
+            CacheManager.TransferResult snapshot = cacheManager.readRejectedTransferSnapshotStrict(fromUuid, toUuid);
+            if (snapshot == null
+                    || !hasValidAuthoritySnapshotAccount(snapshot.fromAccountPresent,
+                            snapshot.fromNewBalance, snapshot.fromNewVersion)
+                    || !hasValidAuthoritySnapshotAccount(snapshot.toAccountPresent,
+                            snapshot.toNewBalance, snapshot.toNewVersion)) {
                 throw new IllegalStateException("Redis returned an invalid transfer authority snapshot");
             }
-            stateManager.completeDirectTransferMutation(operationId, fromUuid,
-                    snapshot.fromNewBalance, snapshot.fromNewVersion, toUuid,
-                    snapshot.toNewBalance, snapshot.toNewVersion);
+            long now = System.currentTimeMillis();
+            EconomyFacade.EconomyState fromSnapshot = snapshot.fromAccountPresent
+                    ? new EconomyFacade.EconomyState(snapshot.fromNewBalance, snapshot.fromNewVersion, now) : null;
+            EconomyFacade.EconomyState toSnapshot = snapshot.toAccountPresent
+                    ? new EconomyFacade.EconomyState(snapshot.toNewBalance, snapshot.toNewVersion, now) : null;
+            stateManager.completeRejectedDirectTransferMutation(
+                    operationId, fromUuid, fromSnapshot, toUuid, toSnapshot);
         } catch (RuntimeException e) {
             plugin.getLogger().severe("Rejected transfer could not refresh its authority pair; both accounts are unavailable: "
                     + e.getMessage());
         }
+    }
+
+    private boolean hasValidAuthoritySnapshotAccount(boolean present, BigDecimal balance, long version) {
+        return present ? balance != null && version >= 0L : balance == null && version == -1L;
     }
 }

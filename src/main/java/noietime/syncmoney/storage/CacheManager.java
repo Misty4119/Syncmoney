@@ -171,7 +171,8 @@ public final class CacheManager {
         if (cached != null && !cached.isExpired(expirationMinutes)) {
             cacheHits.incrementAndGet();
 
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(cached.balance(), cached.version()));
+            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
+                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
             return cached.balance();
         }
 
@@ -191,7 +192,8 @@ public final class CacheManager {
                 NumericUtil.normalize(balanceStr) :
                 BigDecimal.ZERO;
             long version = versionStr != null ? Long.parseLong(versionStr) : 0L;
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(balance, version));
+            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
+                    balance, version, System.currentTimeMillis(), balanceStr != null));
 
             return balance;
         } catch (Exception e) {
@@ -206,7 +208,8 @@ public final class CacheManager {
         CachedBalance cached = memoryCache.get(uuid);
         if (cached != null && !cached.isExpired(expirationMinutes)) {
 
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(cached.balance(), cached.version()));
+            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
+                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
             return cached.version();
         }
 
@@ -437,9 +440,10 @@ public final class CacheManager {
     }
     public java.util.Optional<CachedBalance> getBalanceSnapshotStrict(UUID uuid) {
         CachedBalance cached = memoryCache.get(uuid);
-        if (cached != null && !cached.isExpired(expirationMinutes)) {
+        if (cached != null && cached.accountPresent() && !cached.isExpired(expirationMinutes)) {
             cacheHits.incrementAndGet();
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(cached.balance(), cached.version()));
+            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
+                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
             return java.util.Optional.of(cached);
         }
 
@@ -474,6 +478,7 @@ public final class CacheManager {
             throw new IllegalArgumentException("An authority snapshot requires an account UUID");
         }
 
+        CachedBalance cachedAtReadStart = memoryCache.get(uuid);
         try (var jedis = redisManager.getResource()) {
             if (jedis == null) {
                 throw new IllegalStateException("Redis resource is unavailable for authority reconciliation");
@@ -483,6 +488,7 @@ public final class CacheManager {
                 throw new IllegalStateException("Redis returned an invalid account authority snapshot");
             }
             if (values.get(0) == null && values.get(1) == null) {
+                clearCachedAccountIfUnchanged(uuid, cachedAtReadStart);
                 return java.util.Optional.empty();
             }
 
@@ -616,14 +622,26 @@ public final class CacheManager {
         }
     }
 
-    /**
-     * Read both authority balance/version pairs with one Redis command. Used only after a
-     * known no-mutation transfer rejection so stale local projections can be reconciled.
-     */
+    /** Read both Redis account snapshots, requiring both accounts to exist. */
     public TransferResult readTransferSnapshotStrict(UUID fromUuid, UUID toUuid) {
+        return readTransferSnapshot(fromUuid, toUuid, false);
+    }
+
+    /**
+     * Read the authority pair after Redis has explicitly rejected a transfer without mutation.
+     * Confirmed absence is preserved per account so the caller can release this rejected
+     * operation without manufacturing a zero-balance account.
+     */
+    public TransferResult readRejectedTransferSnapshotStrict(UUID fromUuid, UUID toUuid) {
+        return readTransferSnapshot(fromUuid, toUuid, true);
+    }
+
+    private TransferResult readTransferSnapshot(UUID fromUuid, UUID toUuid, boolean allowAbsent) {
         if (fromUuid == null || toUuid == null || fromUuid.equals(toUuid)) {
             throw new IllegalArgumentException("A transfer snapshot requires two distinct accounts");
         }
+        CachedBalance fromCachedAtReadStart = memoryCache.get(fromUuid);
+        CachedBalance toCachedAtReadStart = memoryCache.get(toUuid);
         try (var jedis = redisManager.getResource()) {
             List<String> values = jedis.mget(
                     RedisKeys.balance(fromUuid), RedisKeys.version(fromUuid),
@@ -633,11 +651,27 @@ public final class CacheManager {
             }
             CachedBalance from = parseStrictSnapshot(fromUuid, values.get(0), values.get(1));
             CachedBalance to = parseStrictSnapshot(toUuid, values.get(2), values.get(3));
-            ConfirmedAccount fromAccount = new ConfirmedAccount(fromUuid, from.balance(), from.version());
-            ConfirmedAccount toAccount = new ConfirmedAccount(toUuid, to.balance(), to.version());
-            rememberConfirmedAccount(fromAccount);
-            rememberConfirmedAccount(toAccount);
-            return new TransferResult(from.balance(), to.balance(), from.version(), to.version());
+            if (!from.accountPresent()) {
+                clearCachedAccountIfUnchanged(fromUuid, fromCachedAtReadStart);
+            }
+            if (!to.accountPresent()) {
+                clearCachedAccountIfUnchanged(toUuid, toCachedAtReadStart);
+            }
+            if (!allowAbsent && (!from.accountPresent() || !to.accountPresent())) {
+                throw new IllegalStateException("Redis transfer authority snapshot is missing an account balance");
+            }
+            if (from.accountPresent()) {
+                rememberConfirmedAccount(new ConfirmedAccount(fromUuid, from.balance(), from.version()));
+            }
+            if (to.accountPresent()) {
+                rememberConfirmedAccount(new ConfirmedAccount(toUuid, to.balance(), to.version()));
+            }
+            return new TransferResult(
+                    from.accountPresent() ? from.balance() : null,
+                    to.accountPresent() ? to.balance() : null,
+                    from.accountPresent() ? from.version() : -1L,
+                    to.accountPresent() ? to.version() : -1L,
+                    from.accountPresent(), to.accountPresent());
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -650,7 +684,7 @@ public final class CacheManager {
             throw new IllegalStateException("Redis account version exists without a balance for " + uuid);
         }
         if (balanceValue == null) {
-            return new CachedBalance(BigDecimal.ZERO, 0L);
+            return new CachedBalance(BigDecimal.ZERO, 0L, System.currentTimeMillis(), false);
         }
         BigDecimal balance = NumericUtil.normalize(balanceValue);
         long version = versionValue == null ? 0L : Long.parseLong(versionValue);
@@ -668,18 +702,30 @@ public final class CacheManager {
         public final BigDecimal toNewBalance;
         public final long fromNewVersion;
         public final long toNewVersion;
+        public final boolean fromAccountPresent;
+        public final boolean toAccountPresent;
 
-        private static final TransferResult INSUFFICIENT_FUNDS_INSTANCE = new TransferResult(null, null, -1, -1);
+        private static final TransferResult INSUFFICIENT_FUNDS_INSTANCE =
+                new TransferResult(null, null, -1, -1, false, false);
 
         public static TransferResult insufficientFunds() {
             return INSUFFICIENT_FUNDS_INSTANCE;
         }
 
         public TransferResult(BigDecimal fromBalance, BigDecimal toBalance, long fromVersion, long toVersion) {
+            this(fromBalance, toBalance, fromVersion, toVersion,
+                    fromBalance != null && fromVersion >= 0L,
+                    toBalance != null && toVersion >= 0L);
+        }
+
+        public TransferResult(BigDecimal fromBalance, BigDecimal toBalance, long fromVersion, long toVersion,
+                boolean fromAccountPresent, boolean toAccountPresent) {
             this.fromNewBalance = fromBalance;
             this.toNewBalance = toBalance;
             this.fromNewVersion = fromVersion;
             this.toNewVersion = toVersion;
+            this.fromAccountPresent = fromAccountPresent;
+            this.toAccountPresent = toAccountPresent;
         }
     }
 
@@ -690,7 +736,7 @@ public final class CacheManager {
     public boolean updateMemoryCache(UUID uuid, BigDecimal balance, long version) {
         final boolean[] updated = {false};
         memoryCache.compute(uuid, (key, existing) -> {
-            if (existing == null || version > existing.version()) {
+            if (existing == null || !existing.accountPresent() || version > existing.version()) {
                 updated[0] = true;
                 return new CachedBalance(balance, version);
             }
@@ -705,7 +751,7 @@ public final class CacheManager {
             if (existing != null && existing.version() > confirmed.version()) {
                 return existing;
             }
-            if (existing != null && existing.version() == confirmed.version()
+            if (existing != null && existing.accountPresent() && existing.version() == confirmed.version()
                     && existing.balance().compareTo(confirmed.balance()) != 0) {
                 plugin.getLogger().severe("Conflicting Redis receipt for " + confirmed.playerUuid()
                         + " at version " + confirmed.version() + "; retaining the cached balance");
@@ -713,6 +759,25 @@ public final class CacheManager {
             }
             return new CachedBalance(confirmed.balance(), confirmed.version());
         });
+    }
+
+    /**
+     * Remove a cached authority value only when it still represents the same account state observed
+     * before the Redis read. A newer concurrent cache value must not be erased by a delayed absence.
+     */
+    private void clearCachedAccountIfUnchanged(UUID uuid, CachedBalance cachedAtReadStart) {
+        if (cachedAtReadStart == null) {
+            return;
+        }
+        memoryCache.computeIfPresent(uuid, (key, current) -> sameAccountState(current, cachedAtReadStart)
+                ? null
+                : current);
+    }
+
+    private static boolean sameAccountState(CachedBalance left, CachedBalance right) {
+        return left.accountPresent() == right.accountPresent()
+                && left.version() == right.version()
+                && left.balance().compareTo(right.balance()) == 0;
     }
 
     /**
@@ -769,9 +834,13 @@ public final class CacheManager {
      * Cache record - uses BigDecimal to avoid floating point errors.
      * Includes lastAccessTime for expiration-based cleanup.
      */
-    public record CachedBalance(BigDecimal balance, long version, long lastAccessTime) {
+    public record CachedBalance(BigDecimal balance, long version, long lastAccessTime, boolean accountPresent) {
         public CachedBalance(BigDecimal balance, long version) {
-            this(balance, version, System.currentTimeMillis());
+            this(balance, version, System.currentTimeMillis(), true);
+        }
+
+        public CachedBalance(BigDecimal balance, long version, long lastAccessTime) {
+            this(balance, version, lastAccessTime, true);
         }
 
         public boolean isExpired(int expirationMinutes) {

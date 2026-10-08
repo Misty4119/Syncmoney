@@ -109,13 +109,25 @@ public final class CMIPubsubHandler {
                             try {
                         if (currentVersion(uuid) != appliedVersion) return;
                         Double beforeObj = cmiApi.getBalance(uuid);
+                        if (beforeObj == null) {
+                            cmiHandler.invalidateCachedBalanceForApi(uuid);
+                        } else {
+                            cmiHandler.recordApiAuthorityBalance(uuid, NumericUtil.normalize(beforeObj));
+                        }
                         double before = beforeObj != null ? beforeObj.doubleValue() : targetBalance.doubleValue();
                         if (Double.compare(before, targetBalance.doubleValue()) == 0) {
+                            if (beforeObj != null) {
+                                cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                            }
                             cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
                             return;
                         }
                         cmiHandler.suppressOutbound(uuid, 750L);
-                        cmiApi.setBalance(uuid, targetBalance.doubleValue());
+                        cmiHandler.invalidateCachedBalanceForApi(uuid);
+                        boolean applied = cmiApi.setBalance(uuid, targetBalance.doubleValue());
+                        if (applied) {
+                            cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                        }
                         cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
                         notifyPlayerIfBalanceChanged(uuid, msg, before, targetBalance.doubleValue());
                         if (config.isDebug()) {
@@ -144,6 +156,7 @@ public final class CMIPubsubHandler {
             } else {
                 plugin.getLogger().fine("[CMI Inbound] CMI API unavailable on this server; "
                         + "Redis mirror updated for " + uuid + " but in-game CMI will only sync on next join.");
+                cmiHandler.invalidateCachedBalanceForApi(uuid);
                 cmiHandler.notifyInboundApplied(uuid, balance, incoming);
             }
             } finally {

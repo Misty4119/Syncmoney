@@ -32,6 +32,7 @@ final class MemoryStateManager {
     private volatile EconomyWriteQueue writeQueue;
 
     private final ConcurrentMap<UUID, EconomyState> memoryState = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, EconomyState> unverifiedBalanceStates = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, EconomyState> deferredRemoteUpdates = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, EconomyState> rejectedAuthorityBases = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, PendingRollback> pendingRollbacks = new ConcurrentHashMap<>();
@@ -63,12 +64,16 @@ final class MemoryStateManager {
                 entries.get(i).getValue().lock.unlock();
             }
             for (var entry : entries) {
-                accountMutationLocks.computeIfPresent(entry.getKey(), (uuid, current) -> {
-                    if (current != entry.getValue()) return current;
-                    return current.references.decrementAndGet() == 0 ? null : current;
-                });
+                releaseAccountMutationLock(entry.getKey(), entry.getValue());
             }
         }
+    }
+
+    private void releaseAccountMutationLock(UUID uuid, AccountMutationLock accountLock) {
+        accountMutationLocks.computeIfPresent(uuid, (key, current) -> {
+            if (current != accountLock) return current;
+            return current.references.decrementAndGet() == 0 ? null : current;
+        });
     }
 
     MemoryStateManager(Plugin plugin) {
@@ -141,7 +146,13 @@ final class MemoryStateManager {
 
     EconomyState compute(UUID uuid, BiFunction<UUID, EconomyState, EconomyState> fn) {
         try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            return memoryState.compute(uuid, fn);
+            return memoryState.compute(uuid, (key, current) -> {
+                EconomyState next = fn.apply(key, current);
+                if (next != current) {
+                    unverifiedBalanceStates.remove(key);
+                }
+                return next;
+            });
         }
     }
 
@@ -151,9 +162,63 @@ final class MemoryStateManager {
         }
     }
 
+    /** Creates a legacy fallback snapshot while retaining that its value is unverified. */
+    EconomyState computeIfAbsentUnverified(UUID uuid, Function<UUID, EconomyState> fn) {
+        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+            EconomyState current = memoryState.get(uuid);
+            if (current != null) {
+                return current;
+            }
+            EconomyState created = fn.apply(uuid);
+            unverifiedBalanceStates.put(uuid, created);
+            memoryState.put(uuid, created);
+            return created;
+        }
+    }
+
+    /**
+     * Returns a resident balance for the API only when its provenance is confirmed.
+     * This cache lookup performs no I/O and immediately returns {@code null} when an
+     * account mutation currently owns the lock, allowing callers to treat contention
+     * as a cache miss and load on their asynchronous worker.
+     */
+    EconomyState getConfirmedStateForApi(UUID uuid) {
+        AccountMutationLease lease = tryLockAccount(uuid);
+        if (lease == null) return null;
+        try (lease) {
+            EconomyState current = memoryState.get(uuid);
+            return current == null || unverifiedBalanceStates.get(uuid) == current ? null : current;
+        }
+    }
+
+    /** Caches an authoritative read, replacing only a prior synthetic fallback snapshot. */
+    EconomyState cacheConfirmedBalance(UUID uuid, BigDecimal balance, long version, long timestamp) {
+        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+            EconomyState current = memoryState.get(uuid);
+            if (current == null) {
+                unverifiedBalanceStates.remove(uuid);
+                EconomyState confirmed = new EconomyState(balance, version, timestamp);
+                memoryState.put(uuid, confirmed);
+                return confirmed;
+            }
+            if (unverifiedBalanceStates.get(uuid) == current) {
+                EconomyState confirmed = new EconomyState(balance, version, timestamp);
+                memoryState.put(uuid, confirmed);
+                unverifiedBalanceStates.remove(uuid, current);
+                return confirmed;
+            }
+            EconomyState staleMarker = unverifiedBalanceStates.get(uuid);
+            if (staleMarker != null && staleMarker != current) {
+                unverifiedBalanceStates.remove(uuid, staleMarker);
+            }
+            return current;
+        }
+    }
+
     void put(UUID uuid, EconomyState state) {
         try (AccountMutationLease ignored = lockAccounts(uuid)) {
             memoryState.put(uuid, state);
+            unverifiedBalanceStates.remove(uuid);
         }
     }
 
@@ -176,6 +241,20 @@ final class MemoryStateManager {
             accountLock.lock.lock();
         }
         return new AccountMutationLease(acquired);
+    }
+
+    private AccountMutationLease tryLockAccount(UUID uuid) {
+        if (uuid == null) throw new IllegalArgumentException("Account UUID must not be null");
+        AccountMutationLock accountLock = accountMutationLocks.compute(uuid, (key, existing) -> {
+            AccountMutationLock selected = existing == null ? new AccountMutationLock() : existing;
+            selected.references.incrementAndGet();
+            return selected;
+        });
+        if (!accountLock.lock.tryLock()) {
+            releaseAccountMutationLock(uuid, accountLock);
+            return null;
+        }
+        return new AccountMutationLease(Map.of(uuid, accountLock));
     }
 
     void withAccountsLocked(UUID firstAccount, UUID secondAccount, Runnable action) {
@@ -213,6 +292,15 @@ final class MemoryStateManager {
         });
     }
 
+    void completeRejectedDirectTransferMutation(String operationId, UUID fromUuid, EconomyState fromSnapshot,
+            UUID toUuid, EconomyState toSnapshot) {
+        withAccountsLocked(fromUuid, toUuid, () -> {
+            reconcileRejectedTransferAccount(fromUuid, fromSnapshot);
+            reconcileRejectedTransferAccount(toUuid, toSnapshot);
+            resolveTransferUnavailable(operationId, fromUuid, toUuid);
+        });
+    }
+
     void cancelDirectTransferMutation(String operationId, UUID fromUuid, UUID toUuid) {
         withAccountsLocked(fromUuid, toUuid, () -> resolveTransferUnavailable(operationId, fromUuid, toUuid));
     }
@@ -231,8 +319,36 @@ final class MemoryStateManager {
         }
         clearConfirmedSnapshotConflict(uuid, latest);
         memoryState.put(uuid, latest);
+        unverifiedBalanceStates.remove(uuid);
         deferredRemoteUpdates.remove(uuid);
         rejectedAuthorityBases.remove(uuid);
+        unavailableAccounts.remove(uuid);
+    }
+
+    private void reconcileRejectedTransferAccount(UUID uuid, EconomyState snapshot) {
+        if (snapshot != null) {
+            reconcileDirectTransferAccount(uuid, snapshot.balance(), snapshot.version(), snapshot.lastAccessTime());
+            return;
+        }
+
+        if (hasPendingWrite(uuid) || hasCommittedWrite(uuid) || deferredRemoteUpdates.containsKey(uuid)
+                || rejectedAuthorityBases.containsKey(uuid) || confirmedSnapshotConflictVersions.containsKey(uuid)) {
+            unavailableAccounts.add(uuid);
+            return;
+        }
+
+        EconomyState current = memoryState.get(uuid);
+        if (current != null && unverifiedBalanceStates.get(uuid) != current) {
+            unavailableAccounts.add(uuid);
+            return;
+        }
+
+        if (current == null) {
+            unverifiedBalanceStates.remove(uuid);
+        } else {
+            memoryState.remove(uuid, current);
+            unverifiedBalanceStates.remove(uuid, current);
+        }
         unavailableAccounts.remove(uuid);
     }
 
@@ -367,6 +483,7 @@ final class MemoryStateManager {
 
                 clearConfirmedSnapshotConflict(key, newest);
                 deferredRemoteUpdates.remove(key);
+                unverifiedBalanceStates.remove(key);
                 result.set(RemoteUpdateResult.APPLIED);
                 return newest;
             });
@@ -416,6 +533,7 @@ final class MemoryStateManager {
                     clearConfirmedSnapshotConflict(key, latest);
                     deferredRemoteUpdates.remove(key);
                     rejectedAuthorityBases.remove(key, rejectedBase);
+                    unverifiedBalanceStates.remove(key);
                     unavailableAccounts.remove(key);
                     return latest;
                 }
@@ -431,6 +549,7 @@ final class MemoryStateManager {
                 // In that tie, prefer the exact confirmed balance/version pair.
                 if (candidate != null && (existing == null || candidate.version() >= existing.version())) {
                     clearConfirmedSnapshotConflict(key, candidate);
+                    unverifiedBalanceStates.remove(key);
                     return candidate;
                 }
                 return existing;
@@ -515,6 +634,7 @@ final class MemoryStateManager {
             }
             clearConfirmedSnapshotConflict(uuid, latest);
             memoryState.put(uuid, latest);
+            unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             rejectedAuthorityBases.remove(uuid, rejectedBase);
             unavailableAccounts.remove(uuid);
@@ -527,6 +647,7 @@ final class MemoryStateManager {
             EconomyState pairSnapshot = new EconomyState(balance, version, now);
             clearConfirmedSnapshotConflict(uuid, pairSnapshot);
             memoryState.put(uuid, pairSnapshot);
+            unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             if (hasCommittedWrite(uuid)) {
                 unavailableAccounts.add(uuid);
@@ -542,8 +663,13 @@ final class MemoryStateManager {
 
     private void reconcileRejectedAuthorityAccount(UUID uuid, BigDecimal balance, long version, long now,
             EconomyEvent rejectedEvent) {
+        if (uuid == null) return;
         if (balance == null || version < 0L) {
-            unavailableAccounts.add(uuid);
+            if (balance != null || version != -1L) {
+                unavailableAccounts.add(uuid);
+                return;
+            }
+            reconcileRejectedAbsentAuthorityAccount(uuid, rejectedEvent);
             return;
         }
 
@@ -580,10 +706,41 @@ final class MemoryStateManager {
         }
 
         memoryState.put(uuid, candidate);
+        unverifiedBalanceStates.remove(uuid);
         clearConfirmedSnapshotConflict(uuid, candidate);
         deferredRemoteUpdates.remove(uuid);
         rejectedAuthorityBases.remove(uuid);
         unavailableAccounts.remove(uuid);
+    }
+
+    /**
+     * A rejected write can confirm that Redis has no account key. Do not turn that absence
+     * into a synthetic zero account. If later accepted writes are queued, discard their local
+     * projection and keep the account unavailable until one of those writes returns authority.
+     */
+    private void reconcileRejectedAbsentAuthorityAccount(UUID uuid, EconomyEvent rejectedEvent) {
+        if (hasPendingWrite(uuid) || hasCommittedWrite(uuid)) {
+            memoryState.remove(uuid);
+            unverifiedBalanceStates.remove(uuid);
+            deferredRemoteUpdates.remove(uuid);
+            rejectedAuthorityBases.remove(uuid);
+            unavailableAccounts.add(uuid);
+            return;
+        }
+
+        EconomyState current = memoryState.get(uuid);
+        if (current == null || unverifiedBalanceStates.get(uuid) == current
+                || matchesRejectedProjection(current, rejectedEvent)) {
+            if (current != null) memoryState.remove(uuid, current);
+            unverifiedBalanceStates.remove(uuid);
+            deferredRemoteUpdates.remove(uuid);
+            rejectedAuthorityBases.remove(uuid);
+            unavailableAccounts.remove(uuid);
+            return;
+        }
+
+        // A fresh absent snapshot must not erase a different confirmed in-memory snapshot.
+        unavailableAccounts.add(uuid);
     }
 
     private boolean matchesRejectedProjection(EconomyState state, EconomyEvent rejectedEvent) {
@@ -625,22 +782,25 @@ final class MemoryStateManager {
             return;
         }
         long now = System.currentTimeMillis();
-        AtomicBoolean updated = new AtomicBoolean();
-        memoryState.compute(uuid, (key, existing) -> {
+        try (AccountMutationLease ignored = lockAccounts(uuid)) {
             if (hasPendingWrite(uuid)) {
-                return existing;
+                plugin.getLogger().warning("Rejected force memory update while accepted writes remain pending for " + uuid);
+                return;
             }
-            updated.set(true);
-            return new EconomyState(balance, version, now);
-        });
-        if (!updated.get()) {
-            plugin.getLogger().warning("Rejected force memory update while accepted writes remain pending for " + uuid);
+            memoryState.put(uuid, new EconomyState(balance, version, now));
+            unverifiedBalanceStates.remove(uuid);
         }
     }
 
     /** [SYNC-ECO-055] Remove a single entry from memory. */
     void clearEntry(UUID uuid) {
-        memoryState.computeIfPresent(uuid, (key, existing) -> hasPendingWrite(uuid) ? existing : null);
+        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+            if (hasPendingWrite(uuid)) {
+                return;
+            }
+            memoryState.remove(uuid);
+            unverifiedBalanceStates.remove(uuid);
+        }
     }
 
     boolean hasPendingWrite(UUID uuid) {
@@ -687,16 +847,16 @@ final class MemoryStateManager {
             Map.Entry<UUID, EconomyState> entry = iterator.next();
             EconomyState state = entry.getValue();
             if (state != null && state.lastAccessTime() < expirationTime) {
-                AtomicBoolean removed = new AtomicBoolean();
-                memoryState.computeIfPresent(entry.getKey(), (key, current) -> {
-                    if (hasPendingWrite(key) || current.lastAccessTime() >= expirationTime) {
-                        return current;
+                UUID uuid = entry.getKey();
+                try (AccountMutationLease ignored = lockAccounts(uuid)) {
+                    EconomyState current = memoryState.get(uuid);
+                    if (current == null || current.lastAccessTime() >= expirationTime || hasPendingWrite(uuid)) {
+                        continue;
                     }
-                    removed.set(true);
-                    return null;
-                });
-                if (removed.get()) {
-                    removedCount++;
+                    if (memoryState.remove(uuid, current)) {
+                        unverifiedBalanceStates.remove(uuid);
+                        removedCount++;
+                    }
                 }
             }
         }
@@ -717,17 +877,16 @@ final class MemoryStateManager {
                 }
                 UUID uuid = candidate.getKey();
                 EconomyState observed = candidate.getValue();
-                AtomicBoolean removed = new AtomicBoolean();
-                memoryState.computeIfPresent(uuid, (key, current) -> {
-                    if (current != observed || hasPendingWrite(key) || memoryState.size() <= MAX_MEMORY_ENTRIES) {
-                        return current;
+                try (AccountMutationLease ignored = lockAccounts(uuid)) {
+                    EconomyState current = memoryState.get(uuid);
+                    if (current != observed || hasPendingWrite(uuid) || memoryState.size() <= MAX_MEMORY_ENTRIES) {
+                        continue;
                     }
-                    removed.set(true);
-                    return null;
-                });
-                if (removed.get()) {
-                    removedCount++;
-                    capacityRemoved++;
+                    if (memoryState.remove(uuid, current)) {
+                        unverifiedBalanceStates.remove(uuid);
+                        removedCount++;
+                        capacityRemoved++;
+                    }
                 }
             }
 

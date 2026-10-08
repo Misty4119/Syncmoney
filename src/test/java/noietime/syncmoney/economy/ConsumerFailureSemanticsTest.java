@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -31,15 +32,24 @@ import static org.mockito.Mockito.*;
 class ConsumerFailureSemanticsTest {
 
     @Test
-    void rejectedAuthorityMutationIsQuarantinedInsteadOfRetried() throws Exception {
+    void rejectedAuthorityMutationWaitsForReceiptThenReleasesWithoutRetrying() throws Exception {
         UUID account = UUID.randomUUID();
         ConsumerHarness harness = new ConsumerHarness("ConsumerFailureSemanticsTest-rejected");
         CountDownLatch firstAttempt = new CountDownLatch(1);
+        CountDownLatch authorityReadStarted = new CountDownLatch(1);
+        CountDownLatch releaseAuthorityRead = new CountDownLatch(1);
         EconomyEvent event = event(account, new BigDecimal("10.00"), new BigDecimal("110.00"),
                 EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.ADMIN_GIVE, "deposit-rejected");
         RedisMutationException rejected = new RedisMutationException(
                 RedisMutationException.ExecutionState.REJECTED,
                 "Redis explicitly rejected the mutation without applying it", null);
+        when(harness.cacheManager.readAuthorityBalanceSnapshotStrict(account)).thenAnswer(invocation -> {
+            authorityReadStarted.countDown();
+            if (!releaseAuthorityRead.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting to release authority snapshot read");
+            }
+            return Optional.of(new CacheManager.CachedBalance(new BigDecimal("100.00"), 7L));
+        });
         doAnswer(invocation -> {
             firstAttempt.countDown();
             throw rejected;
@@ -48,17 +58,29 @@ class ConsumerFailureSemanticsTest {
         try {
             harness.startWith(event);
             assertTrue(firstAttempt.await(5, TimeUnit.SECONDS), "the accepted event should reach Redis once");
-            Thread.sleep(350);
+            assertTrue(authorityReadStarted.await(5, TimeUnit.SECONDS),
+                    "a known rejection should reconcile against the authority pair");
+            assertTrue(harness.queue.hasOutstandingWrites(),
+                    "accepted ownership remains until the authority snapshot is available");
+            releaseAuthorityRead.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (harness.queue.hasOutstandingWrites() && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
 
             assertAll(
                     () -> verify(harness.cacheManager, times(1))
                             .atomicAddBalanceReceipt(eq(account), any(BigDecimal.class)),
-                    () -> assertTrue(harness.queue.hasOutstandingWrites(),
-                            "a rejected accepted event stays owned for reconciliation")
+                    () -> verify(harness.cacheManager).readAuthorityBalanceSnapshotStrict(account),
+                    () -> assertFalse(harness.queue.hasOutstandingWrites(),
+                            "a confirmed rejection receipt completes reconciliation and releases ownership")
             );
         } finally {
+            releaseAuthorityRead.countDown();
             harness.consumer.stop();
-            harness.queue.complete(event, new BigDecimal("100.00"), 7L);
+            if (harness.queue.hasOutstandingWrites()) {
+                harness.queue.completeRejected(event, new BigDecimal("100.00"), 7L);
+            }
             harness.close();
         }
     }

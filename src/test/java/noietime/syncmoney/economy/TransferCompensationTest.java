@@ -12,6 +12,7 @@ import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
+import redis.clients.jedis.Jedis;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -30,6 +31,49 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class TransferCompensationTest {
+
+    @Test
+    void rejectedTransferToAbsentReceiverResolvesWithoutCreatingZeroAccount() {
+        UUID sender = UUID.randomUUID();
+        UUID absentReceiver = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("10.00");
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransferCompensationTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L,
+                System.currentTimeMillis()));
+        state.computeIfAbsentUnverified(absentReceiver,
+                uuid -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.ensureAccountsLoaded(sender, absentReceiver)).thenReturn(true);
+        when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
+        when(facade.getCircuitBreaker()).thenReturn(null);
+
+        RedisManager redis = mock(RedisManager.class);
+        CacheManager cache = spy(new CacheManager(plugin, redis, false));
+        doReturn(CacheManager.TransferResult.insufficientFunds()).when(cache)
+                .atomicTransfer(sender, absentReceiver, amount);
+        Jedis jedis = mock(Jedis.class);
+        when(redis.getResource()).thenReturn(jedis);
+        when(jedis.mget("syncmoney:balance:" + sender, "syncmoney:version:" + sender,
+                "syncmoney:balance:" + absentReceiver, "syncmoney:version:" + absentReceiver))
+                .thenReturn(java.util.Arrays.asList("5.00", "1", null, null));
+        TransferOrchestrator orchestrator = new TransferOrchestrator(
+                facade, plugin, config, cache, state, null);
+
+        CacheManager.TransferResult result = orchestrator.executeAtomicTransfer(sender, absentReceiver, amount);
+
+        assertAll(
+                () -> assertSame(CacheManager.TransferResult.insufficientFunds(), result),
+                () -> assertFalse(state.isUnavailable(sender), "the rejected operation must release the sender"),
+                () -> assertFalse(state.isUnavailable(absentReceiver), "the rejected operation must release the absent receiver"),
+                () -> assertEquals(new BigDecimal("5.00"), state.get(sender).balance()),
+                () -> assertNull(state.get(absentReceiver), "absence must remove the synthetic legacy zero"),
+                () -> assertNull(state.getConfirmedStateForApi(absentReceiver),
+                        "absence must remain a cached API miss")
+        );
+    }
 
     @Test
     void playerGuardCallbacksRunBeforePairedAccountLocks() throws Exception {

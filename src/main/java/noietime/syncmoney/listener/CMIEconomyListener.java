@@ -137,6 +137,7 @@ public final class CMIEconomyListener implements Listener {
             if (uuid == null) {
                 return;
             }
+            cmiHandler.invalidateCachedBalanceForApi(uuid);
             if (isOutboundSuppressed(uuid)) {
                 return;
             }

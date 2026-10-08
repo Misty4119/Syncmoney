@@ -620,11 +620,13 @@ class MemoryPendingStateTest {
             cleanup.start();
 
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (cleanup.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+            while (cleanup.getState() != Thread.State.BLOCKED
+                    && cleanup.getState() != Thread.State.WAITING
+                    && System.nanoTime() < deadline) {
                 Thread.yield();
             }
-            assertEquals(Thread.State.BLOCKED, cleanup.getState(),
-                    "cleanup should reach its candidate removal while the newer state is held by the updater");
+            assertTrue(cleanup.getState() == Thread.State.BLOCKED || cleanup.getState() == Thread.State.WAITING,
+                    "cleanup should wait for the updater's account lease before candidate removal");
         } finally {
             resumeUpdater.countDown();
             updater.join(TimeUnit.SECONDS.toMillis(5));

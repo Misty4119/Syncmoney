@@ -10,6 +10,7 @@ import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.util.NumericUtil;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,7 +36,10 @@ public class CMIEconomyHandler {
     private final CMIApi cmiApi;
     private final String redisPrefix;
 
-    private final ConcurrentHashMap<UUID, BigDecimal> lastKnownBalance = new ConcurrentHashMap<>();
+    private record BalanceObservation(BigDecimal syncBaseline, BigDecimal apiAuthorityBalance) {
+    }
+
+    private final ConcurrentHashMap<UUID, BalanceObservation> balanceObservations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> lastAppliedVersion = new ConcurrentHashMap<>();
     private final AtomicLong versionCounter = new AtomicLong(0L);
 
@@ -71,7 +75,7 @@ public class CMIEconomyHandler {
      * it is recorded so join-reconcile can compare against the Redis mirror version.
      */
     public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance, Long appliedVersion) {
-        lastKnownBalance.put(uuid, absoluteBalance);
+        updateSyncBaseline(uuid, absoluteBalance);
         if (appliedVersion != null) {
             lastAppliedVersion.put(uuid, appliedVersion);
         }
@@ -111,7 +115,7 @@ public class CMIEconomyHandler {
         }
         try (writeLease) {
             BigDecimal newBalance = NumericUtil.normalize(absoluteBalance);
-            BigDecimal last = lastKnownBalance.get(uuid);
+            BigDecimal last = getSyncBaseline(uuid);
             if (last != null && last.compareTo(newBalance) == 0) {
                 return true;
             }
@@ -125,7 +129,7 @@ public class CMIEconomyHandler {
                 syncManager.publishCMIUpdate(uuid, newBalance, version, eventType, amount, "CMI");
             }
 
-            lastKnownBalance.put(uuid, newBalance);
+            updateSyncBaseline(uuid, newBalance);
 
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI] Absolute sync: " + uuid + " = " + newBalance
@@ -147,7 +151,61 @@ public class CMIEconomyHandler {
      */
     public BigDecimal getCMILocalBalance(UUID uuid) {
         Double apiBalance = cmiApi.getBalance(uuid);
-        return apiBalance != null ? NumericUtil.normalize(apiBalance) : null;
+        if (apiBalance == null) {
+            return null;
+        }
+        BigDecimal observed = NumericUtil.normalize(apiBalance);
+        recordApiAuthorityBalance(uuid, observed);
+        return observed;
+    }
+
+    /** Returns a previously observed CMI authority value without performing a CMI API call. */
+    public Optional<BigDecimal> getCachedBalanceForApi(UUID uuid) {
+        if (uuid == null) {
+            throw new IllegalArgumentException("Account UUID must not be null");
+        }
+        BalanceObservation observation = balanceObservations.get(uuid);
+        return Optional.ofNullable(observation == null ? null : observation.apiAuthorityBalance());
+    }
+
+    /** Reads only an already loaded CMI user; this never creates or loads an offline account. */
+    public Optional<BigDecimal> getExistingBalanceForApi(UUID uuid) {
+        if (uuid == null) {
+            throw new IllegalArgumentException("Account UUID must not be null");
+        }
+        Optional<BigDecimal> observed = cmiApi.getExistingBalance(uuid);
+        observed.ifPresent(balance -> recordApiAuthorityBalance(uuid, balance));
+        return observed;
+    }
+
+    /** Records a direct CMI authority observation; callers must run on the player owner. */
+    public void recordApiAuthorityBalance(UUID uuid, BigDecimal balance) {
+        if (uuid == null || balance == null) {
+            return;
+        }
+        BigDecimal normalized = NumericUtil.normalize(balance);
+        balanceObservations.compute(uuid, (key, current) -> new BalanceObservation(
+                current == null ? null : current.syncBaseline(), normalized));
+    }
+
+    /** Invalidates the API snapshot after an observed CMI mutation whose result is not confirmed. */
+    public void invalidateCachedBalanceForApi(UUID uuid) {
+        if (uuid == null) {
+            return;
+        }
+        balanceObservations.computeIfPresent(uuid, (key, current) -> current.syncBaseline() == null
+                ? null
+                : new BalanceObservation(current.syncBaseline(), null));
+    }
+
+    private BigDecimal getSyncBaseline(UUID uuid) {
+        BalanceObservation observation = balanceObservations.get(uuid);
+        return observation == null ? null : observation.syncBaseline();
+    }
+
+    private void updateSyncBaseline(UUID uuid, BigDecimal balance) {
+        balanceObservations.compute(uuid, (key, current) -> new BalanceObservation(balance,
+                current == null ? null : current.apiAuthorityBalance()));
     }
 
     /**
@@ -208,7 +266,15 @@ public class CMIEconomyHandler {
         }
         try (writeLease) {
             suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
-            cmiApi.setBalance(uuid, target);
+            invalidateCachedBalanceForApi(uuid);
+            if (cmiApi.setBalance(uuid, target)) {
+                recordApiAuthorityBalance(uuid, normalizedMirror);
+            } else {
+                BigDecimal observed = getCMILocalBalance(uuid);
+                if (observed == null || observed.compareTo(normalizedMirror) != 0) {
+                    invalidateCachedBalanceForApi(uuid);
+                }
+            }
             notifyInboundApplied(uuid, normalizedMirror, version);
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);

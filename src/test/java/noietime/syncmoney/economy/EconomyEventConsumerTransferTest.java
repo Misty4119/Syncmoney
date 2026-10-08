@@ -113,7 +113,7 @@ class EconomyEventConsumerTransferTest {
         CacheManager cacheManager = mock(CacheManager.class);
         when(cacheManager.atomicTransfer(sender, receiver, amount))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
-        when(cacheManager.readTransferSnapshotStrict(sender, receiver)).thenReturn(
+        when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("80.00"), 9L, 5L));
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount, new BigDecimal("30.00"),
                 new BigDecimal("70.00"), 9L, 5L, plugin);
@@ -128,7 +128,7 @@ class EconomyEventConsumerTransferTest {
 
         assertAll(
                 () -> verify(cacheManager).atomicTransfer(sender, receiver, amount),
-                () -> verify(cacheManager).readTransferSnapshotStrict(sender, receiver),
+                () -> verify(cacheManager).readRejectedTransferSnapshotStrict(sender, receiver),
                 () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any()),
                 () -> assertEquals(new BigDecimal("20.00"), memory.get(sender).balance(),
                         "a confirmed equal-version authority snapshot replaces the rejected provisional sender leg"),
@@ -153,7 +153,7 @@ class EconomyEventConsumerTransferTest {
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
         CountDownLatch authorityReadStarted = new CountDownLatch(1);
         CountDownLatch releaseAuthorityRead = new CountDownLatch(1);
-        when(cacheManager.readTransferSnapshotStrict(sender, receiver)).thenAnswer(invocation -> {
+        when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenAnswer(invocation -> {
             authorityReadStarted.countDown();
             if (!releaseAuthorityRead.await(5, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("timed out waiting to release transfer authority read");
@@ -194,6 +194,134 @@ class EconomyEventConsumerTransferTest {
     }
 
     @Test
+    void rejectedTransferToAbsentReceiverDoesNotStrandLaterAcceptedReceiverWrite() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("70.00");
+        Plugin plugin = plugin();
+        SyncmoneyConfig config = config(false);
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isDegraded()).thenReturn(false);
+        CacheManager cacheManager = mock(CacheManager.class);
+        when(cacheManager.atomicTransfer(sender, receiver, amount))
+                .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        when(cacheManager.readTransferSnapshotStrict(sender, receiver)).thenThrow(
+                new IllegalStateException("Redis transfer authority snapshot is missing an account balance"));
+        when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
+                new CacheManager.TransferResult(new BigDecimal("20.00"), null, 8L, -1L, true, false));
+        when(cacheManager.atomicAddBalanceReceipt(receiver, new BigDecimal("5.00")))
+                .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
+                        receiver, new BigDecimal("5.00"), 1L));
+
+        EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
+        long now = System.currentTimeMillis();
+        String operationId = TransferRequestIds.newOperationId();
+        EconomyEvent out = new EconomyEvent(sender, amount.negate(), BigDecimal.ZERO, 10L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, amount, amount, 5L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        EconomyWriteQueue.Reservation outReservation = queue.tryReserve(sender);
+        EconomyWriteQueue.Reservation inReservation = queue.tryReserve(receiver);
+        assertNotNull(outReservation);
+        assertNotNull(inReservation);
+        assertTrue(queue.commitPair(outReservation, out, inReservation, in, null));
+
+        EconomyEvent laterDeposit = new EconomyEvent(receiver, new BigDecimal("5.00"),
+                new BigDecimal("75.00"), 6L, EconomyEvent.EventType.DEPOSIT,
+                EconomyEvent.EventSource.TEST, "receiver-later-deposit", now + 1L);
+        EconomyWriteQueue.Reservation laterReservation = queue.tryReserve(receiver);
+        assertNotNull(laterReservation);
+        assertTrue(laterReservation.commit(laterDeposit));
+
+        MemoryStateManager memory = new MemoryStateManager(plugin, queue);
+        memory.put(sender, state("0.00", 10L));
+        memory.put(receiver, state("75.00", 6L));
+        EconomyEventConsumer consumer = consumer(plugin, config, queue, cacheManager, redisManager,
+                null, mock(NameResolver.class), mock(DatabaseManager.class));
+
+        consumer.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (queue.hasOutstandingWrites() && System.nanoTime() < deadline) Thread.sleep(10L);
+        consumer.shutdown();
+
+        assertAll(
+                () -> assertFalse(queue.hasOutstandingWrites(),
+                        "the confirmed no-mutation result must release both rejected legs and drain later accepted work"),
+                () -> assertEquals(new BigDecimal("20.00"), memory.get(sender).balance()),
+                () -> assertEquals(new BigDecimal("5.00"), memory.get(receiver).balance(),
+                        "the accepted deposit must create the absent Redis account without retaining the rejected transfer credit"),
+                () -> assertFalse(memory.isUnavailable(sender)),
+                () -> assertFalse(memory.isUnavailable(receiver)),
+                () -> verify(cacheManager).readRejectedTransferSnapshotStrict(sender, receiver),
+                () -> verify(cacheManager, never()).readTransferSnapshotStrict(sender, receiver),
+                () -> verify(cacheManager).atomicAddBalanceReceipt(receiver, new BigDecimal("5.00"))
+        );
+    }
+
+    @Test
+    void rejectedTransferCancelsUncommittedReceiverReservationBeforeRemovingAbsentProjection() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("70.00");
+        Plugin plugin = plugin();
+        SyncmoneyConfig config = config(false);
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isDegraded()).thenReturn(false);
+        CacheManager cacheManager = mock(CacheManager.class);
+        when(cacheManager.atomicTransfer(sender, receiver, amount))
+                .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
+                new CacheManager.TransferResult(new BigDecimal("20.00"), null, 8L, -1L, true, false));
+
+        EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
+        EconomyWriteQueue.Reservation senderReservation = queue.tryReserve(sender);
+        EconomyWriteQueue.Reservation receiverReservation = queue.tryReserve(receiver);
+        long now = System.currentTimeMillis();
+        String operationId = TransferRequestIds.newOperationId();
+        EconomyEvent out = new EconomyEvent(sender, amount.negate(), BigDecimal.ZERO, 10L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, amount, amount, 1L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.TEST,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        assertNotNull(senderReservation);
+        assertNotNull(receiverReservation);
+        assertTrue(queue.commitPair(senderReservation, out, receiverReservation, in, null));
+
+        EconomyWriteQueue.Reservation uncommitted = queue.tryReserve(receiver);
+        assertNotNull(uncommitted, "model a producer paused after capacity reservation");
+        MemoryStateManager memory = new MemoryStateManager(plugin, queue);
+        memory.put(sender, state("0.00", 10L));
+        memory.put(receiver, state("70.00", 1L));
+        EconomyEventConsumer consumer = consumer(plugin, config, queue, cacheManager, redisManager,
+                null, mock(NameResolver.class), mock(DatabaseManager.class));
+
+        consumer.start();
+        try {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (queue.hasOutstandingWrites() && System.nanoTime() < deadline) Thread.sleep(10L);
+        } finally {
+            consumer.shutdown();
+        }
+
+        EconomyEvent lateCommit = new EconomyEvent(receiver, new BigDecimal("5.00"), new BigDecimal("75.00"), 2L,
+                EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
+                "uncommitted-receiver-deposit", now + 1L);
+        assertAll(
+                () -> assertFalse(uncommitted.commit(lateCommit),
+                        "known rejection cancels uncommitted producers before clearing provisional state"),
+                () -> assertFalse(queue.hasOutstandingWrites()),
+                () -> assertNull(memory.get(receiver),
+                        "confirmed absence must not leave the rejected transfer's synthetic receiver balance"),
+                () -> assertFalse(memory.isUnavailable(receiver),
+                        "canceling the pre-accept reservation must not strand the absent account"),
+                () -> assertFalse(memory.isUnavailable(sender))
+        );
+    }
+
+    @Test
     void authorityRejectionRevalidatesLaterPendingWriteAndUsesItsEqualVersionReceipt() throws Exception {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
@@ -205,7 +333,7 @@ class EconomyEventConsumerTransferTest {
         CacheManager cacheManager = mock(CacheManager.class);
         when(cacheManager.atomicTransfer(sender, receiver, amount))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
-        when(cacheManager.readTransferSnapshotStrict(sender, receiver)).thenReturn(
+        when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("80.00"), 9L, 5L));
         when(cacheManager.atomicAddBalanceReceipt(sender, new BigDecimal("5.00")))
                 .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(

@@ -1009,11 +1009,15 @@ class LocalAsyncPersistenceTest {
         assertTrue(secondAttemptCompleted.await(2, TimeUnit.SECONDS));
 
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (queue.hasAcceptedWrite(uuid) && System.nanoTime() < deadline) {
-            Thread.sleep(5);
+        boolean migrationLockAcquired = false;
+        while (!migrationLockAcquired && System.nanoTime() < deadline) {
+            migrationLockAcquired = MigrationLock.lock();
+            if (!migrationLockAcquired) {
+                Thread.sleep(5);
+            }
         }
+        assertTrue(migrationLockAcquired, "persistence completion releases the migration fence");
         assertFalse(queue.hasAcceptedWrite(uuid));
-        assertTrue(MigrationLock.lock(), "persistence completion releases the migration fence");
         assertEquals(2, attempts.get());
     }
 
