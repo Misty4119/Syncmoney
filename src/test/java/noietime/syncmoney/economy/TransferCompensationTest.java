@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.Syncmoney;
@@ -41,10 +42,10 @@ class TransferCompensationTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("TransferCompensationTest"));
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L,
+        state.put(sender, new AccountState(new BigDecimal("5.00"), 1L,
                 System.currentTimeMillis()));
         state.computeIfAbsentUnverified(absentReceiver,
-                uuid -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                uuid -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, absentReceiver)).thenReturn(true);
         when(facade.isPlayerLocked(any(UUID.class))).thenReturn(false);
@@ -84,9 +85,9 @@ class TransferCompensationTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransferCompensationTest"));
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 7L,
                 System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L,
                 System.currentTimeMillis()));
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
@@ -139,9 +140,9 @@ class TransferCompensationTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransferCompensationTest"));
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 7L,
                 System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L,
                 System.currentTimeMillis()));
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
@@ -210,9 +211,9 @@ class TransferCompensationTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(1, Logger.getLogger("TransferCompensationTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L,
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 7L,
                 System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L,
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L,
                 System.currentTimeMillis()));
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
@@ -252,8 +253,8 @@ class TransferCompensationTest {
         RedisManager redisManager = mock(RedisManager.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransferCompensationTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
 
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);
@@ -364,8 +365,8 @@ class TransferCompensationTest {
         RedisManager redisManager = mock(RedisManager.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransferCompensationTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
 
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.ensureAccountsLoaded(sender, receiver)).thenReturn(true);

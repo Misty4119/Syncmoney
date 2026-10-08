@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
@@ -132,7 +133,7 @@ class AdmissionReservationTest {
 
         EconomyWriteQueue queue = new EconomyWriteQueue(1);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         TransactionWriter writer = new TransactionWriter(facade, plugin, mock(SyncmoneyConfig.class), null,
                 queue, new FallbackEconomyWrapper(plugin, mock(RedisManager.class)),
                 mock(OverflowLogInterface.class), state, new AtomicLong(), false);

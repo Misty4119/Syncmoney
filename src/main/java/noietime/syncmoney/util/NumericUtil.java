@@ -1,7 +1,7 @@
 package noietime.syncmoney.util;
 
+import noietime.syncmoney.core.money.MoneyPolicy;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 
 /**
  * Utility class for numeric operations, especially BigDecimal handling.
@@ -21,10 +21,7 @@ public final class NumericUtil {
      * This is the standard for currency operations.
      */
     public static BigDecimal normalize(BigDecimal amount) {
-        if (amount == null) {
-            return ZERO;
-        }
-        return amount.setScale(2, RoundingMode.HALF_UP);
+        return MoneyPolicy.normalize(amount);
     }
 
     /**
@@ -48,20 +45,20 @@ public final class NumericUtil {
      * Checks if amount is valid (positive and not zero).
      */
     public static boolean isValidAmount(BigDecimal amount) {
-        return amount != null && amount.compareTo(BigDecimal.ZERO) > 0;
+        return MoneyPolicy.isValidAmount(amount);
     }
 
     /**
      * Checks if amount is non-negative (zero or positive).
      */
     public static boolean isNonNegative(BigDecimal amount) {
-        return amount != null && amount.compareTo(BigDecimal.ZERO) >= 0;
+        return MoneyPolicy.isNonNegative(amount);
     }
 
     /**
      * Checks if balance is sufficient for withdrawal.
      */
     public static boolean hasSufficientBalance(BigDecimal balance, BigDecimal amount) {
-        return balance != null && amount != null && balance.compareTo(amount) >= 0;
+        return MoneyPolicy.hasSufficientBalance(balance, amount);
     }
 }

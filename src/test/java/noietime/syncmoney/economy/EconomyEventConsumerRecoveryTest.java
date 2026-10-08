@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -173,10 +174,10 @@ class EconomyEventConsumerRecoveryTest {
                         8L, 1L, true, true));
         EconomyWriteQueue queue = new EconomyWriteQueue(10);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
-        memory.put(sender, new EconomyFacade.EconomyState(new BigDecimal("20.00"), 8L, now));
+        memory.put(sender, new AccountState(new BigDecimal("20.00"), 8L, now));
         // This is a later accepted write restored first after restart; it may share the
         // absent receiver's initial authority version while having a different balance.
-        memory.put(receiver, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        memory.put(receiver, new AccountState(new BigDecimal("5.00"), 1L, now + 1L));
         queue.markTransferUnavailable(operationId, sender, receiver);
         DbWriteQueue dbQueue = mock(DbWriteQueue.class);
         when(dbQueue.offerAndTrack(any())).thenReturn(CompletableFuture.completedFuture(true));
@@ -242,8 +243,8 @@ class EconomyEventConsumerRecoveryTest {
         });
         EconomyWriteQueue queue = new EconomyWriteQueue(10);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
-        memory.put(sender, new EconomyFacade.EconomyState(new BigDecimal("20.00"), 8L, now));
-        memory.put(receiver, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        memory.put(sender, new AccountState(new BigDecimal("20.00"), 8L, now));
+        memory.put(receiver, new AccountState(new BigDecimal("5.00"), 1L, now + 1L));
         queue.markTransferUnavailable(operationId, sender, receiver);
         EconomyEventConsumer consumer = consumer(plugin, config, queue, cache, mock(DbWriteQueue.class),
                 mock(NameResolver.class), spool);
@@ -288,7 +289,7 @@ class EconomyEventConsumerRecoveryTest {
                 new CacheManager.CachedBalance(new BigDecimal("5.00"), 1L, now + 1L)));
         EconomyWriteQueue queue = new EconomyWriteQueue(10);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
-        memory.put(uuid, new EconomyFacade.EconomyState(new BigDecimal("5.00"), 1L, now + 1L));
+        memory.put(uuid, new AccountState(new BigDecimal("5.00"), 1L, now + 1L));
         memory.markUnavailable(uuid);
         EconomyEventConsumer consumer = consumer(plugin, config, queue, cache, mock(DbWriteQueue.class),
                 mock(NameResolver.class), null);

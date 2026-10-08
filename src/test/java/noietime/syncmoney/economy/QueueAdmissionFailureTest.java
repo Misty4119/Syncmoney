@@ -2,7 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.event.SyncmoneyListener;
@@ -36,7 +36,7 @@ class QueueAdmissionFailureTest {
         when(facade.getPlayerTransactionGuard()).thenReturn(null);
 
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         EconomyWriteQueue queue = new EconomyWriteQueue(1, Logger.getLogger("QueueAdmissionFailureTest"));
         EconomyEvent queuedWork = new EconomyEvent(account, BigDecimal.ONE, new BigDecimal("101.00"), 8L,
                 EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST, "already-queued", 1L);
@@ -55,7 +55,7 @@ class QueueAdmissionFailureTest {
         try {
             BigDecimal result = writer.deposit(account, new BigDecimal("10.00"), EconomyEvent.EventSource.TEST);
 
-            EconomyState after = state.get(account);
+            AccountState after = state.get(account);
             assertAll(
                     () -> assertEquals(BigDecimal.valueOf(-1), result,
                             "an event with no queue admission or overflow record must be rejected"),

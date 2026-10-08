@@ -1,3 +1,102 @@
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+
 plugins { id 'java-library' }
+
 repositories { mavenCentral() }
 java { toolchain.languageVersion = JavaLanguageVersion.of(25) }
+dependencies {
+    api project(':syncmoney-api')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+tasks.named('test') { useJUnitPlatform() }
+
+tasks.register('verifyArchitecture') {
+    group = 'verification'
+    description = 'Checks core resolved dependencies and compiled classes against platform and infrastructure boundaries.'
+    dependsOn tasks.named('classes')
+
+    doLast {
+        def failures = []
+        def allowedProjectPaths = [project.path, ':syncmoney-api'] as Set
+
+        ['compileClasspath', 'runtimeClasspath'].each { configurationName ->
+            def result = configurations.getByName(configurationName).incoming.resolutionResult
+            def walk
+            walk = { component, List<String> path, Set visited ->
+                if (!visited.add(component.id)) {
+                    return
+                }
+                component.dependencies.each { dependency ->
+                    if (dependency instanceof UnresolvedDependencyResult) {
+                        failures << "${configurationName} dependency path ${path.join(' -> ')} -> " +
+                                "${dependency.requested.displayName}: ${dependency.failure.message}"
+                    } else if (dependency instanceof ResolvedDependencyResult) {
+                        def selected = dependency.selected
+                        def nextPath = path + selected.id.displayName
+                        if (!(selected.id instanceof ProjectComponentIdentifier)
+                                || !allowedProjectPaths.contains(selected.id.projectPath)) {
+                            failures << "${configurationName} dependency path ${nextPath.join(' -> ')} " +
+                                    'is outside core -> syncmoney-api -> JDK'
+                        } else {
+                            walk(selected, nextPath, new LinkedHashSet(visited))
+                        }
+                    }
+                }
+            }
+            def root = result.rootComponent.get()
+            walk(root, [root.id.displayName], new LinkedHashSet())
+        }
+
+        def forbiddenReferences = [
+                'org/bukkit/': 'Bukkit',
+                'org.bukkit.': 'Bukkit',
+                'io/papermc/paper/': 'Paper',
+                'io.papermc.paper.': 'Paper',
+                'com/destroystokyo/paper/': 'Paper',
+                'com.destroystokyo.paper.': 'Paper',
+                'net/milkbowl/vault/': 'Vault',
+                'net.milkbowl.vault.': 'Vault',
+                'me/clip/placeholderapi/': 'PlaceholderAPI',
+                'me.clip.placeholderapi.': 'PlaceholderAPI',
+                'com/zrips/cmi/': 'CMI',
+                'com.zrips.cmi.': 'CMI',
+                'redis/clients/jedis/': 'Jedis',
+                'redis.clients.jedis.': 'Jedis',
+                'java/sql/': 'JDBC',
+                'java.sql.': 'JDBC',
+                'javax/sql/': 'JDBC',
+                'javax.sql.': 'JDBC',
+                'com/zaxxer/hikari/': 'HikariCP',
+                'com.zaxxer.hikari.': 'HikariCP',
+                'io/undertow/': 'Undertow',
+                'io.undertow.': 'Undertow',
+        ]
+        sourceSets.main.output.classesDirs.files.each { classRoot ->
+            if (classRoot.exists()) {
+                def paths = Files.walk(classRoot.toPath())
+                try {
+                    paths.filter { Files.isRegularFile(it) && it.toString().endsWith('.class') }.forEach { classFile ->
+                        def bytecode = new String(Files.readAllBytes(classFile), StandardCharsets.ISO_8859_1)
+                        forbiddenReferences.each { token, boundary ->
+                            if (bytecode.contains(token)) {
+                                failures << "bytecode ${classFile} references forbidden ${boundary} type token ${token}"
+                            }
+                        }
+                    }
+                } finally {
+                    paths.close()
+                }
+            }
+        }
+
+        if (!failures.isEmpty()) {
+            throw new GradleException('Core architecture verification failed:\n - ' + failures.join('\n - '))
+        }
+        logger.lifecycle('Core architecture verification passed: dependencies are limited to syncmoney-api and JDK; no forbidden platform or infrastructure bytecode references found.')
+    }
+}

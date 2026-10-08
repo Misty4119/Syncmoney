@@ -4,10 +4,11 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.breaker.PlayerTransactionGuard.CheckResult;
 import noietime.syncmoney.migration.MigrationLock;
+import noietime.syncmoney.core.state.AccountStateStore;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
@@ -168,8 +169,8 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        EconomyState initialFrom = stateManager.get(fromUuid);
-        EconomyState initialTo = stateManager.get(toUuid);
+        AccountState initialFrom = stateManager.get(fromUuid);
+        AccountState initialTo = stateManager.get(toUuid);
         if (initialFrom == null || initialTo == null || !canAdvanceLocalVersion(fromUuid, initialFrom)
                 || !canAdvanceLocalVersion(toUuid, initialTo)) {
             return BigDecimal.valueOf(-1);
@@ -201,13 +202,13 @@ final class TransactionWriter {
         String operationId = TransferRequestIds.newOperationId();
         long timestamp = System.currentTimeMillis();
         BigDecimal[] acceptedBalances = new BigDecimal[2];
-        EconomyState[] acceptedStates = new EconomyState[2];
+        AccountState[] acceptedStates = new AccountState[2];
         EconomyEvent[] acceptedEvents = new EconomyEvent[2];
         boolean accepted = false;
 
-        try (MemoryStateManager.AccountMutationLease accountLocks = stateManager.lockAccounts(fromUuid, toUuid)) {
-            EconomyState fromState = stateManager.get(fromUuid);
-            EconomyState toState = stateManager.get(toUuid);
+        try (AccountStateStore.MutationLease accountLocks = stateManager.lockAccounts(fromUuid, toUuid)) {
+            AccountState fromState = stateManager.get(fromUuid);
+            AccountState toState = stateManager.get(toUuid);
             if (fromState == null || toState == null || !canAdvanceLocalVersion(fromUuid, fromState)
                     || !canAdvanceLocalVersion(toUuid, toState)
                     || fromState.balance().compareTo(normalizedAmount) < 0
@@ -241,9 +242,9 @@ final class TransactionWriter {
                         return BigDecimal.valueOf(-1);
                     }
 
-                    EconomyState nextFrom = new EconomyState(fromState.balance().subtract(normalizedAmount),
+                    AccountState nextFrom = new AccountState(fromState.balance().subtract(normalizedAmount),
                             fromVersion, timestamp);
-                    EconomyState nextTo = new EconomyState(toState.balance().add(normalizedAmount),
+                    AccountState nextTo = new AccountState(toState.balance().add(normalizedAmount),
                             toVersion, timestamp);
                     EconomyEvent fromEvent = new EconomyEvent(fromUuid, normalizedAmount.negate(),
                             nextFrom.balance(), fromVersion, EconomyEvent.EventType.TRANSFER_OUT, source,
@@ -347,7 +348,7 @@ final class TransactionWriter {
         }
     }
 
-    private boolean canAdvanceLocalVersion(UUID uuid, EconomyState currentState) {
+    private boolean canAdvanceLocalVersion(UUID uuid, AccountState currentState) {
         if (!isLocalMode || localEconomyHandler == null) {
             return true;
         }
@@ -387,7 +388,7 @@ final class TransactionWriter {
             plugin.getLogger().warning("Deposit rejected because the account could not be loaded for " + uuid);
             return BigDecimal.valueOf(-1);
         }
-        EconomyState currentState = stateManager.get(uuid);
+        AccountState currentState = stateManager.get(uuid);
         if (!canAdvanceLocalVersion(uuid, currentState)) {
             return BigDecimal.valueOf(-1);
         }
@@ -410,7 +411,7 @@ final class TransactionWriter {
 
         try (reservation) {
             long now = System.currentTimeMillis();
-            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
+            AccountState newState = stateManager.compute(uuid, (key, existing) -> {
                 BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
                 long currentVersion = (existing != null) ? existing.version() : 0L;
 
@@ -440,7 +441,7 @@ final class TransactionWriter {
                     }
                 }
 
-                EconomyState next = new EconomyState(existingBalance.add(amount), currentVersion + 1, now);
+                AccountState next = new AccountState(existingBalance.add(amount), currentVersion + 1, now);
                 EconomyEvent event = new EconomyEvent(
                         uuid, amount, next.balance(), next.version(),
                         EconomyEvent.EventType.DEPOSIT, source,
@@ -511,7 +512,7 @@ final class TransactionWriter {
             plugin.getLogger().warning("Withdraw rejected because the account could not be loaded for " + uuid);
             return BigDecimal.valueOf(-1);
         }
-        EconomyState currentState = stateManager.get(uuid);
+        AccountState currentState = stateManager.get(uuid);
         if (!canAdvanceLocalVersion(uuid, currentState)) {
             return BigDecimal.valueOf(-1);
         }
@@ -534,7 +535,7 @@ final class TransactionWriter {
         try (reservation) {
             long now = System.currentTimeMillis();
             AtomicBoolean mutationAccepted = new AtomicBoolean();
-            EconomyState newState = stateManager.compute(uuid, (key, existing) -> {
+            AccountState newState = stateManager.compute(uuid, (key, existing) -> {
                 BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
                 long currentVersion = (existing != null) ? existing.version() : 0L;
 
@@ -572,7 +573,7 @@ final class TransactionWriter {
                     return existing;
                 }
 
-                EconomyState next = new EconomyState(existingBalance.subtract(amount), currentVersion + 1, now);
+                AccountState next = new AccountState(existingBalance.subtract(amount), currentVersion + 1, now);
                 EconomyEvent event = new EconomyEvent(
                         uuid, amount.negate(), next.balance(), next.version(),
                         EconomyEvent.EventType.WITHDRAW, source,
@@ -648,7 +649,7 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
 
-        EconomyState existingState = stateManager.get(uuid);
+        AccountState existingState = stateManager.get(uuid);
         if (!canAdvanceLocalVersion(uuid, existingState)) {
             return BigDecimal.valueOf(-1);
         }
@@ -669,7 +670,7 @@ final class TransactionWriter {
             boolean committedAtSourceBoundary = writeLease.commitMutationIfSourceStable(() -> {
                 stateManager.compute(uuid, (key, existing) -> {
                     long currentVersion = (existing != null) ? existing.version() : 0L;
-                    EconomyState next = new EconomyState(finalNewBalance, currentVersion + 1, now);
+                    AccountState next = new AccountState(finalNewBalance, currentVersion + 1, now);
                     if (reservation != null) {
                         BigDecimal delta = finalNewBalance.subtract(oldBalance);
                         EconomyEvent event = new EconomyEvent(

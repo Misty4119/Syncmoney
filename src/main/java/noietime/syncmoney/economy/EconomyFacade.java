@@ -1,6 +1,7 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
@@ -251,7 +252,7 @@ public final class EconomyFacade {
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             throw new IllegalStateException("LOCAL balance is unavailable while accepted-write recovery is unresolved");
         }
-        EconomyState state = stateManager.get(uuid);
+        AccountState state = stateManager.get(uuid);
         if (stateManager.isUnavailable(uuid)) {
             throw new IllegalStateException("Account balance became unavailable pending transfer reconciliation: " + uuid);
         }
@@ -303,10 +304,10 @@ public final class EconomyFacade {
         final BigDecimal finalBalance = balance;
         final long finalVersion = version;
         long now = System.currentTimeMillis();
-        EconomyState loadedState = finalBalance.compareTo(BigDecimal.ZERO) == 0 && finalVersion == 0L
+        AccountState loadedState = finalBalance.compareTo(BigDecimal.ZERO) == 0 && finalVersion == 0L
                 ? stateManager.computeIfAbsentUnverified(uuid,
-                        key -> new EconomyState(finalBalance, finalVersion, now))
-                : stateManager.computeIfAbsent(uuid, key -> new EconomyState(finalBalance, finalVersion, now));
+                        key -> new AccountState(finalBalance, finalVersion, now))
+                : stateManager.computeIfAbsent(uuid, key -> new AccountState(finalBalance, finalVersion, now));
         return loadedState.balance();
     }
 
@@ -330,7 +331,7 @@ public final class EconomyFacade {
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             return null;
         }
-        EconomyState state = stateManager.get(uuid);
+        AccountState state = stateManager.get(uuid);
         if (stateManager.isUnavailable(uuid)) return null;
         if (state != null) return state.balance();
         requestPlaceholderBalanceLoad(uuid);
@@ -348,7 +349,7 @@ public final class EconomyFacade {
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             return java.util.Optional.empty();
         }
-        EconomyState state = stateManager.getConfirmedStateForApi(uuid);
+        AccountState state = stateManager.getConfirmedStateForApi(uuid);
         if (shuttingDown || stateManager.isUnavailable(uuid) || state == null) {
             return java.util.Optional.empty();
         }
@@ -553,7 +554,7 @@ public final class EconomyFacade {
 
     private void cacheUnverifiedLegacyZero(UUID uuid) {
         long now = System.currentTimeMillis();
-        stateManager.computeIfAbsentUnverified(uuid, key -> new EconomyState(BigDecimal.ZERO, 0L, now));
+        stateManager.computeIfAbsentUnverified(uuid, key -> new AccountState(BigDecimal.ZERO, 0L, now));
     }
 
     String resolveCachedPlayerName(UUID uuid) {
@@ -573,7 +574,7 @@ public final class EconomyFacade {
         if (isLocalMode && localEconomyHandler != null && !localEconomyHandler.isRecoveryReady()) {
             return null;
         }
-        EconomyState state = stateManager.get(uuid);
+        AccountState state = stateManager.get(uuid);
         if (state != null) {
             return state.balance();
         }
@@ -794,7 +795,8 @@ public final class EconomyFacade {
      * [SYNC-ECO-056] Get memory state (for debugging purposes).
      */
     public EconomyState getMemoryState(UUID uuid) {
-        return stateManager.get(uuid);
+        AccountState state = stateManager.get(uuid);
+        return state == null ? null : new EconomyState(state.balance(), state.version(), state.lastAccessTime());
     }
 
     /**

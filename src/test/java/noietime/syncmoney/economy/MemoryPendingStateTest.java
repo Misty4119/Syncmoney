@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
@@ -27,15 +28,15 @@ class MemoryPendingStateTest {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
 
         boolean equalVersionApplied = state.applyRemoteUpdate(account, new BigDecimal("1.00"), 7L);
-        EconomyFacade.EconomyState afterEqual = state.get(account);
+        AccountState afterEqual = state.get(account);
         boolean olderVersionApplied = state.applyRemoteUpdate(account, new BigDecimal("2.00"), 6L);
-        EconomyFacade.EconomyState afterOlder = state.get(account);
+        AccountState afterOlder = state.get(account);
         boolean newerVersionApplied = state.applyRemoteUpdate(account, new BigDecimal("110.00"), 8L);
-        EconomyFacade.EconomyState afterNewer = state.get(account);
+        AccountState afterNewer = state.get(account);
 
         assertAll(
                 () -> assertFalse(equalVersionApplied,
@@ -61,7 +62,7 @@ class MemoryPendingStateTest {
 
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("MemoryPendingStateTest"));
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         TransactionWriter writer = new TransactionWriter(
                 facade, plugin, mock(SyncmoneyConfig.class), null, queue,
@@ -72,13 +73,13 @@ class MemoryPendingStateTest {
         assertEquals(0, afterDeposit.compareTo(new BigDecimal("110.00")));
         assertTrue(queue.hasPending(account), "the accepted deposit must have pending persistence work");
 
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("110.00"), 8L, System.currentTimeMillis() - TimeUnitMinutes.THIRTY));
         EconomyEvent inFlight = queue.poll(0, java.util.concurrent.TimeUnit.MILLISECONDS);
         int removedWhileInFlight = state.cleanupExpiredEntries();
 
         boolean staleSnapshotApplied = state.applyRemoteUpdate(account, new BigDecimal("100.00"), 7L);
-        EconomyFacade.EconomyState afterStaleSnapshot = state.get(account);
+        AccountState afterStaleSnapshot = state.get(account);
         assertAll(
                 () -> assertNotNull(inFlight, "the accepted event must reach the worker queue"),
                 () -> assertEquals(0, removedWhileInFlight,
@@ -106,7 +107,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.resolvePlayerName(account)).thenReturn("account");
@@ -152,7 +153,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(1);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
 
         EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
@@ -194,7 +195,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(2);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
 
         EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
@@ -203,7 +204,7 @@ class MemoryPendingStateTest {
                 "deferred-conflict-write", System.currentTimeMillis());
         assertNotNull(reservation);
         assertTrue(reservation.commit(event));
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("110.00"), 8L, System.currentTimeMillis()));
 
         assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
@@ -233,9 +234,9 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("90.00"), 8L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
 
         long now = System.currentTimeMillis();
@@ -279,7 +280,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("95.00"), 9L, System.currentTimeMillis()));
         long now = System.currentTimeMillis();
         EconomyEvent rejected = new EconomyEvent(account, new BigDecimal("-10.00"),
@@ -315,9 +316,9 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("120.00"), 21L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("40.00"), 11L, System.currentTimeMillis()));
         String operationId = "transfer:" + UUID.randomUUID();
         long now = System.currentTimeMillis();
@@ -353,9 +354,9 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
 
         String operationId = "transfer:" + UUID.randomUUID();
@@ -370,9 +371,9 @@ class MemoryPendingStateTest {
                 TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
         assertTrue(queue.offer(out));
         assertTrue(queue.offer(in));
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("90.00"), 8L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("10.00"), 4L, System.currentTimeMillis()));
 
         assertEquals(MemoryStateManager.RemoteUpdateResult.DEFERRED,
@@ -400,9 +401,9 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("0.00"), 3L, System.currentTimeMillis()));
         state.markTransferUnavailable(operationId, sender, receiver);
 
@@ -446,7 +447,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(1);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis() - TimeUnitMinutes.THIRTY));
 
         EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
@@ -470,7 +471,7 @@ class MemoryPendingStateTest {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis() - TimeUnitMinutes.THIRTY));
 
         assertNotNull(state.get(account), "a read sees the current cached entry");
@@ -488,7 +489,7 @@ class MemoryPendingStateTest {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
 
         MigrationLock.disable();
@@ -515,7 +516,7 @@ class MemoryPendingStateTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MemoryPendingStateTest"));
         EconomyWriteQueue queue = new EconomyWriteQueue(1);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(account, new EconomyFacade.EconomyState(
+        state.put(account, new AccountState(
                 new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         EconomyWriteQueue.Reservation reservation = queue.tryReserve(account);
         EconomyEvent event = new EconomyEvent(account, BigDecimal.ONE, new BigDecimal("101.00"), 8L,
@@ -550,7 +551,7 @@ class MemoryPendingStateTest {
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
         long now = System.currentTimeMillis();
         UUID pendingAccount = UUID.randomUUID();
-        state.put(pendingAccount, new EconomyFacade.EconomyState(
+        state.put(pendingAccount, new AccountState(
                 new BigDecimal("100.00"), 7L, now - 1));
         EconomyWriteQueue.Reservation reservation = queue.tryReserve(pendingAccount);
         EconomyEvent event = new EconomyEvent(pendingAccount, BigDecimal.ONE, new BigDecimal("101.00"), 8L,
@@ -561,7 +562,7 @@ class MemoryPendingStateTest {
 
         for (int i = 0; i < 10_000; i++) {
             UUID account = UUID.nameUUIDFromBytes(("capacity-account-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            state.put(account, new EconomyFacade.EconomyState(
+            state.put(account, new AccountState(
                     BigDecimal.ZERO, 1L, now + i));
         }
 
@@ -581,13 +582,13 @@ class MemoryPendingStateTest {
         MemoryStateManager state = new MemoryStateManager(plugin);
         UUID account = UUID.randomUUID();
         long now = System.currentTimeMillis();
-        EconomyFacade.EconomyState observed = new EconomyFacade.EconomyState(
+        AccountState observed = new AccountState(
                 new BigDecimal("100.00"), 7L, now - 1);
         state.put(account, observed);
         for (int i = 0; i < 10_000; i++) {
             UUID filler = UUID.nameUUIDFromBytes(("cleanup-race-" + i)
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            state.put(filler, new EconomyFacade.EconomyState(BigDecimal.ZERO, 1L, now + i));
+            state.put(filler, new AccountState(BigDecimal.ZERO, 1L, now + i));
         }
 
         CountDownLatch updaterOwnsEntry = new CountDownLatch(1);
@@ -605,7 +606,7 @@ class MemoryPendingStateTest {
                         Thread.currentThread().interrupt();
                         throw new IllegalStateException(interrupted);
                     }
-                    return new EconomyFacade.EconomyState(
+                    return new AccountState(
                             new BigDecimal("120.00"), 9L, System.currentTimeMillis() + 60_000);
                 });
             } catch (Throwable failure) {
@@ -636,7 +637,7 @@ class MemoryPendingStateTest {
         if (threadFailure.get() != null) {
             throw new AssertionError("capacity interleaving failed unexpectedly", threadFailure.get());
         }
-        EconomyFacade.EconomyState after = state.get(account);
+        AccountState after = state.get(account);
         assertAll(
                 () -> assertNotNull(after, "capacity cleanup must preserve an entry changed after its snapshot"),
                 () -> assertEquals(new BigDecimal("120.00"), after.balance()),

@@ -4,7 +4,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 import noietime.syncmoney.config.CircuitBreakerConfig;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
@@ -52,12 +52,12 @@ class TransactionWriterOutcomeTest {
         when(localHandler.isRecoveryReady()).thenReturn(true);
         EconomyWriteQueue queue = new EconomyWriteQueue(4, Logger.getLogger("TransactionWriterOutcomeTest"));
         MemoryStateManager state = Mockito.spy(new MemoryStateManager(plugin, queue));
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         CountDownLatch atPreCommitRead = new CountDownLatch(1);
         CountDownLatch allowCommit = new CountDownLatch(1);
         AtomicInteger accountReads = new AtomicInteger();
         doAnswer(invocation -> {
-            EconomyState current = (EconomyState) invocation.callRealMethod();
+            AccountState current = (AccountState) invocation.callRealMethod();
             if (accountReads.incrementAndGet() == 2) {
                 atPreCommitRead.countDown();
                 assertTrue(allowCommit.await(5, TimeUnit.SECONDS), "test must release the pre-commit read");
@@ -142,7 +142,7 @@ class TransactionWriterOutcomeTest {
         when(facade.getCircuitBreaker()).thenReturn(breaker);
 
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         when(facade.getBalance(account)).thenAnswer(invocation -> state.get(account).balance());
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
         TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue,
@@ -240,7 +240,7 @@ class TransactionWriterOutcomeTest {
         when(facade.getCircuitBreaker()).thenReturn(breaker);
 
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
         when(localHandler.isRecoveryReady()).thenReturn(true);
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
@@ -298,7 +298,7 @@ class TransactionWriterOutcomeTest {
         when(facade.getBalance(account)).thenReturn(new BigDecimal("100.00"));
         when(facade.getPlayerTransactionGuard()).thenReturn(null);
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
         EconomicCircuitBreaker breaker = mock(EconomicCircuitBreaker.class);
         when(facade.getCircuitBreaker()).thenReturn(breaker);
@@ -357,7 +357,7 @@ class TransactionWriterOutcomeTest {
         MemoryStateManager state = spy(new MemoryStateManager(plugin));
         ThreadLocal<Integer> stateReads = ThreadLocal.withInitial(() -> 0);
         doAnswer(invocation -> {
-            EconomyState snapshot = (EconomyState) invocation.callRealMethod();
+            AccountState snapshot = (AccountState) invocation.callRealMethod();
             int read = stateReads.get() + 1;
             stateReads.set(read);
             if (Thread.currentThread() == firstWithdrawThread.get() && read == 1) {
@@ -368,7 +368,7 @@ class TransactionWriterOutcomeTest {
             }
             return snapshot;
         }).when(state).get(any(UUID.class));
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
 
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
         FallbackEconomyWrapper fallback = new FallbackEconomyWrapper(plugin, mock(RedisManager.class));
@@ -419,7 +419,7 @@ class TransactionWriterOutcomeTest {
             while ((event = queue.poll(0, TimeUnit.MILLISECONDS)) != null) {
                 queued.add(event);
             }
-            EconomyState finalState = state.get(account);
+            AccountState finalState = state.get(account);
             assertAll(
                     () -> assertEquals(BigDecimal.valueOf(-1), firstResult.get(),
                             "the stale withdrawal must report rejection"),

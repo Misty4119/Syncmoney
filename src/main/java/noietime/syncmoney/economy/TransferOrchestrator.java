@@ -1,6 +1,7 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.economy.EconomyFacade.TransferContext;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.migration.MigrationLock;
@@ -283,10 +284,10 @@ final class TransferOrchestrator {
                 throw new IllegalStateException("Redis returned an invalid transfer authority snapshot");
             }
             long now = System.currentTimeMillis();
-            EconomyFacade.EconomyState fromSnapshot = snapshot.fromAccountPresent
-                    ? new EconomyFacade.EconomyState(snapshot.fromNewBalance, snapshot.fromNewVersion, now) : null;
-            EconomyFacade.EconomyState toSnapshot = snapshot.toAccountPresent
-                    ? new EconomyFacade.EconomyState(snapshot.toNewBalance, snapshot.toNewVersion, now) : null;
+            AccountState fromSnapshot = snapshot.fromAccountPresent
+                    ? new AccountState(snapshot.fromNewBalance, snapshot.fromNewVersion, now) : null;
+            AccountState toSnapshot = snapshot.toAccountPresent
+                    ? new AccountState(snapshot.toNewBalance, snapshot.toNewVersion, now) : null;
             stateManager.completeRejectedDirectTransferMutation(
                     operationId, fromUuid, fromSnapshot, toUuid, toSnapshot);
         } catch (RuntimeException e) {

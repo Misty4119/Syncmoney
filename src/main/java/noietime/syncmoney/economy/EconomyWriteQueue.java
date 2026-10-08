@@ -1,5 +1,6 @@
 package noietime.syncmoney.economy;
 
+import noietime.syncmoney.core.admission.WriteAdmission;
 import noietime.syncmoney.util.FormatUtil;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -12,7 +13,6 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -78,7 +78,7 @@ public final class EconomyWriteQueue {
     private final BlockingQueue<EconomyEvent> queue;
     private final int capacity;
     private final Logger logger;
-    private final Semaphore admissionPermits;
+    private final WriteAdmission writeAdmission;
     private final Object admissionGate = new Object();
     private final Object commitGate = new Object();
     private boolean acceptingWrites = true;
@@ -94,6 +94,7 @@ public final class EconomyWriteQueue {
     private final ConcurrentMap<UUID, AtomicInteger> committedWriteCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<Long, AcceptedWrite> acceptedWrites = new ConcurrentHashMap<>();
     private final ConcurrentMap<Long, Reservation> reservations = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, WriteAdmission.Lease> admissionLeases = new ConcurrentHashMap<>();
     private final Map<EconomyEvent, Long> reservationsByEvent =
             Collections.synchronizedMap(new IdentityHashMap<>());
     private final AtomicLong nextReservationId = new AtomicLong();
@@ -133,7 +134,7 @@ public final class EconomyWriteQueue {
         this.capacity = capacity;
         this.queue = new LinkedBlockingQueue<>(capacity);
         this.logger = logger;
-        this.admissionPermits = new Semaphore(capacity);
+        this.writeAdmission = new WriteAdmission(capacity);
     }
 
     /** A non-blocking slot held until the worker completes the accepted event. */
@@ -233,7 +234,7 @@ public final class EconomyWriteQueue {
      * @return true if successfully offered, false if queue is over 70% capacity
      */
     public boolean offer(EconomyEvent event) {
-        int currentSize = capacity - admissionPermits.availablePermits();
+        int currentSize = capacity - writeAdmission.availableCapacity();
         int usageThreshold = (int) (capacity * BACKPRESSURE_THRESHOLD);
         
         if (currentSize >= usageThreshold) {
@@ -277,21 +278,23 @@ public final class EconomyWriteQueue {
         if (event == null || event.playerUuid() == null) {
             return false;
         }
+        Reservation reservation;
         try {
-            if (!admissionPermits.tryAcquire(timeout, unit)) {
+            WriteAdmission.Lease admissionLease = writeAdmission.acquire(timeout, unit);
+            if (admissionLease == null) {
                 return false;
+            }
+            // The reservation inherits the core admission lease until worker completion.
+            synchronized (admissionGate) {
+                if (!acceptingWrites) {
+                    admissionLease.close();
+                    return false;
+                }
+                reservation = registerReservation(event.playerUuid(), admissionLease);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
-        }
-        Reservation reservation;
-        synchronized (admissionGate) {
-            if (!acceptingWrites) {
-                admissionPermits.release();
-                return false;
-            }
-            reservation = registerReservation(event.playerUuid());
         }
         try (reservation) {
             boolean committed = reservation.commit(event);
@@ -318,7 +321,7 @@ public final class EconomyWriteQueue {
      */
     private void checkHighUsage() {
         if (logger == null) return;
-        int currentSize = capacity - admissionPermits.availablePermits();
+        int currentSize = capacity - writeAdmission.availableCapacity();
         int usageThreshold = (int) (capacity * BACKPRESSURE_THRESHOLD);
 
         if (currentSize >= usageThreshold && !warnedHighUsage) {
@@ -427,10 +430,14 @@ public final class EconomyWriteQueue {
             return null;
         }
         synchronized (admissionGate) {
-            if (!acceptingWrites || !admissionPermits.tryAcquire()) {
+            if (!acceptingWrites) {
                 return null;
             }
-            return registerReservation(uuid);
+            WriteAdmission.Lease admissionLease = writeAdmission.tryAcquire();
+            if (admissionLease == null) {
+                return null;
+            }
+            return registerReservation(uuid, admissionLease);
         }
     }
 
@@ -540,10 +547,11 @@ public final class EconomyWriteQueue {
         return true;
     }
 
-    private Reservation registerReservation(UUID uuid) {
+    private Reservation registerReservation(UUID uuid, WriteAdmission.Lease admissionLease) {
         long id = nextReservationId.incrementAndGet();
         AcceptedWrite acceptedWrite = new AcceptedWrite(uuid, System.currentTimeMillis());
         acceptedWrites.put(id, acceptedWrite);
+        admissionLeases.put(id, admissionLease);
         incrementCount(acceptedWriteCounts, uuid);
         incrementCount(pendingCounts, uuid);
         Reservation reservation = new Reservation(id, uuid, acceptedWrite);
@@ -574,9 +582,13 @@ public final class EconomyWriteQueue {
     }
 
     private void releaseOwnership(long reservationId, boolean releasePendingCount) {
+        WriteAdmission.Lease admissionLease = admissionLeases.remove(reservationId);
         AcceptedWrite accepted = acceptedWrites.remove(reservationId);
         reservations.remove(reservationId);
         if (accepted == null) {
+            if (admissionLease != null) {
+                admissionLease.close();
+            }
             return;
         }
         decrementCount(acceptedWriteCounts, accepted.uuid(), 1);
@@ -586,7 +598,9 @@ public final class EconomyWriteQueue {
         if (releasePendingCount) {
             decrementPendingCount(accepted.uuid(), 1);
         }
-        admissionPermits.release();
+        if (admissionLease != null) {
+            admissionLease.close();
+        }
         AutoCloseable completionResource = completionResources.remove(reservationId);
         closeCompletionResource(completionResource);
     }

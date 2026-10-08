@@ -1,5 +1,6 @@
 package noietime.syncmoney.util;
 
+import noietime.syncmoney.core.money.MoneyPolicy;
 import noietime.syncmoney.protocol.RedisChannels;
 import noietime.syncmoney.protocol.RedisKeys;
 
@@ -108,5 +109,5 @@ public final class Constants {
      * Maximum allowed balance (Database limit for DECIMAL(38,2))
      * Using 10^36 - 1 as a safe upper bound.
      */
-    public static final java.math.BigDecimal MAX_DECIMAL_BALANCE = new java.math.BigDecimal("999999999999999999999999999999999999.99");
+    public static final java.math.BigDecimal MAX_DECIMAL_BALANCE = MoneyPolicy.MAX_BALANCE;
 }

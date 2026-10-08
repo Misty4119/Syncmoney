@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
@@ -135,7 +136,7 @@ class LocalTransferPersistenceTest {
         }
     }
 
-    private static EconomyFacade.EconomyState state(String balance, long version) {
-        return new EconomyFacade.EconomyState(new BigDecimal(balance), version, System.currentTimeMillis());
+    private static AccountState state(String balance, long version) {
+        return new AccountState(new BigDecimal(balance), version, System.currentTimeMillis());
     }
 }

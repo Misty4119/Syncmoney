@@ -1,4 +1,6 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountStateStore;
+import noietime.syncmoney.core.state.AccountState;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -27,7 +29,7 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID uuid = UUID.randomUUID();
         state.computeIfAbsentUnverified(uuid,
-                key -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                key -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
 
         assertNull(state.getConfirmedStateForApi(uuid));
     }
@@ -37,11 +39,11 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID uuid = UUID.randomUUID();
         state.computeIfAbsentUnverified(uuid,
-                key -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                key -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
-            Future<EconomyFacade.EconomyState> snapshot;
-            try (MemoryStateManager.AccountMutationLease ignored = state.lockAccounts(uuid)) {
+            Future<AccountState> snapshot;
+            try (AccountStateStore.MutationLease ignored = state.lockAccounts(uuid)) {
                 CountDownLatch readerStarted = new CountDownLatch(1);
                 snapshot = executor.submit(() -> {
                     readerStarted.countDown();
@@ -55,7 +57,7 @@ class MemoryStateManagerApiVisibilityTest {
             }
 
             assertNull(snapshot.get(2, TimeUnit.SECONDS), "the contended lookup must not wait and return a later value");
-            EconomyFacade.EconomyState confirmed = state.getConfirmedStateForApi(uuid);
+            AccountState confirmed = state.getConfirmedStateForApi(uuid);
             assertNotNull(confirmed);
             assertEquals(new BigDecimal("9.00"), confirmed.balance());
         } finally {
@@ -68,7 +70,7 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID uuid = UUID.randomUUID();
         state.computeIfAbsentUnverified(uuid,
-                key -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                key -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
 
         assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
                 state.applyRemoteUpdateResult(uuid, new BigDecimal("9.00"), 1L));
@@ -84,10 +86,10 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
-        state.put(sender, new EconomyFacade.EconomyState(new BigDecimal("100.00"), 1L,
+        state.put(sender, new AccountState(new BigDecimal("100.00"), 1L,
                 System.currentTimeMillis()));
         state.computeIfAbsentUnverified(receiver,
-                key -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                key -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
 
         assertTrue(state.beginDirectTransferMutation("api-transfer", sender, receiver));
         state.completeDirectTransferMutation("api-transfer", sender, new BigDecimal("90.00"), 2L,
@@ -103,9 +105,9 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID uuid = UUID.randomUUID();
         long expiredAt = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(31);
-        state.put(uuid, new EconomyFacade.EconomyState(new BigDecimal("9.00"), 1L, expiredAt));
+        state.put(uuid, new AccountState(new BigDecimal("9.00"), 1L, expiredAt));
         provenanceMarkers(state).put(uuid,
-                new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, expiredAt - 1L));
+                new AccountState(BigDecimal.ZERO, 0L, expiredAt - 1L));
 
         assertEquals(1, state.cleanupExpiredEntries());
         assertNull(state.get(uuid));
@@ -114,11 +116,11 @@ class MemoryStateManagerApiVisibilityTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static java.util.Map<UUID, EconomyFacade.EconomyState> provenanceMarkers(MemoryStateManager state)
+    private static java.util.Map<UUID, AccountState> provenanceMarkers(MemoryStateManager state)
             throws ReflectiveOperationException {
         var field = MemoryStateManager.class.getDeclaredField("unverifiedBalanceStates");
         field.setAccessible(true);
-        return (java.util.Map<UUID, EconomyFacade.EconomyState>) field.get(state);
+        return (java.util.Map<UUID, AccountState>) field.get(state);
     }
 
     @Test
@@ -126,11 +128,11 @@ class MemoryStateManagerApiVisibilityTest {
         MemoryStateManager state = newStateManager();
         UUID uuid = UUID.randomUUID();
         state.computeIfAbsentUnverified(uuid,
-                key -> new EconomyFacade.EconomyState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
+                key -> new AccountState(BigDecimal.ZERO, 0L, System.currentTimeMillis()));
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<?> clear;
-            try (MemoryStateManager.AccountMutationLease ignored = state.lockAccounts(uuid)) {
+            try (AccountStateStore.MutationLease ignored = state.lockAccounts(uuid)) {
                 CountDownLatch clearStarted = new CountDownLatch(1);
                 clear = executor.submit(() -> {
                     clearStarted.countDown();

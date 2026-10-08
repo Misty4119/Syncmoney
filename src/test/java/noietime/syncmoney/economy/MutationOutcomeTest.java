@@ -2,7 +2,7 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
@@ -36,7 +36,7 @@ class MutationOutcomeTest {
         when(facade.getPlayerTransactionGuard()).thenReturn(null);
 
         MemoryStateManager state = new MemoryStateManager(plugin);
-        state.put(account, new EconomyState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
+        state.put(account, new AccountState(new BigDecimal("100.00"), 7L, System.currentTimeMillis()));
         EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("MutationOutcomeTest"));
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(true);
@@ -55,7 +55,7 @@ class MutationOutcomeTest {
             BigDecimal withdraw = writer.withdraw(account, new BigDecimal("10.00"), EconomyEvent.EventSource.VAULT_WITHDRAW);
             BigDecimal set = writer.setBalance(account, new BigDecimal("200.00"), EconomyEvent.EventSource.ADMIN_SET);
 
-            EconomyState finalState = state.get(account);
+            AccountState finalState = state.get(account);
             assertAll(
                     () -> assertEquals(0, deposit.compareTo(BigDecimal.valueOf(-1)), "degraded authority rejects new deposits"),
                     () -> assertEquals(0, withdraw.compareTo(BigDecimal.valueOf(-1)), "degraded authority rejects new withdrawals"),

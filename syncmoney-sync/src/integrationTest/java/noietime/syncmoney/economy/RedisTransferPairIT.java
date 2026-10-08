@@ -1,7 +1,7 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
@@ -141,8 +141,8 @@ class RedisTransferPairIT {
         String operationId = TransferRequestIds.newOperationId();
         EconomyWriteQueue queue = new EconomyWriteQueue(4, plugin.getLogger());
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
-        memory.put(sender, new EconomyState(new BigDecimal("20.00"), 8L, System.currentTimeMillis()));
-        memory.put(receiver, new EconomyState(new BigDecimal("80.00"), 4L, System.currentTimeMillis()));
+        memory.put(sender, new AccountState(new BigDecimal("20.00"), 8L, System.currentTimeMillis()));
+        memory.put(receiver, new AccountState(new BigDecimal("80.00"), 4L, System.currentTimeMillis()));
 
         long now = System.currentTimeMillis();
         EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-80.00"), new BigDecimal("20.00"), 8L,

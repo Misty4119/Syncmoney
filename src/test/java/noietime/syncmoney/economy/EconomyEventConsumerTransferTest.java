@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
@@ -792,8 +793,8 @@ class EconomyEventConsumerTransferTest {
         return queue;
     }
 
-    private static EconomyFacade.EconomyState state(String balance, long version) {
-        return new EconomyFacade.EconomyState(new BigDecimal(balance), version, System.currentTimeMillis());
+    private static AccountState state(String balance, long version) {
+        return new AccountState(new BigDecimal(balance), version, System.currentTimeMillis());
     }
 
     private static Plugin plugin() {

@@ -1,6 +1,7 @@
 package noietime.syncmoney.economy;
 
-import noietime.syncmoney.economy.EconomyFacade.EconomyState;
+import noietime.syncmoney.core.state.AccountState;
+import noietime.syncmoney.core.state.AccountStateStore;
 import noietime.syncmoney.economy.EconomyFacade.PendingRollback;
 import noietime.syncmoney.economy.EconomyFacade.TransferContext;
 import noietime.syncmoney.migration.MigrationLock;
@@ -15,10 +16,8 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * [SYNC-ECO-070] Owns the in-memory economy state and the transfer bookkeeping maps.
@@ -31,50 +30,15 @@ final class MemoryStateManager {
     private final Plugin plugin;
     private volatile EconomyWriteQueue writeQueue;
 
-    private final ConcurrentMap<UUID, EconomyState> memoryState = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, EconomyState> unverifiedBalanceStates = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, EconomyState> deferredRemoteUpdates = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, EconomyState> rejectedAuthorityBases = new ConcurrentHashMap<>();
+    private final AccountStateStore accountStates = new AccountStateStore();
+    private final ConcurrentMap<UUID, AccountState> unverifiedBalanceStates = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, AccountState> deferredRemoteUpdates = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, AccountState> rejectedAuthorityBases = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, PendingRollback> pendingRollbacks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, TransferContext> transferContexts = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, AccountMutationLock> accountMutationLocks = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, Long> confirmedSnapshotConflictVersions = new ConcurrentHashMap<>();
     private final Set<UUID> unavailableAccounts = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<UUID, Set<String>> unresolvedTransferIds = new ConcurrentHashMap<>();
-
-    private static final class AccountMutationLock {
-        private final ReentrantLock lock = new ReentrantLock();
-        private final AtomicInteger references = new AtomicInteger();
-    }
-
-    final class AccountMutationLease implements AutoCloseable {
-        private final Map<UUID, AccountMutationLock> locks;
-        private boolean closed;
-
-        private AccountMutationLease(Map<UUID, AccountMutationLock> locks) {
-            this.locks = locks;
-        }
-
-        @Override
-        public void close() {
-            if (closed) return;
-            closed = true;
-            var entries = new java.util.ArrayList<>(locks.entrySet());
-            for (int i = entries.size() - 1; i >= 0; i--) {
-                entries.get(i).getValue().lock.unlock();
-            }
-            for (var entry : entries) {
-                releaseAccountMutationLock(entry.getKey(), entry.getValue());
-            }
-        }
-    }
-
-    private void releaseAccountMutationLock(UUID uuid, AccountMutationLock accountLock) {
-        accountMutationLocks.computeIfPresent(uuid, (key, current) -> {
-            if (current != accountLock) return current;
-            return current.references.decrementAndGet() == 0 ? null : current;
-        });
-    }
 
     MemoryStateManager(Plugin plugin) {
         this(plugin, null);
@@ -138,16 +102,16 @@ final class MemoryStateManager {
     }
 
 
-    EconomyState get(UUID uuid) {
-        // EconomyState is immutable and the map is concurrent. Reads must never
+    AccountState get(UUID uuid) {
+        // AccountState is immutable and the map is concurrent. Reads must never
         // wait behind a transfer or persistence operation holding an account lease.
-        return memoryState.get(uuid);
+        return accountStates.get(uuid);
     }
 
-    EconomyState compute(UUID uuid, BiFunction<UUID, EconomyState, EconomyState> fn) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            return memoryState.compute(uuid, (key, current) -> {
-                EconomyState next = fn.apply(key, current);
+    AccountState compute(UUID uuid, BiFunction<UUID, AccountState, AccountState> fn) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            return accountStates.compute(uuid, (key, current) -> {
+                AccountState next = fn.apply(key, current);
                 if (next != current) {
                     unverifiedBalanceStates.remove(key);
                 }
@@ -156,22 +120,22 @@ final class MemoryStateManager {
         }
     }
 
-    EconomyState computeIfAbsent(UUID uuid, Function<UUID, EconomyState> fn) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            return memoryState.computeIfAbsent(uuid, fn);
+    AccountState computeIfAbsent(UUID uuid, Function<UUID, AccountState> fn) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            return accountStates.computeIfAbsent(uuid, fn);
         }
     }
 
     /** Creates a legacy fallback snapshot while retaining that its value is unverified. */
-    EconomyState computeIfAbsentUnverified(UUID uuid, Function<UUID, EconomyState> fn) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            EconomyState current = memoryState.get(uuid);
+    AccountState computeIfAbsentUnverified(UUID uuid, Function<UUID, AccountState> fn) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            AccountState current = accountStates.get(uuid);
             if (current != null) {
                 return current;
             }
-            EconomyState created = fn.apply(uuid);
+            AccountState created = fn.apply(uuid);
             unverifiedBalanceStates.put(uuid, created);
-            memoryState.put(uuid, created);
+            accountStates.put(uuid, created);
             return created;
         }
     }
@@ -182,32 +146,32 @@ final class MemoryStateManager {
      * account mutation currently owns the lock, allowing callers to treat contention
      * as a cache miss and load on their asynchronous worker.
      */
-    EconomyState getConfirmedStateForApi(UUID uuid) {
-        AccountMutationLease lease = tryLockAccount(uuid);
+    AccountState getConfirmedStateForApi(UUID uuid) {
+        AccountStateStore.MutationLease lease = tryLockAccount(uuid);
         if (lease == null) return null;
         try (lease) {
-            EconomyState current = memoryState.get(uuid);
+            AccountState current = accountStates.get(uuid);
             return current == null || unverifiedBalanceStates.get(uuid) == current ? null : current;
         }
     }
 
     /** Caches an authoritative read, replacing only a prior synthetic fallback snapshot. */
-    EconomyState cacheConfirmedBalance(UUID uuid, BigDecimal balance, long version, long timestamp) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            EconomyState current = memoryState.get(uuid);
+    AccountState cacheConfirmedBalance(UUID uuid, BigDecimal balance, long version, long timestamp) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            AccountState current = accountStates.get(uuid);
             if (current == null) {
                 unverifiedBalanceStates.remove(uuid);
-                EconomyState confirmed = new EconomyState(balance, version, timestamp);
-                memoryState.put(uuid, confirmed);
+                AccountState confirmed = new AccountState(balance, version, timestamp);
+                accountStates.put(uuid, confirmed);
                 return confirmed;
             }
             if (unverifiedBalanceStates.get(uuid) == current) {
-                EconomyState confirmed = new EconomyState(balance, version, timestamp);
-                memoryState.put(uuid, confirmed);
+                AccountState confirmed = new AccountState(balance, version, timestamp);
+                accountStates.put(uuid, confirmed);
                 unverifiedBalanceStates.remove(uuid, current);
                 return confirmed;
             }
-            EconomyState staleMarker = unverifiedBalanceStates.get(uuid);
+            AccountState staleMarker = unverifiedBalanceStates.get(uuid);
             if (staleMarker != null && staleMarker != current) {
                 unverifiedBalanceStates.remove(uuid, staleMarker);
             }
@@ -215,53 +179,26 @@ final class MemoryStateManager {
         }
     }
 
-    void put(UUID uuid, EconomyState state) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            memoryState.put(uuid, state);
+    void put(UUID uuid, AccountState state) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            accountStates.put(uuid, state);
             unverifiedBalanceStates.remove(uuid);
         }
     }
 
-    AccountMutationLease lockAccounts(UUID... uuids) {
-        java.util.TreeSet<UUID> ordered = new java.util.TreeSet<>();
-        for (UUID uuid : uuids) {
-            if (uuid == null) throw new IllegalArgumentException("Account UUID must not be null");
-            ordered.add(uuid);
-        }
-        Map<UUID, AccountMutationLock> acquired = new java.util.LinkedHashMap<>();
-        for (UUID uuid : ordered) {
-            AccountMutationLock accountLock = accountMutationLocks.compute(uuid, (key, existing) -> {
-                AccountMutationLock selected = existing == null ? new AccountMutationLock() : existing;
-                selected.references.incrementAndGet();
-                return selected;
-            });
-            acquired.put(uuid, accountLock);
-        }
-        for (AccountMutationLock accountLock : acquired.values()) {
-            accountLock.lock.lock();
-        }
-        return new AccountMutationLease(acquired);
+    AccountStateStore.MutationLease lockAccounts(UUID... uuids) {
+        return accountStates.lockAccounts(uuids);
     }
 
-    private AccountMutationLease tryLockAccount(UUID uuid) {
-        if (uuid == null) throw new IllegalArgumentException("Account UUID must not be null");
-        AccountMutationLock accountLock = accountMutationLocks.compute(uuid, (key, existing) -> {
-            AccountMutationLock selected = existing == null ? new AccountMutationLock() : existing;
-            selected.references.incrementAndGet();
-            return selected;
-        });
-        if (!accountLock.lock.tryLock()) {
-            releaseAccountMutationLock(uuid, accountLock);
-            return null;
-        }
-        return new AccountMutationLease(Map.of(uuid, accountLock));
+    private AccountStateStore.MutationLease tryLockAccount(UUID uuid) {
+        return accountStates.tryLockAccount(uuid);
     }
 
     void withAccountsLocked(UUID firstAccount, UUID secondAccount, Runnable action) {
         UUID[] accounts = secondAccount == null
                 ? new UUID[] { firstAccount }
                 : new UUID[] { firstAccount, secondAccount };
-        try (AccountMutationLease ignored = lockAccounts(accounts)) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(accounts)) {
             action.run();
         }
     }
@@ -292,8 +229,8 @@ final class MemoryStateManager {
         });
     }
 
-    void completeRejectedDirectTransferMutation(String operationId, UUID fromUuid, EconomyState fromSnapshot,
-            UUID toUuid, EconomyState toSnapshot) {
+    void completeRejectedDirectTransferMutation(String operationId, UUID fromUuid, AccountState fromSnapshot,
+            UUID toUuid, AccountState toSnapshot) {
         withAccountsLocked(fromUuid, toUuid, () -> {
             reconcileRejectedTransferAccount(fromUuid, fromSnapshot);
             reconcileRejectedTransferAccount(toUuid, toSnapshot);
@@ -310,22 +247,22 @@ final class MemoryStateManager {
             unavailableAccounts.add(uuid);
             return;
         }
-        EconomyState receipt = new EconomyState(balance, version, now);
-        EconomyState latest = newestConfirmedSnapshot(uuid, memoryState.get(uuid), deferredRemoteUpdates.get(uuid));
+        AccountState receipt = new AccountState(balance, version, now);
+        AccountState latest = newestConfirmedSnapshot(uuid, accountStates.get(uuid), deferredRemoteUpdates.get(uuid));
         latest = newestConfirmedSnapshot(uuid, latest, receipt);
         if (latest == null) {
             markUnavailableUnlessConfirmedSnapshotConflict(uuid);
             return;
         }
         clearConfirmedSnapshotConflict(uuid, latest);
-        memoryState.put(uuid, latest);
+        accountStates.put(uuid, latest);
         unverifiedBalanceStates.remove(uuid);
         deferredRemoteUpdates.remove(uuid);
         rejectedAuthorityBases.remove(uuid);
         unavailableAccounts.remove(uuid);
     }
 
-    private void reconcileRejectedTransferAccount(UUID uuid, EconomyState snapshot) {
+    private void reconcileRejectedTransferAccount(UUID uuid, AccountState snapshot) {
         if (snapshot != null) {
             reconcileDirectTransferAccount(uuid, snapshot.balance(), snapshot.version(), snapshot.lastAccessTime());
             return;
@@ -337,7 +274,7 @@ final class MemoryStateManager {
             return;
         }
 
-        EconomyState current = memoryState.get(uuid);
+        AccountState current = accountStates.get(uuid);
         if (current != null && unverifiedBalanceStates.get(uuid) != current) {
             unavailableAccounts.add(uuid);
             return;
@@ -346,20 +283,20 @@ final class MemoryStateManager {
         if (current == null) {
             unverifiedBalanceStates.remove(uuid);
         } else {
-            memoryState.remove(uuid, current);
+            accountStates.remove(uuid, current);
             unverifiedBalanceStates.remove(uuid, current);
         }
         unavailableAccounts.remove(uuid);
     }
 
-    EconomyWriteQueue.Reservation tryReserveWrite(UUID uuid, EconomyState expectedState) {
+    EconomyWriteQueue.Reservation tryReserveWrite(UUID uuid, AccountState expectedState) {
         if (writeQueue == null) {
             return null;
         }
 
         AtomicReference<EconomyWriteQueue.Reservation> reservationRef = new AtomicReference<>();
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            memoryState.compute(uuid, (key, existing) -> {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            accountStates.compute(uuid, (key, existing) -> {
                 if (isUnavailable(key)) {
                     return existing;
                 }
@@ -376,11 +313,11 @@ final class MemoryStateManager {
     }
 
     boolean containsKey(UUID uuid) {
-        return memoryState.containsKey(uuid);
+        return accountStates.containsKey(uuid);
     }
 
     int size() {
-        return memoryState.size();
+        return accountStates.size();
     }
 
     boolean isUnavailable(UUID uuid) {
@@ -432,11 +369,11 @@ final class MemoryStateManager {
     }
 
     Set<UUID> keySet() {
-        return memoryState.keySet();
+        return accountStates.keySet();
     }
 
     BigDecimal peekBalance(UUID uuid) {
-        EconomyState state = memoryState.get(uuid);
+        AccountState state = accountStates.get(uuid);
         return state != null ? state.balance() : null;
     }
 
@@ -457,15 +394,15 @@ final class MemoryStateManager {
     RemoteUpdateResult applyRemoteUpdateResult(UUID uuid, BigDecimal balance, long version) {
         long now = System.currentTimeMillis();
         AtomicReference<RemoteUpdateResult> result = new AtomicReference<>(RemoteUpdateResult.REJECTED);
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            memoryState.compute(uuid, (key, existing) -> {
-                EconomyState incoming = new EconomyState(balance, version, now);
-                EconomyState deferred = deferredRemoteUpdates.get(key);
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            accountStates.compute(uuid, (key, existing) -> {
+                AccountState incoming = new AccountState(balance, version, now);
+                AccountState deferred = deferredRemoteUpdates.get(key);
                 if (hasCommittedWrite(key)) {
                     // The current memory version may be an optimistic projection. Keep
                     // confirmed snapshots even when they equal that projection so a later
                     // known-rejected write can rebase onto this authority observation.
-                    EconomyState newest = newestConfirmedSnapshot(key, deferred, incoming);
+                    AccountState newest = newestConfirmedSnapshot(key, deferred, incoming);
                     if (newest != null) {
                         clearConfirmedSnapshotConflict(key, newest);
                         deferredRemoteUpdates.put(key, newest);
@@ -474,7 +411,7 @@ final class MemoryStateManager {
                     return existing;
                 }
 
-                EconomyState newest = newestConfirmedSnapshot(key, deferred, incoming);
+                AccountState newest = newestConfirmedSnapshot(key, deferred, incoming);
                 if (newest == null) {
                     result.set(RemoteUpdateResult.REJECTED);
                     return existing;
@@ -493,14 +430,14 @@ final class MemoryStateManager {
 
     private void onAcceptedWriteCompleted(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
         UUID uuid = event.playerUuid();
-        EconomyState authority = authorityBalance != null && authorityVersion >= 0
-                ? new EconomyState(authorityBalance, authorityVersion, System.currentTimeMillis())
+        AccountState authority = authorityBalance != null && authorityVersion >= 0
+                ? new AccountState(authorityBalance, authorityVersion, System.currentTimeMillis())
                 : null;
 
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
-            memoryState.compute(uuid, (key, existing) -> {
-                EconomyState deferred = deferredRemoteUpdates.get(key);
-                EconomyState candidate = deferred;
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+            accountStates.compute(uuid, (key, existing) -> {
+                AccountState deferred = deferredRemoteUpdates.get(key);
+                AccountState candidate = deferred;
                 // Keep a deferred remote snapshot on equal versions: a balance and a later
                 // observed cache version must not be paired into a synthetic authority receipt.
                 if (authority != null) {
@@ -511,10 +448,10 @@ final class MemoryStateManager {
                     }
                 }
 
-                EconomyState rejectedBase = rejectedAuthorityBases.get(key);
+                AccountState rejectedBase = rejectedAuthorityBases.get(key);
                 if (rejectedBase != null && hasCommittedWrite(key)) {
                     if (candidate != null) {
-                        EconomyState latest = newestConfirmedSnapshot(key, deferred, candidate);
+                        AccountState latest = newestConfirmedSnapshot(key, deferred, candidate);
                         if (latest != null) deferredRemoteUpdates.put(key, latest);
                     }
                     return existing;
@@ -525,7 +462,7 @@ final class MemoryStateManager {
                         unavailableAccounts.add(key);
                         return existing;
                     }
-                    EconomyState latest = newestConfirmedSnapshot(key, rejectedBase, candidate);
+                    AccountState latest = newestConfirmedSnapshot(key, rejectedBase, candidate);
                     if (latest == null) {
                         markUnavailableUnlessConfirmedSnapshotConflict(key);
                         return existing;
@@ -563,7 +500,7 @@ final class MemoryStateManager {
     private void onAcceptedWriteRejected(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion) {
         if (event == null) return;
         UUID uuid = event.playerUuid();
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
             reconcileRejectedAuthorityAccount(uuid, authorityBalance, authorityVersion,
                     System.currentTimeMillis(), event);
         }
@@ -588,7 +525,7 @@ final class MemoryStateManager {
         }
 
         long now = System.currentTimeMillis();
-        try (AccountMutationLease ignored = lockAccounts(first.playerUuid(), second.playerUuid())) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(first.playerUuid(), second.playerUuid())) {
             if (rejected) {
                 reconcileRejectedAuthorityAccount(first.playerUuid(), firstBalance, firstVersion, now, first);
                 reconcileRejectedAuthorityAccount(second.playerUuid(), secondBalance, secondVersion, now, second);
@@ -604,20 +541,20 @@ final class MemoryStateManager {
             unavailableAccounts.add(uuid);
             return;
         }
-        EconomyState existing = memoryState.get(uuid);
-        EconomyState deferred = deferredRemoteUpdates.get(uuid);
-        EconomyState latestConfirmed = newestConfirmedSnapshot(uuid, deferred, new EconomyState(balance, version, now));
+        AccountState existing = accountStates.get(uuid);
+        AccountState deferred = deferredRemoteUpdates.get(uuid);
+        AccountState latestConfirmed = newestConfirmedSnapshot(uuid, deferred, new AccountState(balance, version, now));
         if (latestConfirmed == null) {
             markUnavailableUnlessConfirmedSnapshotConflict(uuid);
             return;
         }
         balance = latestConfirmed.balance();
         version = latestConfirmed.version();
-        EconomyState rejectedBase = rejectedAuthorityBases.get(uuid);
+        AccountState rejectedBase = rejectedAuthorityBases.get(uuid);
         if (rejectedBase != null) {
             if (hasCommittedWrite(uuid)) {
-                EconomyState latest = newestConfirmedSnapshot(uuid, deferred,
-                        new EconomyState(balance, version, now));
+                AccountState latest = newestConfirmedSnapshot(uuid, deferred,
+                        new AccountState(balance, version, now));
                 if (latest != null) deferredRemoteUpdates.put(uuid, latest);
                 markUnavailableUnlessConfirmedSnapshotConflict(uuid);
                 return;
@@ -626,14 +563,14 @@ final class MemoryStateManager {
                 unavailableAccounts.add(uuid);
                 return;
             }
-            EconomyState latest = newestConfirmedSnapshot(uuid, rejectedBase,
-                    new EconomyState(balance, version, now));
+            AccountState latest = newestConfirmedSnapshot(uuid, rejectedBase,
+                    new AccountState(balance, version, now));
             if (latest == null) {
                 markUnavailableUnlessConfirmedSnapshotConflict(uuid);
                 return;
             }
             clearConfirmedSnapshotConflict(uuid, latest);
-            memoryState.put(uuid, latest);
+            accountStates.put(uuid, latest);
             unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             rejectedAuthorityBases.remove(uuid, rejectedBase);
@@ -644,9 +581,9 @@ final class MemoryStateManager {
         // provisional transfer can have the same locally predicted version with a
         // different balance, so ordinary strictly-newer remote-update rules do not fit.
         if (existing == null || version >= existing.version()) {
-            EconomyState pairSnapshot = new EconomyState(balance, version, now);
+            AccountState pairSnapshot = new AccountState(balance, version, now);
             clearConfirmedSnapshotConflict(uuid, pairSnapshot);
-            memoryState.put(uuid, pairSnapshot);
+            accountStates.put(uuid, pairSnapshot);
             unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             if (hasCommittedWrite(uuid)) {
@@ -673,14 +610,14 @@ final class MemoryStateManager {
             return;
         }
 
-        EconomyState authority = new EconomyState(balance, version, now);
-        EconomyState candidate = newestConfirmedSnapshot(uuid, deferredRemoteUpdates.get(uuid), authority);
+        AccountState authority = new AccountState(balance, version, now);
+        AccountState candidate = newestConfirmedSnapshot(uuid, deferredRemoteUpdates.get(uuid), authority);
         if (candidate == null) {
             markUnavailableUnlessConfirmedSnapshotConflict(uuid);
             return;
         }
 
-        EconomyState priorBase = rejectedAuthorityBases.get(uuid);
+        AccountState priorBase = rejectedAuthorityBases.get(uuid);
         if (priorBase != null) {
             candidate = newestConfirmedSnapshot(uuid, priorBase, candidate);
             if (candidate == null) {
@@ -696,7 +633,7 @@ final class MemoryStateManager {
             return;
         }
 
-        EconomyState existing = memoryState.get(uuid);
+        AccountState existing = accountStates.get(uuid);
         if (existing != null && !matchesRejectedProjection(existing, rejectedEvent)) {
             candidate = newestConfirmedSnapshot(uuid, existing, candidate);
             if (candidate == null) {
@@ -705,7 +642,7 @@ final class MemoryStateManager {
             }
         }
 
-        memoryState.put(uuid, candidate);
+        accountStates.put(uuid, candidate);
         unverifiedBalanceStates.remove(uuid);
         clearConfirmedSnapshotConflict(uuid, candidate);
         deferredRemoteUpdates.remove(uuid);
@@ -720,7 +657,7 @@ final class MemoryStateManager {
      */
     private void reconcileRejectedAbsentAuthorityAccount(UUID uuid, EconomyEvent rejectedEvent) {
         if (hasPendingWrite(uuid) || hasCommittedWrite(uuid)) {
-            memoryState.remove(uuid);
+            accountStates.remove(uuid);
             unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             rejectedAuthorityBases.remove(uuid);
@@ -728,10 +665,10 @@ final class MemoryStateManager {
             return;
         }
 
-        EconomyState current = memoryState.get(uuid);
+        AccountState current = accountStates.get(uuid);
         if (current == null || unverifiedBalanceStates.get(uuid) == current
                 || matchesRejectedProjection(current, rejectedEvent)) {
-            if (current != null) memoryState.remove(uuid, current);
+            if (current != null) accountStates.remove(uuid, current);
             unverifiedBalanceStates.remove(uuid);
             deferredRemoteUpdates.remove(uuid);
             rejectedAuthorityBases.remove(uuid);
@@ -743,12 +680,12 @@ final class MemoryStateManager {
         unavailableAccounts.add(uuid);
     }
 
-    private boolean matchesRejectedProjection(EconomyState state, EconomyEvent rejectedEvent) {
+    private boolean matchesRejectedProjection(AccountState state, EconomyEvent rejectedEvent) {
         return rejectedEvent != null && state.version() == rejectedEvent.version()
                 && state.balance().compareTo(rejectedEvent.balanceAfter()) == 0;
     }
 
-    private EconomyState newestConfirmedSnapshot(UUID uuid, EconomyState first, EconomyState second) {
+    private AccountState newestConfirmedSnapshot(UUID uuid, AccountState first, AccountState second) {
         if (first == null) return second;
         if (second == null) return first;
         if (first.version() == second.version()
@@ -761,7 +698,7 @@ final class MemoryStateManager {
         return second.version() > first.version() ? second : first;
     }
 
-    private void clearConfirmedSnapshotConflict(UUID uuid, EconomyState confirmedSnapshot) {
+    private void clearConfirmedSnapshotConflict(UUID uuid, AccountState confirmedSnapshot) {
         if (confirmedSnapshot == null) return;
         Long conflictVersion = confirmedSnapshotConflictVersions.get(uuid);
         if (conflictVersion != null && confirmedSnapshot.version() > conflictVersion) {
@@ -782,23 +719,23 @@ final class MemoryStateManager {
             return;
         }
         long now = System.currentTimeMillis();
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
             if (hasPendingWrite(uuid)) {
                 plugin.getLogger().warning("Rejected force memory update while accepted writes remain pending for " + uuid);
                 return;
             }
-            memoryState.put(uuid, new EconomyState(balance, version, now));
+            accountStates.put(uuid, new AccountState(balance, version, now));
             unverifiedBalanceStates.remove(uuid);
         }
     }
 
     /** [SYNC-ECO-055] Remove a single entry from memory. */
     void clearEntry(UUID uuid) {
-        try (AccountMutationLease ignored = lockAccounts(uuid)) {
+        try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
             if (hasPendingWrite(uuid)) {
                 return;
             }
-            memoryState.remove(uuid);
+            accountStates.remove(uuid);
             unverifiedBalanceStates.remove(uuid);
         }
     }
@@ -842,18 +779,18 @@ final class MemoryStateManager {
         long expirationTime = now - (DEFAULT_EXPIRATION_MINUTES * 60 * 1000);
 
         int removedCount = 0;
-        Iterator<Map.Entry<UUID, EconomyState>> iterator = memoryState.entrySet().iterator();
+        Iterator<Map.Entry<UUID, AccountState>> iterator = accountStates.entrySet().iterator();
         while (iterator.hasNext()) {
-            Map.Entry<UUID, EconomyState> entry = iterator.next();
-            EconomyState state = entry.getValue();
+            Map.Entry<UUID, AccountState> entry = iterator.next();
+            AccountState state = entry.getValue();
             if (state != null && state.lastAccessTime() < expirationTime) {
                 UUID uuid = entry.getKey();
-                try (AccountMutationLease ignored = lockAccounts(uuid)) {
-                    EconomyState current = memoryState.get(uuid);
+                try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+                    AccountState current = accountStates.get(uuid);
                     if (current == null || current.lastAccessTime() >= expirationTime || hasPendingWrite(uuid)) {
                         continue;
                     }
-                    if (memoryState.remove(uuid, current)) {
+                    if (accountStates.remove(uuid, current)) {
                         unverifiedBalanceStates.remove(uuid);
                         removedCount++;
                     }
@@ -861,9 +798,9 @@ final class MemoryStateManager {
             }
         }
 
-        if (memoryState.size() > MAX_MEMORY_ENTRIES) {
-            int entriesToRemove = memoryState.size() - MAX_MEMORY_ENTRIES;
-            java.util.List<? extends Map.Entry<UUID, EconomyState>> oldestEntries = memoryState.entrySet().stream()
+        if (accountStates.size() > MAX_MEMORY_ENTRIES) {
+            int entriesToRemove = accountStates.size() - MAX_MEMORY_ENTRIES;
+            java.util.List<? extends Map.Entry<UUID, AccountState>> oldestEntries = accountStates.entrySet().stream()
                     .sorted((e1, e2) -> Long.compare(
                             e1.getValue() != null ? e1.getValue().lastAccessTime() : 0,
                             e2.getValue() != null ? e2.getValue().lastAccessTime() : 0))
@@ -871,18 +808,18 @@ final class MemoryStateManager {
                     .toList();
 
             int capacityRemoved = 0;
-            for (Map.Entry<UUID, EconomyState> candidate : oldestEntries) {
+            for (Map.Entry<UUID, AccountState> candidate : oldestEntries) {
                 if (capacityRemoved >= entriesToRemove) {
                     break;
                 }
                 UUID uuid = candidate.getKey();
-                EconomyState observed = candidate.getValue();
-                try (AccountMutationLease ignored = lockAccounts(uuid)) {
-                    EconomyState current = memoryState.get(uuid);
-                    if (current != observed || hasPendingWrite(uuid) || memoryState.size() <= MAX_MEMORY_ENTRIES) {
+                AccountState observed = candidate.getValue();
+                try (AccountStateStore.MutationLease ignored = lockAccounts(uuid)) {
+                    AccountState current = accountStates.get(uuid);
+                    if (current != observed || hasPendingWrite(uuid) || accountStates.size() <= MAX_MEMORY_ENTRIES) {
                         continue;
                     }
-                    if (memoryState.remove(uuid, current)) {
+                    if (accountStates.remove(uuid, current)) {
                         unverifiedBalanceStates.remove(uuid);
                         removedCount++;
                         capacityRemoved++;
@@ -897,7 +834,7 @@ final class MemoryStateManager {
         }
 
         if (removedCount > 0) {
-            plugin.getLogger().fine("Memory cleanup: removed " + removedCount + " expired entries, " + memoryState.size() + " entries remaining");
+            plugin.getLogger().fine("Memory cleanup: removed " + removedCount + " expired entries, " + accountStates.size() + " entries remaining");
         }
         return removedCount;
     }

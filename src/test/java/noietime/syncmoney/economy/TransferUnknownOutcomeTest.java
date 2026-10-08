@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.core.state.AccountState;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.migration.MigrationLock;
@@ -101,9 +102,9 @@ class TransferUnknownOutcomeTest {
         CacheManager cacheManager = mock(CacheManager.class);
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         MemoryStateManager state = new MemoryStateManager(plugin, queue);
-        state.put(sender, new EconomyFacade.EconomyState(
+        state.put(sender, new AccountState(
                 new BigDecimal("20.00"), 8L, System.currentTimeMillis()));
-        state.put(receiver, new EconomyFacade.EconomyState(
+        state.put(receiver, new AccountState(
                 new BigDecimal("80.00"), 4L, System.currentTimeMillis()));
         EconomyEvent queued = new EconomyEvent(sender, new BigDecimal("-80.00"),
                 new BigDecimal("20.00"), 8L, EconomyEvent.EventType.WITHDRAW,
