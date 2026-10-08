@@ -6,6 +6,7 @@ import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
+import noietime.syncmoney.storage.db.DbWriterConsumer;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
@@ -59,21 +60,38 @@ class EconomyEventConsumerTransferTest {
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
         memory.put(sender, state("90.00", 8L));
         memory.put(receiver, state("10.00", 4L));
+        DatabaseManager databaseManager = mock(DatabaseManager.class);
+        AtomicReference<DbWriteQueue.DbWriteTask> persistedPair = new AtomicReference<>();
+        when(databaseManager.batchInsertOrUpdatePlayersWithStale(anyList())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<DbWriteQueue.DbWriteTask> tasks = invocation.getArgument(0);
+            persistedPair.set(tasks.getFirst());
+            return List.of();
+        });
+        DbWriterConsumer dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager);
+        Thread dbWriterThread = new Thread(dbWriterConsumer::run, "transfer-test-db-writer");
+        dbWriterThread.start();
         EconomyEventConsumer consumer = consumer(plugin, config, queue, cacheManager, redisManager,
-                dbWriteQueue, mock(NameResolver.class), mock(DatabaseManager.class));
+                dbWriteQueue, mock(NameResolver.class), databaseManager);
 
-        consumer.start();
-        consumer.shutdown();
+        try {
+            consumer.start();
+            consumer.shutdown();
+        } finally {
+            dbWriterConsumer.stop();
+            dbWriterThread.join(3_000L);
+        }
 
-        DbWriteQueue.DbWriteTask persistedPair = dbWriteQueue.poll();
         assertAll(
                 () -> verify(cacheManager).atomicTransfer(sender, receiver, amount),
                 () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any()),
-                () -> assertNotNull(persistedPair),
-                () -> assertEquals(2, persistedPair.accountCount(),
+                () -> assertNotNull(persistedPair.get()),
+                () -> assertEquals(2, persistedPair.get().accountCount(),
                         "both confirmed accounts must cross the SQL admission boundary as one task"),
-                () -> assertEquals(new BigDecimal("90.00"), persistedPair.accounts().get(0).account().balance()),
-                () -> assertEquals(new BigDecimal("10.00"), persistedPair.accounts().get(1).account().balance()),
+                () -> assertEquals(new BigDecimal("90.00"),
+                        persistedPair.get().accounts().get(0).account().balance()),
+                () -> assertEquals(new BigDecimal("10.00"),
+                        persistedPair.get().accounts().get(1).account().balance()),
                 () -> assertFalse(queue.hasAcceptedWrite(sender)),
                 () -> assertFalse(queue.hasAcceptedWrite(receiver)),
                 () -> assertNotNull(completion.get()),
@@ -588,7 +606,7 @@ class EconomyEventConsumerTransferTest {
         when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("90.00"), new BigDecimal("10.00"), 8L, 4L));
         DbWriteQueue dbWriteQueue = mock(DbWriteQueue.class);
-        when(dbWriteQueue.offer(any())).thenReturn(false);
+        when(dbWriteQueue.offerAndTrack(any())).thenReturn(null);
         DatabaseManager databaseManager = mock(DatabaseManager.class);
         when(databaseManager.batchInsertOrUpdatePlayersWithStale(anyList()))
                 .thenThrow(new IllegalStateException("injected SQL failure"))

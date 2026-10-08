@@ -693,6 +693,55 @@ public final class EconomyWriteQueue {
         return completePair(first, firstBalance, firstVersion, second, secondBalance, secondVersion, true);
     }
 
+    /** Reconcile a durable receipt recovered after its original queue ownership ended with the old process. */
+    void reconcileRecovered(EconomyEvent event, BigDecimal authorityBalance, long authorityVersion,
+            boolean rejected) {
+        if (event == null || authorityBalance == null || authorityVersion < 0L) {
+            throw new IllegalArgumentException("Recovered account receipt is incomplete");
+        }
+        WriteCompletionHandler handler = writeCompletionHandler;
+        if (handler == null) return;
+        withCompletionAccountLocks(handler, event.playerUuid(), null, () -> {
+            try {
+                if (rejected) handler.onRejected(event, authorityBalance, authorityVersion);
+                else handler.onComplete(event, authorityBalance, authorityVersion);
+            } catch (RuntimeException failure) {
+                markAccountUnavailable(event.playerUuid());
+                throw failure;
+            }
+        });
+    }
+
+    /** Reconcile a paired receipt after restart without inventing queue reservations for either transfer leg. */
+    void reconcileRecoveredPair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
+            EconomyEvent second, BigDecimal secondBalance, long secondVersion, boolean rejected) {
+        if (!TransferRequestIds.arePair(first, second) || firstBalance == null || secondBalance == null
+                || firstVersion < 0L || secondVersion < 0L) {
+            throw new IllegalArgumentException("Recovered transfer receipt is incomplete");
+        }
+        String operationId = TransferRequestIds.operationId(first.type() == EconomyEvent.EventType.TRANSFER_OUT
+                ? first : second);
+        WriteCompletionHandler handler = writeCompletionHandler;
+        if (handler != null) {
+            withCompletionAccountLocks(handler, first.playerUuid(), second.playerUuid(), () -> {
+                try {
+                    if (rejected) {
+                        handler.onRejectedPair(first, firstBalance, firstVersion,
+                                second, secondBalance, secondVersion);
+                    } else {
+                        handler.onCompletePair(first, firstBalance, firstVersion,
+                                second, secondBalance, secondVersion);
+                    }
+                } catch (RuntimeException failure) {
+                    markAccountUnavailable(first.playerUuid());
+                    markAccountUnavailable(second.playerUuid());
+                    throw failure;
+                }
+            });
+        }
+        resolveTransferUnavailable(operationId, first.playerUuid(), second.playerUuid());
+    }
+
     private boolean completePair(EconomyEvent first, BigDecimal firstBalance, long firstVersion,
             EconomyEvent second, BigDecimal secondBalance, long secondVersion, boolean rejected) {
         if (!TransferRequestIds.arePair(first, second)

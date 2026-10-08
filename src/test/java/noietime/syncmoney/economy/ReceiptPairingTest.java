@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -176,10 +177,10 @@ class ReceiptPairingTest {
         DbWriteQueue dbWriteQueue = mock(DbWriteQueue.class);
         CountDownLatch queued = new CountDownLatch(1);
         AtomicReference<DbWriteQueue.DbWriteTask> capturedTask = new AtomicReference<>();
-        when(dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
+        when(dbWriteQueue.offerAndTrack(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
             capturedTask.set(invocation.getArgument(0));
             queued.countDown();
-            return true;
+            return CompletableFuture.completedFuture(true);
         });
         NameResolver nameResolver = mock(NameResolver.class);
         when(nameResolver.getNameCachedOnly(account)).thenReturn("PlayerA");

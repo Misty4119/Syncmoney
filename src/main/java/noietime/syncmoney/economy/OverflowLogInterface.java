@@ -1,5 +1,8 @@
 package noietime.syncmoney.economy;
 
+import java.io.IOException;
+import java.util.List;
+
 /**
  * [SYNC-ECO-116] OverflowLog interface for Write-Ahead Log of dropped economy events.
  * Implementations can use file system or Redis for storage.
@@ -11,6 +14,9 @@ public interface OverflowLogInterface {
      * @param event The event to log
      */
     void log(EconomyEvent event);
+
+    /** Read legacy records without acknowledging, truncating, or deleting them. */
+    List<String> readWithoutClear() throws IOException;
     
     /**
      * Read and clear the overflow log.

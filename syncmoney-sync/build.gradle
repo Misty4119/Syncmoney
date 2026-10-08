@@ -9,8 +9,8 @@ sourceSets {
     integrationTest {
         java.srcDir file('src/integrationTest/java')
         resources.srcDir rootProject.file('src/main/resources/lua')
-        compileClasspath += sourceSets.main.output
-        runtimeClasspath += output + compileClasspath
+        compileClasspath += sourceSets.main.output + rootProject.sourceSets.main.output + rootProject.configurations.compileClasspath
+        runtimeClasspath += output + compileClasspath + rootProject.configurations.runtimeClasspath
     }
 }
 
@@ -22,7 +22,6 @@ configurations {
 dependencies {
     integrationTestImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     integrationTestImplementation 'redis.clients:jedis:5.2.0'
-    integrationTestImplementation project(':')
     integrationTestImplementation project(':syncmoney-core')
     integrationTestImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
     integrationTestImplementation 'org.mockito:mockito-core:5.8.0'

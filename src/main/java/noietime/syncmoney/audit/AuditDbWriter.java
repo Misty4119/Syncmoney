@@ -136,6 +136,55 @@ public final class AuditDbWriter {
     }
 
     /**
+     * Persists one recovery-owned record and treats an identical row already committed
+     * under the same id as success. This makes retry after a lost SQL response idempotent.
+     */
+    public static void writeWithRetryIdempotently(HikariDataSource dataSource, AuditRecord record,
+            int maxRetry) throws SQLException {
+        if (dataSource == null || record == null) {
+            throw new SQLException("Audit recovery persistence requires a data source and record");
+        }
+        try {
+            batchWriteWithRetry(dataSource, List.of(record), maxRetry);
+        } catch (SQLException failure) {
+            try {
+                if (matchesPersistedRecord(dataSource, record)) return;
+            } catch (SQLException verificationFailure) {
+                failure.addSuppressed(verificationFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private static boolean matchesPersistedRecord(HikariDataSource dataSource, AuditRecord expected)
+            throws SQLException {
+        String sql = "SELECT * FROM syncmoney_audit_log WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, expected.id());
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() && sameRecord(mapToRecord(rs), expected);
+            }
+        }
+    }
+
+    private static boolean sameRecord(AuditRecord stored, AuditRecord expected) {
+        return java.util.Objects.equals(stored.id(), expected.id())
+                && stored.timestamp() == expected.timestamp()
+                && stored.type() == expected.type()
+                && java.util.Objects.equals(stored.playerUuid(), expected.playerUuid())
+                && sameAmount(stored.amount(), expected.amount())
+                && sameAmount(stored.balanceAfter(), expected.balanceAfter())
+                && stored.source() == expected.source()
+                && java.util.Objects.equals(stored.targetUuid(), expected.targetUuid())
+                && stored.mergedCount() == expected.mergedCount();
+    }
+
+    private static boolean sameAmount(java.math.BigDecimal left, java.math.BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
+    }
+
+    /**
      * Sets the PreparedStatement parameters from an AuditRecord.
      *
      * @param stmt  the PreparedStatement

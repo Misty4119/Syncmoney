@@ -8,6 +8,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.web.websocket.SseManager;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 
@@ -36,6 +37,19 @@ public final class HybridAuditManager {
 
     private static final String AUDIT_LIST_KEY = "syncmoney:audit:recent";
     private static final String AUDIT_INDEX_KEY = "syncmoney:audit:index";
+    private static final String CONFIRMED_AUDIT_SCRIPT = """
+            local entries = redis.call('LRANGE', KEYS[1], 0, -1)
+            for _, value in ipairs(entries) do
+                local ok, record = pcall(cjson.decode, value)
+                if ok and record.id == ARGV[2] then
+                    return 0
+                end
+            end
+            redis.call('LPUSH', KEYS[1], ARGV[1])
+            redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
+            redis.call('INCR', KEYS[2])
+            return 1
+            """;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -186,6 +200,52 @@ public final class HybridAuditManager {
 
 
         broadcastAuditEvent(recordWithSequence);
+    }
+
+    /**
+     * Persist a recovery-owned record to the configured audit stores without swallowing failures.
+     * SQL uses the stable audit id as its idempotency key; Redis checks the bounded recent list
+     * atomically so an interrupted recovery retry does not duplicate a resident entry.
+     */
+    public void persistConfirmedRecord(AuditRecord record) throws SQLException {
+        if (!enabled || record == null || record.id() == null || record.id().isBlank()
+                || record.id().length() > 36) {
+            throw new SQLException("Confirmed audit record is invalid or audit is disabled");
+        }
+
+        boolean redisInserted = false;
+        SQLException persistenceFailure = null;
+        if (redisEnabled) {
+            try (var jedis = redisManager.getResource()) {
+                String json = objectMapper.writeValueAsString(record);
+                Object result = jedis.eval(CONFIRMED_AUDIT_SCRIPT, 2,
+                        AUDIT_LIST_KEY, AUDIT_INDEX_KEY, json, record.id(), Integer.toString(windowSize));
+                if (!(result instanceof Number count)) {
+                    throw new SQLException("Redis did not return a confirmed audit write receipt");
+                }
+                redisInserted = count.longValue() == 1L;
+            } catch (Exception failure) {
+                persistenceFailure = new SQLException("Redis audit persistence failed", failure);
+            }
+        }
+
+        if (dataSource != null) {
+            try {
+                AuditDbWriter.writeWithRetryIdempotently(dataSource, record, Constants.AUDIT_MAX_RETRY);
+            } catch (SQLException failure) {
+                if (persistenceFailure != null) failure.addSuppressed(persistenceFailure);
+                throw failure;
+            }
+        } else if (!redisEnabled) {
+            throw new SQLException("Confirmed audit persistence has no configured backend");
+        }
+
+        if (persistenceFailure != null) {
+            if (dataSource == null) throw persistenceFailure;
+            logger.warning("Redis recent-audit write failed, but the confirmed record was persisted to SQL: "
+                    + persistenceFailure.getMessage());
+        }
+        if (redisInserted) broadcastAuditEvent(record);
     }
 
     /**

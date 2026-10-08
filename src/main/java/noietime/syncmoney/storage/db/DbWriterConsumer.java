@@ -97,6 +97,7 @@ public final class DbWriterConsumer implements Runnable {
             plugin.getLogger().severe("DB writer stopped with " + pendingStaleTransfers.size()
                     + " stale transfer pair reconciliation(s) still pending after the bounded shutdown drain; "
                     + "no durable T07 recovery record exists yet and SQL may remain behind");
+            pendingStaleTransfers.values().forEach(pending -> pending.task().complete(false));
         }
 
         plugin.getLogger().fine("DB Writer Consumer stopped.");
@@ -144,6 +145,7 @@ public final class DbWriterConsumer implements Runnable {
                 } else {
                     persistedAccounts += task.accountCount();
                     retryCounts.remove(task);
+                    task.complete(true);
                 }
             }
             queue.incrementWrittenCountBy(persistedAccounts);
@@ -199,6 +201,7 @@ public final class DbWriterConsumer implements Runnable {
             retryCounts.remove(staleTask);
             queue.incrementWrittenCountBy(refreshed.accountCount());
             pendingStaleTransfers.remove(staleTask.operationId());
+            staleTask.complete(true);
             plugin.getLogger().warning("A stale SQL transfer pair was replaced by one fresh Redis authority snapshot: "
                     + staleTask.operationId());
             return true;
@@ -244,6 +247,7 @@ public final class DbWriterConsumer implements Runnable {
 
         if (attempts > Constants.DB_WRITE_MAX_RETRIES) {
             retryCounts.remove(task);
+            task.complete(false);
             plugin.getLogger().severe("Dropping DB write task after " + (attempts - 1)
                     + " failed retries for player " + task.playerUuid()
                     + " (balance=" + task.balance() + ", version=" + task.version() + ")");
@@ -254,6 +258,7 @@ public final class DbWriterConsumer implements Runnable {
             plugin.getLogger().warning("Re-queued failed DB write task (attempt " + attempts
                     + "/" + Constants.DB_WRITE_MAX_RETRIES + ") for player " + task.playerUuid());
         } else {
+            task.complete(false);
             plugin.getLogger().severe("DB write queue is full; could not re-queue task for player "
                     + task.playerUuid() + " - it will be retried on the next failure cycle");
         }

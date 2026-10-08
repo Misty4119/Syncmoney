@@ -73,6 +73,15 @@ public final class OverflowLog implements OverflowLogInterface {
         return lines;
     }
 
+    /** Read legacy records without acknowledging, truncating, or deleting the source file. */
+    @Override
+    public List<String> readWithoutClear() throws IOException {
+        if (!Files.exists(logFile) || Files.size(logFile) == 0) {
+            return List.of();
+        }
+        return Files.readAllLines(logFile);
+    }
+
     /**
      * [SYNC-ECO-098] Gets the current size of the overflow log.
      */

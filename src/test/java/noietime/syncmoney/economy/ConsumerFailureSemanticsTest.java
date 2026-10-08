@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -86,8 +87,8 @@ class ConsumerFailureSemanticsTest {
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
-            return true;
-        }).when(harness.dbWriteQueue).offer(any());
+            return CompletableFuture.completedFuture(true);
+        }).when(harness.dbWriteQueue).offerAndTrack(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("-10.00"), new BigDecimal("90.00"),
@@ -132,8 +133,8 @@ class ConsumerFailureSemanticsTest {
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
-            return true;
-        }).when(harness.dbWriteQueue).offer(any());
+            return CompletableFuture.completedFuture(true);
+        }).when(harness.dbWriteQueue).offerAndTrack(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("10.00"), new BigDecimal("110.00"),
@@ -180,8 +181,8 @@ class ConsumerFailureSemanticsTest {
         AtomicInteger dbOffers = new AtomicInteger();
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
-            return true;
-        }).when(harness.dbWriteQueue).offer(any());
+            return CompletableFuture.completedFuture(true);
+        }).when(harness.dbWriteQueue).offerAndTrack(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("-60.00"), new BigDecimal("40.00"),
@@ -236,8 +237,8 @@ class ConsumerFailureSemanticsTest {
         doAnswer(invocation -> {
             dbOffers.incrementAndGet();
             dbOfferObserved.countDown();
-            return true;
-        }).when(harness.dbWriteQueue).offer(any());
+            return CompletableFuture.completedFuture(true);
+        }).when(harness.dbWriteQueue).offerAndTrack(any());
 
         try {
             harness.startWith(event(account, new BigDecimal("-60.00"), new BigDecimal("40.00"),
@@ -335,12 +336,12 @@ class ConsumerFailureSemanticsTest {
             BigDecimal after = durableBalance.updateAndGet(balance -> balance.add(new BigDecimal("10.00")));
             return new ConfirmedAccount(account, after, 9L);
         });
-        when(harness.dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
+        when(harness.dbWriteQueue.offerAndTrack(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
             dbOfferAttempts.countDown();
             if (dbOffers.incrementAndGet() == 1) {
-                throw new IllegalStateException("downstream DB queue failure");
+                return CompletableFuture.completedFuture(false);
             }
-            return true;
+            return CompletableFuture.completedFuture(true);
         });
 
         try {
@@ -355,7 +356,8 @@ class ConsumerFailureSemanticsTest {
                             "a confirmed Redis mutation must not be repeated when downstream work fails"),
                     () -> assertEquals(new BigDecimal("110.00"), durableBalance.get(),
                             "the repeated event currently changes durable balance to 120.00"),
-                    () -> verify(harness.dbWriteQueue, times(2)).offer(any(DbWriteQueue.DbWriteTask.class))
+                    () -> verify(harness.dbWriteQueue, times(2))
+                            .offerAndTrack(any(DbWriteQueue.DbWriteTask.class))
             );
         } finally {
             harness.close();
@@ -379,7 +381,7 @@ class ConsumerFailureSemanticsTest {
             redisMutations.incrementAndGet();
             return new ConfirmedAccount(account, new BigDecimal("110.00"), 9L);
         });
-        when(harness.dbWriteQueue.offer(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
+        when(harness.dbWriteQueue.offerAndTrack(any(DbWriteQueue.DbWriteTask.class))).thenAnswer(invocation -> {
             int attempt = dbOffers.incrementAndGet();
             dbOfferAttempts.countDown();
             if (attempt == 1) {
@@ -387,9 +389,9 @@ class ConsumerFailureSemanticsTest {
                 if (!allowDbFailure.await(5, TimeUnit.SECONDS)) {
                     throw new IllegalStateException("DB failure barrier timed out");
                 }
-                throw new IllegalStateException("downstream DB queue failure");
+                return CompletableFuture.completedFuture(false);
             }
-            return true;
+            return CompletableFuture.completedFuture(true);
         });
 
         try {
@@ -408,7 +410,8 @@ class ConsumerFailureSemanticsTest {
                             "shutdown should retry accepted downstream work before the consumer exits"),
                     () -> assertEquals(1, redisMutations.get(),
                             "a downstream-only retry must not apply the accepted Redis delta twice"),
-                    () -> verify(harness.dbWriteQueue, times(2)).offer(any(DbWriteQueue.DbWriteTask.class)),
+                    () -> verify(harness.dbWriteQueue, times(2))
+                            .offerAndTrack(any(DbWriteQueue.DbWriteTask.class)),
                     () -> assertEquals(0, harness.queue.size(), "the retry is no longer in the public queue")
             );
         } finally {

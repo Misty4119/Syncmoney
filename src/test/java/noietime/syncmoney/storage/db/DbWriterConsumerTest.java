@@ -9,6 +9,7 @@ import org.mockito.MockitoAnnotations;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -170,7 +171,7 @@ class DbWriterConsumerTest {
     }
 
     @Test
-    void testFailedTaskIsRetriedAndNotLost() throws InterruptedException {
+    void testFailedTaskIsRetriedAndNotLost() throws Exception {
         // Use a real queue so re-queued retries are actually observable.
         DbWriteQueue realQueue = new DbWriteQueue(1000);
         DatabaseManager failingThenOk = mock(DatabaseManager.class);
@@ -183,8 +184,9 @@ class DbWriterConsumerTest {
 
         DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, failingThenOk);
 
-        realQueue.offer(new DbWriteQueue.DbWriteTask(
+        CompletableFuture<Boolean> completion = realQueue.offerAndTrack(new DbWriteQueue.DbWriteTask(
                 UUID.randomUUID(), "RetryPlayer", 777.0, 1L, "test-server", Instant.now()));
+        assertNotNull(completion);
 
         Thread consumerThread = new Thread(retryConsumer::run);
         consumerThread.start();
@@ -199,10 +201,11 @@ class DbWriterConsumerTest {
 
         assertEquals(0, realQueue.size(), "Failed task should be retried until written, not lost");
         assertTrue(realQueue.getWrittenCount() >= 1, "Successful write should be counted");
+        assertTrue(completion.get(1, TimeUnit.SECONDS), "completion must follow the successful SQL retry");
     }
 
     @Test
-    void testTaskDroppedAfterMaxRetries() throws InterruptedException {
+    void testTaskDroppedAfterMaxRetries() throws Exception {
         // DB never recovers: the task should be retried up to the cap, then dropped
         // (logged), and the consumer must not loop forever on it.
         DbWriteQueue realQueue = new DbWriteQueue(1000);
@@ -213,8 +216,9 @@ class DbWriterConsumerTest {
 
         DbWriterConsumer retryConsumer = new DbWriterConsumer(mockPlugin, realQueue, alwaysFailing);
 
-        realQueue.offer(new DbWriteQueue.DbWriteTask(
+        CompletableFuture<Boolean> completion = realQueue.offerAndTrack(new DbWriteQueue.DbWriteTask(
                 UUID.randomUUID(), "DoomedPlayer", 1.0, 1L, "test-server", Instant.now()));
+        assertNotNull(completion);
 
         Thread consumerThread = new Thread(retryConsumer::run);
         consumerThread.start();
@@ -230,6 +234,8 @@ class DbWriterConsumerTest {
         consumerThread.join(3000);
 
         assertEquals(0, realQueue.size(), "Task should be dropped after exceeding the retry cap");
+        assertFalse(completion.get(1, TimeUnit.SECONDS),
+                "a retry-exhausted SQL task must report failure to its recovery checkpoint owner");
     }
 
     @Test

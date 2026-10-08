@@ -8,6 +8,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.recovery.RecoverySpool;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.uuid.NameResolver;
 
@@ -90,6 +91,8 @@ public class EventConsumerManager {
             return;
         }
 
+        RecoverySpool recoverySpool = config.isCMIMode() ? null
+                : new RecoverySpool(plugin.getDataFolder().toPath().resolve("recovery-v1.jsonl"));
         this.economyEventConsumer = new EconomyEventConsumer(
                 plugin,
                 config,
@@ -103,7 +106,8 @@ public class EventConsumerManager {
                 baltopManager,
                 shadowSyncTask,
                 overflowLog,
-                databaseManager);
+                databaseManager,
+                recoverySpool);
 
         plugin.getLogger().fine("EconomyEventConsumer initialized");
     }

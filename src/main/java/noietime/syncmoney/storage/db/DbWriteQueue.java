@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 
@@ -89,6 +90,18 @@ public final class DbWriteQueue {
         }
     }
 
+    /**
+     * Offers a task and returns a completion receipt that resolves only after the SQL
+     * writer has persisted it or exhausted its bounded retry path. A null result means
+     * the task was not admitted.
+     */
+    public CompletableFuture<Boolean> offerAndTrack(DbWriteTask task) {
+        if (task == null) return null;
+        CompletableFuture<Boolean> completion = new CompletableFuture<>();
+        if (!offer(task.withCompletion(completion))) return null;
+        return completion;
+    }
+
     public boolean requeue(DbWriteTask task) {
         if (task == null) return false;
         synchronized (admissionGate) {
@@ -160,7 +173,8 @@ public final class DbWriteQueue {
      * @param serverName server name
      * @param timestamp timestamp
      */
-    public record DbWriteTask(String operationId, List<AccountWrite> accounts) {
+    public record DbWriteTask(String operationId, List<AccountWrite> accounts,
+            CompletableFuture<Boolean> completion) {
         public DbWriteTask {
             if (operationId == null || operationId.isBlank()) {
                 throw new IllegalArgumentException("operationId must not be blank");
@@ -171,9 +185,13 @@ public final class DbWriteQueue {
             }
         }
 
+        public DbWriteTask(String operationId, List<AccountWrite> accounts) {
+            this(operationId, accounts, null);
+        }
+
         public DbWriteTask(String operationId, ConfirmedAccount account, String playerName,
                 String serverName, Instant timestamp) {
-            this(operationId, List.of(new AccountWrite(account, playerName, serverName, timestamp)));
+            this(operationId, List.of(new AccountWrite(account, playerName, serverName, timestamp)), null);
         }
 
         /** Compatibility constructor for non-receipt maintenance and test callers. */
@@ -215,6 +233,14 @@ public final class DbWriteQueue {
 
         public int accountCount() {
             return accounts.size();
+        }
+
+        public DbWriteTask withCompletion(CompletableFuture<Boolean> trackedCompletion) {
+            return new DbWriteTask(operationId, accounts, java.util.Objects.requireNonNull(trackedCompletion));
+        }
+
+        public void complete(boolean persisted) {
+            if (completion != null) completion.complete(persisted);
         }
     }
 

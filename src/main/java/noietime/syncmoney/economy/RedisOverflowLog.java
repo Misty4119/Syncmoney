@@ -7,6 +7,7 @@ import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
 
 import java.math.BigDecimal;
+import java.io.IOException;
 import java.util.*;
 
 /**
@@ -23,9 +24,6 @@ import java.util.*;
 public final class RedisOverflowLog implements OverflowLogInterface {
 
     private static final String REDIS_KEY = "syncmoney:overflow:events";
-    private static final long MAX_AGE_MS = 24 * 60 * 60 * 1000L;
-    private static final int MAX_EVENTS = 100000;
-    
     private final RedisManager redisManager;
     private final Plugin plugin;
     private final ObjectMapper objectMapper;
@@ -58,9 +56,6 @@ public final class RedisOverflowLog implements OverflowLogInterface {
             try (var jedis = redisManager.getResource()) {
 
                 jedis.zadd(REDIS_KEY, event.timestamp(), member + "|" + json);
-                
-
-                cleanupOldEntries(jedis);
             }
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to write Redis overflow log: " + e.getMessage());
@@ -112,6 +107,37 @@ public final class RedisOverflowLog implements OverflowLogInterface {
         }
         
         return lines;
+    }
+
+    /** Read legacy Redis records without deleting or pruning the sorted set. */
+    @Override
+    public List<String> readWithoutClear() throws IOException {
+        try (var jedis = redisManager.getResource()) {
+            List<String> entries = jedis.zrange(REDIS_KEY, 0, -1);
+            if (entries == null || entries.isEmpty()) return List.of();
+
+            List<String> lines = new ArrayList<>(entries.size());
+            for (String entry : entries) {
+                int pipeIndex = entry.indexOf('|');
+                if (pipeIndex <= 0) {
+                    throw new IOException("Invalid legacy Redis overflow entry; original record was preserved");
+                }
+                try {
+                    OverflowEvent event = objectMapper.readValue(entry.substring(pipeIndex + 1), OverflowEvent.class);
+                    lines.add(String.format("%d|%s|%s|%s|%s|%s",
+                            event.timestamp, event.playerUuid, event.eventType, event.eventSource,
+                            event.amount, event.requestId));
+                } catch (Exception malformed) {
+                    throw new IOException("Unable to parse legacy Redis overflow entry; original record was preserved",
+                            malformed);
+                }
+            }
+            return lines;
+        } catch (IOException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IOException("Unable to read legacy Redis overflow entries; source data was preserved", failure);
+        }
     }
 
     /**
@@ -167,23 +193,6 @@ public final class RedisOverflowLog implements OverflowLogInterface {
             plugin.getLogger().info("Cleared all overflow events from Redis.");
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to clear overflow events: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Cleanup old entries to prevent unbounded growth.
-     */
-    private void cleanupOldEntries(Jedis jedis) {
-        long cutoff = System.currentTimeMillis() - MAX_AGE_MS;
-        
-
-        jedis.zremrangeByScore(REDIS_KEY, "-inf", String.valueOf(cutoff));
-        
-
-        Long count = jedis.zcard(REDIS_KEY);
-        if (count != null && count > MAX_EVENTS) {
-            long toRemove = count - MAX_EVENTS;
-            jedis.zremrangeByRank(REDIS_KEY, 0, toRemove - 1);
         }
     }
 

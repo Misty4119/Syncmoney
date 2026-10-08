@@ -193,6 +193,14 @@ public final class AuditLogger {
         }
     }
 
+    /** Persist a recovery-owned economy audit record and surface backend failures to its checkpoint owner. */
+    public void persistConfirmedRecord(AuditRecord record) throws SQLException {
+        if (!enabled || dataSource == null || record == null) {
+            throw new SQLException("Confirmed audit persistence is unavailable");
+        }
+        AuditDbWriter.writeWithRetryIdempotently(dataSource, record, maxRetry);
+    }
+
     /**
      * Checks if should merge with previous record.
      * Merge conditions:
