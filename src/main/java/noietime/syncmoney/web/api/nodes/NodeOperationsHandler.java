@@ -103,36 +103,39 @@ public class NodeOperationsHandler extends NodesApiContext {
                 return;
             }
 
-            List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
-            int newIndex = nodes.size();
-
             SyncmoneyConfig.NodeConfig newNode = new SyncmoneyConfig.NodeConfig();
             newNode.name = name;
             newNode.url = url;
             newNode.apiKey = apiKeyStore != null ? apiKeyStore.encrypt(apiKey, getMasterKey()) : apiKey;
             newNode.enabled = enabled != null ? enabled : true;
 
-            List<Map<String, Object>> nodeMaps = new ArrayList<>();
-            List<?> rawNodeMaps = config.getConfig().getMapList("web-admin.nodes");
-            if (rawNodeMaps != null) {
-                for (Object item : rawNodeMaps) {
-                    if (item instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> map = (Map<String, Object>) item;
-                        nodeMaps.add(map);
+            int newIndex;
+            synchronized (plugin) {
+                List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
+                newIndex = nodes.size();
+
+                List<Map<String, Object>> nodeMaps = new ArrayList<>();
+                List<?> rawNodeMaps = config.getConfig().getMapList("web-admin.nodes");
+                if (rawNodeMaps != null) {
+                    for (Object item : rawNodeMaps) {
+                        if (item instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> map = (Map<String, Object>) item;
+                            nodeMaps.add(map);
+                        }
                     }
                 }
+
+                Map<String, Object> nodeMap = new LinkedHashMap<>();
+                nodeMap.put("name", name);
+                nodeMap.put("url", url);
+                nodeMap.put("api-key", newNode.apiKey);
+                nodeMap.put("enabled", newNode.enabled);
+                nodeMaps.add(nodeMap);
+
+                setNodeConfigValue("web-admin.nodes", nodeMaps);
+                plugin.saveConfig();
             }
-
-            Map<String, Object> nodeMap = new LinkedHashMap<>();
-            nodeMap.put("name", name);
-            nodeMap.put("url", url);
-            nodeMap.put("api-key", newNode.apiKey);
-            nodeMap.put("enabled", newNode.enabled);
-            nodeMaps.add(nodeMap);
-
-            config.getConfig().set("web-admin.nodes", nodeMaps);
-            plugin.saveConfig();
             nodeStatusCache.put(newNode.url, "unknown");
 
             Map<String, Object> result = new LinkedHashMap<>();
@@ -162,8 +165,11 @@ public class NodeOperationsHandler extends NodesApiContext {
         }
 
         try {
-            List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
-            if (index >= nodes.size()) {
+            boolean exists;
+            synchronized (plugin) {
+                exists = index < getNodes().size();
+            }
+            if (!exists) {
                 sendError(exchange, 404, "NODE_NOT_FOUND", "Node not found at index " + index);
                 return;
             }
@@ -176,23 +182,36 @@ public class NodeOperationsHandler extends NodesApiContext {
             String apiKey = (String) request.get("apiKey");
             Boolean enabled = (Boolean) request.get("enabled");
 
-            if (name != null && !name.isBlank()) updateNodeInConfig(index, "name", name);
-            if (url != null && !url.isBlank()) {
-                if (!isUrlAllowed(url)) {
-                    sendError(exchange, 400, "SSRF_BLOCKED", "URL is not allowed (SSRF protection)");
-                    return;
+            if (url != null && !url.isBlank() && !isUrlAllowed(url)) {
+                sendError(exchange, 400, "SSRF_BLOCKED", "URL is not allowed (SSRF protection)");
+                return;
+            }
+            String encryptedKey = apiKey != null && !apiKey.isBlank() && apiKeyStore != null
+                    ? apiKeyStore.encrypt(apiKey, getMasterKey())
+                    : apiKey;
+
+            SyncmoneyConfig.NodeConfig node;
+            synchronized (plugin) {
+                List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
+                if (index >= nodes.size()) {
+                    node = null;
+                } else {
+                    if (name != null && !name.isBlank()) updateNodeInConfig(index, "name", name);
+                    if (url != null && !url.isBlank()) updateNodeInConfig(index, "url", url);
+                    if (apiKey != null && !apiKey.isBlank()) {
+                        updateNodeInConfig(index, "api-key", apiKeyStore != null ? encryptedKey : apiKey);
+                    }
+                    if (enabled != null) updateNodeInConfig(index, "enabled", enabled);
+
+                    plugin.saveConfig();
+                    node = nodes.get(index);
                 }
-                updateNodeInConfig(index, "url", url);
             }
-            if (apiKey != null && !apiKey.isBlank()) {
-                String encryptedKey = apiKeyStore != null ? apiKeyStore.encrypt(apiKey, getMasterKey()) : apiKey;
-                updateNodeInConfig(index, "api-key", encryptedKey);
+            if (node == null) {
+                sendError(exchange, 404, "NODE_NOT_FOUND", "Node not found at index " + index);
+                return;
             }
-            if (enabled != null) updateNodeInConfig(index, "enabled", enabled);
 
-            plugin.saveConfig();
-
-            SyncmoneyConfig.NodeConfig node = nodes.get(index);
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("index", index);
             result.put("name", node.name);
@@ -221,31 +240,37 @@ public class NodeOperationsHandler extends NodesApiContext {
         }
 
         try {
-            List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
-            if (index >= nodes.size()) {
-                sendError(exchange, 404, "NODE_NOT_FOUND", "Node not found at index " + index);
-                return;
-            }
+            String nodeUrl;
+            synchronized (plugin) {
+                List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
+                if (index >= nodes.size()) {
+                    nodeUrl = null;
+                } else {
+                    SyncmoneyConfig.NodeConfig nodeToDelete = nodes.get(index);
+                    nodeUrl = nodeToDelete.url;
 
-            SyncmoneyConfig.NodeConfig nodeToDelete = nodes.get(index);
-            String nodeUrl = nodeToDelete.url;
+                    List<Map<String, Object>> nodeMaps = new ArrayList<>();
+                    List<?> rawNodeMaps = config.getConfig().getMapList("web-admin.nodes");
+                    if (rawNodeMaps != null) {
+                        for (Object item : rawNodeMaps) {
+                            if (item instanceof Map) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> map = (Map<String, Object>) item;
+                                nodeMaps.add(map);
+                            }
+                        }
+                    }
 
-            List<Map<String, Object>> nodeMaps = new ArrayList<>();
-            List<?> rawNodeMaps = config.getConfig().getMapList("web-admin.nodes");
-            if (rawNodeMaps != null) {
-                for (Object item : rawNodeMaps) {
-                    if (item instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> map = (Map<String, Object>) item;
-                        nodeMaps.add(map);
+                    if (index < nodeMaps.size()) {
+                        nodeMaps.remove(index);
+                        setNodeConfigValue("web-admin.nodes", nodeMaps);
+                        plugin.saveConfig();
                     }
                 }
             }
-
-            if (index < nodeMaps.size()) {
-                nodeMaps.remove(index);
-                config.getConfig().set("web-admin.nodes", nodeMaps);
-                plugin.saveConfig();
+            if (nodeUrl == null) {
+                sendError(exchange, 404, "NODE_NOT_FOUND", "Node not found at index " + index);
+                return;
             }
 
             nodeStatusCache.remove(nodeUrl);
@@ -300,8 +325,13 @@ public class NodeOperationsHandler extends NodesApiContext {
 
     // ─── Private helpers ────────────────────────────────────────────────────────
 
-    private void updateNodeInConfig(int index, String field, Object value) {
-        config.getConfig().set("web-admin.nodes." + index + "." + field, value);
+    void updateNodeInConfig(int index, String field, Object value) {
+        setNodeConfigValue("web-admin.nodes." + index + "." + field, value);
+    }
+
+    void setNodeConfigValue(String path, Object value) {
+        config.getConfig().set(path, value);
+        plugin.getConfig().set(path, value);
     }
 
     private String pingNode(SyncmoneyConfig.NodeConfig node) {

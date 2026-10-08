@@ -382,33 +382,35 @@ public class ConfigManager {
      * [SYNC-CONFIG-009] Save multiple configuration changes at once.
      */
     public boolean saveConfigBatch(List<ConfigChange> changes) {
-        try {
-            reloadYaml();
+        synchronized (plugin) {
+            try {
+                reloadYaml();
 
-            for (ConfigChange change : changes) {
-                String rawPath = change.section() + "." + change.key();
-                String path = VIRTUAL_SECTION_PATHS.getOrDefault(rawPath, rawPath);
-                Object value = change.value();
+                for (ConfigChange change : changes) {
+                    String rawPath = change.section() + "." + change.key();
+                    String path = VIRTUAL_SECTION_PATHS.getOrDefault(rawPath, rawPath);
+                    Object value = change.value();
 
 
-                if (value instanceof Number) {
-                    if (value instanceof Double || value instanceof Float) {
-                        yamlConfig.set(path, ((Number) value).doubleValue());
-                    } else if (value instanceof Long) {
-                        yamlConfig.set(path, ((Number) value).longValue());
+                    if (value instanceof Number) {
+                        if (value instanceof Double || value instanceof Float) {
+                            yamlConfig.set(path, ((Number) value).doubleValue());
+                        } else if (value instanceof Long) {
+                            yamlConfig.set(path, ((Number) value).longValue());
+                        } else {
+                            yamlConfig.set(path, ((Number) value).intValue());
+                        }
                     } else {
-                        yamlConfig.set(path, ((Number) value).intValue());
+                        yamlConfig.set(path, value);
                     }
-                } else {
-                    yamlConfig.set(path, value);
                 }
-            }
 
-            yamlConfig.save(configFile);
-            return true;
-        } catch (Exception e) {
-            plugin.getLogger().severe("Failed to save config: " + e.getMessage());
-            return false;
+                yamlConfig.save(configFile);
+                return true;
+            } catch (Exception e) {
+                plugin.getLogger().severe("Failed to save config: " + e.getMessage());
+                return false;
+            }
         }
     }
 
@@ -494,17 +496,11 @@ public class ConfigManager {
      * [SYNC-CONFIG-011] Perform hot reload of configuration.
      */
     public void hotReload() {
-
-        plugin.reloadConfig();
-        
-
-        plugin.reloadSyncmoneyConfig();
-        
-
-        plugin.reloadPermissionService();
-        
-
-        plugin.reloadEconomyFacade();
+        synchronized (plugin) {
+            if (!plugin.reloadPluginConfig()) {
+                throw new IllegalStateException("Config reload was rejected; see the server log for details.");
+            }
+        }
     }
 
     /**

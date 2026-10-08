@@ -84,29 +84,27 @@ public final class ReloadCommand implements CommandExecutor, TabCompleter {
     }
 
     private boolean reloadConfig(CommandSender sender, boolean notify) {
-        try {
-            ConfigMerger configMerger = new ConfigMerger(plugin, "config.yml", "messages.yml");
-            List<String> mergedFiles = configMerger.mergeAll();
-            if (!mergedFiles.isEmpty()) {
-                plugin.getLogger().info("Config migration completed for: " + String.join(", ", mergedFiles));
+        synchronized (plugin) {
+            try {
+                ConfigMerger configMerger = new ConfigMerger(plugin, "config.yml", "messages.yml");
+                List<String> mergedFiles = configMerger.mergeAll();
+                if (!mergedFiles.isEmpty()) {
+                    plugin.getLogger().info("Config migration completed for: " + String.join(", ", mergedFiles));
+                }
+
+                if (!plugin.reloadPluginConfig()) {
+                    throw new IllegalStateException("Config reload was rejected; see the server log for details.");
+                }
+
+                return true;
+            } catch (Exception e) {
+                if (notify) {
+                    MessageHelper.sendMessage(sender, plugin.getMessage("reload.fail-config-error")
+                            .replace("{error}", e.getMessage()));
+                }
+                plugin.getLogger().severe("Failed to reload config: " + e.getMessage());
+                return false;
             }
-
-            plugin.reloadConfig();
-
-            plugin.reloadSyncmoneyConfig();
-
-            plugin.reloadPermissionService();
-
-            plugin.reloadEconomyFacade();
-
-            return true;
-        } catch (Exception e) {
-            if (notify) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("reload.fail-config-error")
-                        .replace("{error}", e.getMessage()));
-            }
-            plugin.getLogger().severe("Failed to reload config: " + e.getMessage());
-            return false;
         }
     }
 

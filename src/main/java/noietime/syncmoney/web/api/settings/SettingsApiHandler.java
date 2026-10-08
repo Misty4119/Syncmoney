@@ -70,25 +70,27 @@ public class SettingsApiHandler extends AbstractApiHandler {
 
         saveLock.lock();
         try {
-            var cfg = plugin.getConfig();
+            synchronized (plugin) {
+                var cfg = plugin.getConfig();
 
 
-            String theme = config.getTheme();
-            String language = config.getLanguage();
-            String timezone = config.getTimezone();
+                String theme = config.getTheme();
+                String language = config.getLanguage();
+                String timezone = config.getTimezone();
 
-            if (theme == null) theme = "dark";
-            if (language == null) language = "zh-TW";
-            if (timezone == null) timezone = "UTC";
-
-
-            cfg.set("web-admin.ui.theme", theme);
-            cfg.set("web-admin.ui.language", language);
-            cfg.set("web-admin.ui.timezone", timezone);
+                if (theme == null) theme = "dark";
+                if (language == null) language = "zh-TW";
+                if (timezone == null) timezone = "UTC";
 
 
-            plugin.saveConfig();
-            plugin.getLogger().fine("UI settings saved to config.yml");
+                cfg.set("web-admin.ui.theme", theme);
+                cfg.set("web-admin.ui.language", language);
+                cfg.set("web-admin.ui.timezone", timezone);
+
+
+                plugin.saveConfig();
+                plugin.getLogger().fine("UI settings saved to config.yml");
+            }
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to save UI settings to config: " + e.getMessage());
         } finally {
@@ -170,7 +172,9 @@ public class SettingsApiHandler extends AbstractApiHandler {
                 }
 
 
-                config.setTheme(theme);
+                synchronized (plugin) {
+                    config.setTheme(theme);
+                }
                 saveToDisk();
 
                 Map<String, Object> response = new HashMap<>();
@@ -208,7 +212,9 @@ public class SettingsApiHandler extends AbstractApiHandler {
                 }
 
 
-                config.setLanguage(language);
+                synchronized (plugin) {
+                    config.setLanguage(language);
+                }
                 saveToDisk();
 
                 Map<String, Object> response = new HashMap<>();
@@ -247,7 +253,9 @@ public class SettingsApiHandler extends AbstractApiHandler {
                 }
 
 
-                config.setTimezone(timezone);
+                synchronized (plugin) {
+                    config.setTimezone(timezone);
+                }
                 saveToDisk();
 
                 Map<String, Object> response = new HashMap<>();

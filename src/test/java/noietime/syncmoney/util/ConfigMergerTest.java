@@ -9,8 +9,9 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.io.StringReader;
-import java.util.Set;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -30,6 +31,8 @@ class ConfigMergerTest {
         MockitoAnnotations.openMocks(this);
         when(mockPlugin.getDataFolder()).thenReturn(new File("target/test-config"));
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        when(mockPlugin.getResource("config.yml")).thenAnswer(ignored -> new ByteArrayInputStream(
+                "config-version: 12\n".getBytes(StandardCharsets.UTF_8)));
         
         configMerger = new ConfigMerger(mockPlugin, "config.yml", "messages.yml");
     }
@@ -37,7 +40,7 @@ class ConfigMergerTest {
     @Test
     void testDefaultConfigVersion() {
 
-        assertEquals(11, configMerger.getDefaultConfigVersion());
+        assertEquals(12, configMerger.getDefaultConfigVersion());
     }
 
     @Test
@@ -91,15 +94,23 @@ class ConfigMergerTest {
         int defaultVersion = configMerger.getDefaultConfigVersion();
         
 
-        assertEquals(11, defaultVersion);
+        assertEquals(12, defaultVersion);
         
 
         assertTrue(10 < defaultVersion);
         
 
-        assertEquals(11, defaultVersion);
+        assertEquals(12, defaultVersion);
         
 
-        assertTrue(12 > defaultVersion);
+        assertTrue(13 > defaultVersion);
+    }
+
+    @Test
+    void missingBundledConfigDoesNotInventFallbackSchema() {
+        when(mockPlugin.getResource("config.yml")).thenReturn(null);
+
+        assertEquals(-1, configMerger.getDefaultConfigVersion());
+        assertFalse(configMerger.needsUpgrade());
     }
 }

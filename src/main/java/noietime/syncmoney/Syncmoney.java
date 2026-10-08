@@ -42,6 +42,7 @@ import noietime.syncmoney.vault.SyncmoneyVaultProvider;
 import noietime.syncmoney.breaker.NotificationService;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
@@ -51,6 +52,7 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
@@ -155,6 +157,14 @@ public final class Syncmoney extends JavaPlugin {
         this.storageManager = new StorageManager(this, syncmoneyConfig);
         storageManager.initialize();
 
+        if (storageManager.getDatabaseManager() != null) {
+            this.schemaManager = new SchemaManager(
+                    this,
+                    storageManager.getDatabaseManager().getDataSource(),
+                    syncmoneyConfig.database().getDatabaseType());
+            getLogger().fine("SchemaManager initialized (version " + this.schemaManager.getDatabaseVersion() + ")");
+        }
+
         this.economyServiceManager = new EconomyServiceManager(this, syncmoneyConfig, storageManager);
         economyServiceManager.initialize();
 
@@ -257,14 +267,6 @@ public final class Syncmoney extends JavaPlugin {
                 storageManager.getDatabaseManager() != null ? storageManager.getDatabaseManager().getDataSource()
                         : null);
         auditServiceManager.initialize();
-
-        if (storageManager.getDatabaseManager() != null) {
-            this.schemaManager = new SchemaManager(
-                    this,
-                    storageManager.getDatabaseManager().getDataSource(),
-                    syncmoneyConfig.database().getDatabaseType());
-            getLogger().fine("SchemaManager initialized (version " + this.schemaManager.getDatabaseVersion() + ")");
-        }
 
         this.eventConsumerManager = new EventConsumerManager(
                 this,
@@ -624,13 +626,9 @@ public final class Syncmoney extends JavaPlugin {
     /**
      * Reloads configuration.
      */
-    public boolean reloadPluginConfig() {
+    public synchronized boolean reloadPluginConfig() {
         try {
-            reloadConfig();
-
-            reloadSyncmoneyConfig();
-            reloadPermissionService();
-            reloadEconomyFacade();
+            applyConfigReloadSafely();
 
             getLogger().fine("Configuration reloaded.");
             return true;
@@ -638,6 +636,30 @@ public final class Syncmoney extends JavaPlugin {
             getLogger().severe("Failed to reload config: " + e.getMessage());
             return false;
         }
+    }
+
+    /** Validates the on-disk candidate before replacing Bukkit's config or the active snapshot. */
+    private void applyConfigReloadSafely() throws IOException, InvalidConfigurationException {
+        File configFile = new File(getDataFolder(), "config.yml");
+        YamlConfiguration candidate = new YamlConfiguration();
+        candidate.load(configFile);
+        candidate.setDefaults(getConfig().getDefaults());
+
+        FileConfiguration active = syncmoneyConfig != null ? syncmoneyConfig.getConfig() : getConfig();
+        noietime.syncmoney.config.ConfigReloadPolicy.installIfSafe(active, candidate,
+                this::reloadConfig,
+                this::getConfig,
+                () -> restoreBukkitConfig(active),
+                () -> {
+                    reloadSyncmoneyConfig();
+                    reloadPermissionService();
+                    reloadEconomyFacade();
+                });
+    }
+
+    /** Restores Bukkit's reloaded in-memory config when the on-disk file changed after preflight. */
+    private void restoreBukkitConfig(FileConfiguration previous) {
+        noietime.syncmoney.config.ConfigReloadPolicy.restore(previous, getConfig());
     }
 
     /**
