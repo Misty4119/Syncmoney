@@ -1,5 +1,6 @@
 package noietime.syncmoney.core.state;
 
+import noietime.syncmoney.testkit.fixtures.FixtureCatalog;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -21,7 +22,7 @@ class AccountStateStoreTest {
     @Test
     void supportsAtomicSnapshotOperations() {
         AccountStateStore store = new AccountStateStore();
-        UUID account = UUID.randomUUID();
+        UUID account = FixtureCatalog.PLAYER_A;
         AccountState initial = new AccountState(new BigDecimal("10.00"), 1L, 1L);
 
         assertNull(store.get(account));
@@ -38,8 +39,8 @@ class AccountStateStoreTest {
     @Test
     void reversedPairLockAcquisitionUsesOneStableOrder() throws Exception {
         AccountStateStore store = new AccountStateStore();
-        UUID first = UUID.randomUUID();
-        UUID second = UUID.randomUUID();
+        UUID first = FixtureCatalog.PLAYER_A;
+        UUID second = FixtureCatalog.PLAYER_B;
         CountDownLatch start = new CountDownLatch(1);
         AtomicInteger inCriticalSection = new AtomicInteger();
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -59,7 +60,7 @@ class AccountStateStoreTest {
     @Test
     void tryLockReportsContentionWithoutBlocking() throws Exception {
         AccountStateStore store = new AccountStateStore();
-        UUID account = UUID.randomUUID();
+        UUID account = FixtureCatalog.PLAYER_A;
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService executor = Executors.newSingleThreadExecutor();

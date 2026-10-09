@@ -161,6 +161,7 @@ tasks.register('verifyArchitecture') {
                 ':syncmoney-bukkit'        : [':syncmoney-api', ':syncmoney-core', ':syncmoney-protocol',
                                               ':syncmoney-storage', ':syncmoney-sync'] as Set,
                 ':syncmoney-papi-expansion': [] as Set,
+                ':syncmoney-testkit'       : [] as Set,
         ]
         expectedProjects.each { path, expected ->
             def actual = directProjectPaths(project(path))
@@ -181,6 +182,7 @@ tasks.register('verifyArchitecture') {
                 ':syncmoney-bukkit'        : [':syncmoney-api', ':syncmoney-core', ':syncmoney-protocol',
                                               ':syncmoney-storage', ':syncmoney-sync'] as Set,
                 ':syncmoney-papi-expansion': [] as Set,
+                ':syncmoney-testkit'       : [] as Set,
         ]
         def paperApiExternalGroups = [
                 'io.papermc.paper', 'com.google.guava', 'com.google.code.findbugs', 'org.checkerframework',
@@ -206,6 +208,7 @@ tasks.register('verifyArchitecture') {
                 ':syncmoney-papi-expansion': (paperApiExternalGroups + [
                         'me.clip', 'com.zaxxer', 'com.mysql', 'com.google.protobuf', 'org.postgresql'
                 ]) as Set,
+                ':syncmoney-testkit'       : [] as Set,
         ]
         def runtimeForbiddenExternalGroups = [
                 ':syncmoney-bukkit': ['io.papermc.paper', 'net.milkbowl.vault', 'me.clip', 'net.kyori'] as Set,
@@ -378,6 +381,15 @@ tasks.register('verifyPackaging') {
                 if (classEntries.keySet().any { it.startsWith(prefix) }) {
                     failures << 'server-provided or developer-only classes were packaged under ' + prefix
                 }
+            }
+            def forbiddenFixtureResources = [
+                    'protocol/legacy-balance-v1.json',
+                    'protocol/legacy-cmi-v1.json',
+                    'sql/legacy-local-sqlite-v1.3.2.sql'
+            ] + counts.keySet().findAll { it.startsWith('compat/1.3.2/') }
+            def leakedFixtureResources = forbiddenFixtureResources.findAll { counts.containsKey(it) }
+            if (!leakedFixtureResources.isEmpty()) {
+                failures << 'testkit compatibility fixture resources were packaged: ' + leakedFixtureResources.sort()
             }
             if (classEntries.keySet().any { it.startsWith('com/google/gson/') }) {
                 failures << 'unrelocated Gson classes were packaged'

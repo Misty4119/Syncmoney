@@ -30,6 +30,9 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
     integrationTestImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    integrationTestImplementation(testFixtures(project(':syncmoney-testkit'))) {
+        exclude group: 'org.xerial', module: 'sqlite-jdbc'
+    }
     integrationTestImplementation 'redis.clients:jedis:5.2.0'
     integrationTestImplementation project(':syncmoney-core')
     integrationTestImplementation project(':syncmoney-storage')

@@ -1,8 +1,10 @@
 package noietime.syncmoney.sync;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -22,13 +24,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class CacheManagerScriptReloadIT {
-    private static RedisProcessTestSupport redis;
+    private static DisposableRedisServer redis;
     private static CacheManager cacheManager;
 
     @BeforeAll
     static void startRedisAndCacheManager() {
         try {
-            redis = RedisProcessTestSupport.start();
+        redis = DisposableRedisServer.start();
             Plugin plugin = mock(Plugin.class, RETURNS_DEEP_STUBS);
             when(plugin.getLogger()).thenReturn(Logger.getLogger("CacheManagerScriptReloadIT"));
             when(plugin.getResource(anyString())).thenAnswer(invocation -> {
@@ -36,7 +38,7 @@ class CacheManagerScriptReloadIT {
                 return CacheManager.class.getClassLoader().getResourceAsStream(path);
             });
             RedisManager redisManager = mock(RedisManager.class);
-            when(redisManager.getResource()).thenAnswer(invocation -> redis.connect());
+            when(redisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
             cacheManager = new CacheManager(plugin, redisManager, true);
         } catch (Exception e) {
             throw new RuntimeException("Could not start isolated Redis for CacheManager", e);
@@ -50,7 +52,7 @@ class CacheManagerScriptReloadIT {
 
     @BeforeEach
     void flushScripts() {
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.flushDB();
             jedis.scriptFlush();
         }
@@ -59,7 +61,7 @@ class CacheManagerScriptReloadIT {
     @Test
     void addReloadsAfterNoscriptAndReturnsTheConfirmedPair() {
         UUID player = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + player, "100.00");
             jedis.set("syncmoney:version:" + player, "7");
         }
@@ -74,7 +76,7 @@ class CacheManagerScriptReloadIT {
     @Test
     void setReloadsAfterNoscriptAndReturnsTheConfirmedPair() {
         UUID player = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + player, "100.00");
             jedis.set("syncmoney:version:" + player, "7");
         }
@@ -90,7 +92,7 @@ class CacheManagerScriptReloadIT {
     void transferReloadsAfterNoscriptAndReturnsBothConfirmedAccounts() {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + sender, "100.00");
             jedis.set("syncmoney:version:" + sender, "7");
             jedis.set("syncmoney:balance:" + receiver, "0.00");

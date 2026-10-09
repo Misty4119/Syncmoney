@@ -1,8 +1,9 @@
 package noietime.syncmoney.command;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.RedisMutationException;
-import noietime.syncmoney.sync.RedisProcessTestSupport;
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,13 +28,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class PayLuaScriptManagerNoscriptIT {
-    private static RedisProcessTestSupport redis;
+    private static DisposableRedisServer redis;
     private static PayLuaScriptManager scriptManager;
 
     @BeforeAll
     static void startRedisAndScriptManager() {
         try {
-            redis = RedisProcessTestSupport.start();
+            redis = DisposableRedisServer.start();
             Plugin plugin = mock(Plugin.class, RETURNS_DEEP_STUBS);
             when(plugin.getLogger()).thenReturn(Logger.getLogger("PayLuaScriptManagerNoscriptIT"));
             when(plugin.getResource(anyString())).thenAnswer(invocation -> {
@@ -41,7 +42,7 @@ class PayLuaScriptManagerNoscriptIT {
                 return PayLuaScriptManager.class.getClassLoader().getResourceAsStream(path);
             });
             RedisManager redisManager = mock(RedisManager.class);
-            when(redisManager.getResource()).thenAnswer(invocation -> redis.connect());
+            when(redisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
             scriptManager = new PayLuaScriptManager(plugin, redisManager);
             scriptManager.load();
         } catch (Exception e) {
@@ -56,7 +57,7 @@ class PayLuaScriptManagerNoscriptIT {
 
     @BeforeEach
     void flushScripts() {
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.flushDB();
             jedis.scriptFlush();
         }
@@ -66,7 +67,7 @@ class PayLuaScriptManagerNoscriptIT {
     void payTransferReloadsScriptAfterNoscriptAndReturnsBothAccounts() throws Exception {
         UUID sender = UUID.randomUUID();
         UUID target = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + sender, "100.00");
             jedis.set("syncmoney:version:" + sender, "7");
             jedis.set("syncmoney:balance:" + target, "0.00");
@@ -77,7 +78,7 @@ class PayLuaScriptManagerNoscriptIT {
 
         List<?> receipt = assertInstanceOf(List.class, result);
         assertEquals(List.of("90.00", "10.00", "8", "3"), receipt);
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             assertEquals(0, new BigDecimal("90.00").compareTo(
                     new BigDecimal(jedis.get("syncmoney:balance:" + sender))));
             assertEquals(0, new BigDecimal("10.00").compareTo(
@@ -91,7 +92,7 @@ class PayLuaScriptManagerNoscriptIT {
     void insufficientFundsIsClassifiedAsRejectedInsteadOfUnknown() throws Exception {
         UUID sender = UUID.randomUUID();
         UUID target = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + sender, "5.00");
             jedis.set("syncmoney:version:" + sender, "7");
             jedis.set("syncmoney:balance:" + target, "0.00");
@@ -104,7 +105,7 @@ class PayLuaScriptManagerNoscriptIT {
         assertEquals("REJECTED", rejection.executionState().name());
         assertTrue(rejection.getMessage().contains("INSUFFICIENT_FUNDS"),
                 "known rejection details must remain available to /pay's insufficient-funds response");
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             assertEquals("5.00", jedis.get("syncmoney:balance:" + sender));
             assertEquals("0.00", jedis.get("syncmoney:balance:" + target));
             assertEquals("7", jedis.get("syncmoney:version:" + sender));
@@ -116,7 +117,7 @@ class PayLuaScriptManagerNoscriptIT {
     void payTransferLoadsScriptLazilyAfterStartupRedisRecovery() throws Exception {
         UUID sender = UUID.randomUUID();
         UUID target = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + sender, "100.00");
             jedis.set("syncmoney:version:" + sender, "7");
             jedis.set("syncmoney:balance:" + target, "0.00");
@@ -126,7 +127,7 @@ class PayLuaScriptManagerNoscriptIT {
         AtomicBoolean degraded = new AtomicBoolean(true);
         RedisManager recoveringRedisManager = mock(RedisManager.class);
         when(recoveringRedisManager.isDegraded()).thenAnswer(invocation -> degraded.get());
-        when(recoveringRedisManager.getResource()).thenAnswer(invocation -> redis.connect());
+        when(recoveringRedisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
         PayLuaScriptManager recoveringManager = new PayLuaScriptManager(plugin(), recoveringRedisManager);
 
         recoveringManager.load();

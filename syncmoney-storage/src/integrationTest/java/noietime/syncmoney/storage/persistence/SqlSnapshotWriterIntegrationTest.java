@@ -1,6 +1,11 @@
 package noietime.syncmoney.storage.persistence;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.testkit.port.AccountRepositoryPort;
+import noietime.syncmoney.testkit.repository.FakeAccountRepository;
+import noietime.syncmoney.testkit.fixtures.FixtureCatalog;
+import noietime.syncmoney.testkit.sql.DisposableSqlNamespace;
+import noietime.syncmoney.testkit.sqlite.DisposableSqliteDatabase;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -30,6 +35,78 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class SqlSnapshotWriterIntegrationTest {
     private static final Instant BASE_TIME = Instant.parse("2026-01-01T00:00:00Z");
+
+    @Test
+    void localWriterPreservesLegacySqliteSchemaAndEnforcesSnapshotVersions() throws Exception {
+        try (DisposableSqliteDatabase database = DisposableSqliteDatabase.open()) {
+            database.executeScript(FixtureCatalog.legacyLocalSqliteV132Sql());
+            FakeAccountRepository fake = new FakeAccountRepository();
+            fake.seed(new ConfirmedAccount(FixtureCatalog.PLAYER_A, new BigDecimal("100.00"), 7));
+
+            ConfirmedAccount newer = new ConfirmedAccount(FixtureCatalog.PLAYER_A,
+                    new BigDecimal("95.00"), 8);
+            assertEquals(AccountRepositoryPort.WriteResult.APPLIED, fake.write(newer));
+            persistLocal(database.connection(), "fixture-a", newer, 1_700_000_000_010L);
+            assertEquals(fake.find(FixtureCatalog.PLAYER_A).orElseThrow(),
+                    readLegacyAccount(database.connection()));
+
+            ConfirmedAccount stale = new ConfirmedAccount(FixtureCatalog.PLAYER_A,
+                    new BigDecimal("80.00"), 7);
+            assertEquals(AccountRepositoryPort.WriteResult.STALE, fake.write(stale));
+            persistLocal(database.connection(), "stale-name", stale, 1_700_000_000_020L);
+
+            assertLegacyBalance(database.connection(), "95.00", 8, "fixture-a");
+            ConfirmedAccount duplicate = new ConfirmedAccount(FixtureCatalog.PLAYER_A,
+                    new BigDecimal("95.00"), 8);
+            assertEquals(AccountRepositoryPort.WriteResult.IDEMPOTENT, fake.write(duplicate));
+            persistLocal(database.connection(), "duplicate-name", duplicate, 1_700_000_000_030L);
+            assertEquals(fake.find(FixtureCatalog.PLAYER_A).orElseThrow(),
+                    readLegacyAccount(database.connection()));
+
+            ConfirmedAccount conflict = new ConfirmedAccount(FixtureCatalog.PLAYER_A,
+                    new BigDecimal("90.00"), 8);
+            assertThrows(AccountRepositoryPort.AccountConflictException.class, () -> fake.write(conflict));
+            assertThrows(SnapshotConflictException.class, () -> SqlSnapshotWriter.persistLocalBalance(
+                    database.connection(), conflict.playerUuid(),
+                    "conflict-name", conflict.balance(), (int) conflict.version(), 1_700_000_000_040L));
+            assertEquals(fake.find(FixtureCatalog.PLAYER_A).orElseThrow(),
+                    readLegacyAccount(database.connection()));
+            assertLegacyBalance(database.connection(), "95.00", 8, "duplicate-name");
+        }
+    }
+
+    private static void persistLocal(Connection connection, String name, ConfirmedAccount account, long updatedAt)
+            throws SQLException {
+        SqlSnapshotWriter.persistLocalBalance(connection, account.playerUuid(), name, account.balance(),
+                Math.toIntExact(account.version()), updatedAt);
+    }
+
+    private static ConfirmedAccount readLegacyAccount(Connection connection) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT balance, version FROM player_balances WHERE uuid = ?")) {
+            statement.setString(1, FixtureCatalog.PLAYER_A.toString());
+            try (var result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Legacy SQLite fixture account is missing");
+                return new ConfirmedAccount(FixtureCatalog.PLAYER_A,
+                        result.getBigDecimal("balance"), result.getLong("version"));
+            }
+        }
+    }
+
+    private static void assertLegacyBalance(Connection connection, String balance, int version, String name)
+            throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT name, balance, version FROM player_balances WHERE uuid = ?")) {
+            statement.setString(1, FixtureCatalog.PLAYER_A.toString());
+            try (var result = statement.executeQuery()) {
+                assertTrue(result.next());
+                assertEquals(name, result.getString("name"));
+                assertEquals(0, result.getBigDecimal("balance").compareTo(new BigDecimal(balance)));
+                assertEquals(version, result.getInt("version"));
+                assertFalse(result.next());
+            }
+        }
+    }
 
     @Test
     void guardedUpsertAndBatchRollbackWorkOnConfiguredRealBackends() throws Exception {
@@ -67,54 +144,25 @@ class SqlSnapshotWriterIntegrationTest {
 
     private static void exerciseIsolatedNamespace(Backend backend) throws Exception {
         Class.forName(backend.driverClass());
-        String namespace = "syncmoney_it_" + UUID.randomUUID().toString().replace("-", "");
         try (Connection admin = connect(backend)) {
-            createNamespace(admin, backend, namespace);
-            try (Connection isolated = connect(backend)) {
-                selectNamespace(isolated, backend, namespace);
+            DisposableSqlNamespace.Server server = backend.id().equals("postgresql")
+                    ? DisposableSqlNamespace.Server.POSTGRESQL : DisposableSqlNamespace.Server.MYSQL_COMPATIBLE;
+            try (DisposableSqlNamespace namespace = DisposableSqlNamespace.create(admin, server);
+                 Connection isolated = connect(backend)) {
+                namespace.select(isolated);
                 createPlayersTable(isolated);
                 assertSnapshotSemantics(isolated, backend.dialect());
                 try (Connection contender = connect(backend)) {
-                    selectNamespace(contender, backend, namespace);
+                    namespace.select(contender);
                     assertConcurrentSnapshotSemantics(isolated, contender, backend);
                 }
                 assertLegacyWriterCanRegress(isolated, backend);
-            } finally {
-                dropNamespace(admin, backend, namespace);
             }
         }
     }
 
     private static Connection connect(Backend backend) throws SQLException {
         return DriverManager.getConnection(backend.url(), backend.user(), backend.password());
-    }
-
-    private static void createNamespace(Connection admin, Backend backend, String namespace) throws SQLException {
-        String statement = backend.id().equals("postgresql")
-                ? "CREATE SCHEMA " + namespace
-                : "CREATE DATABASE " + namespace;
-        try (Statement sql = admin.createStatement()) {
-            sql.execute(statement);
-        }
-    }
-
-    private static void selectNamespace(Connection connection, Backend backend, String namespace) throws SQLException {
-        if (backend.id().equals("postgresql")) {
-            try (Statement statement = connection.createStatement()) {
-                statement.execute("SET search_path TO " + namespace);
-            }
-        } else {
-            connection.setCatalog(namespace);
-        }
-    }
-
-    private static void dropNamespace(Connection admin, Backend backend, String namespace) throws SQLException {
-        String statement = backend.id().equals("postgresql")
-                ? "DROP SCHEMA " + namespace + " CASCADE"
-                : "DROP DATABASE " + namespace;
-        try (Statement sql = admin.createStatement()) {
-            sql.execute(statement);
-        }
     }
 
     private static void createPlayersTable(Connection connection) throws SQLException {

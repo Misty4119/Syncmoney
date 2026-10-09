@@ -2,13 +2,11 @@ package noietime.syncmoney.protocol;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import noietime.syncmoney.testkit.fixtures.FixtureCatalog;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,7 +20,7 @@ class LegacyProtocolCodecTest {
 
     @Test
     void decodesLegacyBalanceGoldenWithoutLosingLongOrUnknownEvent() throws IOException {
-        String json = resource("/protocol/legacy-balance-v1.json");
+        String json = FixtureCatalog.legacyBalanceV1Json();
 
         LegacyBalanceMessage message = LegacyProtocolCodec.decodeBalance(json).orElseThrow();
 
@@ -41,13 +39,13 @@ class LegacyProtocolCodecTest {
     @Test
     void decodesLegacyCmiPayloadAndIgnoresUnknownFields() throws IOException {
         LegacyCmiMessage message = LegacyProtocolCodec.decodeCmi(
-                resource("/protocol/legacy-cmi-v1.json")).orElseThrow();
+                FixtureCatalog.legacyCmiV1Json()).orElseThrow();
 
         assertEquals(UUID, message.uuid());
         assertEquals(new BigDecimal("1.0E-4"), message.balance());
         assertEquals(17_910_432_000_000_001L, message.version());
         assertEquals("CMI_BALANCE_UPDATE", message.eventType());
-        assertEquals("margo", message.sourcePlayerName());
+        assertEquals("legacy-player", message.sourcePlayerName());
     }
 
     @Test
@@ -144,12 +142,4 @@ class LegacyProtocolCodecTest {
                         Double.POSITIVE_INFINITY, null, null)));
     }
 
-    private static String resource(String path) throws IOException {
-        try (InputStream input = LegacyProtocolCodecTest.class.getResourceAsStream(path)) {
-            if (input == null) {
-                throw new IOException("Missing protocol fixture: " + path);
-            }
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
-    }
 }

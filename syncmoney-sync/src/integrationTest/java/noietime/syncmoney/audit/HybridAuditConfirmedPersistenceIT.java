@@ -1,11 +1,12 @@
 package noietime.syncmoney.audit;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.AuditConfig;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.storage.RedisManager;
-import noietime.syncmoney.sync.RedisProcessTestSupport;
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.Jedis;
 
@@ -23,10 +24,10 @@ class HybridAuditConfirmedPersistenceIT {
 
     @Test
     void confirmedAuditLuaWritesOnceAndDeduplicatesResidentIds() throws Exception {
-        try (RedisProcessTestSupport redis = RedisProcessTestSupport.start()) {
+        try (DisposableRedisServer redis = DisposableRedisServer.start()) {
             RedisManager redisManager = mock(RedisManager.class);
             when(redisManager.isDegraded()).thenReturn(false);
-            when(redisManager.getResource()).thenAnswer(ignored -> redis.connect());
+            when(redisManager.getResource()).thenAnswer(ignored -> RedisTestSupport.connect(redis));
 
             Syncmoney plugin = mock(Syncmoney.class);
             when(plugin.getLogger()).thenReturn(Logger.getLogger(getClass().getName()));
@@ -53,7 +54,7 @@ class HybridAuditConfirmedPersistenceIT {
                 manager.persistConfirmedRecord(record);
                 manager.persistConfirmedRecord(record);
 
-                try (Jedis jedis = redis.connect()) {
+                try (Jedis jedis = RedisTestSupport.connect(redis)) {
                     List<String> entries = jedis.lrange("syncmoney:audit:recent", 0, -1);
                     assertEquals(1, entries.size(), "retrying a resident audit id must not add another list entry");
                     assertTrue(entries.get(0).contains("\"id\":\"" + record.id() + "\""),

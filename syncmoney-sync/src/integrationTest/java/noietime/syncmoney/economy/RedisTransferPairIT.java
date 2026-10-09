@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.core.state.AccountState;
@@ -7,7 +8,7 @@ import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
-import noietime.syncmoney.sync.RedisProcessTestSupport;
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterAll;
@@ -32,20 +33,20 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class RedisTransferPairIT {
-    private static RedisProcessTestSupport redis;
+    private static DisposableRedisServer redis;
     private static CacheManager firstCache;
     private static CacheManager secondCache;
 
     @BeforeAll
     static void startRedisAndCaches() throws Exception {
-        redis = RedisProcessTestSupport.start();
+        redis = DisposableRedisServer.start();
         firstCache = cacheManager("RedisTransferPairIT-first");
         secondCache = cacheManager("RedisTransferPairIT-second");
     }
 
     @BeforeEach
     void clearRedis() {
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.flushDB();
         }
     }
@@ -60,7 +61,7 @@ class RedisTransferPairIT {
         UUID sender = UUID.randomUUID();
         UUID firstReceiver = UUID.randomUUID();
         UUID secondReceiver = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             setAccount(jedis, sender, "100.00", 7L);
             setAccount(jedis, firstReceiver, "0.00", 3L);
             setAccount(jedis, secondReceiver, "0.00", 3L);
@@ -74,11 +75,16 @@ class RedisTransferPairIT {
 
         Node first = acceptedNode(plugin, firstCache, sender, firstReceiver);
         Node second = acceptedNode(plugin, secondCache, sender, secondReceiver);
+        CountDownLatch settled = new CountDownLatch(2);
+        assertTrue(first.queue.registerTransferCompletionListener(first.operationId,
+                ignored -> settled.countDown()));
+        assertTrue(second.queue.registerTransferCompletionListener(second.operationId,
+                ignored -> settled.countDown()));
         EconomyEventConsumer firstConsumer = consumer(plugin, config, first.queue, firstCache);
         EconomyEventConsumer secondConsumer = consumer(plugin, config, second.queue, secondCache);
         startTogether(firstConsumer, secondConsumer);
 
-        boolean bothSettled = awaitSettled(first.queue, second.queue, 10, TimeUnit.SECONDS);
+        boolean bothSettled = settled.await(10, TimeUnit.SECONDS);
         if (!bothSettled) {
             firstConsumer.stop();
             secondConsumer.stop();
@@ -91,7 +97,7 @@ class RedisTransferPairIT {
         BigDecimal senderBalance;
         BigDecimal firstReceiverBalance;
         BigDecimal secondReceiverBalance;
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             senderBalance = readBalance(jedis, sender);
             firstReceiverBalance = readBalance(jedis, firstReceiver);
             secondReceiverBalance = readBalance(jedis, secondReceiver);
@@ -114,18 +120,6 @@ class RedisTransferPairIT {
         );
     }
 
-    private static boolean awaitSettled(EconomyWriteQueue first, EconomyWriteQueue second,
-            long timeout, TimeUnit unit) throws InterruptedException {
-        long deadline = System.nanoTime() + unit.toNanos(timeout);
-        while (System.nanoTime() < deadline) {
-            if (first.isEmpty() && second.isEmpty()
-                    && !first.hasOutstandingWrites() && !second.hasOutstandingWrites()) return true;
-            TimeUnit.MILLISECONDS.sleep(10);
-        }
-        return first.isEmpty() && second.isEmpty()
-                && !first.hasOutstandingWrites() && !second.hasOutstandingWrites();
-    }
-
     private static CacheManager cacheManager(String loggerName) {
         Plugin plugin = mock(Plugin.class, RETURNS_DEEP_STUBS);
         when(plugin.getLogger()).thenReturn(Logger.getLogger(loggerName));
@@ -133,7 +127,7 @@ class RedisTransferPairIT {
                 CacheManager.class.getClassLoader().getResourceAsStream(invocation.getArgument(0)));
         RedisManager manager = mock(RedisManager.class);
         when(manager.isDegraded()).thenReturn(false);
-        when(manager.getResource()).thenAnswer(invocation -> new Jedis("127.0.0.1", redis.port()));
+        when(manager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
         return new CacheManager(plugin, manager, true);
     }
 
@@ -156,14 +150,14 @@ class RedisTransferPairIT {
         assertNotNull(senderReservation);
         assertNotNull(receiverReservation);
         assertTrue(queue.commitPair(senderReservation, out, receiverReservation, in, null));
-        return new Node(queue, memory);
+        return new Node(queue, memory, operationId);
     }
 
     private static EconomyEventConsumer consumer(Plugin plugin, SyncmoneyConfig config,
             EconomyWriteQueue queue, CacheManager cache) {
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
-        when(redisManager.getResource()).thenAnswer(invocation -> new Jedis("127.0.0.1", redis.port()));
+        when(redisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
         return new EconomyEventConsumer(plugin, config, queue, cache, redisManager,
                 mock(DbWriteQueue.class), null, null, mock(NameResolver.class), null,
                 (ShadowSyncTask) null, null, mock(DatabaseManager.class));
@@ -215,5 +209,5 @@ class RedisTransferPairIT {
         return new BigDecimal(jedis.get("syncmoney:balance:" + uuid));
     }
 
-    private record Node(EconomyWriteQueue queue, MemoryStateManager memory) { }
+    private record Node(EconomyWriteQueue queue, MemoryStateManager memory, String operationId) { }
 }

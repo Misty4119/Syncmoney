@@ -1,5 +1,7 @@
 package noietime.syncmoney.sync;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,16 +19,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisMutationSafetyIT {
-    private static RedisProcessTestSupport redis;
+    private static DisposableRedisServer redis;
 
     @BeforeAll
     static void startRedis() throws Exception {
-        redis = RedisProcessTestSupport.start();
+        redis = DisposableRedisServer.start();
     }
 
     @BeforeEach
     void clearRedis() {
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.flushDB();
         }
     }
@@ -42,7 +44,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:sender";
         String receiverBalance = "syncmoney:balance:receiver";
         String receiverVersion = "syncmoney:version:receiver";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.set(senderVersion, "7");
             jedis.rpush(receiverBalance, "wrong-type");
@@ -64,7 +66,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:sender";
         String receiverBalance = "syncmoney:balance:receiver";
         String receiverVersion = "syncmoney:version:receiver";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.set(senderVersion, "7");
             jedis.set(receiverBalance, "0.00");
@@ -84,7 +86,7 @@ class RedisMutationSafetyIT {
     void versionOverflowDoesNotChangeBalance() throws Exception {
         String balance = "syncmoney:balance:overflow";
         String version = "syncmoney:version:overflow";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "9223372036854775807");
 
@@ -100,7 +102,7 @@ class RedisMutationSafetyIT {
     void addReturnsExactVersionAboveLuaIntegerPrecision() throws Exception {
         String balance = "syncmoney:balance:add-large-version";
         String version = "syncmoney:version:add-large-version";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "9007199254740992");
 
@@ -115,7 +117,7 @@ class RedisMutationSafetyIT {
     void setReturnsExactVersionAboveLuaIntegerPrecision() throws Exception {
         String balance = "syncmoney:balance:set-large-version";
         String version = "syncmoney:version:set-large-version";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "9007199254740992");
 
@@ -132,7 +134,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:large-version-sender";
         String receiverBalance = "syncmoney:balance:large-version-receiver";
         String receiverVersion = "syncmoney:version:large-version-receiver";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.set(senderVersion, "9007199254740992");
             jedis.set(receiverBalance, "0.00");
@@ -151,7 +153,7 @@ class RedisMutationSafetyIT {
     void setPreservesLegacyNegativeBalanceErrorBeforeMutation() throws Exception {
         String balance = "syncmoney:balance:set-negative";
         String version = "syncmoney:version:set-negative";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
@@ -168,7 +170,7 @@ class RedisMutationSafetyIT {
     void addRejectsOverlongVersionBeforeChangingBalance() throws Exception {
         String balance = "syncmoney:balance:overlong-version";
         String version = "syncmoney:version:overlong-version";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "000000000000000000000000");
 
@@ -186,7 +188,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:noncanonical-sender";
         String receiverBalance = "syncmoney:balance:noncanonical-receiver";
         String receiverVersion = "syncmoney:version:noncanonical-receiver";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.set(senderVersion, "7");
             jedis.set(receiverBalance, "0.00");
@@ -206,7 +208,7 @@ class RedisMutationSafetyIT {
     void setRejectsBalanceAboveSqlDecimalRangeBeforeMutation() throws Exception {
         String balance = "syncmoney:balance:set-sql-range";
         String version = "syncmoney:version:set-sql-range";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
@@ -222,7 +224,7 @@ class RedisMutationSafetyIT {
     void setAcceptsMaximumSqlDecimalBalanceExactly() throws Exception {
         String balance = "syncmoney:balance:set-sql-maximum";
         String version = "syncmoney:version:set-sql-maximum";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
@@ -239,7 +241,7 @@ class RedisMutationSafetyIT {
     void addRejectsBalanceAboveSqlDecimalRangeBeforeMutation() throws Exception {
         String balance = "syncmoney:balance:add-sql-range";
         String version = "syncmoney:version:add-sql-range";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "999999999999999999.99");
             jedis.set(version, "7");
 
@@ -257,7 +259,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:range-sender";
         String receiverBalance = "syncmoney:balance:range-receiver";
         String receiverVersion = "syncmoney:version:range-receiver";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "10.00");
             jedis.set(senderVersion, "7");
             jedis.set(receiverBalance, "999999999999999999.99");
@@ -277,7 +279,7 @@ class RedisMutationSafetyIT {
     void addPreservesCentsAboveLuaDoubleIntegerPrecision() throws Exception {
         String balance = "syncmoney:balance:large-exact-balance";
         String version = "syncmoney:version:large-exact-balance";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "9007199254740992.00");
             jedis.set(version, "7");
 
@@ -292,7 +294,7 @@ class RedisMutationSafetyIT {
     void versionWrongTypeDoesNotChangeBalance() throws Exception {
         String balance = "syncmoney:balance:add-version-type";
         String version = "syncmoney:version:add-version-type";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.rpush(version, "wrong-type");
 
@@ -308,7 +310,7 @@ class RedisMutationSafetyIT {
     void setBalanceWrongTypeDoesNotIncrementVersion() throws Exception {
         String balance = "syncmoney:balance:set-type";
         String version = "syncmoney:version:set-type";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.rpush(balance, "wrong-type");
             jedis.set(version, "7");
 
@@ -326,7 +328,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:sender-version-type";
         String receiverBalance = "syncmoney:balance:receiver-version-type";
         String receiverVersion = "syncmoney:version:receiver-version-type";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.rpush(senderVersion, "wrong-type");
             jedis.set(receiverBalance, "0.00");
@@ -348,7 +350,7 @@ class RedisMutationSafetyIT {
         String senderVersion = "syncmoney:version:sender-version-overflow";
         String receiverBalance = "syncmoney:balance:receiver-version-overflow";
         String receiverVersion = "syncmoney:version:receiver-version-overflow";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(senderBalance, "100.00");
             jedis.set(senderVersion, "7");
             jedis.set(receiverBalance, "0.00");
@@ -368,7 +370,7 @@ class RedisMutationSafetyIT {
     void setRejectsNonFiniteBalanceWithoutMutatingEitherKey() throws Exception {
         String balance = "syncmoney:balance:set-nonfinite";
         String version = "syncmoney:version:set-nonfinite";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
@@ -384,7 +386,7 @@ class RedisMutationSafetyIT {
     void selfTransferIsRejectedWithoutBalanceOrVersionMutation() throws Exception {
         String balance = "syncmoney:balance:self";
         String version = "syncmoney:version:self";
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 

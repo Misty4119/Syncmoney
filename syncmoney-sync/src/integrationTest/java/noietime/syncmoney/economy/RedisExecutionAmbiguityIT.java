@@ -1,4 +1,5 @@
 package noietime.syncmoney.economy;
+import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent.EventSource;
@@ -9,7 +10,7 @@ import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.RedisResponseDropProxy;
-import noietime.syncmoney.sync.RedisProcessTestSupport;
+import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterAll;
@@ -30,14 +31,14 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class RedisExecutionAmbiguityIT {
-    private static RedisProcessTestSupport redis;
+    private static DisposableRedisServer redis;
     private static RedisResponseDropProxy proxy;
     private static CacheManager cacheManager;
     private static RedisManager redisManager;
 
     @BeforeAll
     static void startRedisAndCacheManager() throws Exception {
-        redis = RedisProcessTestSupport.start();
+        redis = DisposableRedisServer.start();
         proxy = RedisResponseDropProxy.start(redis.port());
 
         Plugin plugin = mock(Plugin.class, RETURNS_DEEP_STUBS);
@@ -47,7 +48,7 @@ class RedisExecutionAmbiguityIT {
             return CacheManager.class.getClassLoader().getResourceAsStream(path);
         });
         redisManager = mock(RedisManager.class);
-        when(redisManager.getResource()).thenAnswer(invocation -> new Jedis("127.0.0.1", proxy.port()));
+        when(redisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis, "127.0.0.1", proxy.port()));
         cacheManager = new CacheManager(plugin, redisManager, true);
     }
 
@@ -60,7 +61,7 @@ class RedisExecutionAmbiguityIT {
     @Test
     void committedWriteWithDroppedResponseIsQuarantinedWithoutRetry() throws Exception {
         UUID account = UUID.randomUUID();
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + account, "100.00");
             jedis.set("syncmoney:version:" + account, "7");
         }
@@ -88,7 +89,7 @@ class RedisExecutionAmbiguityIT {
         consumer.shutdown();
 
         assertTrue(proxy.didDropResponse(), "the fixture must drop the post-commit EVALSHA response");
-        try (Jedis jedis = redis.connect()) {
+        try (Jedis jedis = RedisTestSupport.connect(redis)) {
             assertEquals(0, new BigDecimal("110.00").compareTo(
                             new BigDecimal(jedis.get("syncmoney:balance:" + account))),
                     "Redis committed once before the proxy discarded the EVALSHA response");
