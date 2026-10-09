@@ -1,15 +1,15 @@
 package noietime.syncmoney.util;
 
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.jar.JarFile;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Regression guard for the Canvas/Paper Adventure class-loader boundary.
@@ -22,14 +22,10 @@ class AdventurePackagingTest {
 
     @Test
     void runtimeJarDoesNotContainPartiallyRelocatedAdventure() throws IOException {
-        Path libs = Path.of("build", "libs");
-        Assumptions.assumeTrue(Files.isDirectory(libs), "shadow jar has not been built");
-
-        Path jar = Files.list(libs)
-                .filter(path -> path.getFileName().toString().startsWith("Syncmoney-"))
-                .filter(path -> path.getFileName().toString().endsWith(".jar"))
-                .max(Comparator.comparingLong(this::lastModified))
-                .orElseThrow(() -> new AssertionError("No Syncmoney shadow jar found"));
+        String configuredPath = System.getProperty("syncmoney.shadowJar");
+        assertNotNull(configuredPath, "root shadowJar path must be configured for packaging tests");
+        Path jar = Path.of(configuredPath);
+        assertTrue(Files.isRegularFile(jar), "root shadow jar is missing: " + jar);
 
         try (JarFile jarFile = new JarFile(jar.toFile())) {
             boolean hasBundledAdventure = jarFile.stream()
@@ -39,14 +35,6 @@ class AdventurePackagingTest {
 
             assertFalse(hasBundledAdventure,
                     "Syncmoney must use the server's native Adventure runtime, not a partial shaded copy");
-        }
-    }
-
-    private long lastModified(Path path) {
-        try {
-            return Files.getLastModifiedTime(path).toMillis();
-        } catch (IOException e) {
-            return Long.MIN_VALUE;
         }
     }
 }

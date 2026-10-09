@@ -1,7 +1,6 @@
 package noietime.syncmoney.storage.db;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
-import noietime.syncmoney.util.Constants;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,6 +18,8 @@ import java.util.concurrent.Semaphore;
  * [AsyncScheduler] This class is thread-safe, suitable for multi-producer single-consumer pattern.
  */
 public final class DbWriteQueue {
+
+    private static final double HIGH_USAGE_THRESHOLD = 0.8;
 
     private final BlockingQueue<DbWriteTask> queue;
     private final int capacity;
@@ -68,7 +69,7 @@ public final class DbWriteQueue {
     /** Reserve one pair-capable task slot without blocking. */
     public Reservation tryReserve() {
         synchronized (admissionGate) {
-            int highWatermark = (int) (capacity * Constants.QUEUE_HIGH_USAGE_THRESHOLD);
+            int highWatermark = (int) (capacity * HIGH_USAGE_THRESHOLD);
             int occupied = capacity - admissionPermits.availablePermits();
             if (occupied >= highWatermark || !admissionPermits.tryAcquire()) {
                 return null;

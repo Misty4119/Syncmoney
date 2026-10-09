@@ -2,6 +2,10 @@ plugins { id 'java-library' }
 repositories {
     mavenCentral()
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+    maven {
+        name = 'codemc-creatorfromhell'
+        url = 'https://repo.codemc.io/repository/creatorfromhell/'
+    }
 }
 java { toolchain.languageVersion = JavaLanguageVersion.of(25) }
 
@@ -9,8 +13,8 @@ sourceSets {
     integrationTest {
         java.srcDir file('src/integrationTest/java')
         resources.srcDir rootProject.file('syncmoney-protocol/src/main/resources/lua')
-        compileClasspath += sourceSets.main.output + rootProject.sourceSets.main.output + rootProject.configurations.compileClasspath
-        runtimeClasspath += output + compileClasspath + rootProject.configurations.runtimeClasspath
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
     }
 }
 
@@ -20,14 +24,32 @@ configurations {
 }
 
 dependencies {
+    implementation project(':syncmoney-core')
+    implementation project(':syncmoney-protocol')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
     integrationTestImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     integrationTestImplementation 'redis.clients:jedis:5.2.0'
     integrationTestImplementation project(':syncmoney-core')
+    integrationTestImplementation project(':syncmoney-storage')
+    integrationTestImplementation project(':syncmoney-bukkit')
+    integrationTestImplementation 'com.zaxxer:HikariCP:6.2.1'
     integrationTestImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
     integrationTestImplementation 'org.mockito:mockito-core:5.8.0'
     integrationTestImplementation 'net.bytebuddy:byte-buddy:1.17.5'
     integrationTestImplementation 'net.bytebuddy:byte-buddy-agent:1.17.5'
+    integrationTestRuntimeOnly 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(25)
+}
+
+test {
+    useJUnitPlatform()
 }
 
 tasks.register('integrationTest', Test) {

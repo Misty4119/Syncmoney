@@ -259,7 +259,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          java_file=src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          java_file=syncmoney-bukkit/src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
           java_before="$(sha256sum "$java_file" | cut -d' ' -f1)"
           node syncmoney-web/scripts/sync-embedded-web.mjs
           java_after="$(sha256sum "$java_file" | cut -d' ' -f1)"

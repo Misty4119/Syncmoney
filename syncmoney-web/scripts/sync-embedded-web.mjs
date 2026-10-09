@@ -9,6 +9,7 @@ const embeddedDir = resolve(webRoot, '..', 'src', 'main', 'resources', 'syncmone
 const webAdminServer = resolve(
   webRoot,
   '..',
+  'syncmoney-bukkit',
   'src',
   'main',
   'java',

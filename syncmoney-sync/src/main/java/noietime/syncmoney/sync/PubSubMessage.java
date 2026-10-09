@@ -3,7 +3,7 @@ package noietime.syncmoney.sync;
 import noietime.syncmoney.protocol.LegacyBalanceMessage;
 import noietime.syncmoney.protocol.LegacyCmiMessage;
 import noietime.syncmoney.protocol.LegacyProtocolCodec;
-import noietime.syncmoney.util.NumericUtil;
+import noietime.syncmoney.core.money.MoneyPolicy;
 
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -144,7 +144,7 @@ public final class PubSubMessage {
      * Gets balance as BigDecimal (avoids floating-point errors).
      */
     public BigDecimal getBalanceAsBigDecimal() {
-        return NumericUtil.normalize(balance);
+        return MoneyPolicy.normalize(balance);
     }
 
     public long getVersion() {

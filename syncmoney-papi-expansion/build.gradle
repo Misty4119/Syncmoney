@@ -20,9 +20,6 @@ repositories {
         name = "extendedclip"
         url = "https://repo.extendedclip.com/content/repositories/placeholderapi/"
     }
-    flatDir {
-        dirs '../src/main/java'
-    }
 }
 
 dependencies {
