@@ -24,12 +24,18 @@ import noietime.syncmoney.schema.SchemaManager;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 
 import java.util.logging.Level;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Unified web service manager.
  * Manages WebAdminServer and API handlers.
  */
 public class WebServiceManager {
+
+    private static final Set<String> UNSAFE_API_KEY_PLACEHOLDERS = Set.of(
+            "change-me",
+            "change-me-in-production");
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -105,9 +111,9 @@ public class WebServiceManager {
         }
 
 
-        if ("change-me".equals(webAdminConfig.getApiKey())) {
+        if (isUnsafeApiKey(webAdminConfig.getApiKey())) {
             plugin.getLogger().severe("╔══════════════════════════════════════════════════════╗");
-            plugin.getLogger().severe("║ WEB ADMIN: Using default API Key is extremely dangerous! ║");
+            plugin.getLogger().severe("║ WEB ADMIN: Configure a non-placeholder API key before enabling it. ║");
             plugin.getLogger().severe("║ Please immediately modify the web-admin.security.api-key in config.yml ║");
             plugin.getLogger().severe("║ Web Admin has been disabled until the API Key is changed            ║");
             plugin.getLogger().severe("╚══════════════════════════════════════════════════════╝");
@@ -139,6 +145,11 @@ public class WebServiceManager {
         } catch (Exception e) {
             plugin.getLogger().log(Level.SEVERE, "Failed to start Web Admin Server: " + e.getMessage(), e);
         }
+    }
+
+    static boolean isUnsafeApiKey(String apiKey) {
+        return apiKey == null || apiKey.isBlank()
+                || UNSAFE_API_KEY_PLACEHOLDERS.contains(apiKey.trim().toLowerCase(Locale.ROOT));
     }
 
     /**

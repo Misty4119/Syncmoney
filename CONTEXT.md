@@ -194,7 +194,7 @@ Cross-server aggregate routes are registered only in central mode.
 
 SSE is served at `/api/sse`. The frontend obtains a session token from `/api/auth/ws-token` and opens SSE with that token. Older `/sse` documentation is stale.
 
-`/ws` currently has incomplete transport support. `WebSocketManager` performs upgrade-shaped handling, subscription bookkeeping, and logging, but its broadcast methods do not send through a full Undertow WebSocket channel. Treat it as limited/non-production until implementation changes.
+Every `/ws` request currently returns `503 WEBSOCKET_UNAVAILABLE`; no WebSocket upgrade occurs. Full transport remains deferred.
 
 `SystemApiHandler` and `NodesApiHandler` both register node GET routes. The registry replaces duplicate keys with `Map.put` and `NodesApiHandler` registers later, so it is effective for duplicates.
 
@@ -202,7 +202,7 @@ SSE is served at `/api/sse`. The frontend obtains a session token from `/api/aut
 
 Sensitive data includes Web/node API keys, Redis/SQL credentials, migration/Shadow credentials, audit exports, and acceptance/RCON secrets. Never commit real values.
 
-The default Web Admin API key is unsafe for exposure. Current code warns when it remains `change-me-in-production`, while the service disable guard checks `change-me`; operators must explicitly replace the default.
+The default Web Admin API key is unsafe for exposure. The service disables Web Admin for a blank key or `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin continues to start.
 
 If a real secret is found in a tracked file/history, removing it from the latest tree is insufficient. Rotate it and assess history/exposure.
 

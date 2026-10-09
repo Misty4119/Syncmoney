@@ -94,7 +94,7 @@ Syncmoney 使用 Paper common scheduler API，需維持 Paper、Folia、Canvas �
 
 Connection、authority、scheduler、module owner 變更除非 policy 明確支援，否則需 restart。要在發布新的 runtime snapshot 前明確回報 restart-required change，不要 half-apply config。`server-name` 必須設定；空白會阻止正常運作。
 
-Web Admin 預設 API key 是 `change-me-in-production`。Config validation 會警告這個值，但目前 `WebServiceManager` 的 auto-disable 邏輯實際只比對 exact `change-me`。因此不能把 shipped placeholder 描述為會自動安全停用；對外暴露 Web Admin 前，operator 必須先替換預設 API key。
+Web Admin 預設 API key 是 `change-me-in-production`。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，`WebServiceManager` 會停用 Web Admin；economy plugin 仍正常啟動。要啟用 Web Admin，operator 必須設定非 placeholder key。
 
 ## Commands 與 permissions
 
@@ -110,7 +110,7 @@ Backend 是 Undertow。一般 authenticated REST request 使用 `Authorization: 
 
 目前 frontend live stream 為 `/api/sse`。Frontend 會先以 API key 呼叫 `POST /api/auth/ws-token` 取得 session token，再使用該 token 建立 SSE connection。不要恢復舊的 `/sse` 文件。
 
-`/ws` 目前 transport 不完整，不得描述為 production live channel。完整 authentication 與已知限制以 [`API_REFERENCE.zh_tw.md`](API_REFERENCE.zh_tw.md) 為準。
+所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`，不得描述為 production live channel。完整 authentication 與 endpoint 行為以 [`API_REFERENCE.zh_tw.md`](API_REFERENCE.zh_tw.md) 為準。
 
 `SystemApiHandler` 與 `NodesApiHandler` 有重複 node GET route；registry 採 replacement semantics，且 `NodesApiHandler` 較晚註冊，因此它生效。
 

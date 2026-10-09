@@ -4,6 +4,18 @@
 
 本變更日誌格式基於 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，且本專案遵循 [語意化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+### 安全性 (Security)
+
+- Web Admin 會因兩種 shipped API-key placeholder（含空白值）自動停用，但不影響 economy plugin 啟動。
+- 延後的 `/ws` endpoint 固定回傳 `503 WEBSOCKET_UNAVAILABLE`，不再產生假的 WebSocket upgrade response。
+- SSE session token 改為原子消費；缺少或無效認證時回傳 `401`，不建立未認證 stream。
+
+### 已變更 (Changed)
+
+- Undertow route 會先從 I/O thread dispatch 到 worker thread，再執行 handler。
+
 ## [1.3.2] - 2026-09-20
 
 ### 安全性 (Security)
@@ -225,7 +237,7 @@ Paper 1.20.4、Paper 26.2、Folia 26.2 BETA、Canvas 26.2 — 多後端（Postgr
 - **系統 API**：提供全新的 `/api/system/status`、`/api/system/redis`、`/api/system/breaker` 與 `/api/system/metrics` 端點。
 - **經濟與審計 API**：無縫獲取總供給量、玩家餘額、排行榜統計數據與交易審計日誌。
 - **設定與配置 API**：用於動態讀取與更新插件設定的 REST 介面（`/api/config/reload`）。
-- **即時通訊**：新增 WebSocket 支援以提供即時交易與斷路器告警，並搭配伺服器傳送事件（SSE）。
+- **即時通訊**：新增初始 WebSocket scaffold 與事件 payload hooks，並搭配伺服器傳送事件（SSE）。完整 WebSocket transport 並未完成；`/ws` 目前回傳 `503 WEBSOCKET_UNAVAILABLE`，可用的即時通道為 SSE。
 
 #### 核心系統與基礎架構
 - **初始化管理器**：導入 `PluginInitializationManager`，可靠地協調元件的啟動／關閉相依性。

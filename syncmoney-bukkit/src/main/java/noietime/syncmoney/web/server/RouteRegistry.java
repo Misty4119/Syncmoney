@@ -51,24 +51,34 @@ public final class RouteRegistry {
      * Handle an incoming request, routing it to the correct sub-system.
      */
     public void handle(HttpServerExchange exchange) {
+        if (exchange.isInIoThread()) {
+            exchange.dispatch(() -> handle(exchange));
+            return;
+        }
+
         try {
             String path = exchange.getRelativePath();
+
+            String pathForRoute = path.startsWith("/") ? path.substring(1) : path;
+
+            if (path.startsWith("ws") || pathForRoute.startsWith("ws")) {
+                WebSocketManager manager = webSocketManager;
+                if (manager == null) {
+                    manager = new WebSocketManager(plugin);
+                }
+                manager.createHandler().handleRequest(exchange);
+                return;
+            }
 
             if ("OPTIONS".equals(exchange.getRequestMethod().toString())) {
                 corsHandler.handlePreflight(exchange, config.getCorsAllowedOrigins());
                 return;
             }
 
-            String pathForRoute = path.startsWith("/") ? path.substring(1) : path;
-
             if (path.startsWith("sse") || pathForRoute.startsWith("sse") ||
                 path.startsWith("api/sse") || pathForRoute.startsWith("api/sse")) {
                 if (sseManager != null) {
                     sseManager.createHandler().handleRequest(exchange);
-                }
-            } else if (path.startsWith("ws") || pathForRoute.startsWith("ws")) {
-                if (webSocketManager != null) {
-                    webSocketManager.createHandler().handleRequest(exchange);
                 }
             } else if (path.startsWith("api/") || pathForRoute.startsWith("api/")) {
                 if (authFilter != null && !authFilter.authenticate(exchange)) {

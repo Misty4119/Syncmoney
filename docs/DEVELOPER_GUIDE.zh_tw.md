@@ -171,7 +171,7 @@ Backend 是 Undertow。
 
 一般 `/api/*` request 使用 `Authorization: Bearer <api-key>`。`/health` 不需 authentication。修改 auth path 時要保留 constant-time key comparison 與 rate limiting。
 
-Shipped key 是 `change-me-in-production`。Validation 會對此值提出警告，但目前 auto-disable logic 只檢查精確的 `change-me`；文件與實作都不可把預設值描述成會自動安全停用。
+Shipped key 是 `change-me-in-production`。API key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，Web Admin 會停用；economy plugin 仍可正常啟動。
 
 ### Route registration
 
@@ -183,7 +183,7 @@ Shipped key 是 `change-me-in-production`。Validation 會對此值提出警告�
 
 Frontend live stream 是 `/api/sse`。One-time token 由 `POST /api/auth/ws-token` 發出，有效 60 秒，validation 成功後 consume。
 
-`/ws` 目前不完整。Upgrade-shaped request 只要求 query token 非空，manager 沒有呼叫 `WsTokenHandler.validateToken`，message transport 也尚未完整。Backend transport 與 token validation 完成並測試前，不要新增依賴 `/ws` 的 client code。
+所有 `/ws` request（含 upgrade-shaped request）都回傳 `503 WEBSOCKET_UNAVAILABLE`。在完整 transport 與 authentication path 實作並通過測試前，不要新增依賴 `/ws` 的 client code。
 
 ### API changes
 

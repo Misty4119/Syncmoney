@@ -194,7 +194,7 @@ Cross-server aggregate route 只在 central mode 註冊。
 
 SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token，再以該 token 開啟 SSE；舊的 `/sse` 說明已過時。
 
-`/ws` 目前 transport 不完整。`WebSocketManager` 有 upgrade-shaped handling、subscription bookkeeping 與 logging，但 broadcast method 並未透過完整 Undertow WebSocket channel 傳送，應視為 limited/non-production。
+所有 `/ws` request 目前都回 `503 WEBSOCKET_UNAVAILABLE`，不會執行 WebSocket upgrade。完整 transport 延後處理。
 
 `SystemApiHandler` 與 `NodesApiHandler` 都註冊 node GET route；registry 使用 `Map.put` 取代相同 key，且 `NodesApiHandler` 較晚註冊，因此 duplicate route 最後由它生效。
 
@@ -202,7 +202,7 @@ SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token�
 
 敏感資料包含 Web/node API key、Redis/SQL credentials、migration/Shadow credentials、audit export、acceptance/RCON secrets。不得 commit 真實值。
 
-預設 Web Admin API key 不適合對外暴露。程式會警告 `change-me-in-production`，但 service disable guard 只比對 `change-me`；operator 必須主動替換預設值。
+預設 Web Admin API key 不適合對外暴露。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，service 會停用 Web Admin，economy plugin 仍正常啟動。
 
 若真實 secret 已進入 tracked file/history，只從最新 tree 刪除並不夠；必須 rotate/revoke 並評估 history/exposure。
 

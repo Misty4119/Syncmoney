@@ -9,7 +9,7 @@
 
 ## 1. 基本行為
 
-Web Admin 預設停用。啟用後，server 提供 SPA、health endpoint、REST API、SSE，以及目前仍不完整的 WebSocket endpoint。
+Web Admin 預設停用。啟用後，server 提供 SPA、health endpoint、REST API 與 SSE endpoint。`/ws` 保留為 unavailable endpoint，所有 request 都固定回傳 `503 WEBSOCKET_UNAVAILABLE`。
 
 一般 API request 使用：
 
@@ -21,7 +21,7 @@ Authorization: Bearer <api-key>
 
 只有 `web-admin.security.trust-proxy=true` 時，才會從 `X-Forwarded-For` 讀取 forwarded client address；未啟用時，rate limiting 使用的 client identity 不信任該 header。
 
-Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limit 是 120 requests/minute；若 rate-limit setting 缺少，`WebAdminConfig` code fallback 為 60/minute。Config validation 會警告 `change-me-in-production`，但目前 server auto-disable logic 只檢查精確字串 `change-me`。因此在對外暴露服務前必須更換 shipped key。
+Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limit 是 120 requests/minute；若 rate-limit setting 缺少，`WebAdminConfig` code fallback 為 60/minute。API key 空白或 trim 後等於 `change-me` / `change-me-in-production`（不分大小寫）時，`WebServiceManager` 會停用 Web Admin，但 economy plugin 仍正常啟動。要啟用 Web Admin，請設定非 placeholder API key。
 
 ## 2. Response envelope
 
@@ -108,19 +108,15 @@ API key comparison 為 constant-time；one-time token validation 成功後即 co
 
 Client 應依 frontend token flow 重連，不應假設 token 可重複使用。
 
+缺少或無效認證的 request 會回傳 `401`，不會建立 SSE connection。
+
 ## 6. WebSocket 狀態
 
 ### `GET /ws` / WebSocket upgrade path
 
 目前 WebSocket implementation **不完整，不是受支援的 production transport**。
 
-已驗證行為：
-
-- 非 upgrade-shaped request 回 `503 WEBSOCKET_UNAVAILABLE`；
-- upgrade-shaped request 目前只要求 query token 非空；
-- handler 目前沒有呼叫 `WsTokenHandler.validateToken` 驗證該 token；
-- 會產生 101-shaped response 與 internal bookkeeping/logging；
-- broadcast method 尚未提供完整可用的 Undertow WebSocket message transport。
+所有 `/ws` request（包含帶有非空 token 的 WebSocket upgrade）都回 `503 WEBSOCKET_UNAVAILABLE`；server 不會回傳 upgrade response。完整 WebSocket transport 延後處理。
 
 前端即時通道應使用 `/api/sse`。不能因 `/ws` endpoint 存在就推定 authentication hardened 或 message delivery 完整。
 

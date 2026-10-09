@@ -220,7 +220,7 @@ The embedded backend uses Undertow.
 - Route exceptions are normalized by `HttpHandlerRegistry`.
 - Static frontend assets are served from the embedded distribution.
 
-The shipped YAML keeps Web Admin disabled and binds to `localhost:8080`. It ships `change-me-in-production` as the API key placeholder. Validation warns about that value, but the current auto-disable check compares only exact `change-me`; operators must replace the shipped placeholder before exposing Web Admin.
+The shipped YAML keeps Web Admin disabled and binds to `localhost:8080`. It ships `change-me-in-production` as the API key placeholder. `WebServiceManager` disables Web Admin when the key is blank or equals `change-me` or `change-me-in-production` after trimming and case folding; the economy plugin continues to start.
 
 ### 9.2 Route registration
 
@@ -240,14 +240,9 @@ The SSE manager sends keepalive activity approximately every 15 seconds and broa
 
 ### 9.4 WebSocket limitation
 
-`/ws` exists but the current `WebSocketManager` is incomplete and must not be treated as a production WebSocket transport.
+`/ws` always returns `503 WEBSOCKET_UNAVAILABLE`; it does not upgrade requests and must not be treated as a production WebSocket transport.
 
-Current behavior is materially different from SSE:
-
-- ordinary non-upgrade requests receive `503 WEBSOCKET_UNAVAILABLE`;
-- upgrade-shaped requests only check for a non-empty query token;
-- the current handler does **not** validate that token through `WsTokenHandler.validateToken`;
-- it performs 101-shaped response/bookkeeping/logging, but the broadcast methods do not implement full working Undertow message transport.
+Every `/ws` request, including an upgrade with a non-empty token, receives `503 WEBSOCKET_UNAVAILABLE`. The server does not perform an upgrade. Full WebSocket transport remains deferred.
 
 This is a known implementation limitation and a security-sensitive area for future work.
 

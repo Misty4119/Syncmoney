@@ -54,13 +54,13 @@ Paper/Folia/Canvas 安全性必須由 ownership 正確性證明，不能只因 `
 
 `SyncmoneyConfig` 是 runtime snapshot。目前只有 `display`、`pay`、`permissions`、`admin-permissions`、`debug` 可即時重載。連線、權威或模組 owner 變更，除非 `ConfigReloadPolicy` 明確允許，否則視為需要重啟。
 
-Web Admin 預設 API key 為 `change-me-in-production`。設定驗證會警告此值，但 `WebServiceManager` 目前只會對精確的 `change-me` 自動停用，因此不能把出廠 placeholder 描述成會自動被阻擋。
+Web Admin 預設 API key 為 `change-me-in-production`。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，Web Admin 會自動停用，但 economy plugin 仍正常啟動。
 
 ## Web 與 API
 
 Web Admin 後端使用 Undertow。REST 通常使用 `Authorization: Bearer <api-key>`；`/health` 為健康檢查。前端即時串流是 `/api/sse`，session token 由 `POST /api/auth/ws-token` 取得。
 
-目前 `/ws` 並不是完整的 production WebSocket transport，不得文件化成完整支援。
+所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`，不得文件化成 production WebSocket transport。
 
 修改路由時，需同時檢查 handler、`RouteRegistry`、`HttpHandlerRegistry`，並同步更新中英文 API reference。
 

@@ -14,16 +14,16 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * [SEC-04 FIX] Handler for WebSocket session token generation.
- * 
- * This endpoint generates a one-time session token for WebSocket connections,
- * avoiding the need to pass API keys directly in the URL.
- * 
+ * [SEC-04 FIX] Issues one-time session tokens for the SSE endpoint.
+ *
+ * The legacy {@code /api/auth/ws-token} route name remains for compatibility.
+ * The token avoids passing the API key directly in the SSE URL.
+ *
  * Flow:
- * 1. Client POSTs to /api/auth/ws-token with Authorization: Bearer <api-key>
- * 2. Server validates the API key and generates a short-lived token
- * 3. Client uses the token to connect via WebSocket: /ws?token=xxx
- * 4. Server validates the token and establishes the connection
+ * 1. Client POSTs to {@code /api/auth/ws-token} with Authorization: Bearer <api-key>.
+ * 2. Server validates the API key and generates a short-lived token.
+ * 3. Client opens {@code /api/sse?token=...} with the token.
+ * 4. The SSE handler atomically consumes the token before opening the stream.
  */
 public class WsTokenHandler extends AbstractApiHandler {
 
@@ -65,14 +65,9 @@ public class WsTokenHandler extends AbstractApiHandler {
         }
 
 
-        String token = UUID.randomUUID().toString();
-        long expires = System.currentTimeMillis() + TOKEN_VALIDITY_MS;
-
-
-        tokens.put(token, new TokenEntry(token, expires));
-
-
-        cleanupExpiredTokens();
+        long now = System.currentTimeMillis();
+        String token = issueToken(now);
+        long expires = now + TOKEN_VALIDITY_MS;
 
 
         String response = ApiResponse.success(Map.of(
@@ -86,32 +81,34 @@ public class WsTokenHandler extends AbstractApiHandler {
         exchange.setStatusCode(200);
         exchange.getResponseSender().send(response);
 
-        plugin.getLogger().fine("Generated WebSocket session token");
+        plugin.getLogger().fine("Generated SSE session token");
     }
 
     /**
-     * Validate a session token for WebSocket connection.
-     * Returns true if valid, false otherwise.
+     * Validate and consume a one-time token for the SSE connection.
+     * Returns true only for an unexpired token that has not already been used.
      */
     public boolean validateToken(String token) {
+        return validateToken(token, System.currentTimeMillis());
+    }
+
+    String issueToken(long nowMillis) {
+        String token = UUID.randomUUID().toString();
+        long expires = nowMillis + TOKEN_VALIDITY_MS;
+        tokens.put(token, new TokenEntry(token, expires));
+        cleanupExpiredTokens();
+        return token;
+    }
+
+    boolean validateToken(String token, long nowMillis) {
         if (token == null || token.isEmpty()) {
             return false;
         }
 
-        TokenEntry entry = tokens.get(token);
-        if (entry == null) {
-            return false;
-        }
-
-
-        if (System.currentTimeMillis() > entry.expires) {
-            tokens.remove(token);
-            return false;
-        }
-
-
-        tokens.remove(token);
-        return true;
+        // remove(key) is atomic: concurrent SSE requests cannot both consume
+        // the same short-lived session token.
+        TokenEntry entry = tokens.remove(token);
+        return entry != null && nowMillis < entry.expires;
     }
 
     /**
@@ -119,7 +116,7 @@ public class WsTokenHandler extends AbstractApiHandler {
      */
     private void cleanupExpiredTokens() {
         long now = System.currentTimeMillis();
-        tokens.entrySet().removeIf(entry -> entry.getValue().expires < now);
+        tokens.entrySet().removeIf(entry -> entry.getValue().expires <= now);
     }
 
     /**

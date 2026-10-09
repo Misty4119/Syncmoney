@@ -54,13 +54,13 @@ During shutdown, stop producers first and drain accepted transaction events whil
 
 `SyncmoneyConfig` is a snapshot. Only `display`, `pay`, `permissions`, `admin-permissions`, and `debug` are currently live-reload roots. Treat connection/authority/module-owner changes as restart-required unless `ConfigReloadPolicy` says otherwise.
 
-The default Web Admin API key is `change-me-in-production`. Current validation warns about it, while `WebServiceManager` only auto-disables for `change-me`. Do not claim the shipped placeholder is automatically blocked.
+The default Web Admin API key is `change-me-in-production`. Web Admin auto-disables when its key is blank or equals `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin still starts normally.
 
 ## Web and API
 
 Undertow serves Web Admin. REST calls normally use `Authorization: Bearer <api-key>`. `/health` is the health probe. The frontend live stream is `/api/sse`, using a session token issued by `POST /api/auth/ws-token`.
 
-`/ws` is not a complete production WebSocket transport in the current implementation. Do not document it as fully supported.
+Every `/ws` request returns `503 WEBSOCKET_UNAVAILABLE`. Do not document it as a production WebSocket transport.
 
 When changing routes, inspect the handler plus `RouteRegistry` and `HttpHandlerRegistry` and update both API-reference languages.
 

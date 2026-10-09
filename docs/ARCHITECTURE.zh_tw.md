@@ -186,7 +186,7 @@ Embedded backend 使用 Undertow。
 - Route exception 由 `HttpHandlerRegistry` 正規化成一致的 API error response。
 - Static frontend asset 由 embedded distribution 提供。
 
-Shipped YAML 預設停用 Web Admin 並綁定 `localhost:8080`。預設 API key placeholder 是 `change-me-in-production`；config validation 會對此值提出警告，但目前 Web Service 的自動停用檢查只比對精確字串 `change-me`。因此在對外開放 Web Admin 前，operator 必須主動替換 shipped placeholder。
+Shipped YAML 預設停用 Web Admin 並綁定 `localhost:8080`。API key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，`WebServiceManager` 會停用 Web Admin，但 economy plugin 仍正常啟動。
 
 ### 9.2 Route registration
 
@@ -210,12 +210,7 @@ SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEven
 
 `/ws` 存在，但目前 `WebSocketManager` 尚未完成，不應視為 production WebSocket transport。
 
-目前行為和 SSE 有實質差異：
-
-- 一般非 upgrade request 會收到 `503 WEBSOCKET_UNAVAILABLE`；
-- upgrade-shaped request 只檢查 query token 是否非空；
-- 現行 handler **沒有**透過 `WsTokenHandler.validateToken` 驗證該 token；
-- 它會執行 101-shaped response、bookkeeping 與 logging，但 broadcast methods 尚未實作完整可用的 Undertow message transport。
+所有 `/ws` request（包含帶非空 token 的 upgrade）都會收到 `503 WEBSOCKET_UNAVAILABLE`，server 不會執行 upgrade。完整 WebSocket transport 延後處理。
 
 這是已知 implementation limitation，也是未來修改時需要特別審查的 security-sensitive area。
 

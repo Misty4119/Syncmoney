@@ -9,7 +9,7 @@ Traditional Chinese: [`API_REFERENCE.zh_tw.md`](API_REFERENCE.zh_tw.md)
 
 ## 1. Base behavior
 
-Web Admin is disabled by default. When enabled, the server hosts the SPA, health endpoint, REST API, SSE endpoint, and the current partial WebSocket endpoint.
+Web Admin is disabled by default. When enabled, the server hosts the SPA, health endpoint, REST API, and SSE endpoint. `/ws` is retained as an unavailable endpoint and always responds with `503 WEBSOCKET_UNAVAILABLE`.
 
 Normal API calls use:
 
@@ -21,7 +21,7 @@ Authorization: Bearer <api-key>
 
 When `web-admin.security.trust-proxy=true`, forwarded client addresses may be read from `X-Forwarded-For`. When it is false, that header is not trusted for the client identity used by rate limiting.
 
-The shipped config contains `change-me-in-production` as the API-key placeholder and a rate limit of 120 requests/minute. The `WebAdminConfig` code fallback is 60/minute when that setting is absent. Configuration validation warns about the placeholder, but current server auto-disable logic checks only exact `change-me`; replace the shipped key before exposing the service.
+The shipped config contains `change-me-in-production` as the API-key placeholder and a rate limit of 120 requests/minute. The `WebAdminConfig` code fallback is 60/minute when that setting is absent. `WebServiceManager` disables Web Admin when the key is blank or equals `change-me` or `change-me-in-production` (case-insensitive after trimming). The economy plugin continues to start; configure a non-placeholder key to enable Web Admin.
 
 ## 2. Response envelope
 
@@ -112,19 +112,15 @@ The API key comparison is constant-time. One-time tokens are consumed when valid
 
 Clients should reconnect through the frontend token flow rather than assuming a token can be reused indefinitely.
 
+Requests with a missing or invalid credential receive `401` and do not establish an SSE connection.
+
 ## 6. WebSocket status
 
 ### `GET /ws` / WebSocket upgrade path
 
 The current WebSocket implementation is incomplete and is **not a supported production transport**.
 
-Verified current behavior:
-
-- a request that does not look like an upgrade receives `503 WEBSOCKET_UNAVAILABLE`;
-- upgrade-shaped requests require only a non-empty query token;
-- the handler currently does **not** call `WsTokenHandler.validateToken`;
-- it emits a 101-shaped upgrade response and internal bookkeeping/logging;
-- broadcast methods do not provide a complete working Undertow WebSocket message transport.
+Every `/ws` request, including a WebSocket upgrade with a non-empty token, receives `503 WEBSOCKET_UNAVAILABLE`; the server never emits an upgrade response. Full WebSocket transport remains deferred.
 
 Use `/api/sse` for the frontend live channel. Do not treat the presence of `/ws` as proof of hardened authentication or complete message delivery.
 

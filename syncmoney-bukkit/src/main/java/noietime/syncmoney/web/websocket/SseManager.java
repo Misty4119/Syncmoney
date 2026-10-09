@@ -36,6 +36,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class SseManager {
 
+    static final long KEEPALIVE_INTERVAL_MILLIS = 15_000L;
+    static final String KEEPALIVE_FRAME = ": keepalive\n\n";
+
     private final Syncmoney plugin;
     private final Map<String, SseConnection> connections = new ConcurrentHashMap<>();
     private final Set<String> channelSubscriptions = new CopyOnWriteArraySet<>();
@@ -65,9 +68,9 @@ public class SseManager {
      * Validate API key or session token from request.
      * [SEC-01 FIX] Uses constant-time comparison to prevent timing attacks.
      */
-    private boolean validateApiKey(HttpServerExchange exchange) {
-        if (apiKey == null || apiKey.isEmpty()) {
-            return true;
+    boolean validateApiKey(HttpServerExchange exchange) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return false;
         }
 
         String auth = exchange.getRequestHeaders().getFirst("Authorization");
@@ -200,6 +203,7 @@ public class SseManager {
 
 
         if (!authenticated) {
+            exchange.setStatusCode(401);
             sendToConnection(connection, "error",
                 "{\"code\":401,\"message\":\"Invalid or missing API key\",\"status\":\"unauthenticated\"}");
             plugin.getLogger().fine("SSE rejected (unauthenticated): " + connId);
@@ -231,17 +235,21 @@ public class SseManager {
 
         while (!connection.isClosed()) {
             try {
-                Thread.sleep(15000);
+                Thread.sleep(KEEPALIVE_INTERVAL_MILLIS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
             if (connection.isClosed()) break;
-            sendRaw(connection, ": keepalive\n\n");
+            sendKeepalive(connection);
         }
 
         connections.remove(connId);
         plugin.getLogger().fine("SSE connection loop ended: " + connId);
+    }
+
+    void sendKeepalive(SseConnection connection) {
+        sendRaw(connection, KEEPALIVE_FRAME);
     }
 
     /**
@@ -345,7 +353,7 @@ public class SseManager {
     /**
      * Represents a single active SSE connection.
      */
-    private static class SseConnection {
+    static final class SseConnection {
 
         private final String id;
         private final OutputStream outputStream;

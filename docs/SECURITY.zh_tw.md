@@ -50,13 +50,13 @@ Syncmoney 是經濟插件；安全問題可能影響餘額、憑證、跨服同�
 Web Admin 是特權管理介面：
 
 - 對外暴露前先更換 `web-admin.security.api-key`。
-- shipped config 使用 `change-me-in-production`；validation 會警告，但 `WebServiceManager` 目前只在 key 精確等於 `change-me` 時自動停用，不能依賴此 guard 保護未修改的預設值。
+- shipped config 使用 `change-me-in-production`。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，`WebServiceManager` 會停用 Web Admin；economy plugin 仍正常啟動。
 - 綁定可信介面，或放在正確設定的 reverse proxy/firewall 後方。
 - CORS origin 應限制為可信來源；plugin 會對 `*` 發出警告。
 - 流量離開可信本機網路時，應在 reverse proxy 使用 TLS。
 - Node API key 視為 secret，限制 central 與 managed node 的可達性。
 - `/health` 刻意不需 authentication；一般 `/api/*` 會走 Bearer API-key auth，再依 endpoint 行為處理。
-- 前端目前實作的 live transport 是 SSE；`/ws` 尚未完整，不應視為 hardened production channel。
+- 前端目前實作的 live transport 是 SSE；所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`，不提供 production transport。
 
 ## Secret 處理
 

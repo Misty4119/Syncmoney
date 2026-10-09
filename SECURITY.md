@@ -50,13 +50,13 @@ Reports are especially useful when they involve:
 Web Admin is an administrative surface and should be treated as privileged infrastructure.
 
 - Replace the shipped `web-admin.security.api-key` value before exposing the service.
-- The default configuration currently uses `change-me-in-production`. Configuration validation warns about this value, while `WebServiceManager` only auto-disables the server when the key equals `change-me`. Do not rely on the auto-disable guard to protect an unchanged default.
+- The default configuration uses `change-me-in-production`. `WebServiceManager` disables Web Admin for blank keys and for `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin still starts normally.
 - Bind the service to a trusted interface or place it behind a properly configured reverse proxy/firewall.
 - Restrict CORS origins to trusted origins; `*` is intentionally warned about by the plugin.
 - Use TLS at the reverse proxy when traffic leaves a trusted local network.
 - Treat node API keys as secrets and limit connectivity between central and managed nodes.
 - `/health` is intentionally unauthenticated. Normal `/api/*` endpoints pass through Bearer API-key authentication, subject to endpoint-specific behavior.
-- SSE is the implemented live transport used by the frontend. The current `/ws` implementation is incomplete and should not be treated as a hardened production channel.
+- SSE is the implemented live transport used by the frontend. Every `/ws` request returns `503 WEBSOCKET_UNAVAILABLE`; it is not a production channel.
 
 ## Secret handling
 

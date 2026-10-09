@@ -101,7 +101,7 @@ Redis-backed economy update 要保留 per-account version ordering、duplicate/e
 
 Backend 是 Undertow。一般 `/api/*` 使用 `Authorization: Bearer <api-key>`；`/health` 不需 authentication。前端 live stream 是 `/api/sse`，session token 由 `POST /api/auth/ws-token` 發出。
 
-不要把 `/ws` 描述為 production-ready；目前 WebSocket transport 不完整。
+所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`。不要把它描述為 production-ready WebSocket transport。
 
 API 變更時：
 

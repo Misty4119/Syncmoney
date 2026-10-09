@@ -123,7 +123,7 @@ All optional modules can be toggled in `plugins/Syncmoney/config.yml`.
 | **Audit Logging** | `audit.enabled` | Asynchronous transaction audit trail. Sub-features (`cleanup`, `export`, `redis`) require this parent switch. |
 | **Shadow Sync** | `shadow-sync.enabled` | Background snapshot mirroring to secondary databases. Does not replace primary database backups. |
 | **Discord Webhooks** | `discord-webhook.enabled` | Real-time notifications for circuit breaker triggers, locks, and migration events. |
-| **Web Admin Panel** | `web-admin.enabled` | Embedded Undertow HTTP/WebSocket service for administrative dashboard. |
+| **Web Admin Panel** | `web-admin.enabled` | Embedded Undertow HTTP/SSE service for the administrative dashboard; `/ws` is unavailable. |
 
 > [!IMPORTANT]
 > **Configuration Reload vs. Full Restart**:
@@ -225,7 +225,7 @@ web-admin:
 
 1. **Reverse Proxy**: Bind Web Admin to `127.0.0.1` and route external traffic through Nginx or Caddy with HTTPS.
 2. **API Key**: Always replace the placeholder API key with a cryptographically secure token.
-3. **SSE / WebSocket**: When reverse proxying, ensure proxy buffering is disabled to support live SSE updates.
+3. **SSE**: When reverse proxying, ensure proxy buffering is disabled to support live SSE updates. `/ws` currently returns `503 WEBSOCKET_UNAVAILABLE`.
 4. **Firewall**: Restrict external access to the configured HTTP port.
 
 ---

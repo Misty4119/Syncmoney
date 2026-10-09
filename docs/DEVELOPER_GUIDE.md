@@ -196,7 +196,7 @@ The backend is Undertow.
 
 Normal `/api/*` calls use `Authorization: Bearer <api-key>`. `/health` is unauthenticated. Keep constant-time key comparison and rate limiting intact.
 
-The shipped key is `change-me-in-production`. Validation warns about it, but current auto-disable logic checks only exact `change-me`; do not describe the default as automatically safe.
+The shipped key is `change-me-in-production`. Web Admin is disabled when the key is blank or equals `change-me` or `change-me-in-production` after trimming and case folding. This does not prevent the economy plugin from starting.
 
 ### Route registration
 
@@ -208,7 +208,7 @@ The current code has duplicate registrations for `GET /api/nodes` and `GET /api/
 
 The frontend live stream is `/api/sse`. One-time tokens come from `POST /api/auth/ws-token`, are valid for 60 seconds, and are consumed on validation.
 
-`/ws` is currently incomplete. Upgrade-shaped requests only require a non-empty query token and the manager does not call `WsTokenHandler.validateToken`; message transport is also incomplete. Do not write new client code that depends on `/ws` until the implementation is completed and tested.
+Every `/ws` request, including an upgrade-shaped request, returns `503 WEBSOCKET_UNAVAILABLE`. Do not write client code that depends on `/ws`; the endpoint remains disabled until a complete transport and authentication path are implemented and tested.
 
 ### API changes
 

@@ -108,7 +108,7 @@ Connection, authority, scheduler, and module-owner changes require restart unles
 
 `server-name` must be configured; a blank default prevents normal plugin operation.
 
-The default Web Admin API key is `change-me-in-production`. Configuration validation warns about it, but current `WebServiceManager` auto-disable logic checks `change-me`. Never describe the placeholder as automatically safe: operators must replace it before exposing Web Admin.
+The default Web Admin API key is `change-me-in-production`. `WebServiceManager` disables Web Admin when the key is blank or equals `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin continues to start normally. Operators must configure a non-placeholder key to enable Web Admin.
 
 ## Commands and permissions
 
@@ -124,7 +124,7 @@ The backend is Undertow. Authenticated REST calls normally use `Authorization: B
 
 The current frontend connects SSE at `/api/sse`. It obtains a session token from `POST /api/auth/ws-token` using the API key and connects with that token. Do not restore stale `/sse` documentation.
 
-`/ws` exists, but `WebSocketManager` is incomplete: it performs upgrade-shaped handling and bookkeeping/logging while broadcast methods do not provide full Undertow WebSocket message transport. Do not document it as a production real-time channel.
+Every `/ws` request returns `503 WEBSOCKET_UNAVAILABLE`; the endpoint does not upgrade connections and is not a production real-time channel.
 
 `SystemApiHandler` and `NodesApiHandler` both register `GET /api/nodes` and `GET /api/nodes/status`. `HttpHandlerRegistry.register` uses map replacement semantics and `NodesApiHandler` registers later, so its handlers are effective.
 

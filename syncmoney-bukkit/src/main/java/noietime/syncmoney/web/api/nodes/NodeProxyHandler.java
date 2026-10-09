@@ -82,22 +82,7 @@ public class NodeProxyHandler extends NodesApiContext {
                 java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
                         .connectTimeout(java.time.Duration.ofSeconds(5)).build();
 
-                java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
-                        .uri(URI.create(targetUrl))
-                        .header("Authorization", "Bearer " + apiKey)
-                        .header("Content-Type", "application/json")
-                        .timeout(java.time.Duration.ofSeconds(30));
-
-                if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method)) {
-                    String bodyStr = requestBody != null ? requestBody.toString() : "";
-                    requestBuilder.method(method.toUpperCase(),
-                            java.net.http.HttpRequest.BodyPublishers.ofString(bodyStr));
-                } else {
-                    requestBuilder.method(method.toUpperCase(),
-                            java.net.http.HttpRequest.BodyPublishers.noBody());
-                }
-
-                java.net.http.HttpResponse<String> response = client.send(requestBuilder.build(),
+                java.net.http.HttpResponse<String> response = client.send(buildNodeRequest(targetUrl, apiKey, method, requestBody),
                         java.net.http.HttpResponse.BodyHandlers.ofString());
 
                 exchange.setStatusCode(response.statusCode());
@@ -111,5 +96,24 @@ public class NodeProxyHandler extends NodesApiContext {
                 sendError(exchange, 500, "PROXY_FAILED", "Failed to proxy request: " + e.getMessage());
             }
         });
+    }
+
+    static java.net.http.HttpRequest buildNodeRequest(String targetUrl, String apiKey,
+                                                      String method, Object requestBody) {
+        java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
+                .uri(URI.create(targetUrl))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .timeout(java.time.Duration.ofSeconds(30));
+
+        String normalizedMethod = method.toUpperCase(java.util.Locale.ROOT);
+        if ("POST".equals(normalizedMethod) || "PUT".equals(normalizedMethod)
+                || "PATCH".equals(normalizedMethod)) {
+            String body = requestBody != null ? requestBody.toString() : "";
+            requestBuilder.method(normalizedMethod, java.net.http.HttpRequest.BodyPublishers.ofString(body));
+        } else {
+            requestBuilder.method(normalizedMethod, java.net.http.HttpRequest.BodyPublishers.noBody());
+        }
+        return requestBuilder.build();
     }
 }

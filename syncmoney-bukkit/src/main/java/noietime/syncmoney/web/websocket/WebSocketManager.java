@@ -14,11 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
- * Manages WebSocket connections for real-time notifications.
- * This implementation provides basic WebSocket upgrade handling and channel
- * management.
- * Full WebSocket functionality requires additional undertow-websockets
- * integration.
+ * Holds the deferred WebSocket endpoint. Full WebSocket transport remains out
+ * of scope, so requests receive an explicit unavailable response.
  */
 public class WebSocketManager {
 
@@ -27,7 +24,6 @@ public class WebSocketManager {
     private final Map<String, Set<String>> connectionChannels = new ConcurrentHashMap<>();
     private final Set<String> activeConnectionIds = new CopyOnWriteArraySet<>();
     private boolean initialized = false;
-    private int connectionCounter = 0;
 
     /**
      * Available event channels.
@@ -42,7 +38,7 @@ public class WebSocketManager {
     }
 
     /**
-     * Initialize WebSocket manager and register event listeners.
+     * Initialize the deferred WebSocket manager and register its internal listeners.
      */
     public void init() {
         if (initialized) {
@@ -55,7 +51,8 @@ public class WebSocketManager {
     }
 
     /**
-     * Register event listeners to broadcast events via WebSocket.
+     * Register internal event listeners for the deferred WebSocket payload.
+     * The disabled {@code /ws} endpoint does not deliver these payloads to clients.
      */
     private void registerEventListeners() {
         if (!SyncmoneyEventBus.isInitialized()) {
@@ -91,76 +88,19 @@ public class WebSocketManager {
     }
 
     /**
-     * Create HTTP handler for WebSocket upgrade.
-     * Note: Full WebSocket implementation requires additional Undertow WebSocket
-     * setup.
-     * This handler validates session token and returns appropriate response.
+     * Create the disabled endpoint handler. No request is upgraded until a
+     * complete transport and its authentication path are implemented.
      */
     public HttpHandler createHandler() {
         return exchange -> {
-            String path = exchange.getRelativePath();
-
-            String upgrade = exchange.getRequestHeaders().getFirst("Upgrade");
-            if (upgrade != null && upgrade.equalsIgnoreCase("websocket")) {
-
-                String queryString = exchange.getQueryString();
-                String token = extractTokenFromQuery(queryString);
-                
-
-
-                if (token != null && !token.isEmpty()) {
-                    exchange.setStatusCode(101);
-                    exchange.getResponseHeaders().put(
-                            io.undertow.util.Headers.UPGRADE, "websocket");
-
-                    String connId = "conn-" + (++connectionCounter);
-                    activeConnectionIds.add(connId);
-                    plugin.getLogger().fine("WebSocket connection established: " + connId);
-
-                    try {
-                        exchange.getResponseSender().send("WebSocket upgrade accepted");
-                    } finally {
-                        activeConnectionIds.remove(connId);
-                        plugin.getLogger().fine("WebSocket connection closed: " + connId);
-                    }
-                } else {
-
-                    exchange.setStatusCode(401);
-                    exchange.getResponseHeaders().put(
-                            io.undertow.util.Headers.CONTENT_TYPE,
-                            "application/json;charset=UTF-8");
-                    exchange.getResponseSender().send(
-                            "{\"success\":false,\"error\":{\"code\":\"UNAUTHORIZED\"," +
-                                    "\"message\":\"Valid session token required. Use /api/auth/ws-token to obtain one.\"}}");
-                    plugin.getLogger().warning("WebSocket connection rejected: missing or invalid token");
-                }
-            } else {
-                exchange.setStatusCode(503);
-                exchange.getResponseHeaders().put(
-                        io.undertow.util.Headers.CONTENT_TYPE,
-                        "application/json;charset=UTF-8");
-                exchange.getResponseSender().send(
-                        "{\"success\":false,\"error\":{\"code\":\"WEBSOCKET_UNAVAILABLE\"," +
-                                "\"message\":\"WebSocket is under maintenance. Use REST API for now.\"}}");
-                plugin.getLogger().warning("WebSocket requested but full implementation pending");
-            }
+            exchange.setStatusCode(503);
+            exchange.getResponseHeaders().put(
+                    io.undertow.util.Headers.CONTENT_TYPE,
+                    "application/json;charset=UTF-8");
+            exchange.getResponseSender().send(
+                    "{\"success\":false,\"error\":{\"code\":\"WEBSOCKET_UNAVAILABLE\"," +
+                            "\"message\":\"WebSocket is unavailable. Use /api/sse for live updates.\"}}");
         };
-    }
-    
-    /**
-     * Extract token from query string.
-     */
-    private String extractTokenFromQuery(String queryString) {
-        if (queryString == null || queryString.isEmpty()) {
-            return null;
-        }
-        for (String param : queryString.split("&")) {
-            String[] kv = param.split("=");
-            if (kv.length == 2 && "token".equals(kv[0])) {
-                return kv[1];
-            }
-        }
-        return null;
     }
 
     /**
@@ -246,7 +186,7 @@ public class WebSocketManager {
      * Check if WebSocket is enabled.
      */
     public boolean isEnabled() {
-        return true;
+        return false;
     }
 
     /**

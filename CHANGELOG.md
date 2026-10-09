@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Web Admin now disables itself for both shipped API-key placeholders (including blank values), without preventing the economy plugin from starting.
+- The deferred `/ws` endpoint always returns `503 WEBSOCKET_UNAVAILABLE`; it no longer sends a fake WebSocket upgrade response.
+- SSE session-token consumption is atomic, and missing or invalid credentials receive `401` instead of opening an unauthenticated stream.
+
+### Changed
+
+- Undertow routes dispatch from I/O threads to worker threads before running handlers.
+
 ## [1.3.2] - 2026-09-20
 
 ### Security
@@ -226,7 +238,7 @@ These entries summarize tagged Git history and are not newly reimplemented featu
 - **System API**: Provided new `/api/system/status`, `/api/system/redis`, `/api/system/breaker`, and `/api/system/metrics` endpoints.
 - **Economy & Audit API**: Retrieve total supply, player balances, top statistics, and transaction audit logs seamlessly.
 - **Settings & Config API**: REST interface to read and update plugin configurations dynamically (`/api/config/reload`).
-- **Real-Time Communications**: Added WebSocket support for instant transaction & circuit breaker alerts alongside Server-Sent Events (SSE).
+- **Real-Time Communications**: Added initial WebSocket scaffolding and event payload hooks alongside Server-Sent Events (SSE). Full WebSocket transport was not completed; `/ws` currently returns `503 WEBSOCKET_UNAVAILABLE`, and SSE is the available live channel.
 
 #### Core System & Infrastructure
 - **Initialization Manager**: Introduced `PluginInitializationManager` to reliably coordinate component startup/shutdown dependencies.
