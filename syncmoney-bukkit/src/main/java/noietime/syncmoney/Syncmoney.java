@@ -2,6 +2,7 @@ package noietime.syncmoney;
 
 import net.kyori.adventure.text.Component;
 import noietime.syncmoney.api.bukkit.BukkitApiProvider;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 import noietime.syncmoney.command.CommandServiceManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
@@ -58,6 +59,7 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
 /**
@@ -95,6 +97,7 @@ public final class Syncmoney extends JavaPlugin {
     private PermissionManager permissionManager;
     private EventConsumerManager eventConsumerManager;
     private SchemaManager schemaManager;
+    private final AtomicBoolean shutdownStarted = new AtomicBoolean();
 
     private long startTime;
     private PluginContext pluginContext;
@@ -112,6 +115,16 @@ public final class Syncmoney extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        try {
+            initializePlugin();
+        } catch (Throwable failure) {
+            getLogger().log(Level.SEVERE, "Syncmoney initialization failed; rolling back initialized owners", failure);
+            onDisable();
+            getServer().getPluginManager().disablePlugin(this);
+        }
+    }
+
+    private void initializePlugin() {
         this.startTime = System.currentTimeMillis();
 
         this.syncmoneyConfig = new SyncmoneyConfig(this);
@@ -368,60 +381,52 @@ public final class Syncmoney extends JavaPlugin {
 
     @Override
     public void onDisable() {
-
-        if (apiProvider != null) {
-            apiProvider.close();
+        if (!shutdownStarted.compareAndSet(false, true)) {
+            return;
         }
-
-        if (webServiceManager != null) {
-            webServiceManager.shutdown();
-        }
-
-        if (commandServiceManager != null) {
-            commandServiceManager.shutdown();
-        }
-
-        if (permissionManager != null) {
-            permissionManager.shutdown();
-        }
-
-        if (listenerServiceManager != null) {
-            listenerServiceManager.shutdown();
-        }
-
-        if (syncManager != null) {
-            syncManager.shutdown();
-        }
-
-        // Drain accepted writes while audit, Shadow and storage are still available.
-        if (eventConsumerManager != null) {
-            eventConsumerManager.shutdown();
-        }
-
-        if (economyServiceManager != null) {
-            economyServiceManager.shutdown();
-        }
-
-        if (auditServiceManager != null) {
-            auditServiceManager.shutdown();
-        }
-
-        if (breakerManager != null) {
-            breakerManager.shutdown();
-        }
-
-        if (baltopManager != null) {
-            baltopManager.saveToDatabase();
-        }
-
-        if (storageManager != null) {
-            storageManager.shutdown();
-        }
-
-        if (SyncmoneyEventBus.isInitialized()) {
-            SyncmoneyEventBus.getInstance().clearAll();
-        }
-
+        ShutdownStepRunner.run(getLogger(),
+                new ShutdownStepRunner.Step("read-only API provider", () -> {
+                    if (apiProvider != null) apiProvider.close();
+                }),
+                new ShutdownStepRunner.Step("economy provider and write quiescence", () -> {
+                    if (economyServiceManager != null) economyServiceManager.quiesce();
+                }),
+                new ShutdownStepRunner.Step("web services", () -> {
+                    if (webServiceManager != null) webServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("commands", () -> {
+                    if (commandServiceManager != null) commandServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("permissions", () -> {
+                    if (permissionManager != null) permissionManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("listeners", () -> {
+                    if (listenerServiceManager != null) listenerServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("inbound sync producers", () -> {
+                    if (syncManager != null) syncManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("accepted economy write drain", () -> {
+                    if (eventConsumerManager != null) eventConsumerManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("economy owners", () -> {
+                    if (economyServiceManager != null) economyServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("audit owners", () -> {
+                    if (auditServiceManager != null) auditServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("breaker owners", () -> {
+                    if (breakerManager != null) breakerManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("baltop persistence", () -> {
+                    if (baltopManager != null) baltopManager.saveToDatabase();
+                }),
+                new ShutdownStepRunner.Step("storage dependencies", () -> {
+                    if (storageManager != null) storageManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("event bus", () -> {
+                    if (SyncmoneyEventBus.isInitialized()) SyncmoneyEventBus.getInstance().clearAll();
+                }));
         getLogger().info("Syncmoney disabled.");
     }
 

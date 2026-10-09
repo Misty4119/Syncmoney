@@ -45,6 +45,9 @@ public class CMIEconomyHandler {
     private final ConcurrentHashMap<UUID, BalanceObservation> balanceObservations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> lastAppliedVersion = new ConcurrentHashMap<>();
     private final AtomicLong versionCounter = new AtomicLong(0L);
+    private final Object joinReconciliationGate = new Object();
+    private volatile boolean joinReconciliationStopped;
+    private int inFlightJoinReconciliations;
 
     public CMIEconomyHandler(Syncmoney plugin, SyncmoneyConfig config,
                            RedisManager redisManager,
@@ -227,26 +230,72 @@ public class CMIEconomyHandler {
     }
 
     public void reconcileOnJoin(UUID uuid) {
-        if (!cmiApi.isAvailable()) {
-            return;
+        synchronized (joinReconciliationGate) {
+            if (joinReconciliationStopped) {
+                return;
+            }
+            inFlightJoinReconciliations++;
         }
-        Optional<CMIRedisMirror.Snapshot> snapshot = redisMirror.read(uuid);
-        if (snapshot.isEmpty()) {
-            return;
-        }
-        BigDecimal mirror = snapshot.orElseThrow().balance();
-        long mirrorVersion = snapshot.orElseThrow().version();
+        try {
+            // This in-flight count covers the asynchronous Redis read and owner-task dispatch.
+            // The player callback has a separate admission point at its final state update or
+            // MigrationLock write-lease acquisition; shutdown never waits on a player region.
+            if (!cmiApi.isAvailable()) {
+                return;
+            }
+            Optional<CMIRedisMirror.Snapshot> snapshot = redisMirror.read(uuid);
+            if (snapshot.isEmpty()) {
+                return;
+            }
+            BigDecimal mirror = snapshot.orElseThrow().balance();
+            long mirrorVersion = snapshot.orElseThrow().version();
 
-        noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
-                player -> applyJoinMirror(uuid, mirror, mirrorVersion));
+            noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
+                    player -> applyJoinMirror(uuid, mirror, mirrorVersion));
+        } finally {
+            synchronized (joinReconciliationGate) {
+                inFlightJoinReconciliations--;
+                if (inFlightJoinReconciliations == 0) {
+                    joinReconciliationGate.notifyAll();
+                }
+            }
+        }
     }
 
     private void applyJoinMirror(UUID uuid, BigDecimal mirror, long mirrorVersion) {
+        synchronized (joinReconciliationGate) {
+            if (joinReconciliationStopped) {
+                return;
+            }
+        }
+        // Admit the owner callback briefly, then leave the gate before touching CMI.
+        // Shutdown closes admission without waiting on a different player's region.
+        applyJoinMirrorWhileActive(uuid, mirror, mirrorVersion);
+    }
 
+    /** Stops queued join callbacks from mutating CMI after listener shutdown. */
+    public void stopJoinReconciliation() {
+        boolean interrupted = false;
+        synchronized (joinReconciliationGate) {
+            joinReconciliationStopped = true;
+            while (inFlightJoinReconciliations > 0) {
+                try {
+                    joinReconciliationGate.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void applyJoinMirrorWhileActive(UUID uuid, BigDecimal mirror, long mirrorVersion) {
         long lastApplied = lastAppliedVersion.getOrDefault(uuid, 0L);
         if (!CMIVersioning.isNewer(mirrorVersion, lastApplied)) {
             BigDecimal local = getCMILocalBalance(uuid);
-            if (local != null) {
+            if (local != null && admitJoinReconciliationUpdate()) {
                 notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
             }
             return;
@@ -254,18 +303,22 @@ public class CMIEconomyHandler {
 
         BigDecimal local = getCMILocalBalance(uuid);
         if (local != null && local.compareTo(mirror) == 0) {
-            notifyInboundApplied(uuid, mirror, mirrorVersion);
+            if (admitJoinReconciliationUpdate()) {
+                notifyInboundApplied(uuid, mirror, mirrorVersion);
+            }
             return;
         }
         if (local != null && local.compareTo(mirror) > 0) {
-            notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
+            if (admitJoinReconciliationUpdate()) {
+                notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
+            }
             return;
         }
 
         final double target = mirror.doubleValue();
         final BigDecimal normalizedMirror = mirror;
         final long version = mirrorVersion;
-        MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
+        MigrationLock.WriteLease writeLease = tryAcquireJoinWriteLease();
         if (writeLease == null) {
             return;
         }
@@ -284,6 +337,24 @@ public class CMIEconomyHandler {
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
             }
+        }
+    }
+
+    private MigrationLock.WriteLease tryAcquireJoinWriteLease() {
+        synchronized (joinReconciliationGate) {
+            if (joinReconciliationStopped) {
+                return null;
+            }
+            // Lease acquisition is the linearized admission point for this owner mutation.
+            // Shutdown may return while an admitted CMI call finishes, rather than wait across
+            // entity regions; callbacks that have not acquired a lease are rejected.
+            return MigrationLock.tryAcquireWrite();
+        }
+    }
+
+    private boolean admitJoinReconciliationUpdate() {
+        synchronized (joinReconciliationGate) {
+            return !joinReconciliationStopped;
         }
     }
 

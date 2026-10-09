@@ -41,4 +41,17 @@ public final class VaultUnlockedIntegrationLoader {
             return null;
         }
     }
+
+    /** Closes an optional Vault2 registrar without linking its API on legacy Vault servers. */
+    public static void close(Plugin plugin, Object registrar) {
+        if (registrar == null) {
+            return;
+        }
+        try {
+            Method close = registrar.getClass().getMethod("close");
+            close.invoke(registrar);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to close VaultUnlocked provider", e);
+        }
+    }
 }

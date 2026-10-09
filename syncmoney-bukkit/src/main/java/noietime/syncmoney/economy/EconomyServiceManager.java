@@ -9,9 +9,11 @@ import noietime.syncmoney.vault.VaultRuntimeDetector;
 import noietime.syncmoney.vault.VaultUnlockedIntegrationLoader;
 import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 
 import java.math.BigDecimal;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * [SYNC-ECO-070] Unified economy service manager.
@@ -33,6 +35,7 @@ public class EconomyServiceManager {
     private EconomyModeRouter economyModeRouter;
     private ShadowSyncTask shadowSyncTask;
     private NameResolver nameResolver;
+    private final AtomicBoolean quiesced = new AtomicBoolean();
 
 
     public EconomyServiceManager(Syncmoney plugin, SyncmoneyConfig config, StorageManager storageManager) {
@@ -178,25 +181,37 @@ public class EconomyServiceManager {
     /**
      * [SYNC-ECO-072] Shutdown economy components in reverse order.
      */
+    public void quiesce() {
+        if (!quiesced.compareAndSet(false, true)) {
+            return;
+        }
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("economy write admission", () -> {
+                    if (economyFacade != null) economyFacade.beginShutdown();
+                }),
+                new ShutdownStepRunner.Step("Vault provider", () -> {
+                    if (vaultProvider != null) vaultProvider.shutdown();
+                }),
+                new ShutdownStepRunner.Step("VaultUnlocked provider", () ->
+                        VaultUnlockedIntegrationLoader.close(plugin, vaultUnlockedRegistrar)),
+                new ShutdownStepRunner.Step("cross-server version producer", () -> {
+                    if (crossServerSyncManager != null) crossServerSyncManager.shutdown();
+                }));
+    }
+
     public void shutdown() {
+        quiesce();
         plugin.getLogger().fine("Shutting down economy layer...");
-
-        if (shadowSyncTask != null) {
-            shadowSyncTask.stop();
-        }
-
-        if (crossServerSyncManager != null) {
-            crossServerSyncManager.shutdown();
-        }
-
-
-        if (economyFacade != null) {
-            economyFacade.shutdown();
-        }
-        if (localHandler != null) {
-            localHandler.close();
-        }
-
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("shadow sync", () -> {
+                    if (shadowSyncTask != null) shadowSyncTask.stop();
+                }),
+                new ShutdownStepRunner.Step("economy facade", () -> {
+                    if (economyFacade != null) economyFacade.shutdown();
+                }),
+                new ShutdownStepRunner.Step("LOCAL persistence", () -> {
+                    if (localHandler != null) localHandler.close();
+                }));
         plugin.getLogger().fine("Economy layer shutdown complete");
     }
 

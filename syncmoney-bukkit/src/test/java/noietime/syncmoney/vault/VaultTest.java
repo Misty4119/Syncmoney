@@ -86,6 +86,7 @@ class VaultTest {
                 plugin, economyFacade, null, pluginDetector, null, playerHandler, nameResolver);
         providerCore = new VaultProviderCore(plugin, economyFacade, playerHandler, transferHandler,
                 bankHandler, pluginDetector, luaScriptManager, nameResolver);
+        providerCore.setEnabled(true);
     }
 
     @AfterEach
@@ -144,6 +145,16 @@ class VaultTest {
 
         assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
         assertEquals("Transfer was not accepted; one or both accounts are unavailable", response.errorMessage);
+    }
+
+    @Test
+    void disabledProviderReferenceRejectsBankMutation() {
+        providerCore.setEnabled(false);
+
+        EconomyResponse response = providerCore.bankDeposit("test-bank", 5.0);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        verify(bankHandler, never()).bankDeposit("test-bank", 5.0);
     }
 
     @Test

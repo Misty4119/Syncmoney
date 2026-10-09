@@ -15,6 +15,7 @@ import redis.clients.jedis.JedisPubSub;
 import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 
 /**
@@ -38,15 +39,29 @@ public final class PubsubSubscriber {
     private final DebounceManager debounceManager;
     private final RedisManager redisManager;
     private final boolean redisRequired;
+    private final Supplier<redis.clients.jedis.Jedis> jedisFactory;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean stopped = new AtomicBoolean(false);
+    private final Object lifecycleGate = new Object();
+    private final Object inboundApplyGate = new Object();
     private volatile Thread subscriberThread;
+    private volatile redis.clients.jedis.Jedis activeJedis;
     private volatile CMIPubsubHandler cmiPubsubHandler;
 
     public PubsubSubscriber(Plugin plugin, SyncmoneyConfig config,
                           CacheManager cacheManager, EconomyFacade economyFacade,
                           DebounceManager debounceManager, RedisManager redisManager,
                           boolean redisRequired) {
+        this(plugin, config, cacheManager, economyFacade, debounceManager, redisManager,
+                redisRequired, () -> new redis.clients.jedis.Jedis(
+                        config.redis().getRedisHost(), config.redis().getRedisPort(), 5000, 5000));
+    }
+
+    PubsubSubscriber(Plugin plugin, SyncmoneyConfig config,
+                     CacheManager cacheManager, EconomyFacade economyFacade,
+                     DebounceManager debounceManager, RedisManager redisManager,
+                     boolean redisRequired, Supplier<redis.clients.jedis.Jedis> jedisFactory) {
         this.plugin = plugin;
         this.config = config;
         this.cacheManager = cacheManager;
@@ -54,6 +69,7 @@ public final class PubsubSubscriber {
         this.debounceManager = debounceManager;
         this.redisManager = redisManager;
         this.redisRequired = redisRequired;
+        this.jedisFactory = jedisFactory;
     }
 
     /**
@@ -61,6 +77,11 @@ public final class PubsubSubscriber {
      * Should be called from AsyncScheduler or separate thread.
      */
     public void startSubscription() {
+        synchronized (lifecycleGate) {
+            if (stopped.get()) {
+                return;
+            }
+        }
         if (!config.isPubsubEnabled()) {
             plugin.getLogger().fine("Pub/Sub is disabled in config.");
             return;
@@ -71,21 +92,25 @@ public final class PubsubSubscriber {
             return;
         }
 
-        if (!running.compareAndSet(false, true)) {
-            plugin.getLogger().fine("Pub/Sub subscription already running.");
-            return;
-        }
-
         String serverName = config.getServerName();
         if (serverName == null || serverName.isBlank()) {
             plugin.getLogger().severe("server-name not configured. Pub/Sub disabled.");
-            running.set(false);
             return;
         }
 
-        subscriberThread = new Thread(this::runSubscription, "Syncmoney-PubSub");
-        subscriberThread.setDaemon(true);
-        subscriberThread.start();
+        synchronized (lifecycleGate) {
+            if (stopped.get()) {
+                return;
+            }
+            if (!running.compareAndSet(false, true)) {
+                plugin.getLogger().fine("Pub/Sub subscription already running.");
+                return;
+            }
+
+            subscriberThread = new Thread(this::runSubscription, "Syncmoney-PubSub");
+            subscriberThread.setDaemon(true);
+            subscriberThread.start();
+        }
 
         plugin.getLogger().fine("Pub/Sub subscription started on channel: " + CHANNEL);
     }
@@ -104,12 +129,14 @@ public final class PubsubSubscriber {
             redis.clients.jedis.Jedis jedis = null;
             try {
 
-            jedis = new redis.clients.jedis.Jedis(
-                    config.redis().getRedisHost(),
-                    config.redis().getRedisPort(),
-                    5000,
-                    5000
-            );
+            jedis = jedisFactory.get();
+
+            synchronized (lifecycleGate) {
+                if (stopped.get() || !running.get()) {
+                    break;
+                }
+                activeJedis = jedis;
+            }
 
             String redisPassword = config.redis().getRedisPassword();
             if (redisPassword != null && !redisPassword.isEmpty()) {
@@ -175,8 +202,13 @@ public final class PubsubSubscriber {
                         jedis.close();
                     } catch (Exception ignored) {
                     }
+                    synchronized (lifecycleGate) {
+                        if (activeJedis == jedis) {
+                            activeJedis = null;
+                        }
+                    }
                 }
-            }
+        }
         }
 
         plugin.getLogger().fine("Pub/Sub subscription thread ended.");
@@ -186,17 +218,52 @@ public final class PubsubSubscriber {
      * Stop subscription.
      */
     public void stopSubscription() {
-        running.set(false);
+        Thread threadToStop;
+        redis.clients.jedis.Jedis connectionToClose;
+        synchronized (lifecycleGate) {
+            stopped.set(true);
+            running.set(false);
+            threadToStop = subscriberThread;
+            connectionToClose = activeJedis;
+        }
 
-        if (subscriberThread != null && subscriberThread.isAlive()) {
-            subscriberThread.interrupt();
+        if (connectionToClose != null) {
             try {
-                subscriberThread.join(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                connectionToClose.close();
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.FINE, "Failed to close the active Pub/Sub connection", e);
             }
         }
 
+        synchronized (inboundApplyGate) {
+            // Fence any inbound balance apply that passed the initial running check.
+        }
+
+        boolean interrupted = false;
+        if (threadToStop != null) {
+            threadToStop.interrupt();
+            while (threadToStop.isAlive()) {
+                try {
+                    threadToStop.join(10_000);
+                    if (threadToStop.isAlive()) {
+                        plugin.getLogger().severe("Pub/Sub callback is still active after 10 seconds; "
+                                + "waiting before storage can be closed");
+                    }
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                    threadToStop.interrupt();
+                }
+            }
+        }
+
+        CMIPubsubHandler handler = cmiPubsubHandler;
+        if (handler != null) {
+            handler.shutdown();
+        }
+
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
         plugin.getLogger().fine("Pub/Sub subscription stopped.");
     }
 
@@ -205,6 +272,9 @@ public final class PubsubSubscriber {
     }
 
     private void handleCMIMessage(String message) {
+        if (stopped.get() || !running.get()) {
+            return;
+        }
         CMIPubsubHandler handler = this.cmiPubsubHandler;
         if (handler == null) {
             return;
@@ -227,6 +297,9 @@ public final class PubsubSubscriber {
      * [AsyncScheduler] This method runs on Pub/Sub subscriber thread.
      */
     private void handleMessage(String message) {
+        if (stopped.get() || !running.get()) {
+            return;
+        }
         try {
             PubSubMessage msg = PubSubMessage.fromJson(message);
             if (msg == null) {
@@ -262,15 +335,26 @@ public final class PubsubSubscriber {
             }
 
             BigDecimal balance = msg.getBalanceAsBigDecimal();
-            boolean updated = economyFacade.updateMemoryState(uuid, balance, msg.getVersion());
-            if (!updated) {
+            synchronized (inboundApplyGate) {
+                if (stopped.get() || !running.get()) {
+                    return;
+                }
+                boolean updated = economyFacade.updateMemoryState(uuid, balance, msg.getVersion());
+                if (!updated) {
+                    if (isDebugEnabled()) {
+                        plugin.getLogger().fine("Pub/Sub: memory state not updated for " + uuid);
+                    }
+                    return;
+                }
+                cacheManager.updateMemoryCache(uuid, balance, msg.getVersion());
+            }
+
+            if (stopped.get() || !running.get()) {
                 if (isDebugEnabled()) {
-                    plugin.getLogger().fine("Pub/Sub: memory state not updated for " + uuid);
+                    plugin.getLogger().fine("Pub/Sub: stopped before online notification for " + uuid);
                 }
                 return;
             }
-
-            cacheManager.updateMemoryCache(uuid, balance, msg.getVersion());
 
             if (msg.getSourceServer() != null && !msg.getSourceServer().equals(config.getServerName())) {
                 notifyPlayerIfOnline(uuid, balance, msg.getEventType(), msg.getAmount(), msg.getSourcePlayerName(), msg.getSourceServer());
@@ -297,6 +381,9 @@ public final class PubsubSubscriber {
         }
 
         player.getScheduler().run(plugin, (task) -> {
+            if (stopped.get() || !running.get()) {
+                return;
+            }
             if (plugin instanceof noietime.syncmoney.Syncmoney) {
                 noietime.syncmoney.Syncmoney syncMoneyPlugin = (noietime.syncmoney.Syncmoney) plugin;
                 String messageKey = MessageKeys.forEventType(eventType);

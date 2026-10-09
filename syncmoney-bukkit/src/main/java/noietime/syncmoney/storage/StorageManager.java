@@ -6,12 +6,17 @@ import noietime.syncmoney.economy.EconomyMode;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.storage.db.DbWriterConsumer;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Unified storage layer manager.
  * Manages Redis, Cache, and Database components.
  */
 public class StorageManager {
+
+    private static final long DB_WRITER_JOIN_TIMEOUT_MILLIS = 10_000L;
+    private static final long DB_WRITER_INTERRUPT_JOIN_MILLIS = 2_000L;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -22,10 +27,21 @@ public class StorageManager {
     private DbWriteQueue dbWriteQueue;
     private DbWriterConsumer dbWriterConsumer;
     private Thread dbWriterThread;
+    private final long dbWriterJoinTimeoutMillis;
+    private final long dbWriterInterruptJoinMillis;
+    private final AtomicBoolean shutdownRequested = new AtomicBoolean();
+    private final AtomicBoolean storageDependenciesClosed = new AtomicBoolean();
 
     public StorageManager(Syncmoney plugin, SyncmoneyConfig config) {
+        this(plugin, config, DB_WRITER_JOIN_TIMEOUT_MILLIS, DB_WRITER_INTERRUPT_JOIN_MILLIS);
+    }
+
+    StorageManager(Syncmoney plugin, SyncmoneyConfig config, long dbWriterJoinTimeoutMillis,
+                   long dbWriterInterruptJoinMillis) {
         this.plugin = plugin;
         this.config = config;
+        this.dbWriterJoinTimeoutMillis = Math.max(1, dbWriterJoinTimeoutMillis);
+        this.dbWriterInterruptJoinMillis = Math.max(1, dbWriterInterruptJoinMillis);
     }
 
     /**
@@ -51,7 +67,7 @@ public class StorageManager {
         if (databaseManager != null) {
             this.dbWriterConsumer = new DbWriterConsumer(plugin, dbWriteQueue, databaseManager,
                     cacheManager, redisManager);
-            this.dbWriterThread = new Thread(dbWriterConsumer, "Syncmoney-DbWriter");
+            this.dbWriterThread = createDbWriterThread(dbWriterConsumer);
             dbWriterThread.setDaemon(true);
             dbWriterThread.start();
         }
@@ -64,33 +80,64 @@ public class StorageManager {
      */
     public void shutdown() {
         plugin.getLogger().fine("Shutting down storage layer...");
-
-        if (dbWriterConsumer != null) {
-            dbWriterConsumer.stop();
-        }
+        shutdownRequested.set(true);
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("cache manager", () -> {
+                    if (cacheManager != null) cacheManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("database writer", () -> {
+                    if (dbWriterConsumer != null) dbWriterConsumer.stop();
+                }));
         if (dbWriterThread != null) {
             try {
-                dbWriterThread.join(10000);
+                dbWriterThread.join(dbWriterJoinTimeoutMillis);
                 if (dbWriterThread.isAlive()) {
                     plugin.getLogger().severe("DB writer drain timed out; pending writes require recovery");
                     dbWriterThread.interrupt();
-                    dbWriterThread.join(2000);
+                    dbWriterThread.join(dbWriterInterruptJoinMillis);
                 }
             } catch (InterruptedException interrupted) {
                 dbWriterThread.interrupt();
                 Thread.currentThread().interrupt();
+            } catch (Throwable failure) {
+                plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                        "Failed while draining database writer", failure);
             }
         }
 
-        if (databaseManager != null) {
-            databaseManager.close();
+        if (dbWriterThread != null && dbWriterThread.isAlive()) {
+            plugin.getLogger().severe("DB writer is still using storage after shutdown deadline; "
+                    + "database and Redis dependencies will remain open until that writer exits");
+            return;
         }
 
-        if (redisManager != null) {
-            redisManager.close();
-        }
-
+        closeStorageDependencies();
         plugin.getLogger().fine("Storage layer shutdown complete");
+    }
+
+    Thread createDbWriterThread(DbWriterConsumer consumer) {
+        return new Thread(() -> {
+            try {
+                consumer.run();
+            } finally {
+                if (shutdownRequested.get()) {
+                    closeStorageDependencies();
+                }
+            }
+        }, "Syncmoney-DbWriter");
+    }
+
+    private void closeStorageDependencies() {
+        if (!storageDependenciesClosed.compareAndSet(false, true)) {
+            return;
+        }
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("database manager", () -> {
+                    if (databaseManager != null) databaseManager.close();
+                }),
+                new ShutdownStepRunner.Step("Redis manager", () -> {
+                    if (redisManager != null) redisManager.close();
+                }));
     }
 
     public RedisManager getRedisManager() {

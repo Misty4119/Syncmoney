@@ -44,6 +44,9 @@ public final class CMIEconomyListener implements Listener {
     private final ConcurrentHashMap<UUID, BigDecimal> lastKnownCMIBalance = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> outboundSuppressUntilMs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> failedOutboundSyncAttempts = new ConcurrentHashMap<>();
+    private volatile boolean stopped;
+    private final Object outboundLifecycleGate = new Object();
+    private int inFlightOutboundCallbacks;
     private static final long OUTBOUND_SUPPRESS_MS = 750L;
     private static final int MAX_OUTBOUND_SYNC_ATTEMPTS = 3;
 
@@ -106,7 +109,7 @@ public final class CMIEconomyListener implements Listener {
 
 
     private void startPollingFallback() {
-        if (cmiHandler == null || pollingTask != null) {
+        if (stopped || cmiHandler == null || pollingTask != null) {
             return;
         }
         long intervalMs = Math.max(1000L, config.cmi().getCMIDetectIntervalMs());
@@ -118,7 +121,7 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void handleCMIEvent(Event event) {
-        if (cmiHandler == null) {
+        if (stopped || cmiHandler == null) {
             return;
         }
         try {
@@ -155,12 +158,15 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void publishDebounced(UUID uuid, String sourceName) {
+        if (stopped) return;
         noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
-                player -> publishOnPlayerScheduler(uuid, sourceName));
+                player -> {
+                    if (!stopped) publishOnPlayerScheduler(uuid, sourceName);
+                });
     }
 
     private void publishOnPlayerScheduler(UUID uuid, String sourceName) {
-        if (cmiHandler == null) {
+        if (stopped || cmiHandler == null) {
             return;
         }
         BigDecimal absolute = cmiHandler.getCMILocalBalance(uuid);
@@ -189,17 +195,26 @@ public final class CMIEconomyListener implements Listener {
         boolean isDeposit = diff.compareTo(BigDecimal.ZERO) >= 0;
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-            if (cmiHandler.trySyncAbsoluteBalance(uuid, absolute, diff, isDeposit, sourceName)) {
-                lastKnownCMIBalance.put(uuid, absolute);
-                failedOutboundSyncAttempts.remove(uuid);
-            } else {
-                int attempts = failedOutboundSyncAttempts.merge(uuid, 1, Integer::sum);
-                if (MigrationLock.isLocked() || attempts < MAX_OUTBOUND_SYNC_ATTEMPTS) {
-                    debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
+            if (!beginOutboundCallback()) return;
+            try {
+                if (stopped) return;
+                if (cmiHandler.trySyncAbsoluteBalance(uuid, absolute, diff, isDeposit, sourceName)) {
+                    if (!stopped) {
+                        lastKnownCMIBalance.put(uuid, absolute);
+                        failedOutboundSyncAttempts.remove(uuid);
+                    }
                 } else {
-                    failedOutboundSyncAttempts.remove(uuid, attempts);
-                    plugin.getLogger().warning("CMI balance mirror retries exhausted for " + uuid);
+                    if (stopped) return;
+                    int attempts = failedOutboundSyncAttempts.merge(uuid, 1, Integer::sum);
+                    if (MigrationLock.isLocked() || attempts < MAX_OUTBOUND_SYNC_ATTEMPTS) {
+                        debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
+                    } else {
+                        failedOutboundSyncAttempts.remove(uuid, attempts);
+                        plugin.getLogger().warning("CMI balance mirror retries exhausted for " + uuid);
+                    }
                 }
+            } finally {
+                finishOutboundCallback();
             }
         });
     }
@@ -227,13 +242,15 @@ public final class CMIEconomyListener implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
-        if (cmiHandler == null) {
+        if (stopped || cmiHandler == null) {
             return;
         }
         final UUID uuid = event.getPlayer().getUniqueId();
         plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            if (stopped) return;
             cmiHandler.reconcileOnJoin(uuid);
             noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid, player -> {
+                if (stopped) return;
                 BigDecimal local = cmiHandler.getCMILocalBalance(uuid);
                 if (local != null) lastKnownCMIBalance.put(uuid, local);
             });
@@ -241,6 +258,7 @@ public final class CMIEconomyListener implements Listener {
     }
 
     public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance) {
+        if (stopped) return;
         suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
         lastKnownCMIBalance.put(uuid, absoluteBalance);
     }
@@ -264,6 +282,20 @@ public final class CMIEconomyListener implements Listener {
     }
 
     public void shutdown() {
+        boolean interrupted = false;
+        synchronized (outboundLifecycleGate) {
+            stopped = true;
+            while (inFlightOutboundCallbacks > 0) {
+                try {
+                    outboundLifecycleGate.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (cmiHandler != null) {
+            cmiHandler.stopJoinReconciliation();
+        }
         if (debounceManager != null) {
             debounceManager.cancelAll();
         }
@@ -271,5 +303,27 @@ public final class CMIEconomyListener implements Listener {
             pollingTask.cancel();
         }
         failedOutboundSyncAttempts.clear();
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private boolean beginOutboundCallback() {
+        synchronized (outboundLifecycleGate) {
+            if (stopped) {
+                return false;
+            }
+            inFlightOutboundCallbacks++;
+            return true;
+        }
+    }
+
+    private void finishOutboundCallback() {
+        synchronized (outboundLifecycleGate) {
+            inFlightOutboundCallbacks--;
+            if (inFlightOutboundCallbacks == 0) {
+                outboundLifecycleGate.notifyAll();
+            }
+        }
     }
 }

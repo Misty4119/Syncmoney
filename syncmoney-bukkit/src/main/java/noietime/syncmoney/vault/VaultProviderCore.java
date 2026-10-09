@@ -243,11 +243,11 @@ public class VaultProviderCore {
     }
 
     public boolean createPlayerAccount(String playerName) {
-        return true;
+        return enabled;
     }
 
     public boolean createPlayerAccount(OfflinePlayer player) {
-        return player != null;
+        return enabled && player != null;
     }
 
     public boolean createPlayerAccount(String playerName, String worldName) {
@@ -263,10 +263,12 @@ public class VaultProviderCore {
     // =========================================================================
 
     public EconomyResponse withdrawPlayer(String playerName, double amount) {
+        if (!enabled) return providerUnavailable();
         return transferHandler.withdrawPlayer(playerHandler.getOfflinePlayerSafe(playerName), amount);
     }
 
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount) {
+        if (!enabled) return providerUnavailable();
         return transferHandler.withdrawPlayer(player, amount);
     }
 
@@ -274,6 +276,7 @@ public class VaultProviderCore {
      * [SYNC-VAULT-011] Withdraw with an explicit target for an atomic transfer.
      */
     public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount, UUID toUuid) {
+        if (!enabled) return providerUnavailable();
         return transferHandler.withdrawPlayer(player, amount, toUuid);
     }
 
@@ -290,6 +293,7 @@ public class VaultProviderCore {
     }
 
     public EconomyResponse depositPlayer(OfflinePlayer player, double amount) {
+        if (!enabled) return providerUnavailable();
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
         }
@@ -353,6 +357,7 @@ public class VaultProviderCore {
      * @return EconomyResponse with transaction result
      */
     public EconomyResponse depositPlayerForPlugin(OfflinePlayer player, double amount, String pluginName) {
+        if (!enabled) return providerUnavailable();
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
         }
@@ -394,6 +399,7 @@ public class VaultProviderCore {
      * @return EconomyResponse with transaction result
      */
     public EconomyResponse withdrawPlayerForPlugin(OfflinePlayer player, double amount, String pluginName) {
+        if (!enabled) return providerUnavailable();
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
         }
@@ -436,6 +442,7 @@ public class VaultProviderCore {
      * @return EconomyResponse with transaction result
      */
     public EconomyResponse pluginTransfer(OfflinePlayer from, OfflinePlayer to, double amount, String pluginName) {
+        if (!enabled) return providerUnavailable();
         if (from == null || to == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
         }
@@ -512,10 +519,12 @@ public class VaultProviderCore {
     // =========================================================================
 
     public EconomyResponse createBank(String name, String player) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.createBank(name, player);
     }
 
     public EconomyResponse createBank(String name, OfflinePlayer player) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.createBank(name, player);
     }
 
@@ -523,6 +532,11 @@ public class VaultProviderCore {
         double balance = readyBalance(uuid);
         return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE,
                 Double.isNaN(balance) ? notReadyMessage() : fallbackMessage);
+    }
+
+    private EconomyResponse providerUnavailable() {
+        return new EconomyResponse(0, Double.NaN, EconomyResponse.ResponseType.FAILURE,
+                "Economy provider is disabled or shutting down");
     }
 
     private double readyBalance(UUID uuid) {
@@ -543,6 +557,7 @@ public class VaultProviderCore {
     }
 
     public EconomyResponse deleteBank(String name) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.deleteBank(name);
     }
 
@@ -555,10 +570,12 @@ public class VaultProviderCore {
     }
 
     public EconomyResponse bankWithdraw(String name, double amount) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.bankWithdraw(name, amount);
     }
 
     public EconomyResponse bankDeposit(String name, double amount) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.bankDeposit(name, amount);
     }
 
@@ -566,6 +583,7 @@ public class VaultProviderCore {
      * [SYNC-VAULT-008] Atomic bank-to-bank transfer using Lua script.
      */
     public EconomyResponse bankTransfer(String fromBankName, String toBankName, double amount) {
+        if (!enabled) return providerUnavailable();
         return bankHandler.bankTransfer(fromBankName, toBankName, amount);
     }
 

@@ -11,6 +11,7 @@ import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.recovery.RecoverySpool;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 
 /**
  * Unified manager for economy event consumer.
@@ -137,14 +138,13 @@ public class EventConsumerManager {
      */
     public void shutdown() {
         plugin.getLogger().fine("Shutting down event consumer layer...");
-        
-        if (economyEventConsumer != null) {
-            economyEventConsumer.shutdown();
-        }
-        if (localPersistenceWorker != null) {
-            localPersistenceWorker.shutdown();
-        }
-        
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("economy event consumer", () -> {
+                    if (economyEventConsumer != null) economyEventConsumer.shutdown();
+                }),
+                new ShutdownStepRunner.Step("LOCAL persistence worker", () -> {
+                    if (localPersistenceWorker != null) localPersistenceWorker.shutdown();
+                }));
         plugin.getLogger().fine("Event consumer layer shutdown complete");
     }
 

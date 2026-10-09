@@ -10,6 +10,8 @@ import noietime.syncmoney.guard.PlayerTransferGuard;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.uuid.OnlinePlayerRegistry;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
+import org.bukkit.event.HandlerList;
 
 /**
  * Unified listener service manager.
@@ -82,11 +84,17 @@ public class ListenerServiceManager {
 
     public void shutdown() {
         plugin.getLogger().fine("Shutting down listener layer...");
-        if (playerTransferGuard != null) playerTransferGuard.shutdown();
-        if (cmiListener != null) cmiListener.shutdown();
-        if (onlinePlayerRegistry != null) {
-            onlinePlayerRegistry.shutdown();
-        }
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("Bukkit event registrations", () -> HandlerList.unregisterAll(plugin)),
+                new ShutdownStepRunner.Step("player transfer guard", () -> {
+                    if (playerTransferGuard != null) playerTransferGuard.shutdown();
+                }),
+                new ShutdownStepRunner.Step("CMI economy listener", () -> {
+                    if (cmiListener != null) cmiListener.shutdown();
+                }),
+                new ShutdownStepRunner.Step("online player registry", () -> {
+                    if (onlinePlayerRegistry != null) onlinePlayerRegistry.shutdown();
+                }));
         plugin.getLogger().fine("Listener layer shutdown complete");
     }
 

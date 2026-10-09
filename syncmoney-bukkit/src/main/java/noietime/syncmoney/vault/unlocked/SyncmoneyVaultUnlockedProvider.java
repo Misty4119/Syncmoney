@@ -173,7 +173,7 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public boolean renameAccount(String pluginName, UUID accountID, String name) {
-        if (accountID == null || name == null || name.isBlank() || nameResolver == null) {
+        if (!enabled || accountID == null || name == null || name.isBlank() || nameResolver == null) {
             return false;
         }
         nameResolver.cacheName(name, accountID);
@@ -272,6 +272,9 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public EconomyResponse withdraw(String pluginName, UUID accountID, BigDecimal amount) {
+        if (!enabled) {
+            return failure(null, "Economy provider is disabled or shutting down");
+        }
         BigDecimal balance = getBalance(pluginName, accountID);
         EconomyResponse allowed = canWithdraw(pluginName, accountID, amount, balance);
         if (!allowed.transactionSuccess()) {
@@ -336,6 +339,9 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public EconomyResponse deposit(String pluginName, UUID accountID, BigDecimal amount) {
+        if (!enabled) {
+            return failure(null, "Economy provider is disabled or shutting down");
+        }
         BigDecimal balance = getBalance(pluginName, accountID);
         EconomyResponse allowed = canDeposit(pluginName, accountID, amount, balance);
         if (!allowed.transactionSuccess()) {
@@ -368,6 +374,10 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public MultiEconomyResponse transfer(String pluginName, UUID from, UUID to, BigDecimal amount) {
+        if (!enabled) {
+            return transferFailure(amount == null ? BigDecimal.ZERO : amount,
+                    "Economy provider is disabled or shutting down");
+        }
         if (!validTransaction(from, amount) || to == null || from.equals(to)) {
             return transferFailure(amount, "Invalid transfer");
         }
@@ -461,7 +471,7 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
     }
 
     private boolean createPlayerAccount(UUID accountID, String name) {
-        if (accountID == null || name == null || name.isBlank()) {
+        if (!enabled || accountID == null || name == null || name.isBlank()) {
             return false;
         }
         if (nameResolver != null) {

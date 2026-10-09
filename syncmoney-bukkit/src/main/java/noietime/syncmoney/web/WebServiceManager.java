@@ -1,6 +1,7 @@
 package noietime.syncmoney.web;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.config.ConfigManager;
 import noietime.syncmoney.economy.EconomyFacade;
@@ -197,19 +198,16 @@ public class WebServiceManager {
      */
     public void shutdown() {
         plugin.getLogger().fine("Shutting down web layer...");
-
-        if (extensionManager != null) {
-            extensionManager.shutdown();
-        }
-
-        if (nodeHealthChecker != null) {
-            nodeHealthChecker.shutdown();
-        }
-
-        if (webAdminServer != null) {
-            webAdminServer.stop();
-        }
-
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("web API extensions", () -> {
+                    if (extensionManager != null) extensionManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("node health checker", () -> {
+                    if (nodeHealthChecker != null) nodeHealthChecker.shutdown();
+                }),
+                new ShutdownStepRunner.Step("web admin server", () -> {
+                    if (webAdminServer != null) webAdminServer.stop();
+                }));
         plugin.getLogger().fine("Web layer shutdown complete");
     }
 

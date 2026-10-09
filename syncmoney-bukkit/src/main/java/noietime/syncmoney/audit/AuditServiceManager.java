@@ -1,6 +1,7 @@
 package noietime.syncmoney.audit;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.web.server.WebAdminServer;
@@ -74,29 +75,19 @@ public class AuditServiceManager {
      */
     public void shutdown() {
         plugin.getLogger().fine("Shutting down audit layer...");
-
-
-        if (hybridAuditManager != null) {
-            hybridAuditManager.close();
-            plugin.getLogger().fine("HybridAuditManager shutdown");
-        }
-
-
-        if (auditLogger != null) {
-            auditLogger.close();
-            plugin.getLogger().fine("AuditLogger shutdown");
-        }
-
-        if (auditLogCleanup != null) {
-            auditLogCleanup.stop();
-            plugin.getLogger().fine("AuditLogCleanup shutdown");
-        }
-
-        if (auditLogExporter != null) {
-            auditLogExporter.stop();
-            plugin.getLogger().fine("AuditLogExporter shutdown");
-        }
-
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("hybrid audit", () -> {
+                    if (hybridAuditManager != null) hybridAuditManager.close();
+                }),
+                new ShutdownStepRunner.Step("audit logger", () -> {
+                    if (auditLogger != null) auditLogger.close();
+                }),
+                new ShutdownStepRunner.Step("audit cleanup", () -> {
+                    if (auditLogCleanup != null) auditLogCleanup.stop();
+                }),
+                new ShutdownStepRunner.Step("audit exporter", () -> {
+                    if (auditLogExporter != null) auditLogExporter.stop();
+                }));
         plugin.getLogger().fine("Audit layer shutdown complete");
     }
 

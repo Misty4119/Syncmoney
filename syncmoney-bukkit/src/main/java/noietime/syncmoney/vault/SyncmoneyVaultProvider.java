@@ -2,6 +2,7 @@ package noietime.syncmoney.vault;
 
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
@@ -15,6 +16,7 @@ import org.bukkit.plugin.Plugin;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * [SYNC-VAULT-001] Vault Economy API wrapper for Syncmoney.
@@ -28,6 +30,9 @@ public class SyncmoneyVaultProvider implements Economy {
 
     private final Plugin plugin;
     private final VaultProviderCore core;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final Object registrationGate = new Object();
+    private volatile ScheduledTask delayedRegistrationTask;
 
     public SyncmoneyVaultProvider(Plugin plugin, EconomyFacade economyFacade, NameResolver nameResolver) {
         this(plugin, economyFacade, null, nameResolver);
@@ -86,6 +91,9 @@ public class SyncmoneyVaultProvider implements Economy {
      * @return true if registration succeeded
      */
     public boolean setupEconomy() {
+        if (closed.get()) {
+            return false;
+        }
         if (plugin.getServer().getPluginManager().getPlugin("Vault") == null) {
             plugin.getLogger().warning("Vault plugin not found. Economy integration disabled.");
             return false;
@@ -124,32 +132,41 @@ public class SyncmoneyVaultProvider implements Economy {
      * Register the economy system to Vault.
      */
     private boolean registerEconomy() {
-        try {
-            var existingProvider = plugin.getServer().getServicesManager().getRegistration(Economy.class);
-            if (existingProvider != null && existingProvider.getProvider() instanceof SyncmoneyVaultProvider) {
-                plugin.getLogger().fine("Syncmoney Vault Economy already registered.");
+        synchronized (registrationGate) {
+            if (closed.get()) {
+                return false;
+            }
+            try {
+                var services = plugin.getServer().getServicesManager();
+                var existingProvider = services.getRegistration(Economy.class);
+                if (closed.get()) {
+                    return false;
+                }
+                if (existingProvider != null && existingProvider.getProvider() instanceof SyncmoneyVaultProvider) {
+                    plugin.getLogger().fine("Syncmoney Vault Economy already registered.");
+                    core.setEnabled(true);
+                    return true;
+                }
+
+                if (existingProvider != null) {
+                    services.unregister(Economy.class, existingProvider.getProvider());
+                    plugin.getLogger()
+                            .fine("Unregistered existing economy provider: " + existingProvider.getProvider().getName());
+                }
+
+                if (closed.get()) {
+                    return false;
+                }
+                services.register(Economy.class, this, plugin,
+                        org.bukkit.plugin.ServicePriority.Highest);
+
                 core.setEnabled(true);
                 return true;
+            } catch (Exception e) {
+                plugin.getLogger().warning("Registration error: " + e.getMessage());
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "Vault registration stacktrace", e);
+                return false;
             }
-
-            if (existingProvider != null) {
-                plugin.getServer().getServicesManager().unregister(Economy.class, existingProvider.getProvider());
-                plugin.getLogger()
-                        .fine("Unregistered existing economy provider: " + existingProvider.getProvider().getName());
-            }
-
-            plugin.getServer().getServicesManager().register(
-                    Economy.class,
-                    this,
-                    plugin,
-                    org.bukkit.plugin.ServicePriority.Highest);
-
-            core.setEnabled(true);
-            return true;
-        } catch (Exception e) {
-            plugin.getLogger().warning("Registration error: " + e.getMessage());
-            plugin.getLogger().log(java.util.logging.Level.WARNING, "Vault registration stacktrace", e);
-            return false;
         }
     }
 
@@ -166,22 +183,68 @@ public class SyncmoneyVaultProvider implements Economy {
      * Folia-compatible delayed registration using global region scheduler.
      */
     private void scheduleDelayedRegistrationFolia(org.bukkit.Server server) {
-        try {
-            server.getGlobalRegionScheduler().runDelayed(plugin, task -> {
-                var existingProvider = server.getServicesManager().getRegistration(Economy.class);
-
-                if (existingProvider != null && !(existingProvider.getProvider() instanceof SyncmoneyVaultProvider)) {
-                    server.getServicesManager().unregister(Economy.class, existingProvider.getProvider());
-                    server.getServicesManager().register(
-                            Economy.class,
-                            this,
-                            plugin,
-                            org.bukkit.plugin.ServicePriority.Highest);
-                    plugin.getLogger().fine("Syncmoney Vault Economy re-registered for compatibility (Folia).");
+        synchronized (registrationGate) {
+            if (closed.get()) {
+                return;
+            }
+            try {
+                ScheduledTask scheduled = server.getGlobalRegionScheduler().runDelayed(plugin, task -> {
+                    synchronized (registrationGate) {
+                        if (closed.get()) {
+                            return;
+                        }
+                        var services = server.getServicesManager();
+                        var existingProvider = services.getRegistration(Economy.class);
+                        if (closed.get()) {
+                            return;
+                        }
+                        if (existingProvider != null
+                                && !(existingProvider.getProvider() instanceof SyncmoneyVaultProvider)) {
+                            services.unregister(Economy.class, existingProvider.getProvider());
+                            if (!closed.get()) {
+                                services.register(Economy.class, this, plugin,
+                                        org.bukkit.plugin.ServicePriority.Highest);
+                                plugin.getLogger().fine(
+                                        "Syncmoney Vault Economy re-registered for compatibility (Folia).");
+                            }
+                        }
+                    }
+                }, 20L);
+                delayedRegistrationTask = scheduled;
+                if (closed.get() && scheduled != null) {
+                    scheduled.cancel();
                 }
-            }, 20L);
-        } catch (Exception e) {
-            plugin.getLogger().fine("Folia scheduling failed, using immediate registration.");
+            } catch (Exception e) {
+                plugin.getLogger().fine("Folia scheduling failed, using immediate registration.");
+            }
+        }
+    }
+
+    /** Stops new calls through retained provider references and removes this service registration. */
+    public void shutdown() {
+        synchronized (registrationGate) {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            core.setEnabled(false);
+            ScheduledTask scheduled = delayedRegistrationTask;
+            delayedRegistrationTask = null;
+            if (scheduled != null) {
+                try {
+                    scheduled.cancel();
+                } catch (Throwable failure) {
+                    plugin.getLogger().log(java.util.logging.Level.WARNING,
+                            "Failed to cancel delayed Vault provider registration", failure);
+                }
+            }
+            try {
+                plugin.getServer().getServicesManager().unregister(Economy.class, this);
+            } catch (Throwable failure) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING,
+                        "Failed to unregister Vault provider during shutdown", failure);
+            } finally {
+                core.setEnabled(false);
+            }
         }
     }
 

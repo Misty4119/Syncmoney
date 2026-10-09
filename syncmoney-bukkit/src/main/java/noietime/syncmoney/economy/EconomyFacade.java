@@ -76,6 +76,7 @@ public final class EconomyFacade {
     private final LocalEconomyHandler localEconomyHandler;
     private final FallbackEconomyWrapper fallbackWrapper;
     private final OverflowLogInterface overflowLog;
+    private final EconomyWriteQueue writeQueue;
     private PlayerTransactionGuard playerTransactionGuard;
     private EconomicCircuitBreaker circuitBreaker;
     private NameResolver nameResolver;
@@ -129,6 +130,7 @@ public final class EconomyFacade {
         this.redisManager = redisManager;
         this.databaseManager = databaseManager;
         this.localEconomyHandler = localEconomyHandler;
+        this.writeQueue = writeQueue;
         this.fallbackWrapper = fallbackWrapper;
         this.playerTransactionGuard = playerTransactionGuard;
 
@@ -639,12 +641,14 @@ public final class EconomyFacade {
      * Events are queued for async persistence to Redis/DB.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.deposit(uuid, amount, source);
     }
 
     /** Deposit with caller attribution retained through the confirmed Redis receipt. */
     public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
             String sourcePlugin) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.deposit(uuid, amount, source, sourcePlugin);
     }
 
@@ -660,12 +664,14 @@ public final class EconomyFacade {
      * Events are queued for async persistence to Redis/DB.
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.withdraw(uuid, amount, source);
     }
 
     /** Withdraw with caller attribution retained through the confirmed Redis receipt. */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source,
             String sourcePlugin) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.withdraw(uuid, amount, source, sourcePlugin);
     }
 
@@ -681,6 +687,7 @@ public final class EconomyFacade {
      * This method bypasses the memory state and directly uses Redis for true atomicity.
      */
     public CacheManager.TransferResult executeAtomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount) {
+        if (shuttingDown) return null;
         return transferOrchestrator.executeAtomicTransfer(fromUuid, toUuid, amount);
     }
 
@@ -695,6 +702,7 @@ public final class EconomyFacade {
      * @return new balance of fromUuid, or -1 if transfer failed
      */
     public BigDecimal atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transferOrchestrator.atomicTransfer(fromUuid, toUuid, amount, source);
     }
 
@@ -717,6 +725,7 @@ public final class EconomyFacade {
      * @return New balance after transaction, -1 on failure
      */
     public BigDecimal pluginDeposit(UUID uuid, BigDecimal amount, String pluginName) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.pluginDeposit(uuid, amount, pluginName);
     }
 
@@ -731,6 +740,7 @@ public final class EconomyFacade {
      * @return New balance after transaction, -1 on failure
      */
     public BigDecimal pluginWithdraw(UUID uuid, BigDecimal amount, String pluginName) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.pluginWithdraw(uuid, amount, pluginName);
     }
 
@@ -746,6 +756,7 @@ public final class EconomyFacade {
      * @return TransferResult (with both new balances and versions), null on failure
      */
     public CacheManager.TransferResult pluginAtomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount, String pluginName) {
+        if (shuttingDown) return null;
         return transferOrchestrator.pluginAtomicTransfer(fromUuid, toUuid, amount, pluginName);
     }
 
@@ -754,6 +765,7 @@ public final class EconomyFacade {
      * Events are queued for async persistence to Redis/DB.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
+        if (shuttingDown) return BigDecimal.valueOf(-1);
         return transactionWriter.setBalance(uuid, newBalance, source);
     }
 
@@ -893,8 +905,16 @@ public final class EconomyFacade {
     /**
      * [SYNC-ECO-069] Shutdown the EconomyFacade and release resources.
      */
-    public void shutdown() {
+    /** Stops new economic mutations while preserving already reserved writes for the consumer drain. */
+    public void beginShutdown() {
         shuttingDown = true;
+        if (writeQueue != null) {
+            writeQueue.closeAdmission();
+        }
+    }
+
+    public void shutdown() {
+        beginShutdown();
         IllegalStateException shutdownFailure = new IllegalStateException("Economy provider has shut down");
         apiBalanceLoads.forEach((uuid, future) -> future.completeExceptionally(shutdownFailure));
         apiBalanceLoads.clear();

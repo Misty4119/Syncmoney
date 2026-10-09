@@ -97,6 +97,18 @@ class SyncmoneyVaultUnlockedProviderTest {
     }
 
     @Test
+    void retainedProviderReferenceRejectsWritesAfterItIsDisabled() {
+        UUID account = UUID.randomUUID();
+        provider.setEnabled(false);
+
+        EconomyResponse response = provider.deposit("Shop", account, BigDecimal.ONE);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        verify(economyFacade, never()).getBalanceForPlaceholder(account);
+        verify(economyFacade, never()).pluginDeposit(any(), any(), any());
+    }
+
+    @Test
     void coldAccountReturnsNullAndRejectsMutationsWithoutReadingStorageSynchronously() {
         UUID account = UUID.randomUUID();
         when(economyFacade.getBalanceForPlaceholder(account)).thenReturn(null);

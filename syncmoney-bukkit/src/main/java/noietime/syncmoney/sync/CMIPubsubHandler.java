@@ -7,6 +7,7 @@ import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class CMIPubsubHandler {
 
@@ -41,6 +43,9 @@ public final class CMIPubsubHandler {
     private static final int MAX_SEEN_NOTIFICATION_IDS = 20_000;
 
     private final Map<UUID, Long> notificationCooldownUntilMs = new ConcurrentHashMap<>();
+    private final Set<PendingEntityApply> pendingEntityApplies = ConcurrentHashMap.newKeySet();
+    private final Object lifecycleGate = new Object();
+    private volatile boolean stopped;
     private static final long NOTIFICATION_COOLDOWN_MS = 1_500L;
 
     private record VersionEntry(long version, long timestamp) {}
@@ -66,7 +71,7 @@ public final class CMIPubsubHandler {
     }
 
     public void process(PubSubMessage msg) {
-        if (msg == null) {
+        if (stopped || msg == null) {
             return;
         }
         try {
@@ -101,70 +106,85 @@ public final class CMIPubsubHandler {
             }
             boolean leaseTransferred = false;
             try {
-            updateRedisMirror(uuid, balance, incoming);
-            lastUpdateVersion.put(uuid, new VersionEntry(incoming, clock.millis()));
-            maybeCleanup();
+                updateRedisMirror(uuid, balance, incoming);
+                synchronized (lifecycleGate) {
+                    if (stopped) {
+                        return;
+                    }
+                    lastUpdateVersion.put(uuid, new VersionEntry(incoming, clock.millis()));
+                }
+                maybeCleanup();
 
-            if (cmiApi.isAvailable()) {
-                final BigDecimal targetBalance = balance;
-                final long appliedVersion = incoming;
-                Player player = plugin.getServer().getPlayer(uuid);
-                if (player != null && player.isOnline()) {
-                    try {
-                        var scheduled = player.getScheduler().run(plugin, task -> {
+                if (cmiApi.isAvailable()) {
+                    final BigDecimal targetBalance = balance;
+                    final long appliedVersion = incoming;
+                    Player player = plugin.getServer().getPlayer(uuid);
+                    if (player != null && player.isOnline()) {
+                        PendingEntityApply pending = registerPendingEntityApply(writeLease);
+                        if (pending != null) {
                             try {
-                        if (currentVersion(uuid) != appliedVersion) return;
-                        Double beforeObj = cmiApi.getBalance(uuid);
-                        if (beforeObj == null) {
-                            cmiHandler.invalidateCachedBalanceForApi(uuid);
-                        } else {
-                            cmiHandler.recordApiAuthorityBalance(uuid, NumericUtil.normalize(beforeObj));
-                        }
-                        double before = beforeObj != null ? beforeObj.doubleValue() : targetBalance.doubleValue();
-                        if (Double.compare(before, targetBalance.doubleValue()) == 0) {
-                            if (beforeObj != null) {
-                                cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                                ScheduledTask scheduled = player.getScheduler().run(plugin, task -> {
+                                    if (!pending.begin()) {
+                                        return;
+                                    }
+                                    try {
+                                        if (stopped || currentVersion(uuid) != appliedVersion) return;
+                                        Double beforeObj = cmiApi.getBalance(uuid);
+                                        if (!pending.beginApply(uuid, appliedVersion)) return;
+                                        if (beforeObj == null) {
+                                            cmiHandler.invalidateCachedBalanceForApi(uuid);
+                                        } else {
+                                            cmiHandler.recordApiAuthorityBalance(
+                                                    uuid, NumericUtil.normalize(beforeObj));
+                                        }
+                                        double before = beforeObj != null
+                                                ? beforeObj.doubleValue() : targetBalance.doubleValue();
+                                        if (Double.compare(before, targetBalance.doubleValue()) == 0) {
+                                            if (beforeObj != null) {
+                                                cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                                            }
+                                            cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
+                                            return;
+                                        }
+                                        cmiHandler.suppressOutbound(uuid, 750L);
+                                        cmiHandler.invalidateCachedBalanceForApi(uuid);
+                                        boolean applied = cmiApi.setBalance(uuid, targetBalance.doubleValue());
+                                        if (applied) {
+                                            cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                                        }
+                                        cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
+                                        notifyPlayerIfBalanceChanged(uuid, msg, before, targetBalance.doubleValue());
+                                        if (config.isDebug()) {
+                                            plugin.getLogger().fine("[CMI Inbound] CMI write " + uuid
+                                                    + " = " + targetBalance + " (before=" + before + ")");
+                                        }
+                                    } catch (Throwable th) {
+                                        plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
+                                                + ": " + th.getMessage());
+                                    } finally {
+                                        pending.finish();
+                                    }
+                                }, pending::cancelBeforeStart);
+                                pending.setTask(scheduled);
+                                leaseTransferred = scheduled != null;
+                                if (!leaseTransferred) {
+                                    pending.finish();
+                                }
+                            } catch (Throwable schedEx) {
+                                pending.finish();
+                                if (config.isDebug()) {
+                                    plugin.getLogger().fine("[CMI Inbound] EntityScheduler.run failed for "
+                                            + uuid + " (" + schedEx.getMessage() + "), CMI write skipped this tick");
+                                }
                             }
-                            cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
-                            return;
-                        }
-                        cmiHandler.suppressOutbound(uuid, 750L);
-                        cmiHandler.invalidateCachedBalanceForApi(uuid);
-                        boolean applied = cmiApi.setBalance(uuid, targetBalance.doubleValue());
-                        if (applied) {
-                            cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
-                        }
-                        cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
-                        notifyPlayerIfBalanceChanged(uuid, msg, before, targetBalance.doubleValue());
-                        if (config.isDebug()) {
-                            plugin.getLogger().fine("[CMI Inbound] CMI write " + uuid
-                                    + " = " + targetBalance + " (before=" + before + ")");
-                        }
-                            } catch (Throwable th) {
-                                plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
-                                        + ": " + th.getMessage());
-                            } finally {
-                                writeLease.close();
-                            }
-                        }, writeLease::close);
-                        leaseTransferred = scheduled != null;
-                        if (!leaseTransferred) {
-                            writeLease.close();
-                        }
-                    } catch (Throwable schedEx) {
-                        writeLease.close();
-                        if (config.isDebug()) {
-                            plugin.getLogger().fine("[CMI Inbound] EntityScheduler.run failed for "
-                                    + uuid + " (" + schedEx.getMessage() + "), CMI write skipped this tick");
                         }
                     }
-                }
-            } else {
-                plugin.getLogger().fine("[CMI Inbound] CMI API unavailable on this server; "
-                        + "Redis mirror updated for " + uuid + " but in-game CMI will only sync on next join.");
-                cmiHandler.invalidateCachedBalanceForApi(uuid);
-                cmiHandler.notifyInboundApplied(uuid, balance, incoming);
-            }
+                } else if (!stopped) {
+                        plugin.getLogger().fine("[CMI Inbound] CMI API unavailable on this server; "
+                                + "Redis mirror updated for " + uuid + " but in-game CMI will only sync on next join.");
+                        cmiHandler.invalidateCachedBalanceForApi(uuid);
+                        cmiHandler.notifyInboundApplied(uuid, balance, incoming);
+                    }
             } finally {
                 if (!leaseTransferred) {
                     writeLease.close();
@@ -178,6 +198,101 @@ public final class CMIPubsubHandler {
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to process CMI inbound update: " + e.getMessage());
         }
+    }
+
+    /**
+     * Stops new inbound work and cancels owner callbacks that have not started. An owner callback
+     * that wins {@link PendingEntityApply#beginApply(UUID, long)} before shutdown is already
+     * admitted and may finish without making shutdown wait on another entity region.
+     */
+    public void shutdown() {
+        List<PendingEntityApply> pending;
+        synchronized (lifecycleGate) {
+            if (stopped) {
+                return;
+            }
+            stopped = true;
+            pending = List.copyOf(pendingEntityApplies);
+        }
+        for (PendingEntityApply apply : pending) {
+            apply.cancelBeforeStart();
+        }
+    }
+
+    private PendingEntityApply registerPendingEntityApply(MigrationLock.WriteLease writeLease) {
+        synchronized (lifecycleGate) {
+            if (stopped) {
+                return null;
+            }
+            PendingEntityApply pending = new PendingEntityApply(writeLease);
+            pendingEntityApplies.add(pending);
+            return pending;
+        }
+    }
+
+    private final class PendingEntityApply {
+        private final MigrationLock.WriteLease writeLease;
+        private final AtomicReference<PendingEntityState> state =
+                new AtomicReference<>(PendingEntityState.PENDING);
+        private volatile ScheduledTask task;
+
+        private PendingEntityApply(MigrationLock.WriteLease writeLease) {
+            this.writeLease = writeLease;
+        }
+
+        private void setTask(ScheduledTask task) {
+            this.task = task;
+            if (stopped && task != null && !cancelBeforeStart()
+                    && state.get() == PendingEntityState.FINISHED) {
+                task.cancel();
+            }
+        }
+
+        private boolean begin() {
+            return state.compareAndSet(PendingEntityState.PENDING, PendingEntityState.RUNNING);
+        }
+
+        private boolean beginApply(UUID uuid, long expectedVersion) {
+            synchronized (lifecycleGate) {
+                if (stopped || state.get() != PendingEntityState.RUNNING
+                        || currentVersion(uuid) != expectedVersion) {
+                    return false;
+                }
+                state.set(PendingEntityState.APPLYING);
+                return true;
+            }
+        }
+
+        private void finish() {
+            if (state.getAndSet(PendingEntityState.FINISHED) == PendingEntityState.FINISHED) {
+                return;
+            }
+            releaseLease();
+        }
+
+        private boolean cancelBeforeStart() {
+            if (!state.compareAndSet(PendingEntityState.PENDING, PendingEntityState.FINISHED)) {
+                return false;
+            }
+            releaseLease();
+            ScheduledTask scheduled = task;
+            if (scheduled != null) {
+                scheduled.cancel();
+            }
+            return true;
+        }
+
+        private void releaseLease() {
+            pendingEntityApplies.remove(this);
+            writeLease.close();
+        }
+    }
+
+    private enum PendingEntityState {
+        PENDING,
+        RUNNING,
+        APPLYING,
+        FINISHED
     }
 
     private long currentVersion(UUID uuid) {
@@ -223,7 +338,7 @@ public final class CMIPubsubHandler {
      * than {@code msg.amount} (which could be wrong on counterparty/verify publishes).
      */
     private void notifyPlayerIfBalanceChanged(UUID uuid, PubSubMessage msg, double before, double after) {
-        if (!config.crossServer().isCrossServerNotificationsEnabled()) {
+        if (stopped || !config.crossServer().isCrossServerNotificationsEnabled()) {
             return;
         }
         double delta = after - before;
@@ -250,14 +365,24 @@ public final class CMIPubsubHandler {
         String sourceServer = msg.getSourceServer();
         String key = delta > 0 ? "cross-server.money-received" : "cross-server.money-spent";
 
-        player.getScheduler().run(plugin, t -> {
-            String message = plugin.getMessage(key);
-            if (message != null) {
-                message = message.replace("{amount}", FormatUtil.formatCurrency(Math.abs(delta)));
-                message = message.replace("{server}", sourceServer != null ? sourceServer : "");
-                MessageHelper.sendMessage(player, message);
+        synchronized (lifecycleGate) {
+            if (stopped) {
+                return;
             }
-        }, null);
+            player.getScheduler().run(plugin, t -> {
+                if (stopped) {
+                    return;
+                }
+                String message = plugin.getMessage(key);
+                if (message != null) {
+                    message = message.replace("{amount}", FormatUtil.formatCurrency(Math.abs(delta)));
+                    message = message.replace("{server}", sourceServer != null ? sourceServer : "");
+                    if (!stopped) {
+                        MessageHelper.sendMessage(player, message);
+                    }
+                }
+            }, null);
+        }
     }
 
     private void trimSeenNotifications() {

@@ -90,6 +90,19 @@ class EconomyFacadeTest {
     }
 
     @Test
+    void beginShutdownClosesWriteAdmissionAndRejectsNewMutations() {
+        economyFacade.updateMemoryState(testUuid, new BigDecimal("25.00"), 4L);
+
+        economyFacade.beginShutdown();
+
+        assertEquals(BigDecimal.valueOf(-1), economyFacade.deposit(
+                testUuid, BigDecimal.ONE, EconomyEvent.EventSource.TEST));
+        assertEquals(new BigDecimal("25.00"), economyFacade.getMemoryState(testUuid).balance());
+        verify(mockWriteQueue).closeAdmission();
+        verify(mockWriteQueue, never()).tryReserve(testUuid);
+    }
+
+    @Test
     void testHasInMemory_False_ForNewPlayer() {
 
         assertFalse(economyFacade.hasInMemory(testUuid));

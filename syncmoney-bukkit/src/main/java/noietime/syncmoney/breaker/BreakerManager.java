@@ -1,6 +1,7 @@
 package noietime.syncmoney.breaker;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.storage.RedisManager;
@@ -81,26 +82,20 @@ public class BreakerManager {
      */
     public void shutdown() {
         plugin.getLogger().fine("Shutting down breaker layer...");
-
-        if (playerTransactionGuard != null) {
-            playerTransactionGuard.shutdown();
-        }
-
-        if (notificationService != null) {
-            notificationService.shutdown();
-        }
-
-        if (circuitBreaker != null) {
-            circuitBreaker.shutdown();
-        } else if (connectionStateManager != null) {
-            connectionStateManager.shutdown();
-        }
-
-
-        if (discordNotifier != null) {
-            discordNotifier.shutdown();
-        }
-
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("player transaction guard", () -> {
+                    if (playerTransactionGuard != null) playerTransactionGuard.shutdown();
+                }),
+                new ShutdownStepRunner.Step("notification service", () -> {
+                    if (notificationService != null) notificationService.shutdown();
+                }),
+                new ShutdownStepRunner.Step("circuit breaker", () -> {
+                    if (circuitBreaker != null) circuitBreaker.shutdown();
+                    else if (connectionStateManager != null) connectionStateManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("Discord notifier", () -> {
+                    if (discordNotifier != null) discordNotifier.shutdown();
+                }));
         plugin.getLogger().fine("Breaker layer shutdown complete");
     }
 

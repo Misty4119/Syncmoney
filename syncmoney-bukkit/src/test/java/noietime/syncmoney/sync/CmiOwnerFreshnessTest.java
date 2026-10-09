@@ -9,6 +9,7 @@ import noietime.syncmoney.listener.CMIEconomyListener;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.RedisManager;
+import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
@@ -16,6 +17,7 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import redis.clients.jedis.Jedis;
 import io.papermc.paper.threadedregions.scheduler.AsyncScheduler;
 
@@ -29,6 +31,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -43,6 +46,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -106,6 +110,119 @@ class CmiOwnerFreshnessTest {
         assertTrue(MigrationLock.lock(), "retirement releases the CMI write lease");
         verify(fixture.cmiApi, never()).getBalance(account);
         verify(fixture.cmiApi, never()).setBalance(eq(account), any(Double.class));
+    }
+
+    @Test
+    void shutdownBeforeOwnerApplyAdmissionRejectsMutationAndKeepsMigrationFence() throws Exception {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch continueCallback = new CountDownLatch(1);
+        MigrationLock.enable();
+        when(fixture.cmiApi.getBalance(account)).thenAnswer(invocation -> {
+            callbackEntered.countDown();
+            if (!continueCallback.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("test callback release timed out");
+            }
+            return 10.0;
+        });
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(true);
+
+        fixture.handler.process(message(account, "20.00", 20L));
+        assertEquals(1, fixture.scheduledWork.size());
+        assertFalse(MigrationLock.lock(), "the queued owner callback retains the write lease");
+
+        Thread ownerCallback = new Thread(
+                () -> fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class)),
+                "cmi-owner-callback-test");
+        ownerCallback.start();
+        boolean migrationStartedWhileCallbackRunning = false;
+        try {
+            assertTrue(callbackEntered.await(5, TimeUnit.SECONDS), "owner callback did not start");
+            fixture.handler.shutdown();
+            migrationStartedWhileCallbackRunning = MigrationLock.lock();
+            if (migrationStartedWhileCallbackRunning) {
+                MigrationLock.unlock();
+            }
+        } finally {
+            continueCallback.countDown();
+            ownerCallback.join(TimeUnit.SECONDS.toMillis(5));
+        }
+
+        assertFalse(ownerCallback.isAlive(), "owner callback should finish without a cross-region wait");
+        assertFalse(migrationStartedWhileCallbackRunning,
+                "shutdown must retain the migration write lease while an owner callback is running");
+        assertTrue(MigrationLock.lock(), "the callback releases its migration lease after finishing");
+        verify(fixture.cmiApi, never()).setBalance(eq(account), any(Double.class));
+    }
+
+    @Test
+    void inboundShutdownDoesNotWaitForAnAdmittedPlayerOwnerCmiMutation() throws Exception {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true, true);
+        CountDownLatch cmiWriteEntered = new CountDownLatch(1);
+        CountDownLatch releaseCmiWrite = new CountDownLatch(1);
+        when(fixture.cmiApi.getBalance(account)).thenReturn(10.0);
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenAnswer(invocation -> {
+            cmiWriteEntered.countDown();
+            if (!releaseCmiWrite.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("test CMI write release timed out");
+            }
+            return true;
+        });
+        MigrationLock.enable();
+
+        fixture.handler.process(message(account, "20.00", 20L));
+        Thread ownerCallback = new Thread(
+                () -> fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class)),
+                "cmi-owner-shutdown-nonblocking-test");
+        ownerCallback.start();
+        Thread shutdown = null;
+        try {
+            assertTrue(cmiWriteEntered.await(5, TimeUnit.SECONDS), "owner CMI write did not start");
+            CountDownLatch shutdownFinished = new CountDownLatch(1);
+            shutdown = new Thread(() -> {
+                fixture.handler.shutdown();
+                shutdownFinished.countDown();
+            }, "cmi-handler-shutdown-nonblocking-test");
+            shutdown.start();
+            assertTrue(shutdownFinished.await(1, TimeUnit.SECONDS),
+                    "shutdown must not wait for a player-region CMI call");
+            assertFalse(MigrationLock.lock(), "the active callback must retain its migration write lease");
+        } finally {
+            releaseCmiWrite.countDown();
+            ownerCallback.join(TimeUnit.SECONDS.toMillis(5));
+            if (shutdown != null) shutdown.join(TimeUnit.SECONDS.toMillis(5));
+        }
+
+        assertFalse(ownerCallback.isAlive(), "owner callback should finish after the CMI call is released");
+        assertEquals(1, fixture.scheduledWork.size(),
+                "the admitted callback must not schedule a player notification after shutdown");
+        assertTrue(MigrationLock.lock(), "the in-flight callback releases its lease after finishing");
+        verify(fixture.cmiApi).setBalance(account, 20.0);
+    }
+
+    @Test
+    void queuedCrossServerNotificationIsDroppedAfterShutdown() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true, true);
+        when(fixture.cmiApi.getBalance(account)).thenReturn(10.0);
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(true);
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            Server server = fixture.plugin.getServer();
+            bukkit.when(Bukkit::getServer).thenReturn(server);
+            fixture.handler.process(message(account, "20.00", 20L));
+            fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
+
+            assertTrue(fixture.config.crossServer().isCrossServerNotificationsEnabled());
+            verify(fixture.cmiApi).setBalance(account, 20.0);
+            assertEquals(2, fixture.scheduledWork.size(), "the balance change should queue one player notification");
+            fixture.handler.shutdown();
+            fixture.scheduledWork.get(1).accept(mock(ScheduledTask.class));
+
+            verify(fixture.plugin, never()).getMessage("cross-server.money-received");
+        }
     }
 
     @Test
@@ -185,11 +302,16 @@ class CmiOwnerFreshnessTest {
     }
 
     private static Fixture fixture(Clock clock, boolean cmiAvailable, boolean playerOnline) {
+        return fixture(clock, cmiAvailable, playerOnline, false);
+    }
+
+    private static Fixture fixture(Clock clock, boolean cmiAvailable, boolean playerOnline,
+                                   boolean crossServerNotifications) {
         Syncmoney plugin = mock(Syncmoney.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
         Server server = mock(Server.class);
         when(plugin.getServer()).thenReturn(server);
-        SyncmoneyConfig config = config();
+        SyncmoneyConfig config = config(crossServerNotifications);
 
         RedisManager redis = mock(RedisManager.class);
         Jedis jedis = mock(Jedis.class);
@@ -214,14 +336,18 @@ class CmiOwnerFreshnessTest {
         }).when(entityScheduler).run(eq(plugin), any(), any());
 
         CMIPubsubHandler handler = new CMIPubsubHandler(plugin, config, redis, cmiApi, cmiHandler, clock);
-        return new Fixture(handler, cmiApi, cmiHandler, player, scheduledWork, retiredWork);
+        return new Fixture(handler, cmiApi, cmiHandler, player, scheduledWork, retiredWork, plugin, config);
     }
 
     private static SyncmoneyConfig config() {
+        return config(false);
+    }
+
+    private static SyncmoneyConfig config(boolean crossServerNotifications) {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(config.getServerName()).thenReturn("local");
         when(config.cmi().getCMIRedisPrefix()).thenReturn("syncmoney:cmi");
-        when(config.crossServer().isCrossServerNotificationsEnabled()).thenReturn(false);
+        when(config.crossServer().isCrossServerNotificationsEnabled()).thenReturn(crossServerNotifications);
         return config;
     }
 
@@ -257,7 +383,7 @@ class CmiOwnerFreshnessTest {
 
     private record Fixture(CMIPubsubHandler handler, CMIApi cmiApi, CMIEconomyHandler cmiHandler,
                            Player player, List<Consumer<ScheduledTask>> scheduledWork,
-                           AtomicReference<Runnable> retiredWork) {
+                           AtomicReference<Runnable> retiredWork, Syncmoney plugin, SyncmoneyConfig config) {
     }
 
     private static final class MutableClock extends Clock {

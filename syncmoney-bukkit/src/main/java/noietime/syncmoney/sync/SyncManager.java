@@ -6,11 +6,14 @@ import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyFacade.EconomyState;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -27,7 +30,10 @@ public class SyncManager {
     
     private PubsubSubscriber pubsubSubscriber;
     private DebounceManager debounceManager;
-    private volatile boolean versionCheckRunning = false;
+    private boolean versionCheckRunning;
+    private volatile boolean stopped;
+    private volatile ScheduledTask versionCheckTask;
+    private final Object versionCheckLifecycleGate = new Object();
 
     private static final Logger logger = Logger.getLogger("Syncmoney.VersionCheck");
 
@@ -71,12 +77,21 @@ public class SyncManager {
      * Shutdown sync layer components.
      */
     public void shutdown() {
-        plugin.getLogger().fine("Shutting down sync layer...");
-        
-        if (pubsubSubscriber != null) {
-            pubsubSubscriber.stopSubscription();
+        ScheduledTask scheduled;
+        synchronized (versionCheckLifecycleGate) {
+            stopped = true;
+            scheduled = versionCheckTask;
+            versionCheckTask = null;
         }
-        
+        plugin.getLogger().fine("Shutting down sync layer...");
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("periodic version check", () -> {
+                    if (scheduled != null) scheduled.cancel();
+                }),
+                new ShutdownStepRunner.Step("Pub/Sub subscriber", () -> {
+                    if (pubsubSubscriber != null) pubsubSubscriber.stopSubscription();
+                }),
+                new ShutdownStepRunner.Step("active version check", this::awaitVersionCheck));
         plugin.getLogger().fine("Sync layer shutdown complete");
     }
 
@@ -91,23 +106,41 @@ public class SyncManager {
             return;
         }
 
-
-        long intervalTicks = 5 * 60 * 20;
-
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
-            if (!versionCheckRunning) {
-                versionCheckRunning = true;
-                try {
-                    performVersionCheck();
-                } catch (Exception e) {
-                    logger.warning("Version check failed: " + e.getMessage());
-                } finally {
-                    versionCheckRunning = false;
-                }
+        synchronized (versionCheckLifecycleGate) {
+            if (stopped || versionCheckTask != null) {
+                return;
             }
-        }, intervalTicks, intervalTicks);
+        }
 
-        logger.info("Periodic version check started (every 5 minutes)");
+
+        ScheduledTask scheduled = plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin, task -> {
+            if (!beginVersionCheck()) {
+                if (stopped) task.cancel();
+                return;
+            }
+            try {
+                performVersionCheck();
+            } catch (Exception e) {
+                logger.warning("Version check failed: " + e.getMessage());
+            } finally {
+                finishVersionCheck();
+            }
+        }, 5, 5, TimeUnit.MINUTES);
+
+        boolean cancelScheduled;
+        synchronized (versionCheckLifecycleGate) {
+            cancelScheduled = stopped || versionCheckTask != null;
+            if (!cancelScheduled) {
+                versionCheckTask = scheduled;
+            }
+        }
+        if (cancelScheduled && scheduled != null) {
+            scheduled.cancel();
+        }
+
+        if (!cancelScheduled) {
+            logger.info("Periodic version check started (every 5 minutes)");
+        }
     }
 
     /**
@@ -115,19 +148,20 @@ public class SyncManager {
      * [AsyncScheduler] This runs on async scheduler, safe for Redis operations.
      */
     private void performVersionCheck() {
-        Set<UUID> onlinePlayers = economyFacade.getOnlinePlayerUuids();
-        if (onlinePlayers.isEmpty()) {
+        Set<UUID> onlinePlayers = Set.copyOf(economyFacade.getOnlinePlayerUuids());
+        if (stopped || onlinePlayers.isEmpty()) {
             return;
         }
 
 
         Map<UUID, Long> redisVersions = cacheManager.getAllVersions(onlinePlayers);
-        if (redisVersions.isEmpty()) {
+        if (stopped || redisVersions.isEmpty()) {
             return;
         }
 
         int syncCount = 0;
         for (Map.Entry<UUID, Long> entry : redisVersions.entrySet()) {
+            if (stopped) return;
             UUID uuid = entry.getKey();
             long redisVersion = entry.getValue();
 
@@ -141,7 +175,7 @@ public class SyncManager {
                     BigDecimal redisBalance = cacheManager.getBalance(uuid);
                     long redisVersionFromCache = cacheManager.getVersion(uuid);
 
-                    if (economyFacade.updateMemoryState(uuid, redisBalance, redisVersionFromCache)) {
+                    if (!stopped && economyFacade.updateMemoryState(uuid, redisBalance, redisVersionFromCache)) {
                         syncCount++;
                     }
                 }
@@ -152,6 +186,39 @@ public class SyncManager {
 
         if (syncCount > 0) {
             logger.info("Version check completed: synced " + syncCount + " players from Redis");
+        }
+    }
+
+    private boolean beginVersionCheck() {
+        synchronized (versionCheckLifecycleGate) {
+            if (stopped || versionCheckRunning) {
+                return false;
+            }
+            versionCheckRunning = true;
+            return true;
+        }
+    }
+
+    private void finishVersionCheck() {
+        synchronized (versionCheckLifecycleGate) {
+            versionCheckRunning = false;
+            versionCheckLifecycleGate.notifyAll();
+        }
+    }
+
+    private void awaitVersionCheck() {
+        boolean interrupted = false;
+        synchronized (versionCheckLifecycleGate) {
+            while (versionCheckRunning) {
+                try {
+                    versionCheckLifecycleGate.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

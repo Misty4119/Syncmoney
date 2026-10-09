@@ -2,8 +2,9 @@ package noietime.syncmoney.initialization;
 
 import noietime.syncmoney.Syncmoney;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.Level;
 
 /**
  * Manages plugin initialization and shutdown phases.
@@ -20,6 +21,7 @@ public class PluginInitializationManager {
 
     private final Syncmoney plugin;
     private final CopyOnWriteArrayList<Initializable> initSteps = new CopyOnWriteArrayList<>();
+    private List<Initializable> activeSteps = List.of();
     private boolean initialized = false;
 
     public PluginInitializationManager(Syncmoney plugin) {
@@ -36,21 +38,33 @@ public class PluginInitializationManager {
     /**
      * Execute all initialization steps in order.
      */
-    public void initialize() {
+    public synchronized void initialize() throws Initializable.InitializationException {
         if (initialized) {
             plugin.getLogger().warning("PluginInitializationManager already initialized");
             return;
         }
 
+        List<Initializable> attemptedSteps = new ArrayList<>();
+        List<Initializable> completedSteps = new ArrayList<>();
         for (Initializable step : initSteps) {
+            attemptedSteps.add(step);
             try {
                 plugin.getLogger().fine("Initializing: " + step.getClass().getSimpleName());
                 step.initialize();
-            } catch (Exception e) {
-                plugin.getLogger().severe("Failed to initialize " + step.getClass().getSimpleName() + ": " + e.getMessage());
+                completedSteps.add(step);
+            } catch (Exception | LinkageError failure) {
+                plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                        "Failed to initialize " + step.getClass().getSimpleName(), failure);
+                rollback(attemptedSteps);
+                if (failure instanceof Initializable.InitializationException initializationFailure) {
+                    throw initializationFailure;
+                }
+                throw new Initializable.InitializationException(
+                        "Failed to initialize " + step.getClass().getSimpleName(), failure);
             }
         }
 
+        activeSteps = List.copyOf(completedSteps);
         initialized = true;
         plugin.getLogger().fine("PluginInitializationManager initialized successfully");
     }
@@ -58,21 +72,26 @@ public class PluginInitializationManager {
     /**
      * Execute shutdown in reverse order.
      */
-    public void shutdown() {
+    public synchronized void shutdown() {
         plugin.getLogger().fine("Shutting down PluginInitializationManager...");
+        List<Initializable> toClose = activeSteps;
+        activeSteps = List.of();
+        initialized = false;
+        rollback(toClose);
+        plugin.getLogger().fine("PluginInitializationManager shutdown complete");
+    }
 
-        for (int i = initSteps.size() - 1; i >= 0; i--) {
+    private void rollback(List<Initializable> steps) {
+        for (int i = steps.size() - 1; i >= 0; i--) {
+            Initializable step = steps.get(i);
             try {
-                Initializable step = initSteps.get(i);
                 plugin.getLogger().fine("Shutting down: " + step.getClass().getSimpleName());
                 step.shutdown();
-            } catch (Exception e) {
-                plugin.getLogger().log(Level.WARNING, "Error during shutdown", e);
+            } catch (Throwable failure) {
+                plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                        "Error shutting down " + step.getClass().getSimpleName(), failure);
             }
         }
-
-        initialized = false;
-        plugin.getLogger().fine("PluginInitializationManager shutdown complete");
     }
 
     /**

@@ -4,6 +4,7 @@ import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.plugin.Plugin;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.exceptions.JedisConnectionException;
@@ -49,6 +50,8 @@ public final class CacheManager {
     private volatile String atomicSetBalanceScript;
     private volatile String atomicAddBalanceScript;
     private volatile String atomicTransferScript;
+    private volatile ScheduledTask cleanupTask;
+    private volatile boolean stopped;
 
     private final java.util.concurrent.atomic.AtomicLong cacheHits = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong cacheMisses = new java.util.concurrent.atomic.AtomicLong(0);
@@ -89,7 +92,11 @@ public final class CacheManager {
 
         long cleanupIntervalTicks = 5 * 60 * 20;
         
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
+        cleanupTask = plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
+            if (stopped) {
+                task.cancel();
+                return;
+            }
             cleanupExpiredEntries();
         }, cleanupIntervalTicks, cleanupIntervalTicks);
         
@@ -271,6 +278,16 @@ public final class CacheManager {
         } catch (RedisMutationException e) {
             plugin.getLogger().warning("Atomic set did not return a confirmed receipt: " + e.getMessage());
             return -1L;
+        }
+    }
+
+    /** Cancels the cache-owned periodic task before storage dependencies are closed. */
+    public void shutdown() {
+        stopped = true;
+        ScheduledTask scheduled = cleanupTask;
+        cleanupTask = null;
+        if (scheduled != null) {
+            scheduled.cancel();
         }
     }
 

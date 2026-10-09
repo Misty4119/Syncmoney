@@ -13,9 +13,12 @@ import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.breaker.DiscordWebhookNotifier;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+import io.papermc.paper.threadedregions.scheduler.AsyncScheduler;
 
 import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Set;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +40,10 @@ public class CrossServerSyncManager {
     private final EconomyFacade economyFacade;
     private final CacheManager cacheManager;
     private volatile DiscordWebhookNotifier discordWebhookNotifier;
+    private volatile ScheduledTask versionCheckTask;
+    private volatile boolean stopped;
+    private final Object versionCheckLifecycleGate = new Object();
+    private boolean versionCheckRunning;
 
     public CrossServerSyncManager(Syncmoney plugin, SyncmoneyConfig config,
                                 RedisManager redisManager,
@@ -318,6 +325,16 @@ public class CrossServerSyncManager {
      * [SYNC-ECO-034] Shutdown cross-server sync manager.
      */
     public void shutdown() {
+        ScheduledTask scheduled;
+        synchronized (versionCheckLifecycleGate) {
+            stopped = true;
+            scheduled = versionCheckTask;
+            versionCheckTask = null;
+        }
+        if (scheduled != null) {
+            scheduled.cancel();
+        }
+        awaitVersionCheck();
     }
 
     /**
@@ -329,26 +346,75 @@ public class CrossServerSyncManager {
      * so the interval is supplied in ticks (not milliseconds) to actually run every 5 minutes.
      */
     public void startPeriodicVersionCheck() {
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
-            performVersionCheck();
+        synchronized (versionCheckLifecycleGate) {
+            if (stopped || versionCheckTask != null) {
+                return;
+            }
+        }
+        ScheduledTask scheduled = plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
+            if (beginVersionCheck()) {
+                boolean handedOff = false;
+                try {
+                    Set<UUID> onlineUuids = Set.copyOf(plugin.getServer().getOnlinePlayers().stream()
+                            .map(Player::getUniqueId)
+                            .collect(java.util.stream.Collectors.toSet()));
+                    if (stopped) {
+                        return;
+                    }
+                    AsyncScheduler asyncScheduler = plugin.getServer().getAsyncScheduler();
+                    ScheduledTask asyncTask = asyncScheduler.runNow(plugin, asyncTaskHandle -> {
+                        try {
+                            if (!stopped) {
+                                performVersionCheck(onlineUuids);
+                            }
+                        } catch (Exception e) {
+                            plugin.getLogger().warning("Cross-server version check failed: " + e.getMessage());
+                        } finally {
+                            finishVersionCheck();
+                        }
+                    });
+                    if (asyncTask != null) {
+                        handedOff = true;
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Failed to schedule cross-server version check: " + e.getMessage());
+                } finally {
+                    if (!handedOff) {
+                        finishVersionCheck();
+                    }
+                }
+            } else if (stopped) {
+                task.cancel();
+            }
         }, VERSION_CHECK_INTERVAL_TICKS, VERSION_CHECK_INTERVAL_TICKS);
+
+        boolean cancelScheduled;
+        synchronized (versionCheckLifecycleGate) {
+            cancelScheduled = stopped || versionCheckTask != null;
+            if (!cancelScheduled) {
+                versionCheckTask = scheduled;
+            }
+        }
+        if (cancelScheduled && scheduled != null) {
+            scheduled.cancel();
+        }
     }
 
     /**
      * [SYNC-ECO-036] Performs version check for all online players using batch getAllVersions.
      */
-    private void performVersionCheck() {
+    private void performVersionCheck(Set<UUID> onlineUuids) {
         if (redisManager == null || cacheManager == null || economyFacade == null) {
             return;
         }
 
         try (var jedis = redisManager.getResource()) {
-            Set<UUID> onlineUuids = plugin.getServer().getOnlinePlayers().stream()
-                    .map(player -> player.getUniqueId())
-                    .collect(java.util.stream.Collectors.toSet());
+            if (stopped) return;
             Map<UUID, Long> redisVersions = cacheManager.getAllVersions(onlineUuids);
+            if (stopped) return;
 
             for (UUID uuid : onlineUuids) {
+                if (stopped) return;
                 Long redisVersion = redisVersions.get(uuid);
                 if (redisVersion == null) {
 
@@ -359,7 +425,7 @@ public class CrossServerSyncManager {
                 if (redisVersion > localVersion) {
                     String balanceKey = RedisKeys.balance(uuid);
                     String balanceStr = jedis.get(balanceKey);
-                    if (balanceStr != null) {
+                    if (!stopped && balanceStr != null) {
                         BigDecimal redisBalance = new BigDecimal(balanceStr);
                         economyFacade.updateMemoryState(uuid, redisBalance, redisVersion);
                         cacheManager.updateMemoryCache(uuid, redisBalance, redisVersion);
@@ -371,6 +437,9 @@ public class CrossServerSyncManager {
 
                     String balanceKey = RedisKeys.balance(uuid);
                     String versionKey = RedisKeys.version(uuid);
+                    if (stopped) return;
+                    // Once this two-key write begins, finish the pair before shutdown can
+                    // close Redis; returning between the SETs would leave a torn snapshot.
                     jedis.set(balanceKey, localBalance.toString());
                     jedis.set(versionKey, String.valueOf(localVersion));
 
@@ -378,6 +447,39 @@ public class CrossServerSyncManager {
                 }
             }
         } catch (Exception e) {
+        }
+    }
+
+    private boolean beginVersionCheck() {
+        synchronized (versionCheckLifecycleGate) {
+            if (stopped || versionCheckRunning) {
+                return false;
+            }
+            versionCheckRunning = true;
+            return true;
+        }
+    }
+
+    private void finishVersionCheck() {
+        synchronized (versionCheckLifecycleGate) {
+            versionCheckRunning = false;
+            versionCheckLifecycleGate.notifyAll();
+        }
+    }
+
+    private void awaitVersionCheck() {
+        boolean interrupted = false;
+        synchronized (versionCheckLifecycleGate) {
+            while (versionCheckRunning) {
+                try {
+                    versionCheckLifecycleGate.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 }
