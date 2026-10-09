@@ -8,6 +8,7 @@ version = rootProject.version
 repositories {
     mavenCentral()
     maven { name = 'papermc'; url = 'https://repo.papermc.io/repository/maven-public/' }
+    maven { name = 'codemc-creatorfromhell'; url = 'https://repo.codemc.io/repository/creatorfromhell/' }
 }
 
 java {
@@ -49,6 +50,8 @@ dependencies {
     jmhImplementation project(':syncmoney-protocol')
     jmhImplementation project(':syncmoney-storage')
     jmhImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    // Syncmoney extends JavaPlugin and implements VaultUnlocked's economy interface; the isolated mock event bus loads that type.
+    jmhImplementation 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     jmhImplementation 'org.openjdk.jmh:jmh-core:1.37'
     jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
     jmhImplementation 'org.hdrhistogram:HdrHistogram:2.2.2'
@@ -346,7 +349,7 @@ tasks.register('runBaselineComparison', JavaExec) {
         if (baselineProperty == null || baselineProperty.isBlank()) {
             throw new GradleException('Supply -PbaselineCheckout=<verified isolated 1.3.2 worktree>.')
         }
-        File baseline = file(baselineProperty).canonicalFile
+        File baseline = rootProject.file(baselineProperty).canonicalFile
         if (!baseline.isDirectory() || baseline == rootProject.projectDir.canonicalFile) {
             throw new GradleException('baselineCheckout must be an existing isolated checkout, not this project.')
         }
@@ -361,6 +364,16 @@ tasks.register('runBaselineComparison', JavaExec) {
         if (!(threadCount in ['1', '2', '8'])) {
             throw new GradleException('benchmarkThreads must be one of the planned producer counts: 1, 2, or 8.')
         }
+        def variants = providers.gradleProperty('benchmarkVariants').orElse('current,legacy132').get()
+        if (variants.split(',').toList().any { !(it in ['current', 'legacy132']) }
+                || variants.split(',').toList().toSet().size() != variants.split(',').length) {
+            throw new GradleException('benchmarkVariants must be a unique comma-separated subset of current,legacy132.')
+        }
+        def benchmarkOperation = providers.gradleProperty('benchmarkOperation').orNull
+        if (benchmarkOperation != null && !(benchmarkOperation in ['balance', 'deposit', 'withdraw', 'set',
+                'transfer', 'reject-withdraw', 'cancel-deposit', 'cancel-withdraw'])) {
+            throw new GradleException('benchmarkOperation must name a supported TransactionBenchmarks operation.')
+        }
         File resultFile = new File(reportDir, 'transaction-paired-jmh-t' + threadCount + '-' + runId + '.json')
         comparison.putAll([
                 baseline: baseline,
@@ -370,6 +383,8 @@ tasks.register('runBaselineComparison', JavaExec) {
                 resultFile: resultFile,
                 reportDir: reportDir,
                 threadCount: Integer.parseInt(threadCount),
+                variants: variants.split(',').toList(),
+                benchmarkOperation: benchmarkOperation,
                 runId: runId,
                 baselineBuildJavaVersion: baselineBuild.buildJavaVersion
         ])
@@ -378,26 +393,34 @@ tasks.register('runBaselineComparison', JavaExec) {
         systemProperty 'syncmoney.benchmarks.baselineArtifactSha256', comparison.baselineArtifactSha256
 
         if (providers.gradleProperty('benchmarkQuick').isPresent()) {
-            args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
-                    '-p', 'variant=current,legacy132', '-p', 'accountCount=1000', '-p', 'accessPattern=uniform',
-                    '-p', 'operation=deposit', '-t', threadCount, '-wi', '1', '-i', '1', '-w', '200ms', '-r', '200ms', '-f', '1',
-                    '-jvmArgsAppend', '-Dnet.bytebuddy.experimental=true',
-                    '-rf', 'json', '-rff', resultFile.absolutePath
+                args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
+                        '-p', 'variant=' + comparison.variants.join(','), '-p', 'accountCount=1000', '-p', 'accessPattern=uniform',
+                        '-p', 'operation=' + (benchmarkOperation ?: 'deposit'), '-t', threadCount, '-wi', '1', '-i', '1', '-w', '200ms', '-r', '200ms', '-f', '1',
+                        '-jvmArgsAppend', '-XX:+UseParallelGC -Dnet.bytebuddy.experimental=true -Xmx1g',
+                        '-rf', 'json', '-rff', resultFile.absolutePath
         } else {
             args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
-                    '-p', 'variant=current,legacy132',
+                    '-p', 'variant=' + comparison.variants.join(','),
                     '-t', threadCount, '-wi', '5', '-i', '10', '-w', '1s', '-r', '1s', '-f', '3', '-prof', 'gc',
-                    '-jvmArgsAppend', '-Dnet.bytebuddy.experimental=true',
+                    '-jvmArgsAppend', '-XX:+UseParallelGC -Dnet.bytebuddy.experimental=true -Xmx1g',
                     '-rf', 'json', '-rff', resultFile.absolutePath
+            if (benchmarkOperation != null) args '-p', 'operation=' + benchmarkOperation
         }
     }
     doLast {
         def rows = new groovy.json.JsonSlurper().parse(comparison.resultFile)
         boolean quick = providers.gradleProperty('benchmarkQuick').isPresent()
-        int expectedRows = quick ? 4 : 144
+        int selectedOperationCount = comparison.benchmarkOperation == null ? 8 : 1
+        int expectedRows = quick
+                ? comparison.variants.size() * (comparison.benchmarkOperation == null ? 1 : 1) * 2
+                : comparison.variants.size() * selectedOperationCount * 3 * 2 * 2
         if (!(rows instanceof List) || rows.size() != expectedRows) {
             throw new GradleException('Paired JMH result count mismatch; expected ' + expectedRows
                     + ' completed rows, got ' + (rows instanceof List ? rows.size() : 'invalid JSON shape'))
+        }
+        if (!rows.every { row -> row instanceof Map && row.jvmArgs instanceof List
+                && row.jvmArgs.containsAll(['-XX:+UseParallelGC', '-Dnet.bytebuddy.experimental=true', '-Xmx1g']) }) {
+            throw new GradleException('Every paired JMH fork must use the recorded ParallelGC and 1 GiB heap measurement profile.')
         }
         def invalidResult = rows.find { row ->
             !(row instanceof Map) || !(row.primaryMetric?.score instanceof Number)
@@ -429,33 +452,40 @@ tasks.register('runBaselineComparison', JavaExec) {
         }
         String measurementJdk = measurementJdks.first()
         Set variants = rows.collect { it.params.variant }.toSet()
-        if (variants != (['current', 'legacy132'] as Set)) {
-            throw new GradleException('Paired JMH did not produce both current and 1.3.2 variants.')
+        if (variants != (comparison.variants as Set)) {
+            throw new GradleException('Paired JMH variant rows do not match the requested variants.')
         }
         def baselinePilot = rows.find { row ->
             row.params.variant == 'legacy132' && row.params.operation == 'deposit'
                     && row.params.accountCount == '1000' && row.params.accessPattern == 'uniform'
                     && row.mode == 'thrpt'
         }
-        if (baselinePilot == null) throw new GradleException('Paired report omitted the baseline accepted-rate pilot case.')
-        def acceptedScore = baselinePilot.secondaryMetrics?.accepted?.score
-        def offeredScore = baselinePilot.secondaryMetrics?.offered?.score
-        def rejectedScore = baselinePilot.secondaryMetrics?.rejected?.score
-        if (!(acceptedScore instanceof Number) || !(offeredScore instanceof Number)
-                || !(rejectedScore instanceof Number) || baselinePilot.primaryMetric.scoreUnit != 'ops/us') {
-            throw new GradleException('Baseline pilot must include accepted/offered/rejected counters and throughput in ops/us.')
-        }
-        double accepted = acceptedScore.doubleValue()
-        double offered = offeredScore.doubleValue()
-        double rejected = rejectedScore.doubleValue()
-        if (![accepted, offered, rejected].every { Double.isFinite(it) && it >= 0d }
-                || offered <= 0d || Math.abs(offered - accepted - rejected) > Math.max(1e-6d, offered * 1e-9d)) {
-            throw new GradleException('Baseline pilot outcome counters are invalid or do not conserve offered operations.')
-        }
-        comparison.baselineAcceptedRate = baselinePilot.primaryMetric.score.doubleValue()
-                * (accepted / offered) * 1_000_000d
-        if (!Double.isFinite(comparison.baselineAcceptedRate) || comparison.baselineAcceptedRate <= 0d) {
-            throw new GradleException('Baseline facade accepted rate must be positive and finite.')
+        double accepted = 0d
+        double offered = 0d
+        double rejected = 0d
+        if (comparison.variants.contains('legacy132') && comparison.benchmarkOperation in [null, 'deposit']) {
+            if (baselinePilot == null) throw new GradleException('Paired report omitted the baseline accepted-rate pilot case.')
+            def acceptedScore = baselinePilot.secondaryMetrics?.accepted?.score
+            def offeredScore = baselinePilot.secondaryMetrics?.offered?.score
+            def rejectedScore = baselinePilot.secondaryMetrics?.rejected?.score
+            if (!(acceptedScore instanceof Number) || !(offeredScore instanceof Number)
+                    || !(rejectedScore instanceof Number) || baselinePilot.primaryMetric.scoreUnit != 'ops/us') {
+                throw new GradleException('Baseline pilot must include accepted/offered/rejected counters and throughput in ops/us.')
+            }
+            accepted = acceptedScore.doubleValue()
+            offered = offeredScore.doubleValue()
+            rejected = rejectedScore.doubleValue()
+            if (![accepted, offered, rejected].every { Double.isFinite(it) && it >= 0d }
+                    || offered <= 0d || Math.abs(offered - accepted - rejected) > Math.max(1e-6d, offered * 1e-9d)) {
+                throw new GradleException('Baseline pilot outcome counters are invalid or do not conserve offered operations.')
+            }
+            comparison.baselineAcceptedRate = baselinePilot.primaryMetric.score.doubleValue()
+                    * (accepted / offered) * 1_000_000d
+            if (!Double.isFinite(comparison.baselineAcceptedRate) || comparison.baselineAcceptedRate <= 0d) {
+                throw new GradleException('Baseline facade accepted rate must be positive and finite.')
+            }
+        } else {
+            comparison.baselineAcceptedRate = null
         }
 
         File metadata = new File(comparison.reportDir, 'transaction-paired-manifest-t' + comparison.threadCount + '-' + comparison.runId + '.json')
@@ -473,12 +503,17 @@ tasks.register('runBaselineComparison', JavaExec) {
                 jdk: measurementJdk,
                 gradleDaemonJdk: System.getProperty('java.version'),
                 baselineBuildJavaVersion: comparison.baselineBuildJavaVersion,
+                gcCollector: 'ParallelGC',
+                gcJvmFlag: '-XX:+UseParallelGC',
+                heapJvmFlag: '-Xmx1g',
                 p999SampleMinimum: 100000,
                 sampleTailAssessment: tailAssessments,
                 os: System.getProperty('os.name') + ' ' + System.getProperty('os.version') + ' ' + System.getProperty('os.arch'),
                 availableProcessors: Runtime.getRuntime().availableProcessors(),
                 resultFile: comparison.resultFile.absolutePath,
-                baselineFacadeAcceptedRatePilot: [operation: 'deposit', accountCount: 1000, accessPattern: 'uniform',
+                baselineFacadeAcceptedRatePilot: comparison.baselineAcceptedRate == null ? [available: false,
+                        reason: 'This filtered operation/variant run is not a baseline accepted-rate calibration profile.'] : [available: true,
+                        operation: 'deposit', accountCount: 1000, accessPattern: 'uniform',
                         producerThreads: comparison.threadCount, acceptedTransactionsPerSecond: comparison.baselineAcceptedRate,
                         meanOfferedPerMeasurement: offered, meanAcceptedPerMeasurement: accepted,
                         meanRejectedPerMeasurement: rejected,
@@ -486,10 +521,66 @@ tasks.register('runBaselineComparison', JavaExec) {
                         unit: 'facade acceptances/second; synthetic receipt completion does not include Redis or SQL'],
                 producerThreads: comparison.threadCount,
                 notes: ['p99.9 is reliable only for sample rows marked p999Reliable; the quick smoke is not a tail-latency conclusion.',
+                        'Measurement forks explicitly use ParallelGC after repeatable HotSpot G1 worker crashes on the pinned Java 25.0.4 host; both variants share the same collector.',
+                        'Measurement forks use a fixed 1 GiB maximum heap for both variants.',
                         'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
                         'The current facade receipt adapter drains accepted events into deterministic in-memory receipts; synthetic receipt completion is not durable persistence.',
                         'This facade pilot is not a macro Redis/SQL baseline and must not be used to calibrate the open-loop load profile.']
         ])) + System.lineSeparator()
+    }
+}
+
+tasks.register('runBaselineMacroPilot', JavaExec) {
+    group = 'benchmark'
+    description = 'Builds the verified 1.3.2 baseline with Java 21 and measures its isolated Redis/SQL macro path on Java 25.'
+    dependsOn tasks.named('loadTestClasses')
+    classpath = sourceSets.loadTest.runtimeClasspath
+    mainClass = 'noietime.syncmoney.benchmark.load.BaselineMacroPilotProducer'
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    maxHeapSize = '1g'
+    jvmArgs '-XX:+UseParallelGC'
+    systemProperty 'net.bytebuddy.experimental', 'true'
+    doFirst {
+        def baselineProperty = providers.gradleProperty('baselineCheckout').orNull
+        if (baselineProperty == null || baselineProperty.isBlank()) {
+            throw new GradleException('Supply -PbaselineCheckout=<verified isolated 1.3.2 worktree>.')
+        }
+        def profileProperty = providers.gradleProperty('profile').orNull
+        if (profileProperty == null || profileProperty.isBlank()) {
+            throw new GradleException('Supply -Pprofile=<path-to-open-loop-profile.json>.')
+        }
+        File baseline = rootProject.file(baselineProperty).canonicalFile
+        if (!baseline.isDirectory() || baseline == rootProject.projectDir.canonicalFile) {
+            throw new GradleException('baselineCheckout must be an existing isolated checkout, not this project.')
+        }
+        File profileFile = rootProject.file(profileProperty).canonicalFile
+        if (!profileFile.isFile()) throw new GradleException('profile must point to an existing benchmark profile JSON file.')
+
+        def baselineBuild = prepareVerifiedBaseline.call(baseline)
+        File outputFile = rootProject.file(providers.gradleProperty('baselinePilotOutput')
+                .orElse('build/reports/benchmarks/baseline-macro-pilot.json').get()).canonicalFile
+        outputFile.parentFile.mkdirs()
+        String runId = UUID.randomUUID().toString()
+        File attestationFile = new File(outputFile.parentFile, outputFile.name + '.build-' + runId + '.json')
+        attestationFile.text = groovy.json.JsonOutput.toJson([
+                schemaVersion: 1,
+                baselineSHA: baselineBuild.baselineSha,
+                baselineArtifactSHA256: baselineBuild.artifactSha256,
+                baselineBuildJavaVersion: baselineBuild.buildJavaVersion
+        ]) + System.lineSeparator()
+
+        args '--baseline-checkout', baseline.absolutePath,
+                '--baseline-artifact', baselineBuild.artifact.absolutePath,
+                '--baseline-build-attestation', attestationFile.absolutePath,
+                '--profile', profileFile.absolutePath,
+                '--output', outputFile.absolutePath
+        systemProperty 'syncmoney.benchmarks.sourceSha', captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
+        systemProperty 'syncmoney.benchmarks.sourceTreeSha256', benchmarkSourceTreeSha256.call()
+        systemProperty 'syncmoney.benchmarks.loadTestRuntimeClasspathSha256',
+                loadTestRuntimeClasspathSha256.call(classpath)
+        logger.lifecycle('baselineBuildAttestation=' + attestationFile.absolutePath)
     }
 }
 
@@ -502,6 +593,9 @@ tasks.register('loadTest', JavaExec) {
     javaLauncher = javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(25)
     }
+    maxHeapSize = '1g'
+    jvmArgs '-XX:+UseParallelGC'
+    systemProperty 'net.bytebuddy.experimental', 'true'
     doFirst {
         def profile = providers.gradleProperty('profile').orNull
         if (profile == null || profile.isBlank()) {
@@ -515,18 +609,20 @@ tasks.register('loadTest', JavaExec) {
         if (baselineProperty == null || baselineProperty.isBlank()) {
             throw new GradleException('Supply -PbaselineCheckout=<verified isolated 1.3.2 worktree> for report provenance.')
         }
-        File baseline = file(baselineProperty).canonicalFile
+        File baseline = rootProject.file(baselineProperty).canonicalFile
         if (!baseline.isDirectory() || baseline == rootProject.projectDir.canonicalFile) {
             throw new GradleException('baselineCheckout must be an existing isolated checkout, not this project.')
         }
         def baselineBuild = prepareVerifiedBaseline.call(baseline)
-        File baselinePilot = file(baselinePilotProperty).canonicalFile
+        File baselinePilot = rootProject.file(baselinePilotProperty).canonicalFile
         if (!baselinePilot.isFile()) throw new GradleException('baselinePilot must point to an existing macro-pilot JSON file.')
         systemProperty 'syncmoney.benchmarks.baselineSha', baselineBuild.baselineSha
         systemProperty 'syncmoney.benchmarks.baselineJarSha256', baselineBuild.artifactSha256
         systemProperty 'syncmoney.benchmarks.baselineBuildJavaVersion', baselineBuild.buildJavaVersion
         systemProperty 'syncmoney.benchmarks.baselineMacroPilotSha256', sha256(baselinePilot)
-        args file(profile).canonicalPath
+        File profileFile = rootProject.file(profile).canonicalFile
+        if (!profileFile.isFile()) throw new GradleException('profile must point to an existing benchmark profile JSON file.')
+        args profileFile.canonicalPath
         args '--baseline-pilot', baselinePilot.canonicalPath
         systemProperty 'syncmoney.benchmarks.sourceSha', captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
         systemProperty 'syncmoney.benchmarks.sourceTreeSha256', benchmarkSourceTreeSha256.call()

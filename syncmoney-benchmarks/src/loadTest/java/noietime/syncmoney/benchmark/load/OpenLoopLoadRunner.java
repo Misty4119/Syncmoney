@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 import java.lang.management.GarbageCollectorMXBean;
 
 /** Bounded open-loop Redis authority receipt and SQL durability load runner. */
@@ -50,6 +51,7 @@ public final class OpenLoopLoadRunner {
     private static final BigDecimal ONE_DOLLAR = new BigDecimal("1.00");
     private static final long MAX_HISTOGRAM_MICROS = TimeUnit.HOURS.toMicros(1);
     private static final int ACCOUNT_COUNT = 10_000;
+    private static final long P999_MINIMUM_SAMPLES = 100_000L;
 
     private OpenLoopLoadRunner() { }
 
@@ -65,6 +67,7 @@ public final class OpenLoopLoadRunner {
         OpenLoopProfile.BackendSettings backend;
         try {
             backend = profile.resolveBackendSettings(System.getenv());
+            validateDisposableTarget(backend, System.getenv("SYNCMONEY_BENCHMARK_DISPOSABLE_ACK"));
         } catch (IllegalArgumentException missingSetting) {
             throw new IllegalStateException(missingSetting.getMessage()
                     + "; values are intentionally not included in benchmark output", missingSetting);
@@ -82,13 +85,13 @@ public final class OpenLoopLoadRunner {
                 for (int batchWait : profile.maxBatchWaitMillis) {
                     if (profile.warmupSecondsPerRate > 0) {
                         Scenario warmup = runScenario(profile, backend, targetRate, batchSize,
-                                batchWait, profile.warmupSecondsPerRate);
+                                batchWait, profile.warmupSecondsPerRate, baselinePilot);
                         if (!warmup.valid) throw new IllegalStateException("Warmup scenario failed its correctness or drain checks");
                     }
                     Scenario measurement = runScenario(profile, backend, targetRate, batchSize,
-                            batchWait, profile.measurementSecondsPerRate);
+                            batchWait, profile.measurementSecondsPerRate, baselinePilot);
                     Map<String, Object> report = report(profile, measurement, targetRate, fraction,
-                            baselineAcceptedRate, batchSize, batchWait);
+                            baselineAcceptedRate, baselinePilot.environmentFingerprintSha256(), batchSize, batchWait);
                     Path reportFile = outputDirectory.resolve(String.format("%s-%s-%03d.json",
                             profile.profileId, measurement.runId, ++reportNumber));
                     Files.writeString(reportFile, GSON.toJson(report) + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -106,9 +109,10 @@ public final class OpenLoopLoadRunner {
             if (args[index].equals("--baseline-pilot")) {
                 String expectedBaselineSha = requiredSystemProperty("syncmoney.benchmarks.baselineSha");
                 String expectedBaselineJarSha = requiredSystemProperty("syncmoney.benchmarks.baselineJarSha256");
+                String expectedPilotSha = requiredSystemProperty("syncmoney.benchmarks.baselineMacroPilotSha256");
                 return BaselineMacroPilot.read(Path.of(args[index + 1]), expectedBaselineSha,
                         expectedBaselineJarSha, profile.profileId, profile.sha256,
-                        profile.minimumMeasurementSamples);
+                        profile.minimumMeasurementSamples, expectedPilotSha);
             }
         }
         throw new IllegalArgumentException("Supply a hash-bound 1.3.2 Redis/SQL macro pilot with --baseline-pilot");
@@ -121,9 +125,13 @@ public final class OpenLoopLoadRunner {
     }
 
     private static Scenario runScenario(OpenLoopProfile profile, OpenLoopProfile.BackendSettings backend,
-            double targetRate, int batchSize, int batchWaitMillis, int durationSeconds) throws Exception {
+            double targetRate, int batchSize, int batchWaitMillis, int durationSeconds,
+            BaselineMacroPilot baselinePilot) throws Exception {
         RunSession session = new RunSession(profile, backend, targetRate, batchSize, batchWaitMillis);
         try {
+            baselinePilot.requireBackendMatch(session.redisVersion.get(), backend.sqlDialect().name(),
+                    session.sqlProduct.get(), session.sqlVersion.get());
+            session.allocation.beginMeasurement();
             long issuedStart = System.nanoTime();
             long intervalNanos = Math.max(1L, Math.round(1_000_000_000d / targetRate));
             long end = issuedStart + TimeUnit.SECONDS.toNanos(durationSeconds);
@@ -143,7 +151,7 @@ public final class OpenLoopLoadRunner {
             session.finishWorkers();
             session.finishBatchWriter();
             long finish = System.nanoTime();
-            boolean valid = session.failure.get() == null && session.validateAndCleanup();
+            boolean valid = validateAfterDrain(session.failure, session::validateAndCleanup);
             return session.snapshot(issuedStart, issueEnd, finish, durationSeconds, valid);
         } catch (InterruptedException | RuntimeException | Error runFailure) {
             session.abortAndCleanup(runFailure);
@@ -151,8 +159,15 @@ public final class OpenLoopLoadRunner {
         }
     }
 
+    static boolean validateAfterDrain(AtomicReference<Throwable> failure, BooleanSupplier validateAndCleanup) {
+        boolean postconditionsValid = validateAndCleanup.getAsBoolean();
+        return failure.get() == null && postconditionsValid;
+    }
+
     private static Map<String, Object> report(OpenLoopProfile profile, Scenario scenario, double targetRate,
-            double rateFraction, double baselineRate, int batchSize, int batchWaitMillis) {
+            double rateFraction, double baselineRate, String baselineEnvironmentFingerprint,
+            int batchSize, int batchWaitMillis) {
+        BenchmarkEnvironment.Snapshot environment = BenchmarkEnvironment.capture();
         String baselineSha = System.getProperty("syncmoney.benchmarks.baselineSha");
         if (baselineSha != null && baselineSha.equals("UNSPECIFIED")) baselineSha = null;
         return Map.ofEntries(
@@ -169,15 +184,19 @@ public final class OpenLoopLoadRunner {
                         "loadTestRuntimeClasspath", System.getProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256", "UNKNOWN"),
                         "baselineJar", System.getProperty("syncmoney.benchmarks.baselineJarSha256", ""))),
                 Map.entry("profileId", profile.profileId),
-                Map.entry("jdk", System.getProperty("java.version")),
-                Map.entry("runtimeJavaVersion", System.getProperty("java.version")),
-                Map.entry("os", System.getProperty("os.name") + " " + System.getProperty("os.version") + " " + System.getProperty("os.arch")),
-                Map.entry("hardware", Map.of("availableProcessors", Runtime.getRuntime().availableProcessors(),
-                        "maxMemoryBytes", Runtime.getRuntime().maxMemory())),
+                Map.entry("jdk", environment.javaVersion()),
+                Map.entry("runtimeJavaVersion", environment.javaVersion()),
+                Map.entry("environment", environment.fields()),
+                Map.entry("environmentFingerprintSHA256", environment.fingerprint()),
+                Map.entry("baselineEnvironmentFingerprintSHA256", baselineEnvironmentFingerprint),
+                Map.entry("baselineLatencyComparisonEligible", false),
+                Map.entry("os", environment.osName() + " " + environment.osVersion() + " " + environment.osArch()),
+                Map.entry("hardware", Map.of("availableProcessors", environment.availableProcessors(),
+                        "maxMemoryBytes", environment.maxMemoryBytes())),
                 Map.entry("dependencies", Map.of("jmh", "1.37", "hdrHistogram", "2.2.2",
                         "sqlDialect", scenario.sqlDialect.name(), "sqlProduct", scenario.sqlProduct,
                         "sqlVersion", scenario.sqlVersion, "redisVersion", scenario.redisVersion)),
-                Map.entry("flags", sanitizedJvmArguments()),
+                Map.entry("flags", environment.jvmArguments()),
                 Map.entry("dataset", Map.of("accounts", ACCOUNT_COUNT, "operation", "atomic add + version-guarded SQL snapshot",
                         "amount", "1.00", "batchSize", batchSize, "maxBatchWaitMillis", batchWaitMillis,
                         "sqlTable", "connection-local TEMP players")),
@@ -195,7 +214,7 @@ public final class OpenLoopLoadRunner {
                 Map.entry("scheduleLagHistogram", scenario.scheduleLag.asMap()),
                 Map.entry("receiptHistogram", scenario.receipt.asMap()),
                 Map.entry("durableHistogram", scenario.durable.asMap()),
-                Map.entry("allocationBytesPerOp", "NOT_MEASURED"),
+                Map.entry("allocation", scenario.allocation.asMap()),
                 Map.entry("gc", scenario.gc),
                 Map.entry("queueMax", scenario.queueMax),
                 Map.entry("oldestBacklogAgeMicros", scenario.oldestBacklogAgeMicros),
@@ -206,23 +225,47 @@ public final class OpenLoopLoadRunner {
                 Map.entry("versionConflicts", scenario.versionConflicts),
                 Map.entry("failureCategory", scenario.failureCategory),
                 Map.entry("valid", scenario.valid),
-                Map.entry("p999Reliable", scenario.response.rawTotalCount() >= profile.minimumMeasurementSamples
-                        && scenario.receipt.rawTotalCount() >= profile.minimumMeasurementSamples
-                        && scenario.durable.rawTotalCount() >= profile.minimumMeasurementSamples),
-                Map.entry("minimumMeasurementSamples", profile.minimumMeasurementSamples),
+                Map.entry("p999Reliable", isP999Reliable(scenario.response.rawTotalCount(),
+                        scenario.receipt.rawTotalCount(), scenario.durable.rawTotalCount(),
+                        profile.minimumMeasurementSamples)),
+                Map.entry("p999ConfidenceMethod", "approximate 95% binomial order-statistic interval; emitted only when each histogram meets its sample minimum; assumes independent samples"),
+                Map.entry("minimumMeasurementSamples", Math.max(P999_MINIMUM_SAMPLES,
+                        profile.minimumMeasurementSamples)),
                 Map.entry("notes", List.of(
                         "Response is scheduled-arrival to Redis result for admitted work, or immediate bounded-runner rejection; it includes scheduler lag and rejection samples.",
                         "Receipt is accepted-admission to the actual protocol-v1 atomic_add_balance.lua Redis receipt.",
                         "Durable is accepted-admission to commit through the production SqlSnapshotWriter in one isolated temporary players table.",
-                        "Raw and expected-interval-corrected HDR distributions are separate; no blind Redis retry is performed.",
+                        "The baseline macro pilot's receipt and durable latencies are polling-observation upper bounds, may coalesce writes, and are excluded from matched latency comparisons; only its accepted rate calibrates arrivals.",
+                        "Raw and expected-interval-corrected HDR distributions are separate; a 95% approximate order-statistic interval is omitted for any histogram below the p99.9 sample minimum; no blind Redis retry is performed.",
                         "SQL and Redis endpoint values, credentials, player names, UUIDs and per-account balances are excluded from this report.")));
     }
 
-    private static List<String> sanitizedJvmArguments() {
-        return java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
-                .filter(argument -> argument.matches("-Xm[sx][0-9]+[kKmMgG]?|"
-                        + "-XX:[+-]Use[A-Za-z0-9]+GC|-XX:(MaxGCPauseMillis|ActiveProcessorCount)=[0-9]+"))
-                .toList();
+    static void validateDisposableTarget(OpenLoopProfile.BackendSettings backend, String acknowledgement) {
+        BaselineMacroPilotProducer.SqlEndpoint sql = BaselineMacroPilotProducer.parseSqlEndpoint(
+                backend.sqlUrl(), backend.sqlDialect());
+        BaselineMacroPilotProducer.validateDisposableBackend(backend, sql, acknowledgement);
+    }
+
+    static boolean isP999Reliable(long responseSamples, long receiptSamples, long durableSamples,
+            int profileMinimumSamples) {
+        long requiredSamples = Math.max(P999_MINIMUM_SAMPLES, profileMinimumSamples);
+        return responseSamples >= requiredSamples && receiptSamples >= requiredSamples
+                && durableSamples >= requiredSamples;
+    }
+
+    static boolean matchesExpectedMutationCount(long expectedMutationCount, boolean redisPairComplete,
+            BigDecimal redisBalance, Long redisVersion, boolean sqlRowPresent,
+            BigDecimal sqlBalance, Long sqlVersion) {
+        if (expectedMutationCount < 0L || !redisPairComplete) return false;
+        if (expectedMutationCount == 0L) {
+            return redisBalance == null && redisVersion == null && !sqlRowPresent
+                    && sqlBalance == null && sqlVersion == null;
+        }
+        if (redisBalance == null || redisVersion == null || !sqlRowPresent
+                || sqlBalance == null || sqlVersion == null) return false;
+        BigDecimal expectedBalance = BigDecimal.valueOf(expectedMutationCount, 0);
+        return redisBalance.compareTo(expectedBalance) == 0 && redisVersion == expectedMutationCount
+                && sqlBalance.compareTo(expectedBalance) == 0 && sqlVersion == expectedMutationCount;
     }
 
     private static final class RunSession {
@@ -231,10 +274,11 @@ public final class OpenLoopLoadRunner {
         private final double targetRate;
         private final int batchSize;
         private final int batchWaitMillis;
+        private final ThreadAllocationTracker allocation = new ThreadAllocationTracker();
         private final String runId = UUID.randomUUID().toString();
         private final String keyPrefix = "syncmoney:benchmark:" + runId + ":";
         private final List<UUID> accounts = new ArrayList<>(ACCOUNT_COUNT);
-        private final AtomicLongArray appliedCounts = new AtomicLongArray(ACCOUNT_COUNT);
+        private final AtomicLongArray expectedMutationCounts = new AtomicLongArray(ACCOUNT_COUNT);
         private final Semaphore inFlight;
         private final ArrayBlockingQueue<Receipt> receipts;
         private final ThreadPoolExecutor workers;
@@ -296,10 +340,12 @@ public final class OpenLoopLoadRunner {
                     throw new IllegalStateException("Could not create benchmark Redis worker connection", failedConnection);
                 }
             });
+            AtomicInteger workerSequence = new AtomicInteger();
             workers = new ThreadPoolExecutor(profile.workerThreads, profile.workerThreads,
                     0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(profile.maxInFlight),
-                    Executors.defaultThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
-            batchWriter = new Thread(this::writeBatches, "syncmoney-benchmark-sql-batcher");
+                    task -> new Thread(allocation.track(task), "syncmoney-benchmark-redis-worker-"
+                            + workerSequence.incrementAndGet()), new ThreadPoolExecutor.AbortPolicy());
+            batchWriter = new Thread(allocation.track(this::writeBatches), "syncmoney-benchmark-sql-batcher");
             batchWriter.setDaemon(false);
             try {
                 CountDownLatch workerReady = new CountDownLatch(profile.workerThreads);
@@ -429,6 +475,7 @@ public final class OpenLoopLoadRunner {
             try {
                 workers.execute(() -> executeRedisMutation(request));
                 accepted.incrementAndGet();
+                expectedMutationCounts.incrementAndGet(accountIndex);
                 queueMax.accumulateAndGet(workers.getQueue().size() + workers.getActiveCount() + receipts.size(), Math::max);
             } catch (RuntimeException submissionFailure) {
                 inFlight.release();
@@ -467,7 +514,6 @@ public final class OpenLoopLoadRunner {
                     moneyInvariantFailures.incrementAndGet();
                     throw new IllegalStateException("Redis atomic receipt violated the benchmark add invariant");
                 }
-                appliedCounts.accumulateAndGet(request.accountIndex(), version, Math::max);
                 long receivedAt = System.nanoTime();
                 record(receipt, receivedAt - request.acceptedAtNanos());
                 record(response, receivedAt - request.scheduledNanos());
@@ -576,26 +622,23 @@ public final class OpenLoopLoadRunner {
                 Connection connection = sqlConnection.get();
                 try (var query = connection.prepareStatement("SELECT balance, version FROM players WHERE player_uuid = ?")) {
                     for (int index = 0; index < ACCOUNT_COUNT; index++) {
-                        long expectedCount = appliedCounts.get(index);
+                        long expectedCount = expectedMutationCounts.get(index);
                         UUID uuid = accounts.get(index);
                         List<String> redisValues = client.mget(keyPrefix + "balance:" + uuid,
                                 keyPrefix + "version:" + uuid);
+                        boolean redisPairComplete = redisValues.size() == 2;
+                        BigDecimal redisBalance = redisPairComplete && redisValues.get(0) != null
+                                ? new BigDecimal(redisValues.get(0)) : null;
+                        Long redisVersion = redisPairComplete && redisValues.get(1) != null
+                                ? Long.parseLong(redisValues.get(1)) : null;
                         query.setString(1, uuid.toString());
                         try (ResultSet row = query.executeQuery()) {
-                            if (expectedCount == 0L) {
-                                if (redisValues.size() != 2 || redisValues.get(0) != null
-                                        || redisValues.get(1) != null || row.next()) {
-                                    moneyInvariantFailures.incrementAndGet();
-                                }
-                            } else {
-                                BigDecimal expectedBalance = BigDecimal.valueOf(expectedCount, 0);
-                                if (redisValues.size() != 2 || redisValues.get(0) == null || redisValues.get(1) == null
-                                        || new BigDecimal(redisValues.get(0)).compareTo(expectedBalance) != 0
-                                        || Long.parseLong(redisValues.get(1)) != expectedCount
-                                        || !row.next() || row.getBigDecimal(1).compareTo(expectedBalance) != 0
-                                        || row.getLong(2) != expectedCount) {
-                                    moneyInvariantFailures.incrementAndGet();
-                                }
+                            boolean sqlRowPresent = row.next();
+                            BigDecimal sqlBalance = sqlRowPresent ? row.getBigDecimal(1) : null;
+                            Long sqlVersion = sqlRowPresent ? row.getLong(2) : null;
+                            if (!matchesExpectedMutationCount(expectedCount, redisPairComplete, redisBalance,
+                                    redisVersion, sqlRowPresent, sqlBalance, sqlVersion)) {
+                                moneyInvariantFailures.incrementAndGet();
                             }
                         }
                     }
@@ -658,12 +701,14 @@ public final class OpenLoopLoadRunner {
                     : TimeUnit.NANOSECONDS.toMillis(Math.max(0L, durableEnd - recoveryStart));
             return new Scenario(runId, backend.sqlDialect(), durationSeconds,
                     offered.get(), accepted.get(), rejected.get(), persisted.get(),
-                    histogram(response), histogram(scheduleLag), histogram(receipt), histogram(durable),
+                    histogram(response, minimumP999Samples(profile)), histogram(scheduleLag, minimumP999Samples(profile)),
+                    histogram(receipt, minimumP999Samples(profile)), histogram(durable, minimumP999Samples(profile)),
                     gcDelta(gcBefore, gcSnapshot()), queueMax.get(), oldestBacklogAgeMicros.get(), recoveryMillis,
                     ambiguous.get(), quarantine.get(), moneyInvariantFailures.get(), versionConflicts.get(),
                     authorityRejected.get(),
                     valid && inFlight.availablePermits() == profile.maxInFlight,
                     redisVersion.get(), sqlProduct.get(), sqlVersion.get(),
+                    allocation.snapshot(offered.get(), accepted.get(), profile.workerThreads + 1),
                     failure.get() == null ? "NONE" : failure.get().getClass().getSimpleName(),
                     started, issueEnd, finished);
         }
@@ -766,24 +811,45 @@ public final class OpenLoopLoadRunner {
                         "timeMillis", Math.max(0L, entry.getValue().get("timeMillis") - before.getOrDefault(entry.getKey(), Map.of()).getOrDefault("timeMillis", 0L)))));
     }
 
-    private static HistogramSummary histogram(LatencyDistribution distribution) {
+    private static HistogramSummary histogram(LatencyDistribution distribution, long minimumP999Samples) {
         Histogram raw = distribution.raw.getIntervalHistogram();
         Histogram corrected = distribution.corrected.getIntervalHistogram();
+        return summarize(raw, corrected, minimumP999Samples);
+    }
+
+    private static long minimumP999Samples(OpenLoopProfile profile) {
+        return Math.max(P999_MINIMUM_SAMPLES, profile.minimumMeasurementSamples);
+    }
+
+    static Map<String, Object> histogramSummary(Histogram raw, Histogram corrected, long minimumP999Samples) {
+        return summarize(raw, corrected, minimumP999Samples).asMap();
+    }
+
+    private static HistogramSummary summarize(Histogram raw, Histogram corrected, long minimumP999Samples) {
+        HistogramQuantileConfidence confidence = raw.getTotalCount() < minimumP999Samples
+                ? null : HistogramQuantileConfidence.p999(raw);
         return new HistogramSummary(raw.getTotalCount(), raw.getValueAtPercentile(50.0d),
                 raw.getValueAtPercentile(95.0d), raw.getValueAtPercentile(99.0d),
                 raw.getValueAtPercentile(99.9d), raw.getMaxValue(), corrected.getTotalCount(),
-                corrected.getValueAtPercentile(99.9d));
+                corrected.getValueAtPercentile(99.9d), confidence);
     }
 
     private record ReceiptRequest(int accountIndex, long scheduledNanos, long acceptedAtNanos) { }
     private record Receipt(ReceiptRequest request, PlayerSnapshot snapshot, long receivedAtNanos,
             BigDecimal balance, long version) { }
-    private record HistogramSummary(long rawTotalCount, long p50Micros, long p95Micros, long p99Micros,
-            long p999Micros, long maxMicros, long correctedTotalCount, long correctedP999Micros) {
+    record HistogramSummary(long rawTotalCount, long p50Micros, long p95Micros, long p99Micros,
+            long p999Micros, long maxMicros, long correctedTotalCount, long correctedP999Micros,
+            HistogramQuantileConfidence p999Confidence) {
         Map<String, Object> asMap() {
-            return Map.of("unit", "microseconds", "rawCount", rawTotalCount, "raw", Map.of(
-                    "p50", p50Micros, "p95", p95Micros, "p99", p99Micros, "p99.9", p999Micros, "max", maxMicros),
-                    "correctedCount", correctedTotalCount, "expectedIntervalCorrected", Map.of("p99.9", correctedP999Micros));
+            Map<String, Object> summary = new java.util.LinkedHashMap<>();
+            summary.put("unit", "microseconds");
+            summary.put("rawCount", rawTotalCount);
+            summary.put("raw", Map.of("p50", p50Micros, "p95", p95Micros, "p99", p99Micros,
+                    "p99.9", p999Micros, "max", maxMicros));
+            if (p999Confidence != null) summary.put("p99.9Confidence95", p999Confidence.asMap());
+            summary.put("correctedCount", correctedTotalCount);
+            summary.put("expectedIntervalCorrected", Map.of("p99.9", correctedP999Micros));
+            return Map.copyOf(summary);
         }
     }
     private static final class LatencyDistribution {
@@ -796,5 +862,6 @@ public final class OpenLoopLoadRunner {
             Map<String, Map<String, Long>> gc, int queueMax, long oldestBacklogAgeMicros,
             long backlogRecoveryMillis, long ambiguous, long quarantine, long moneyInvariantFailures,
             long versionConflicts, long authorityRejected, boolean valid, String redisVersion, String sqlProduct, String sqlVersion,
+            ThreadAllocationTracker.AllocationSnapshot allocation,
             String failureCategory, long startedNanos, long issueEndNanos, long finishedNanos) { }
 }

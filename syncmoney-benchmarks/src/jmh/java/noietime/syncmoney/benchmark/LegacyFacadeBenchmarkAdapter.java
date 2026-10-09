@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,7 +20,9 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.lang.reflect.Proxy;
 import java.util.logging.Logger;
+import java.util.logging.Level;
 
 import static org.mockito.Mockito.when;
 
@@ -27,6 +30,10 @@ import static org.mockito.Mockito.when;
 public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkAdapter {
 
     private static final Logger LOGGER = Logger.getLogger("SyncmoneyLegacyBenchmark");
+
+    static {
+        LOGGER.setLevel(Level.SEVERE);
+    }
 
     private final URLClassLoader loader;
     private final Object facade;
@@ -43,8 +50,13 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
     private final Method clearPendingTracking;
     private final Method queueSize;
     private final Method shutdown;
+    private final Map<String, Object> cancellationListeners = new ConcurrentHashMap<>();
+    private Object cancellationEventBus;
+    private Class<?> cancellationEventType;
+    private Class<?> cancellationListenerType;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong inFlight = new AtomicLong();
+    private final Object drainStateLock = new Object();
     private final AtomicLong drained = new AtomicLong();
     private final AtomicReference<Throwable> drainFailure = new AtomicReference<>();
     private final ConcurrentMap<UUID, Receipt> latestReceipts = new ConcurrentHashMap<>();
@@ -154,15 +166,68 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
     }
 
     @Override
+    public synchronized void enablePreTransactionCancellation(String transactionType) {
+        try {
+            Class<?> eventType = load("noietime.syncmoney.event.AsyncPreTransactionEvent");
+            boolean supported = Arrays.stream(load("noietime.syncmoney.event.AsyncPreTransactionEvent$TransactionType").getEnumConstants())
+                    .anyMatch(value -> ((Enum<?>) value).name().equals(transactionType));
+            if (!supported) throw new IllegalArgumentException("Unknown pre-transaction type: " + transactionType);
+
+            Class<?> busType = load("noietime.syncmoney.event.SyncmoneyEventBus");
+            if (!Boolean.TRUE.equals(invoke(busType.getMethod("isInitialized"), null))) {
+                Object testPlugin = mockChild("noietime.syncmoney.Syncmoney");
+                when(((Plugin) testPlugin).getLogger()).thenReturn(LOGGER);
+                invoke(busType.getMethod("init", load("noietime.syncmoney.Syncmoney")), null, testPlugin);
+            }
+            Object bus = invoke(busType.getMethod("getInstance"), null);
+            Class<?> listenerType = load("noietime.syncmoney.event.SyncmoneyListener");
+            Object listener = Proxy.newProxyInstance(loader, new Class<?>[] {listenerType}, (proxy, invokedMethod, args) -> {
+                if (invokedMethod.getName().equals("onEvent") && args != null && args.length == 1) {
+                    Object event = args[0];
+                    Object eventValue = invoke(method(event.getClass(), "getType"), event);
+                    if (((Enum<?>) eventValue).name().equals(transactionType)) {
+                        Method setCancelled = eventType.getMethod("setCancelled", boolean.class, String.class);
+                        invoke(setCancelled, event, true, "benchmark cancellation");
+                    }
+                    return null;
+                }
+                return switch (invokedMethod.getName()) {
+                    case "toString" -> "Syncmoney benchmark cancellation listener";
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> null;
+                };
+            });
+            Class<?> priorityType = load("noietime.syncmoney.event.EventPriority");
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            Object highest = Enum.valueOf((Class<? extends Enum>) priorityType, "HIGHEST");
+            Method register = busType.getMethod("register", Class.class, listenerType, priorityType);
+            invoke(register, bus, eventType, listener, highest);
+            cancellationEventBus = bus;
+            cancellationEventType = eventType;
+            cancellationListenerType = listenerType;
+            cancellationListeners.put(transactionType, listener);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Could not register isolated 1.3.2 pre-transaction cancellation", failure);
+        }
+    }
+
+    @Override
     public void awaitDrain(long timeoutMillis) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-        while ((queuedEvents() != 0 || inFlight.get() != 0) && System.nanoTime() < deadline) {
+        while (!isDrained() && System.nanoTime() < deadline) {
             throwIfDrainFailed();
             Thread.sleep(1L);
         }
         throwIfDrainFailed();
-        if (queuedEvents() != 0 || inFlight.get() != 0) {
+        if (!isDrained()) {
             throw new IllegalStateException("1.3.2 benchmark receipt adapter did not drain within " + timeoutMillis + "ms");
+        }
+    }
+
+    private boolean isDrained() {
+        synchronized (drainStateLock) {
+            return queuedEvents() == 0 && inFlight.get() == 0;
         }
     }
 
@@ -189,10 +254,13 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
             Method version = eventType.getMethod("version");
             Method type = eventType.getMethod("type");
             while (running.get() || queuedEvents() != 0) {
-                Object event = invoke(poll, queue, 50L, TimeUnit.MILLISECONDS);
-                if (event == null) continue;
-                inFlight.incrementAndGet();
+                Object event = null;
                 try {
+                    synchronized (drainStateLock) {
+                        event = invoke(poll, queue, 50L, TimeUnit.MILLISECONDS);
+                        if (event != null) inFlight.incrementAndGet();
+                    }
+                    if (event == null) continue;
                     String eventTypeName = ((Enum<?>) invoke(type, event)).name();
                     if (eventTypeName.equals("TRANSFER_IN") || eventTypeName.equals("TRANSFER_OUT")) {
                         Object paired = invoke(poll, queue, 1L, TimeUnit.SECONDS);
@@ -210,7 +278,7 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
                         drained.incrementAndGet();
                     }
                 } finally {
-                    inFlight.decrementAndGet();
+                    if (event != null) inFlight.decrementAndGet();
                 }
             }
         } catch (Throwable failure) {
@@ -264,24 +332,38 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
 
     @Override
     public void close() {
-        try {
-            awaitDrain(10_000);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while awaiting 1.3.2 benchmark adapter", interrupted);
-        }
-        running.set(false);
-        drainer.interrupt();
-        try {
-            drainer.join(2_000L);
-            invoke(shutdown, facade);
-            loader.close();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while closing 1.3.2 benchmark adapter", interrupted);
-        } catch (java.io.IOException failure) {
-            throw new IllegalStateException("Could not close isolated 1.3.2 class loader", failure);
-        }
+        BenchmarkAdapterClose.run("Could not close isolated 1.3.2 benchmark adapter",
+                () -> awaitDrain(10_000),
+                () -> running.set(false),
+                () -> {
+                    drainer.interrupt();
+                    drainer.join(2_000L);
+                    if (drainer.isAlive()) throw new IllegalStateException("1.3.2 benchmark receipt drainer did not stop");
+                },
+                () -> {
+                    if (cancellationEventBus == null) return;
+                    Throwable unregisterFailure = null;
+                    try {
+                        Method unregister = cancellationEventBus.getClass().getMethod("unregister", Class.class,
+                                cancellationListenerType);
+                        for (Object listener : cancellationListeners.values()) {
+                            try {
+                                invoke(unregister, cancellationEventBus, cancellationEventType, listener);
+                            } catch (Throwable failure) {
+                                if (unregisterFailure == null) unregisterFailure = failure;
+                                else unregisterFailure.addSuppressed(failure);
+                            }
+                        }
+                    } finally {
+                        cancellationListeners.clear();
+                        cancellationEventBus = null;
+                        cancellationEventType = null;
+                        cancellationListenerType = null;
+                    }
+                    if (unregisterFailure != null) throw unregisterFailure;
+                },
+                () -> invoke(shutdown, facade),
+                loader::close);
     }
 
     private static final class ChildFirstSyncmoneyClassLoader extends URLClassLoader {

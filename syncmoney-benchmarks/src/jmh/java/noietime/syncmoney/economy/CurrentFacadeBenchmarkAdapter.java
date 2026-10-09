@@ -2,7 +2,13 @@ package noietime.syncmoney.economy;
 
 import noietime.syncmoney.benchmark.TransactionBenchmarkAdapter;
 import noietime.syncmoney.benchmark.TransactionBenchmarkAdapter.Receipt;
+import noietime.syncmoney.benchmark.BenchmarkAdapterClose;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.event.AsyncPreTransactionEvent;
+import noietime.syncmoney.event.EventPriority;
+import noietime.syncmoney.event.SyncmoneyEventBus;
+import noietime.syncmoney.event.SyncmoneyListener;
 import org.bukkit.plugin.Plugin;
 import org.mockito.Mockito;
 
@@ -15,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
+import java.util.logging.Level;
 
 import static org.mockito.Mockito.when;
 
@@ -23,14 +30,21 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
 
     private static final Logger LOGGER = Logger.getLogger("SyncmoneyBenchmark");
 
+    static {
+        LOGGER.setLevel(Level.SEVERE);
+    }
+
     private final EconomyWriteQueue queue = new EconomyWriteQueue(50_000, LOGGER);
     private final EconomyFacade facade;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong inFlight = new AtomicLong();
     private final AtomicLong drained = new AtomicLong();
+    private final Object drainStateLock = new Object();
     private final AtomicReference<Throwable> drainFailure = new AtomicReference<>();
     private final ConcurrentMap<UUID, Receipt> latestReceipts = new ConcurrentHashMap<>();
     private final Thread drainer;
+    private SyncmoneyEventBus cancellationEventBus;
+    private SyncmoneyListener<AsyncPreTransactionEvent> cancellationListener;
 
     public CurrentFacadeBenchmarkAdapter() {
         Plugin plugin = Mockito.mock(Plugin.class);
@@ -94,15 +108,40 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
     }
 
     @Override
+    public synchronized void enablePreTransactionCancellation(String transactionType) {
+        boolean supported = java.util.Arrays.stream(AsyncPreTransactionEvent.TransactionType.values())
+                .anyMatch(type -> type.name().equals(transactionType));
+        if (!supported) throw new IllegalArgumentException("Unknown pre-transaction type: " + transactionType);
+        if (!SyncmoneyEventBus.isInitialized()) {
+            Syncmoney testPlugin = Mockito.mock(Syncmoney.class);
+            when(testPlugin.getLogger()).thenReturn(LOGGER);
+            SyncmoneyEventBus.init(testPlugin);
+        }
+        cancellationEventBus = SyncmoneyEventBus.getInstance();
+        cancellationListener = event -> {
+            if (event.getType().name().equals(transactionType)) {
+                event.setCancelled(true, "benchmark cancellation");
+            }
+        };
+        cancellationEventBus.register(AsyncPreTransactionEvent.class, cancellationListener, EventPriority.HIGHEST);
+    }
+
+    @Override
     public void awaitDrain(long timeoutMillis) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-        while ((queue.size() != 0 || inFlight.get() != 0) && System.nanoTime() < deadline) {
+        while (!isDrained() && System.nanoTime() < deadline) {
             throwIfDrainFailed();
             Thread.sleep(1L);
         }
         throwIfDrainFailed();
-        if (queue.size() != 0 || inFlight.get() != 0) {
+        if (!isDrained()) {
             throw new IllegalStateException("Current benchmark receipt adapter did not drain within " + timeoutMillis + "ms");
+        }
+    }
+
+    private boolean isDrained() {
+        synchronized (drainStateLock) {
+            return queue.size() == 0 && inFlight.get() == 0;
         }
     }
 
@@ -124,37 +163,38 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
 
     private void drain() {
         while (running.get() || queue.size() != 0) {
+            EconomyEvent event = null;
             try {
-                EconomyEvent event = queue.poll(50, TimeUnit.MILLISECONDS);
+                synchronized (drainStateLock) {
+                    event = queue.poll(50, TimeUnit.MILLISECONDS);
+                    if (event != null) inFlight.incrementAndGet();
+                }
                 if (event == null) continue;
-                inFlight.incrementAndGet();
-                try {
-                    if (event.type() == EconomyEvent.EventType.TRANSFER_IN
-                            || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
-                        EconomyEvent paired = queue.poll(1, TimeUnit.SECONDS);
-                        if (paired == null) throw new IllegalStateException("Accepted transfer was missing its paired event");
-                        inFlight.incrementAndGet();
-                        recordReceipt(event);
-                        recordReceipt(paired);
-                        if (!queue.completePair(event, event.balanceAfter(), event.version(),
-                                paired, paired.balanceAfter(), paired.version())) {
-                            throw new IllegalStateException("Current queue rejected its accepted transfer receipt pair");
-                        }
-                        drained.addAndGet(2);
-                        inFlight.decrementAndGet();
-                    } else {
-                        recordReceipt(event);
-                        queue.complete(event, event.balanceAfter(), event.version());
-                        drained.incrementAndGet();
+                if (event.type() == EconomyEvent.EventType.TRANSFER_IN
+                        || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
+                    EconomyEvent paired = queue.poll(1, TimeUnit.SECONDS);
+                    if (paired == null) throw new IllegalStateException("Accepted transfer was missing its paired event");
+                    inFlight.incrementAndGet();
+                    recordReceipt(event);
+                    recordReceipt(paired);
+                    if (!queue.completePair(event, event.balanceAfter(), event.version(),
+                            paired, paired.balanceAfter(), paired.version())) {
+                        throw new IllegalStateException("Current queue rejected its accepted transfer receipt pair");
                     }
-                } finally {
+                    drained.addAndGet(2);
                     inFlight.decrementAndGet();
+                } else {
+                    recordReceipt(event);
+                    queue.complete(event, event.balanceAfter(), event.version());
+                    drained.incrementAndGet();
                 }
             } catch (InterruptedException interrupted) {
                 if (!running.get()) return;
             } catch (Throwable failure) {
                 drainFailure.compareAndSet(null, failure);
                 return;
+            } finally {
+                if (event != null) inFlight.decrementAndGet();
             }
         }
     }
@@ -174,20 +214,24 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
 
     @Override
     public void close() {
-        try {
-            awaitDrain(10_000);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while awaiting current benchmark receipt adapter", interrupted);
-        }
-        running.set(false);
-        drainer.interrupt();
-        try {
-            drainer.join(2_000L);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while closing current benchmark receipt adapter", interrupted);
-        }
-        facade.shutdown();
+        BenchmarkAdapterClose.run("Could not close current benchmark receipt adapter",
+                () -> awaitDrain(10_000),
+                () -> running.set(false),
+                () -> {
+                    if (cancellationEventBus != null && cancellationListener != null) {
+                        try {
+                            cancellationEventBus.unregister(AsyncPreTransactionEvent.class, cancellationListener);
+                        } finally {
+                            cancellationListener = null;
+                            cancellationEventBus = null;
+                        }
+                    }
+                },
+                () -> {
+                    drainer.interrupt();
+                    drainer.join(2_000L);
+                    if (drainer.isAlive()) throw new IllegalStateException("Current benchmark receipt drainer did not stop");
+                },
+                facade::shutdown);
     }
 }

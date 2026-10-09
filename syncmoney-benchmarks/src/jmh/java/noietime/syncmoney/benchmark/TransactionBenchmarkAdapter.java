@@ -24,6 +24,9 @@ public interface TransactionBenchmarkAdapter extends AutoCloseable {
 
     BigDecimal transfer(UUID from, UUID to, BigDecimal amount);
 
+    /** Installs a real pre-transaction event listener that rejects the named operation type. */
+    void enablePreTransactionCancellation(String transactionType);
+
     void awaitDrain(long timeoutMillis) throws InterruptedException;
 
     long drainedEvents();

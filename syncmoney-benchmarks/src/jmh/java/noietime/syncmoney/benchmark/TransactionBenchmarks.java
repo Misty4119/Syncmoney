@@ -46,7 +46,8 @@ public class TransactionBenchmarks {
         @Param({"uniform", "hot"})
         public String accessPattern;
 
-        @Param({"balance", "deposit", "withdraw", "set", "transfer", "reject-withdraw"})
+        @Param({"balance", "deposit", "withdraw", "set", "transfer", "reject-withdraw",
+                "cancel-deposit", "cancel-withdraw"})
         public String operation;
 
         private TransactionBenchmarkAdapter adapter;
@@ -92,6 +93,8 @@ public class TransactionBenchmarks {
             }
             rejectedAccount = UUID.nameUUIDFromBytes("syncmoney-bench-rejected".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             adapter.seed(rejectedAccount, BigDecimal.ZERO.setScale(2), 1L);
+            if (operation.equals("cancel-deposit")) adapter.enablePreTransactionCancellation("DEPOSIT");
+            if (operation.equals("cancel-withdraw")) adapter.enablePreTransactionCancellation("WITHDRAW");
         }
 
         UUID nextAccount() {
@@ -145,11 +148,12 @@ public class TransactionBenchmarks {
                 adapter.awaitDrain(10_000L);
                 adapter.throwIfDrainFailed();
                 if (adapter.queuedEvents() != 0) throw new IllegalStateException("Accepted benchmark events remain queued");
+                verifyDrainedWrites(acceptedWrites.sum(), adapter.drainedEvents());
                 if (offeredTransactions.sum() != acceptedTransactions.sum() + rejectedTransactions.sum()) {
                     throw new IllegalStateException("Benchmark transaction outcome counts do not conserve offered operations");
                 }
                 if (!operation.equals("balance") && acceptedTransactions.sum() == 0L
-                        && !operation.equals("reject-withdraw")) {
+                        && !operation.equals("reject-withdraw") && !isCancellationOperation(operation)) {
                     throw new IllegalStateException("Benchmark produced no accepted transaction samples");
                 }
                 for (UUID account : accounts) {
@@ -160,9 +164,14 @@ public class TransactionBenchmarks {
                     }
                     BigDecimal balance = adapter.balance(account);
                     if (balance.signum() < 0) throw new IllegalStateException("Benchmark produced a negative balance for " + account);
-                    if (operation.equals("balance") || operation.equals("reject-withdraw")) {
+                    if (operation.equals("balance") || operation.equals("reject-withdraw")
+                            || isCancellationOperation(operation)) {
                         if (balance.compareTo(START_BALANCE) != 0) {
                             throw new IllegalStateException("Read/rejection benchmark changed account balance " + account);
+                        }
+                        if (isCancellationOperation(operation)
+                                && (expectedVersion != 100L || adapter.latestReceipt(account) != null)) {
+                            throw new IllegalStateException("Cancelled transaction changed account version or emitted a receipt for " + account);
                         }
                     } else if (operation.equals("set")) {
                         Receipt latestReceipt = adapter.latestReceipt(account);
@@ -175,6 +184,7 @@ public class TransactionBenchmarks {
                             throw new IllegalStateException("Funds postcondition failed for " + account
                                     + ": expected " + expected + ", observed " + balance);
                         }
+                        verifyLatestReceipt(account, 100L, expectedVersion, expected, adapter.latestReceipt(account));
                     }
                 }
                 if (adapter.version(rejectedAccount) != 1L || adapter.balance(rejectedAccount).signum() != 0) {
@@ -191,6 +201,12 @@ public class TransactionBenchmarks {
                         && (acceptedTransactions.sum() != 0L || rejectedTransactions.sum() != offeredTransactions.sum()
                                 || offeredTransactions.sum() == 0L)) {
                     throw new IllegalStateException("Insufficient-funds control did not reject every offered transaction");
+                }
+                if (isCancellationOperation(operation)
+                        && (acceptedWrites.sum() != 0L || acceptedTransactions.sum() != 0L
+                                || rejectedTransactions.sum() != offeredTransactions.sum()
+                                || offeredTransactions.sum() == 0L)) {
+                    throw new IllegalStateException("Pre-transaction cancellation did not reject every operation without queue admission");
                 }
             } finally {
                 adapter.close();
@@ -215,6 +231,28 @@ public class TransactionBenchmarks {
                 || latestReceipt.balance().compareTo(expectedTarget) != 0
                 || balance.compareTo(expectedTarget) != 0) {
             throw new IllegalStateException("Set benchmark highest accepted version does not match its submitted target for " + account);
+        }
+    }
+
+    static void verifyDrainedWrites(long acceptedWriteLegs, long drainedEventLegs) {
+        if (acceptedWriteLegs < 0L || drainedEventLegs != acceptedWriteLegs) {
+            throw new IllegalStateException("Drained benchmark event count does not match accepted write legs: accepted="
+                    + acceptedWriteLegs + ", drained=" + drainedEventLegs);
+        }
+    }
+
+    static void verifyLatestReceipt(UUID account, long seedVersion, long expectedVersion,
+            BigDecimal expectedBalance, Receipt latestReceipt) {
+        if (expectedVersion < seedVersion) {
+            throw new IllegalStateException("Benchmark receipt version regressed for " + account);
+        }
+        if (expectedVersion == seedVersion) {
+            if (latestReceipt != null) {
+                throw new IllegalStateException("Benchmark emitted a receipt without an accepted write for " + account);
+            }
+        } else if (latestReceipt == null || latestReceipt.version() != expectedVersion
+                || latestReceipt.balance().compareTo(expectedBalance) != 0) {
+            throw new IllegalStateException("Latest benchmark receipt does not match the final accepted state for " + account);
         }
     }
 
@@ -293,6 +331,10 @@ public class TransactionBenchmarks {
                 fixture.rejectedTransaction();
                 yield result;
             }
+            case "cancel-deposit" -> mutate(fixture, counts, fixture.nextAccount(), fixture.adapter::deposit,
+                    AMOUNT, AMOUNT);
+            case "cancel-withdraw" -> mutate(fixture, counts, fixture.nextAccount(), fixture.adapter::withdraw,
+                    AMOUNT, AMOUNT.negate());
             default -> throw new IllegalArgumentException("Unknown benchmark operation: " + fixture.operation);
         };
     }
@@ -317,5 +359,9 @@ public class TransactionBenchmarks {
 
     private static boolean isRejected(BigDecimal result) {
         return result == null || result.signum() < 0;
+    }
+
+    private static boolean isCancellationOperation(String operation) {
+        return operation.equals("cancel-deposit") || operation.equals("cancel-withdraw");
     }
 }

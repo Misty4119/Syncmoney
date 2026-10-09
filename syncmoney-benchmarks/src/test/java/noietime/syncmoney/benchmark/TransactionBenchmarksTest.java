@@ -32,4 +32,24 @@ class TransactionBenchmarksTest {
         assertDoesNotThrow(() -> TransactionBenchmarks.verifySetPostcondition(
                 ACCOUNT, 100L, 100L, START, null, SET_A, START));
     }
+
+    @Test
+    void rejectsAcceptedWriteWithoutItsDrainedReceiptEvent() {
+        assertThrows(IllegalStateException.class,
+                () -> TransactionBenchmarks.verifyDrainedWrites(3L, 2L));
+        assertDoesNotThrow(() -> TransactionBenchmarks.verifyDrainedWrites(3L, 3L));
+    }
+
+    @Test
+    void rejectsMissingOrStaleReceiptForTheFinalAcceptedAccountState() {
+        BigDecimal expected = START.add(new BigDecimal("1.00"));
+
+        assertThrows(IllegalStateException.class,
+                () -> TransactionBenchmarks.verifyLatestReceipt(ACCOUNT, 100L, 101L, expected, null));
+        assertThrows(IllegalStateException.class,
+                () -> TransactionBenchmarks.verifyLatestReceipt(ACCOUNT, 100L, 101L, expected,
+                        new Receipt(START, 100L)));
+        assertDoesNotThrow(() -> TransactionBenchmarks.verifyLatestReceipt(ACCOUNT, 100L, 101L, expected,
+                new Receipt(expected, 101L)));
+    }
 }
