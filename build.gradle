@@ -10,6 +10,8 @@ plugins {
     id 'java'
     id 'jacoco'
     id 'com.gradleup.shadow' version '9.3.1'
+    id 'com.gradleup.nmcp.aggregation' version '1.6.2'
+    id 'com.gradleup.nmcp' version '1.6.2' apply false
     id 'xyz.jpenilla.run-paper' version '2.3.1'
 }
 
@@ -27,6 +29,50 @@ repositories {
 
 dependencies {
     implementation project(':syncmoney-bukkit')
+    nmcpAggregation project(':syncmoney-api')
+}
+
+nmcpAggregation {
+    centralPortal {
+        // Validation must stop at a reviewable Portal deployment. The only enabled
+        // upload path is the guarded tools/central-publisher client.
+        publishingType = 'USER_MANAGED'
+        validationTimeout = java.time.Duration.ofMinutes(15)
+    }
+}
+
+allprojects {
+    tasks.configureEach {
+        String taskName = name.toLowerCase(java.util.Locale.ROOT)
+        boolean portalPublisher =
+                ((taskName.startsWith('publish') || taskName.startsWith('nmcppublish')) && taskName.contains('central')) ||
+                        taskName == 'nmcppublishdeployment'
+        if (portalPublisher) {
+            enabled = false
+        }
+    }
+}
+
+tasks.register('verifyCentralPublisherIsolation') {
+    group = 'verification'
+    description = 'Verifies that no Gradle task can publish directly to a Central Portal repository.'
+    doLast {
+        def enabledPortalPublishTasks = allprojects.collectMany { project ->
+            project.tasks.findAll { task ->
+                String taskName = task.name.toLowerCase(java.util.Locale.ROOT)
+                boolean portalPublisher =
+                        ((taskName.startsWith('publish') || taskName.startsWith('nmcppublish')) && taskName.contains('central')) ||
+                                taskName == 'nmcppublishdeployment'
+                portalPublisher && task.enabled
+            }
+        }
+        if (!enabledPortalPublishTasks.isEmpty()) {
+            throw new GradleException(
+                    "Central Portal publish tasks must remain disabled: ${enabledPortalPublishTasks.collect { it.path }.sort()}"
+            )
+        }
+        logger.lifecycle('Central Portal publisher isolation verified; direct Portal publishing tasks are disabled.')
+    }
 }
 
 java {

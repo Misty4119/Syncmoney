@@ -58,8 +58,18 @@ jobs:
           java-version: '25'
           cache: gradle
 
+      - name: Test Central publisher and disposable signing fixture
+        run: |
+          python3 -m unittest discover -s tools/central-publisher/tests -v
+          python3 tools/central-publisher/verify_signing_fixture.py
+
       - name: Test and build
-        run: bash ./gradlew -PreleaseVersion="${{ needs.build-metadata.outputs.version }}" test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+        run: bash ./gradlew -PreleaseVersion="${{ needs.build-metadata.outputs.version }}" test :syncmoney-api:check nmcpZipAggregation :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+
+      - name: Validate Central bundle and offline consumer
+        run: |
+          python3 tools/central-publisher/publish_central.py validate --bundle build/nmcp/zip/aggregation.zip
+          python3 tools/central-publisher/publish_central.py verify-consumer --bundle build/nmcp/zip/aggregation.zip --gradle-wrapper ./gradlew
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

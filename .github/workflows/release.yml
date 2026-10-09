@@ -290,8 +290,18 @@ jobs:
         working-directory: syncmoney-web
         run: pnpm test:e2e
 
+      - name: Test Central publisher and disposable signing fixture
+        run: |
+          python3 -m unittest discover -s tools/central-publisher/tests -v
+          python3 tools/central-publisher/verify_signing_fixture.py
+
       - name: Test and build Java artifacts
-        run: bash ./gradlew -PreleaseVersion="$RELEASE_VERSION" test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+        run: bash ./gradlew -PreleaseVersion="$RELEASE_VERSION" test :syncmoney-api:check nmcpZipAggregation :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+
+      - name: Validate Central bundle and offline consumer
+        run: |
+          python3 tools/central-publisher/publish_central.py validate --bundle build/nmcp/zip/aggregation.zip
+          python3 tools/central-publisher/publish_central.py verify-consumer --bundle build/nmcp/zip/aggregation.zip --gradle-wrapper ./gradlew
 
       - name: Create SHA-256 checksums
         shell: bash
