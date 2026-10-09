@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "profileId": "redis-sql-open-loop",
+  "mode": "open-loop",
+  "arrivalRateFractions": [0.25, 0.5, 0.75, 1.0, 1.25],
+  "warmupSecondsPerRate": 120,
+  "measurementSecondsPerRate": 300,
+  "minimumMeasurementSamples": 100000,
+  "workerThreads": 20,
+  "maxInFlight": 4096,
+  "batchSizes": [1, 50, 200, 500],
+  "maxBatchWaitMillis": [1, 5, 20],
+  "redis": {
+    "hostEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_HOST",
+    "portEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_PORT",
+    "passwordEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_PASSWORD",
+    "databaseEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_DATABASE"
+  },
+  "sql": {
+    "urlEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_URL",
+    "userEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_USER",
+    "passwordEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_PASSWORD",
+    "dialectEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_DIALECT"
+  },
+  "outputDirectory": "build/reports/benchmarks"
+}

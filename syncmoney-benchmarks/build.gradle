@@ -1,0 +1,536 @@
+plugins {
+    id 'java-library'
+}
+
+group = rootProject.group
+version = rootProject.version
+
+repositories {
+    mavenCentral()
+    maven { name = 'papermc'; url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    sourceCompatibility = JavaVersion.toVersion(25)
+    targetCompatibility = JavaVersion.toVersion(25)
+}
+
+sourceSets {
+    main {
+        java.setSrcDirs([])
+        resources.setSrcDirs([])
+    }
+    jmh {
+        java.srcDir file('src/jmh/java')
+        resources.srcDir file('src/jmh/resources')
+    }
+    loadTest {
+        java.srcDir file('src/loadTest/java')
+        resources.srcDir file('src/loadTest/resources')
+    }
+    test {
+        compileClasspath += sourceSets.jmh.output
+        compileClasspath += sourceSets.jmh.compileClasspath
+        runtimeClasspath += sourceSets.jmh.runtimeClasspath
+        compileClasspath += sourceSets.loadTest.output
+        runtimeClasspath += sourceSets.loadTest.output
+        resources.srcDir file('profiles')
+    }
+}
+
+configurations {
+    loadTestImplementation.extendsFrom(jmhImplementation)
+    loadTestRuntimeOnly.extendsFrom(jmhRuntimeOnly)
+}
+
+dependencies {
+    jmhImplementation project(':syncmoney-bukkit')
+    jmhImplementation project(':syncmoney-protocol')
+    jmhImplementation project(':syncmoney-storage')
+    jmhImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    jmhImplementation 'org.openjdk.jmh:jmh-core:1.37'
+    jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+    jmhImplementation 'org.hdrhistogram:HdrHistogram:2.2.2'
+    jmhImplementation 'redis.clients:jedis:5.2.0'
+    jmhImplementation 'org.mockito:mockito-core:5.8.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testImplementation project(':syncmoney-storage')
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(25)
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    dependsOn tasks.named('loadTestClasses'), tasks.named('jmhClasses')
+    jvmArgs '-Dnet.bytebuddy.experimental=true'
+}
+
+tasks.register('benchmarkJar', Jar) {
+    group = 'benchmark'
+    description = 'Builds the isolated JMH runner; this artifact is not a Syncmoney runtime plugin.'
+    dependsOn tasks.named('jmhClasses')
+    dependsOn configurations.jmhRuntimeClasspath.buildDependencies
+    archiveFileName = 'SyncmoneyBenchmarks.jar'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes('Main-Class': 'org.openjdk.jmh.Main')
+    }
+    from sourceSets.jmh.output
+    from {
+        configurations.jmhRuntimeClasspath.collect { dependency ->
+            dependency.isDirectory() ? dependency : zipTree(dependency)
+        }
+    }
+}
+
+tasks.register('verifyBenchmarkIsolation') {
+    group = 'verification'
+    description = 'Keeps JMH and HDR Histogram dependencies out of this module main runtime.'
+    doLast {
+        def mainGroups = configurations.runtimeClasspath.incoming.resolutionResult.allComponents
+                .findAll { it.id instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+                .collect { it.id.group }
+        def leaked = mainGroups.findAll { it == 'org.openjdk.jmh' || it == 'org.hdrhistogram' }
+        if (!leaked.isEmpty()) {
+            throw new GradleException('Benchmark-only dependencies leaked into main runtimeClasspath: ' + leaked.unique())
+        }
+        if (!sourceSets.main.allSource.isEmpty()) {
+            throw new GradleException('Benchmark module main source set must remain empty and non-production.')
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyBenchmarkIsolation')
+}
+
+def runProcess = { List<String> command, File workingDirectory, Map<String, String> environment ->
+    File capturedOutput = File.createTempFile('syncmoney-benchmark-process-', '.log')
+    ProcessBuilder processBuilder = new ProcessBuilder(command)
+            .directory(workingDirectory)
+            .redirectErrorStream(true)
+            .redirectOutput(capturedOutput)
+    processBuilder.environment().putAll(environment)
+    Process process = processBuilder.start()
+    try {
+        if (!process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES)) {
+            List<ProcessHandle> descendants = process.toHandle().descendants().toList()
+            descendants.reverseEach { ProcessHandle child -> if (child.isAlive()) child.destroy() }
+            process.destroy()
+            boolean rootStopped = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            boolean childStillAlive = descendants.any { ProcessHandle child -> child.isAlive() }
+            if (!rootStopped || childStillAlive) {
+                descendants.each { ProcessHandle child -> if (child.isAlive()) child.destroyForcibly() }
+                if (process.isAlive()) process.destroyForcibly()
+                process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                descendants.each { ProcessHandle child ->
+                    if (child.isAlive()) {
+                        try {
+                            child.onExit().get(2, java.util.concurrent.TimeUnit.SECONDS)
+                        } catch (java.util.concurrent.TimeoutException ignored) {
+                            // The timeout below remains the primary failure; no unbounded wait here.
+                        }
+                    }
+                }
+            }
+            throw new GradleException('Command timed out after 10 minutes: ' + command.first())
+        }
+        int exitCode = process.exitValue()
+        String text = capturedOutput.getText('UTF-8').trim()
+        if (exitCode != 0) {
+            throw new GradleException('Command failed with exit code ' + exitCode + ': '
+                    + command.first() + (text.isEmpty() ? '' : System.lineSeparator() + text))
+        }
+        text
+    } catch (InterruptedException interrupted) {
+        List<ProcessHandle> descendants = process.toHandle().descendants().toList()
+        descendants.reverseEach { ProcessHandle child -> if (child.isAlive()) child.destroyForcibly() }
+        process.destroyForcibly()
+        process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        Thread.currentThread().interrupt()
+        throw new GradleException('Interrupted while waiting for command: ' + command.first(), interrupted)
+    } finally {
+        capturedOutput.delete()
+    }
+}
+
+def captureOutput = { List<String> command ->
+    runProcess.call(command, rootProject.projectDir, [:]).trim()
+}
+
+def sha256 = { File file ->
+    java.security.MessageDigest.getInstance('SHA-256')
+            .digest(file.bytes).collect { String.format('%02x', it & 0xff) }.join()
+}
+
+def benchmarkProjectPaths = {
+    configurations.jmhRuntimeClasspath.incoming.resolutionResult.allComponents
+            .findAll { component -> component.id instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier }
+            .collect { component -> component.id.projectPath }
+            .findAll { projectPath -> projectPath != ':' }
+            .toSorted()
+}
+
+def benchmarkSourceTreeSha256 = {
+    List<String> roots = [
+            'build.gradle', 'settings.gradle', 'gradle.properties',
+            'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml',
+            'syncmoney-benchmarks/build.gradle', 'syncmoney-benchmarks/profiles',
+            'syncmoney-benchmarks/src/jmh', 'syncmoney-benchmarks/src/loadTest',
+            'syncmoney-benchmarks/src/test'
+    ]
+    Set<File> inputs = new LinkedHashSet<>()
+    roots.each { relative ->
+        File input = rootProject.file(relative)
+        if (input.isFile()) inputs.add(input.canonicalFile)
+        else if (input.isDirectory()) inputs.addAll(fileTree(input).files.collect { it.canonicalFile })
+    }
+    benchmarkProjectPaths.call().each { String projectPath ->
+        Project dependencyProject = rootProject.findProject(projectPath)
+        if (dependencyProject == null) {
+            throw new GradleException('Cannot resolve benchmark project dependency ' + projectPath)
+        }
+        File buildFile = dependencyProject.buildFile
+        if (buildFile.isFile()) inputs.add(buildFile.canonicalFile)
+        inputs.addAll(dependencyProject.sourceSets.main.allSource.files.collect { it.canonicalFile })
+    }
+    File requiredBukkitResource = rootProject.file('src/main/resources/plugin.yml').canonicalFile
+    if (benchmarkProjectPaths.call().contains(':syncmoney-bukkit') && !inputs.contains(requiredBukkitResource)) {
+        throw new GradleException('Benchmark source fingerprint omitted configured Bukkit main resources: '
+                + rootProject.projectDir.toPath().relativize(requiredBukkitResource.toPath()))
+    }
+    File buildLogic = rootProject.file('buildSrc')
+    if (buildLogic.isDirectory()) inputs.addAll(fileTree(buildLogic).files.collect { it.canonicalFile })
+    java.security.MessageDigest digest = java.security.MessageDigest.getInstance('SHA-256')
+    inputs.sort { left, right ->
+        rootProject.projectDir.toPath().relativize(left.toPath()).toString()
+                .compareTo(rootProject.projectDir.toPath().relativize(right.toPath()).toString())
+    }.each { File input ->
+        String relative = rootProject.projectDir.toPath().relativize(input.toPath()).toString().replace('\\', '/')
+        digest.update(relative.getBytes('UTF-8'))
+        digest.update((byte) 0)
+        digest.update(input.bytes)
+        digest.update((byte) 0)
+    }
+    digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+
+def loadTestRuntimeClasspathSha256 = { FileCollection runtimeClasspath ->
+    List<String> orderedEntries = runtimeClasspath.asPath
+            .split(java.util.regex.Pattern.quote(File.pathSeparator))
+            .findAll { !it.isEmpty() }
+    if (orderedEntries.isEmpty()) throw new GradleException('Load-test runtime classpath is empty.')
+
+    java.security.MessageDigest digest = java.security.MessageDigest.getInstance('SHA-256')
+    orderedEntries.eachWithIndex { String path, int index ->
+        File entry = file(path).canonicalFile
+        String kind = !entry.exists() ? 'missing' : (entry.isDirectory() ? 'directory' : 'file')
+        digest.update((index + ':' + kind + ':' + entry.name).getBytes('UTF-8'))
+        digest.update((byte) 0)
+        if (!entry.exists()) {
+            // Source sets may contribute an empty resources directory that Gradle has not created.
+            digest.update((byte) 0)
+        } else if (entry.isDirectory()) {
+            List<File> contents = fileTree(entry).files.sort { left, right ->
+                entry.toPath().relativize(left.toPath()).toString().replace('\\', '/')
+                        .compareTo(entry.toPath().relativize(right.toPath()).toString().replace('\\', '/'))
+            }
+            digest.update(contents.size().toString().getBytes('UTF-8'))
+            digest.update((byte) 0)
+            contents.each { File content ->
+                String relative = entry.toPath().relativize(content.toPath()).toString().replace('\\', '/')
+                digest.update(relative.getBytes('UTF-8'))
+                digest.update((byte) 0)
+                digest.update(sha256(content).getBytes('UTF-8'))
+                digest.update((byte) 0)
+            }
+        } else if (entry.isFile()) {
+            digest.update(entry.length().toString().getBytes('UTF-8'))
+            digest.update((byte) 0)
+            digest.update(sha256(entry).getBytes('UTF-8'))
+        } else {
+            throw new GradleException('Unsupported load-test classpath entry: ' + entry.name)
+        }
+        digest.update((byte) 0)
+    }
+    digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+
+tasks.register('verifyBenchmarkProvenance') {
+    group = 'verification'
+    description = 'Verifies deterministic source and actual load-test runtime classpath fingerprints.'
+    dependsOn tasks.named('loadTestClasses')
+    doLast {
+        List<String> projectPaths = benchmarkProjectPaths.call()
+        List<String> requiredProjects = [':syncmoney-api', ':syncmoney-sync']
+        List<String> missingProjects = requiredProjects.findAll { !projectPaths.contains(it) }
+        if (!missingProjects.isEmpty()) {
+            throw new GradleException('Benchmark source fingerprint omitted transitive projects: ' + missingProjects)
+        }
+        String sourceFirst = benchmarkSourceTreeSha256.call()
+        String sourceSecond = benchmarkSourceTreeSha256.call()
+        String classpathFirst = loadTestRuntimeClasspathSha256.call(sourceSets.loadTest.runtimeClasspath)
+        String classpathSecond = loadTestRuntimeClasspathSha256.call(sourceSets.loadTest.runtimeClasspath)
+        if (sourceFirst != sourceSecond || classpathFirst != classpathSecond) {
+            throw new GradleException('Benchmark provenance fingerprints are not deterministic.')
+        }
+        int classpathEntries = sourceSets.loadTest.runtimeClasspath.asPath
+                .split(java.util.regex.Pattern.quote(File.pathSeparator)).findAll { !it.isEmpty() }.size()
+        logger.lifecycle('benchmarkSourceTreeSHA256=' + sourceFirst)
+        logger.lifecycle('loadTestRuntimeClasspathSHA256=' + classpathFirst)
+        logger.lifecycle('loadTestRuntimeClasspathEntries=' + classpathEntries)
+        logger.lifecycle('benchmarkProjectDependencies=' + projectPaths.join(','))
+    }
+}
+
+def prepareVerifiedBaseline = { File baseline ->
+    String baselineRoot = captureOutput(['git', '-C', baseline.absolutePath, 'rev-parse', '--show-toplevel'])
+    String baselineSha = captureOutput(['git', '-C', baseline.absolutePath, 'rev-parse', 'HEAD'])
+    String dirty = captureOutput(['git', '-C', baseline.absolutePath, 'status', '--porcelain'])
+    if (file(baselineRoot).canonicalFile != baseline || baselineSha != '71cc55dfeefe9a8f40a3835b051ddd324d353767'
+            || !dirty.isEmpty()) {
+        throw new GradleException('baselineCheckout must be a clean isolated checkout at verified 1.3.2 SHA '
+                + '71cc55dfeefe9a8f40a3835b051ddd324d353767; observed SHA=' + baselineSha
+                + ', status=' + (dirty.isEmpty() ? 'clean' : 'dirty'))
+    }
+
+    File baselineJavaHome = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
+    }.get().metadata.installationPath.asFile
+    boolean windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+    File baselineJava = new File(baselineJavaHome, "bin${File.separator}java${windows ? '.exe' : ''}")
+    File wrapperJar = new File(baseline, 'gradle/wrapper/gradle-wrapper.jar')
+    if (!baselineJava.isFile() || !wrapperJar.isFile()) {
+        throw new GradleException('Verified 1.3.2 baseline needs its Java 21 launcher and Gradle wrapper JAR.')
+    }
+    String javaVersionOutput = runProcess.call([baselineJava.absolutePath, '-version'], baseline, [:])
+    def versionMatch = javaVersionOutput =~ /(?m)^(?:openjdk|java) version "(21[^\"]*)"/
+    if (!versionMatch.find()) {
+        throw new GradleException('Verified baseline launcher did not report Java 21.')
+    }
+    String baselineBuildJavaVersion = versionMatch.group(1)
+    String baselineBuildOutput = runProcess.call([
+            baselineJava.absolutePath, '-classpath', wrapperJar.absolutePath,
+            'org.gradle.wrapper.GradleWrapperMain', '--no-daemon', '--no-build-cache', '--rerun-tasks',
+            '--console', 'plain', 'shadowJar'
+    ], baseline, [
+            JAVA_HOME: baselineJavaHome.absolutePath,
+            PATH: new File(baselineJavaHome, 'bin').absolutePath + File.pathSeparator + System.getenv('PATH')
+    ])
+    logger.lifecycle(baselineBuildOutput)
+    File baselineArtifact = new File(baseline, 'build/libs/Syncmoney-1.3.2.jar')
+    if (!baselineArtifact.isFile()) throw new GradleException('Baseline Java 21 build did not produce ' + baselineArtifact)
+    [baselineSha: baselineSha, artifact: baselineArtifact,
+            artifactSha256: sha256(baselineArtifact), buildJavaVersion: baselineBuildJavaVersion]
+}
+
+def comparison = [:]
+tasks.register('runBaselineComparison', JavaExec) {
+    group = 'benchmark'
+    description = 'Builds the verified 1.3.2 baseline artifact and runs paired transaction benchmarks.'
+    dependsOn tasks.named('benchmarkJar')
+    classpath = sourceSets.jmh.runtimeClasspath
+    mainClass = 'org.openjdk.jmh.Main'
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    doFirst {
+        def baselineProperty = providers.gradleProperty('baselineCheckout').orNull
+        if (baselineProperty == null || baselineProperty.isBlank()) {
+            throw new GradleException('Supply -PbaselineCheckout=<verified isolated 1.3.2 worktree>.')
+        }
+        File baseline = file(baselineProperty).canonicalFile
+        if (!baseline.isDirectory() || baseline == rootProject.projectDir.canonicalFile) {
+            throw new GradleException('baselineCheckout must be an existing isolated checkout, not this project.')
+        }
+
+        def baselineBuild = prepareVerifiedBaseline.call(baseline)
+        String baselineSha = baselineBuild.baselineSha
+        File baselineArtifact = baselineBuild.artifact
+        File reportDir = layout.buildDirectory.dir('reports/benchmarks').get().asFile
+        reportDir.mkdirs()
+        String runId = UUID.randomUUID().toString()
+        def threadCount = providers.gradleProperty('benchmarkThreads').orElse('1').get()
+        if (!(threadCount in ['1', '2', '8'])) {
+            throw new GradleException('benchmarkThreads must be one of the planned producer counts: 1, 2, or 8.')
+        }
+        File resultFile = new File(reportDir, 'transaction-paired-jmh-t' + threadCount + '-' + runId + '.json')
+        comparison.putAll([
+                baseline: baseline,
+                baselineSha: baselineSha,
+                baselineArtifact: baselineArtifact,
+                baselineArtifactSha256: baselineBuild.artifactSha256,
+                resultFile: resultFile,
+                reportDir: reportDir,
+                threadCount: Integer.parseInt(threadCount),
+                runId: runId,
+                baselineBuildJavaVersion: baselineBuild.buildJavaVersion
+        ])
+        systemProperty 'syncmoney.benchmarks.baselineArtifact', baselineArtifact.canonicalPath
+        systemProperty 'syncmoney.benchmarks.baselineSha', baselineSha
+        systemProperty 'syncmoney.benchmarks.baselineArtifactSha256', comparison.baselineArtifactSha256
+
+        if (providers.gradleProperty('benchmarkQuick').isPresent()) {
+            args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
+                    '-p', 'variant=current,legacy132', '-p', 'accountCount=1000', '-p', 'accessPattern=uniform',
+                    '-p', 'operation=deposit', '-t', threadCount, '-wi', '1', '-i', '1', '-w', '200ms', '-r', '200ms', '-f', '1',
+                    '-jvmArgsAppend', '-Dnet.bytebuddy.experimental=true',
+                    '-rf', 'json', '-rff', resultFile.absolutePath
+        } else {
+            args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
+                    '-p', 'variant=current,legacy132',
+                    '-t', threadCount, '-wi', '5', '-i', '10', '-w', '1s', '-r', '1s', '-f', '3', '-prof', 'gc',
+                    '-jvmArgsAppend', '-Dnet.bytebuddy.experimental=true',
+                    '-rf', 'json', '-rff', resultFile.absolutePath
+        }
+    }
+    doLast {
+        def rows = new groovy.json.JsonSlurper().parse(comparison.resultFile)
+        boolean quick = providers.gradleProperty('benchmarkQuick').isPresent()
+        int expectedRows = quick ? 4 : 144
+        if (!(rows instanceof List) || rows.size() != expectedRows) {
+            throw new GradleException('Paired JMH result count mismatch; expected ' + expectedRows
+                    + ' completed rows, got ' + (rows instanceof List ? rows.size() : 'invalid JSON shape'))
+        }
+        def invalidResult = rows.find { row ->
+            !(row instanceof Map) || !(row.primaryMetric?.score instanceof Number)
+                    || !Double.isFinite(row.primaryMetric.score.doubleValue())
+                    || !(row.params?.variant in ['current', 'legacy132'])
+        }
+        if (invalidResult != null) throw new GradleException('Paired JMH emitted a failed or invalid benchmark result row.')
+        def histogramCount
+        histogramCount = { Object node ->
+            if (!(node instanceof List)) return 0L
+            if (node.size() == 2 && node[0] instanceof Number && node[1] instanceof Number) {
+                return node[1].longValue()
+            }
+            node.collect { histogramCount.call(it) }.sum(0L)
+        }
+        List<Map> tailAssessments = rows.findAll { row -> row.mode == 'sample' }.collect { row ->
+            long sampleCount = histogramCount.call(row.primaryMetric?.rawDataHistogram)
+            [variant: row.params.variant, operation: row.params.operation,
+                    accountCount: row.params.accountCount, accessPattern: row.params.accessPattern,
+                    sampleCount: sampleCount, p999Reliable: sampleCount >= 100_000L]
+        }
+        if (tailAssessments.any { it.sampleCount <= 0L }) {
+            throw new GradleException('Paired JMH SampleTime row has no raw latency samples.')
+        }
+        Set measurementJdks = rows.collect { it.jdkVersion }.findAll { it instanceof String }.toSet()
+        if (measurementJdks.size() != 1 || !measurementJdks.first().startsWith('25.')) {
+            throw new GradleException('Paired JMH rows must all run on the planned Java 25 measurement runtime; observed '
+                    + measurementJdks)
+        }
+        String measurementJdk = measurementJdks.first()
+        Set variants = rows.collect { it.params.variant }.toSet()
+        if (variants != (['current', 'legacy132'] as Set)) {
+            throw new GradleException('Paired JMH did not produce both current and 1.3.2 variants.')
+        }
+        def baselinePilot = rows.find { row ->
+            row.params.variant == 'legacy132' && row.params.operation == 'deposit'
+                    && row.params.accountCount == '1000' && row.params.accessPattern == 'uniform'
+                    && row.mode == 'thrpt'
+        }
+        if (baselinePilot == null) throw new GradleException('Paired report omitted the baseline accepted-rate pilot case.')
+        def acceptedScore = baselinePilot.secondaryMetrics?.accepted?.score
+        def offeredScore = baselinePilot.secondaryMetrics?.offered?.score
+        def rejectedScore = baselinePilot.secondaryMetrics?.rejected?.score
+        if (!(acceptedScore instanceof Number) || !(offeredScore instanceof Number)
+                || !(rejectedScore instanceof Number) || baselinePilot.primaryMetric.scoreUnit != 'ops/us') {
+            throw new GradleException('Baseline pilot must include accepted/offered/rejected counters and throughput in ops/us.')
+        }
+        double accepted = acceptedScore.doubleValue()
+        double offered = offeredScore.doubleValue()
+        double rejected = rejectedScore.doubleValue()
+        if (![accepted, offered, rejected].every { Double.isFinite(it) && it >= 0d }
+                || offered <= 0d || Math.abs(offered - accepted - rejected) > Math.max(1e-6d, offered * 1e-9d)) {
+            throw new GradleException('Baseline pilot outcome counters are invalid or do not conserve offered operations.')
+        }
+        comparison.baselineAcceptedRate = baselinePilot.primaryMetric.score.doubleValue()
+                * (accepted / offered) * 1_000_000d
+        if (!Double.isFinite(comparison.baselineAcceptedRate) || comparison.baselineAcceptedRate <= 0d) {
+            throw new GradleException('Baseline facade accepted rate must be positive and finite.')
+        }
+
+        File metadata = new File(comparison.reportDir, 'transaction-paired-manifest-t' + comparison.threadCount + '-' + comparison.runId + '.json')
+        String currentSha = captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
+        String sourceTreeSha256 = benchmarkSourceTreeSha256.call()
+        File benchmarkArtifact = tasks.named('benchmarkJar').get().archiveFile.get().asFile
+        metadata.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+                schemaVersion: 1,
+                runId: comparison.runId,
+                sourceSHA: currentSha,
+                sourceTreeSHA256: sourceTreeSha256,
+                baselineSHA: comparison.baselineSha,
+                artifactSHA256: [benchmarkJar: sha256(benchmarkArtifact), baselineJar: comparison.baselineArtifactSha256],
+                profileId: 'transaction-paired-jmh',
+                jdk: measurementJdk,
+                gradleDaemonJdk: System.getProperty('java.version'),
+                baselineBuildJavaVersion: comparison.baselineBuildJavaVersion,
+                p999SampleMinimum: 100000,
+                sampleTailAssessment: tailAssessments,
+                os: System.getProperty('os.name') + ' ' + System.getProperty('os.version') + ' ' + System.getProperty('os.arch'),
+                availableProcessors: Runtime.getRuntime().availableProcessors(),
+                resultFile: comparison.resultFile.absolutePath,
+                baselineFacadeAcceptedRatePilot: [operation: 'deposit', accountCount: 1000, accessPattern: 'uniform',
+                        producerThreads: comparison.threadCount, acceptedTransactionsPerSecond: comparison.baselineAcceptedRate,
+                        meanOfferedPerMeasurement: offered, meanAcceptedPerMeasurement: accepted,
+                        meanRejectedPerMeasurement: rejected,
+                        derivation: 'JMH throughput (ops/us) × accepted/offered × 1,000,000',
+                        unit: 'facade acceptances/second; synthetic receipt completion does not include Redis or SQL'],
+                producerThreads: comparison.threadCount,
+                notes: ['p99.9 is reliable only for sample rows marked p999Reliable; the quick smoke is not a tail-latency conclusion.',
+                        'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
+                        'The current facade receipt adapter drains accepted events into deterministic in-memory receipts; synthetic receipt completion is not durable persistence.',
+                        'This facade pilot is not a macro Redis/SQL baseline and must not be used to calibrate the open-loop load profile.']
+        ])) + System.lineSeparator()
+    }
+}
+
+tasks.register('loadTest', JavaExec) {
+    group = 'benchmark'
+    description = 'Runs a bounded open-loop Redis/SQL load profile with arrival-to-response histograms.'
+    dependsOn tasks.named('loadTestClasses')
+    classpath = sourceSets.loadTest.runtimeClasspath
+    mainClass = 'noietime.syncmoney.benchmark.load.OpenLoopLoadRunner'
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    doFirst {
+        def profile = providers.gradleProperty('profile').orNull
+        if (profile == null || profile.isBlank()) {
+            throw new GradleException('Supply -Pprofile=<path-to-open-loop-profile.json>.')
+        }
+        def baselinePilotProperty = providers.gradleProperty('baselinePilot').orNull
+        if (baselinePilotProperty == null || baselinePilotProperty.isBlank()) {
+            throw new GradleException('Supply -PbaselinePilot=<hash-bound 1.3.2 Redis/SQL macro-pilot JSON>; facade/JMH rates are not valid calibration inputs.')
+        }
+        def baselineProperty = providers.gradleProperty('baselineCheckout').orNull
+        if (baselineProperty == null || baselineProperty.isBlank()) {
+            throw new GradleException('Supply -PbaselineCheckout=<verified isolated 1.3.2 worktree> for report provenance.')
+        }
+        File baseline = file(baselineProperty).canonicalFile
+        if (!baseline.isDirectory() || baseline == rootProject.projectDir.canonicalFile) {
+            throw new GradleException('baselineCheckout must be an existing isolated checkout, not this project.')
+        }
+        def baselineBuild = prepareVerifiedBaseline.call(baseline)
+        File baselinePilot = file(baselinePilotProperty).canonicalFile
+        if (!baselinePilot.isFile()) throw new GradleException('baselinePilot must point to an existing macro-pilot JSON file.')
+        systemProperty 'syncmoney.benchmarks.baselineSha', baselineBuild.baselineSha
+        systemProperty 'syncmoney.benchmarks.baselineJarSha256', baselineBuild.artifactSha256
+        systemProperty 'syncmoney.benchmarks.baselineBuildJavaVersion', baselineBuild.buildJavaVersion
+        systemProperty 'syncmoney.benchmarks.baselineMacroPilotSha256', sha256(baselinePilot)
+        args file(profile).canonicalPath
+        args '--baseline-pilot', baselinePilot.canonicalPath
+        systemProperty 'syncmoney.benchmarks.sourceSha', captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
+        systemProperty 'syncmoney.benchmarks.sourceTreeSha256', benchmarkSourceTreeSha256.call()
+        systemProperty 'syncmoney.benchmarks.loadTestRuntimeClasspathSha256',
+                loadTestRuntimeClasspathSha256.call(classpath)
+    }
+}

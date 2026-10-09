@@ -1,3 +1,3 @@
 rootProject.name = 'Syncmoney'
 
-include('syncmoney-papi-expansion', 'syncmoney-api', 'syncmoney-core', 'syncmoney-protocol', 'syncmoney-storage', 'syncmoney-sync', 'syncmoney-bukkit', 'syncmoney-testkit')
+include('syncmoney-papi-expansion', 'syncmoney-api', 'syncmoney-core', 'syncmoney-protocol', 'syncmoney-storage', 'syncmoney-sync', 'syncmoney-bukkit', 'syncmoney-testkit', 'syncmoney-benchmarks')

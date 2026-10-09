@@ -208,6 +208,7 @@ tasks.register('verifyArchitecture') {
                                               ':syncmoney-storage', ':syncmoney-sync'] as Set,
                 ':syncmoney-papi-expansion': [] as Set,
                 ':syncmoney-testkit'       : [] as Set,
+                ':syncmoney-benchmarks'    : [] as Set,
         ]
         expectedProjects.each { path, expected ->
             def actual = directProjectPaths(project(path))
@@ -229,6 +230,7 @@ tasks.register('verifyArchitecture') {
                                               ':syncmoney-storage', ':syncmoney-sync'] as Set,
                 ':syncmoney-papi-expansion': [] as Set,
                 ':syncmoney-testkit'       : [] as Set,
+                ':syncmoney-benchmarks'    : [] as Set,
         ]
         def paperApiExternalGroups = [
                 'io.papermc.paper', 'com.google.guava', 'com.google.code.findbugs', 'org.checkerframework',
@@ -255,6 +257,7 @@ tasks.register('verifyArchitecture') {
                         'me.clip', 'com.zaxxer', 'com.mysql', 'com.google.protobuf', 'org.postgresql'
                 ]) as Set,
                 ':syncmoney-testkit'       : [] as Set,
+                ':syncmoney-benchmarks'    : [] as Set,
         ]
         def runtimeForbiddenExternalGroups = [
                 ':syncmoney-bukkit': ['io.papermc.paper', 'net.milkbowl.vault', 'me.clip', 'net.kyori'] as Set,
