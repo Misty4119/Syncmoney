@@ -5,6 +5,9 @@ import noietime.syncmoney.economy.CurrentFacadeBenchmarkAdapter;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -72,6 +75,52 @@ class CurrentFacadeBenchmarkAdapterTest {
             assertNotNull(receipt);
             assertEquals(101L, receipt.version());
             assertEquals(0, receipt.balance().compareTo(new BigDecimal("1000.00")));
+        } finally {
+            adapter.close();
+        }
+    }
+
+    @Test
+    void manyDistinctTransferPairsDrainWithExactReceipts() throws Exception {
+        int transfers = 1_000;
+        List<UUID> senders = new ArrayList<>(transfers);
+        List<UUID> receivers = new ArrayList<>(transfers);
+        CurrentFacadeBenchmarkAdapter adapter = new CurrentFacadeBenchmarkAdapter();
+        try {
+            for (int index = 0; index < transfers; index++) {
+                UUID sender = UUID.nameUUIDFromBytes(("transfer-sender-" + index).getBytes(StandardCharsets.UTF_8));
+                UUID receiver = UUID.nameUUIDFromBytes(("transfer-receiver-" + index).getBytes(StandardCharsets.UTF_8));
+                senders.add(sender);
+                receivers.add(receiver);
+                adapter.seed(sender, new BigDecimal("10000.00"), 7L);
+                adapter.seed(receiver, new BigDecimal("10000.00"), 11L);
+            }
+            for (int index = 0; index < transfers; index++) {
+                BigDecimal result = adapter.transfer(senders.get(index), receivers.get(index), new BigDecimal("1.00"));
+                assertTrue(result.signum() >= 0,
+                        "accepted transfer " + index + " should return a non-negative sender balance; result="
+                                + result + ", queued=" + adapter.queuedEvents());
+            }
+            adapter.awaitDrain(5_000L);
+
+            assertEquals(2L * transfers, adapter.drainedEvents());
+            assertEquals(0, adapter.queuedEvents());
+            for (int index = 0; index < transfers; index++) {
+                UUID sender = senders.get(index);
+                UUID receiver = receivers.get(index);
+                assertEquals(8L, adapter.version(sender));
+                assertEquals(12L, adapter.version(receiver));
+                assertEquals(0, adapter.balance(sender).compareTo(new BigDecimal("9999.00")));
+                assertEquals(0, adapter.balance(receiver).compareTo(new BigDecimal("10001.00")));
+                Receipt senderReceipt = adapter.latestReceipt(sender);
+                Receipt receiverReceipt = adapter.latestReceipt(receiver);
+                assertNotNull(senderReceipt, "sender receipt should exist after drain");
+                assertNotNull(receiverReceipt, "receiver receipt should exist after drain");
+                assertEquals(8L, senderReceipt.version());
+                assertEquals(12L, receiverReceipt.version());
+                assertEquals(0, senderReceipt.balance().compareTo(new BigDecimal("9999.00")));
+                assertEquals(0, receiverReceipt.balance().compareTo(new BigDecimal("10001.00")));
+            }
         } finally {
             adapter.close();
         }

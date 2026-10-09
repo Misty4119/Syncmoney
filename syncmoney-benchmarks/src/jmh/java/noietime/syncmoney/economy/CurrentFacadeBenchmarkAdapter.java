@@ -46,6 +46,12 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
     private SyncmoneyEventBus cancellationEventBus;
     private SyncmoneyListener<AsyncPreTransactionEvent> cancellationListener;
 
+    private record DrainSnapshot(int queued, long inFlight, long drained) {
+        boolean isDrained() {
+            return queued == 0 && inFlight == 0;
+        }
+    }
+
     public CurrentFacadeBenchmarkAdapter() {
         Plugin plugin = Mockito.mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(LOGGER);
@@ -134,14 +140,28 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
             Thread.sleep(1L);
         }
         throwIfDrainFailed();
-        if (!isDrained()) {
-            throw new IllegalStateException("Current benchmark receipt adapter did not drain within " + timeoutMillis + "ms");
+        DrainSnapshot snapshot = drainSnapshot();
+        if (!snapshot.isDrained()) {
+            Thread.State drainerState = drainer.getState();
+            String drainerStack = java.util.Arrays.stream(drainer.getStackTrace())
+                    .limit(4)
+                    .map(StackTraceElement::toString)
+                    .collect(java.util.stream.Collectors.joining(" <- "));
+            throw new IllegalStateException("Current benchmark receipt adapter did not drain within " + timeoutMillis
+                    + "ms: queueSize=" + snapshot.queued() + "/" + queue.getCapacity()
+                    + ", inFlight=" + snapshot.inFlight() + ", drained=" + snapshot.drained()
+                    + ", drainerAlive=" + drainer.isAlive() + ", drainerState=" + drainerState
+                    + ", drainerStack=[" + drainerStack + "]");
         }
     }
 
     private boolean isDrained() {
+        return drainSnapshot().isDrained();
+    }
+
+    private DrainSnapshot drainSnapshot() {
         synchronized (drainStateLock) {
-            return queue.size() == 0 && inFlight.get() == 0;
+            return new DrainSnapshot(queue.size(), inFlight.get(), drained.get());
         }
     }
 
