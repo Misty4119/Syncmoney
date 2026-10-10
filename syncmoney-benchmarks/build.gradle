@@ -64,6 +64,7 @@ dependencies {
     // Syncmoney extends JavaPlugin and implements VaultUnlocked's economy interface; the isolated mock event bus loads that type.
     jmhImplementation 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     jmhImplementation 'org.openjdk.jmh:jmh-core:1.37'
+    jmhImplementation 'com.google.code.gson:gson:2.11.0'
     jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
     jmhImplementation 'org.hdrhistogram:HdrHistogram:2.2.2'
     jmhImplementation 'redis.clients:jedis:5.2.0'
@@ -202,6 +203,91 @@ def runProcess = { List<String> command, File workingDirectory, Map<String, Stri
 
 def captureOutput = { List<String> command ->
     runProcess.call(command, rootProject.projectDir, [:]).trim()
+}
+
+def runJavaMain = { File executable, String classpath, String mainClass, List<String> mainArgs ->
+    List<String> command = [executable.absolutePath, '-cp', classpath, mainClass] + mainArgs
+    def output = providers.exec {
+        commandLine command
+        ignoreExitValue = true
+    }
+    int exitCode = output.result.get().exitValue
+    if (exitCode != 0) {
+        String stdout = output.standardOutput.asText.get()
+        String stderr = output.standardError.asText.get()
+        throw new GradleException("Java tool ${mainClass} failed with exit code ${exitCode}.\n${stdout}\n${stderr}")
+    }
+}
+
+def captureHostCommand = { List<String> command ->
+    Process process = new ProcessBuilder(command).start()
+    try {
+        if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)
+            return null
+        }
+        String stdout = process.inputStream.getText('UTF-8').trim()
+        String stderr = process.errorStream.getText('UTF-8').trim()
+        process.exitValue() == 0 && stderr.isEmpty() && !stdout.isEmpty() ? stdout : null
+    } catch (InterruptedException interrupted) {
+        process.destroyForcibly()
+        Thread.currentThread().interrupt()
+        throw new GradleException('Interrupted while capturing benchmark host provenance.', interrupted)
+    }
+}
+
+def capturePowerShell = { String script ->
+    String encoded = java.util.Base64.encoder.encodeToString(
+            script.getBytes(java.nio.charset.StandardCharsets.UTF_16LE))
+    captureHostCommand.call(['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
+}
+
+def captureHostProvenance = {
+    def osBean = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+    boolean windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+    String cpuModel = System.getenv('PROCESSOR_IDENTIFIER')?.trim()
+    if (windows) {
+        String wmiCpuModel = capturePowerShell.call(
+                '$ErrorActionPreference = \'Stop\'; $ProgressPreference = \'SilentlyContinue\'; '
+                        + '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); '
+                        + '$model = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name); '
+                        + '[Console]::Out.Write($model)')
+        if (wmiCpuModel != null && !wmiCpuModel.contains('\n') && !wmiCpuModel.contains('\r')) cpuModel = wmiCpuModel
+    }
+    if (cpuModel == null || cpuModel.isBlank() || cpuModel.length() > 256
+            || cpuModel.contains('\n') || cpuModel.contains('\r')) cpuModel = 'NOT_CAPTURED'
+
+    Object totalPhysicalMemoryBytes = 'NOT_CAPTURED'
+    String totalPhysicalMemoryReason = null
+    if (osBean instanceof com.sun.management.OperatingSystemMXBean) {
+        long totalMemory = ((com.sun.management.OperatingSystemMXBean) osBean).getTotalMemorySize()
+        if (totalMemory > 0L) totalPhysicalMemoryBytes = totalMemory
+    }
+    if (totalPhysicalMemoryBytes == 'NOT_CAPTURED') {
+        totalPhysicalMemoryReason = 'The Java operating-system management bean did not expose physical memory.'
+    }
+
+    String activePowerPlan = windows
+            ? captureHostCommand.call(['powercfg.exe', '/GETACTIVESCHEME'])
+            : null
+    def powerPlanGuidMatcher = activePowerPlan == null ? null
+            : (activePowerPlan =~ /(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/)
+    String activePowerPlanGuid = powerPlanGuidMatcher != null && powerPlanGuidMatcher.find()
+            ? powerPlanGuidMatcher.group().toLowerCase(Locale.ROOT) : null
+    Map powerPlan = activePowerPlanGuid == null
+            ? [status: 'NOT_CAPTURED', reason: 'The active OS power plan was not available through the host runner.']
+            : [status: 'CAPTURED', value: activePowerPlanGuid]
+
+    [osName: System.getProperty('os.name'), osVersion: System.getProperty('os.version'),
+     osArch: System.getProperty('os.arch'), cpuModel: cpuModel,
+     cpuModelReason: cpuModel == 'NOT_CAPTURED' ? 'No CPU model was available from the host environment.' : null,
+     availableProcessors: Runtime.getRuntime().availableProcessors(),
+     totalPhysicalMemoryBytes: totalPhysicalMemoryBytes,
+     totalPhysicalMemoryReason: totalPhysicalMemoryReason,
+     forkAffinity: [status: 'NOT_CAPTURED',
+                    reason: 'The JMH fork affinity mask was not observed; no mask is inferred from its controller.'],
+     powerPlan: powerPlan]
 }
 
 def sha256 = { File file ->
@@ -410,7 +496,10 @@ tasks.register('runBaselineComparison', JavaExec) {
                 'transfer', 'reject-withdraw', 'cancel-deposit', 'cancel-withdraw'])) {
             throw new GradleException('benchmarkOperation must name a supported TransactionBenchmarks operation.')
         }
+        boolean quick = providers.gradleProperty('benchmarkQuick').isPresent()
         File resultFile = new File(reportDir, 'transaction-paired-jmh-t' + threadCount + '-' + runId + '.json')
+        File validationSummaryFile = new File(layout.buildDirectory.dir('tmp').get().asFile,
+                'transaction-paired-validation-' + runId + '.json')
         comparison.putAll([
                 baseline: baseline,
                 baselineSha: baselineSha,
@@ -421,6 +510,11 @@ tasks.register('runBaselineComparison', JavaExec) {
                 threadCount: Integer.parseInt(threadCount),
                 variants: variants.split(',').toList(),
                 benchmarkOperation: benchmarkOperation,
+                quick: quick,
+                expectedForks: quick ? 1 : 3,
+                expectedMeasurementIterations: quick ? 1 : 10,
+                validationSummaryFile: validationSummaryFile,
+                hostProvenance: captureHostProvenance.call(),
                 runId: runId,
                 baselineBuildJavaVersion: baselineBuild.buildJavaVersion
         ])
@@ -444,43 +538,18 @@ tasks.register('runBaselineComparison', JavaExec) {
         }
     }
     doLast {
+        File validatorJava = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(25)
+        }.get().executablePath.asFile
+        runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+                'noietime.syncmoney.benchmark.PairedJmhReportValidator', [
+                        'summarize', comparison.resultFile.absolutePath, comparison.validationSummaryFile.absolutePath,
+                        comparison.variants.join(','), comparison.benchmarkOperation ?: 'all',
+                        comparison.quick.toString(), comparison.threadCount.toString(), comparison.expectedForks.toString(),
+                        comparison.expectedMeasurementIterations.toString(), '100000'
+                ])
+        def validationSummary = new groovy.json.JsonSlurper().parse(comparison.validationSummaryFile)
         def rows = new groovy.json.JsonSlurper().parse(comparison.resultFile)
-        boolean quick = providers.gradleProperty('benchmarkQuick').isPresent()
-        int selectedOperationCount = comparison.benchmarkOperation == null ? 8 : 1
-        int expectedRows = quick
-                ? comparison.variants.size() * (comparison.benchmarkOperation == null ? 1 : 1) * 2
-                : comparison.variants.size() * selectedOperationCount * 3 * 2 * 2
-        if (!(rows instanceof List) || rows.size() != expectedRows) {
-            throw new GradleException('Paired JMH result count mismatch; expected ' + expectedRows
-                    + ' completed rows, got ' + (rows instanceof List ? rows.size() : 'invalid JSON shape'))
-        }
-        if (!rows.every { row -> row instanceof Map && row.jvmArgs instanceof List
-                && row.jvmArgs.containsAll(pairedJmhMeasurementProfile.jmhJvmArgs) }) {
-            throw new GradleException('Every paired JMH fork must use the recorded SerialGC and 1 GiB heap measurement profile.')
-        }
-        def invalidResult = rows.find { row ->
-            !(row instanceof Map) || !(row.primaryMetric?.score instanceof Number)
-                    || !Double.isFinite(row.primaryMetric.score.doubleValue())
-                    || !(row.params?.variant in ['current', 'legacy132'])
-        }
-        if (invalidResult != null) throw new GradleException('Paired JMH emitted a failed or invalid benchmark result row.')
-        def histogramCount
-        histogramCount = { Object node ->
-            if (!(node instanceof List)) return 0L
-            if (node.size() == 2 && node[0] instanceof Number && node[1] instanceof Number) {
-                return node[1].longValue()
-            }
-            node.collect { histogramCount.call(it) }.sum(0L)
-        }
-        List<Map> tailAssessments = rows.findAll { row -> row.mode == 'sample' }.collect { row ->
-            long sampleCount = histogramCount.call(row.primaryMetric?.rawDataHistogram)
-            [variant: row.params.variant, operation: row.params.operation,
-                    accountCount: row.params.accountCount, accessPattern: row.params.accessPattern,
-                    sampleCount: sampleCount, p999Reliable: sampleCount >= 100_000L]
-        }
-        if (tailAssessments.any { it.sampleCount <= 0L }) {
-            throw new GradleException('Paired JMH SampleTime row has no raw latency samples.')
-        }
         Set measurementJdks = rows.collect { it.jdkVersion }.findAll { it instanceof String }.toSet()
         if (measurementJdks.size() != 1 || !measurementJdks.first().startsWith('25.')) {
             throw new GradleException('Paired JMH rows must all run on the planned Java 25 measurement runtime; observed '
@@ -491,6 +560,8 @@ tasks.register('runBaselineComparison', JavaExec) {
         if (variants != (comparison.variants as Set)) {
             throw new GradleException('Paired JMH variant rows do not match the requested variants.')
         }
+        int expectedRows = validationSummary.expectedRows as int
+        List<Map> tailAssessments = validationSummary.sampleTailAssessment as List<Map>
         def baselinePilot = rows.find { row ->
             row.params.variant == 'legacy132' && row.params.operation == 'deposit'
                     && row.params.accountCount == '1000' && row.params.accessPattern == 'uniform'
@@ -528,8 +599,21 @@ tasks.register('runBaselineComparison', JavaExec) {
         String currentSha = captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
         String sourceTreeSha256 = benchmarkSourceTreeSha256.call()
         File benchmarkArtifact = tasks.named('benchmarkJar').get().archiveFile.get().asFile
+        String resultSha256 = sha256(comparison.resultFile)
+        String resultRelativePath = rootProject.projectDir.toPath().relativize(comparison.resultFile.toPath())
+                .toString().replace('\\', '/')
+        def expectedMatrix = [
+                variants: comparison.variants,
+                operation: comparison.benchmarkOperation ?: (comparison.quick ? 'deposit' : 'all'),
+                accountCounts: comparison.quick ? ['1000'] : ['1', '1000', '10000'],
+                accessPatterns: comparison.quick ? ['uniform'] : ['uniform', 'hot'],
+                modes: ['thrpt', 'sample'],
+                producerThreads: comparison.threadCount,
+                forks: comparison.expectedForks,
+                measurementIterations: comparison.expectedMeasurementIterations
+        ]
         def manifest = [
-                schemaVersion: 1,
+                schemaVersion: 2,
                 runId: comparison.runId,
                 sourceSHA: currentSha,
                 sourceTreeSHA256: sourceTreeSha256,
@@ -545,9 +629,15 @@ tasks.register('runBaselineComparison', JavaExec) {
                 measurementJvmArgs: pairedJmhMeasurementProfile.jmhJvmArgs,
                 p999SampleMinimum: 100000,
                 sampleTailAssessment: tailAssessments,
+                expectedMatrix: expectedMatrix,
+                reportValidation: [expectedRows: expectedRows, rowCount: validationSummary.rowCount,
+                        sampleTimeRows: validationSummary.sampleTimeRows],
                 os: System.getProperty('os.name') + ' ' + System.getProperty('os.version') + ' ' + System.getProperty('os.arch'),
-                availableProcessors: Runtime.getRuntime().availableProcessors(),
-                resultFile: comparison.resultFile.absolutePath,
+                availableProcessors: comparison.hostProvenance.availableProcessors,
+                hostProvenance: comparison.hostProvenance,
+                resultFile: resultRelativePath,
+                resultBytes: comparison.resultFile.length(),
+                resultSHA256: resultSha256,
                 baselineFacadeAcceptedRatePilot: comparison.baselineAcceptedRate == null ? [available: false,
                         reason: 'This filtered operation/variant run is not a baseline accepted-rate calibration profile.'] : [available: true,
                         operation: 'deposit', accountCount: 1000, accessPattern: 'uniform',
@@ -557,7 +647,9 @@ tasks.register('runBaselineComparison', JavaExec) {
                         derivation: 'JMH throughput (ops/us) × accepted/offered × 1,000,000',
                         unit: 'facade acceptances/second; synthetic receipt completion does not include Redis or SQL'],
                 producerThreads: comparison.threadCount,
-                notes: ['p99.9 is reliable only for sample rows marked p999Reliable; the quick smoke is not a tail-latency conclusion.',
+                notes: ['A p99.9 estimate includes an approximate 95% binomial order-statistic interval only when the sample minimum is met; this interval does not establish independence or cross-fork stationarity.',
+                        'The quick smoke is not a tail-latency conclusion.',
+                        'Fork affinity is explicitly NOT_CAPTURED; the paired result does not claim affinity parity.',
                         'Paired measurement forks use benchmark-only SerialGC following intermittent HotSpot access violations observed under G1 and ParallelGC; the root cause remains unknown, and both variants share the same collector.',
                         'Measurement forks use a fixed 1 GiB maximum heap for both variants.',
                         'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
@@ -573,6 +665,9 @@ tasks.register('runBaselineComparison', JavaExec) {
                 || !rows.every { row -> row.jvmArgs.containsAll(writtenManifest.measurementJvmArgs) }) {
             throw new GradleException('Paired JMH manifest measurement profile does not match the completed result rows.')
         }
+        runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+                'noietime.syncmoney.benchmark.PairedJmhReportValidator',
+                ['verify-binding', comparison.resultFile.absolutePath, metadata.absolutePath])
     }
 }
 
