@@ -5,6 +5,17 @@ plugins {
 group = rootProject.group
 version = rootProject.version
 
+def pairedJmhMeasurementProfile = [
+        collector: 'SerialGC',
+        gcJvmFlag: '-XX:+UseSerialGC',
+        heapJvmFlag: '-Xmx1g',
+        jmhJvmArgs: ['-XX:+UseSerialGC', '-Dnet.bytebuddy.experimental=true', '-Xmx1g']
+]
+def redisSqlMeasurementProfile = [
+        collector: 'ParallelGC',
+        gcJvmFlag: '-XX:+UseParallelGC'
+]
+
 repositories {
     mavenCentral()
     maven { name = 'papermc'; url = 'https://repo.papermc.io/repository/maven-public/' }
@@ -110,8 +121,33 @@ tasks.register('verifyBenchmarkIsolation') {
     }
 }
 
+tasks.register('verifyBenchmarkJvmProfiles') {
+    group = 'verification'
+    description = 'Guards the paired JMH SerialGC profile and Redis/SQL ParallelGC profiles.'
+    doLast {
+        if (pairedJmhMeasurementProfile.collector != 'SerialGC'
+                || pairedJmhMeasurementProfile.gcJvmFlag != '-XX:+UseSerialGC'
+                || pairedJmhMeasurementProfile.heapJvmFlag != '-Xmx1g'
+                || pairedJmhMeasurementProfile.jmhJvmArgs != [
+                        '-XX:+UseSerialGC', '-Dnet.bytebuddy.experimental=true', '-Xmx1g']) {
+            throw new GradleException('Paired JMH profile must remain the recorded benchmark-only SerialGC / 1 GiB profile.')
+        }
+        if (redisSqlMeasurementProfile.collector != 'ParallelGC'
+                || redisSqlMeasurementProfile.gcJvmFlag != '-XX:+UseParallelGC') {
+            throw new GradleException('Redis/SQL macro and open-loop profiles must retain ParallelGC.')
+        }
+        ['runBaselineMacroPilot', 'loadTest'].each { taskName ->
+            List<String> configuredJvmArgs = tasks.named(taskName, JavaExec).get().jvmArgs ?: []
+            if (configuredJvmArgs != [redisSqlMeasurementProfile.gcJvmFlag]) {
+                throw new GradleException(taskName + ' must use the recorded Redis/SQL measurement JVM profile; got '
+                        + configuredJvmArgs)
+            }
+        }
+    }
+}
+
 tasks.named('check') {
-    dependsOn tasks.named('verifyBenchmarkIsolation')
+    dependsOn tasks.named('verifyBenchmarkIsolation'), tasks.named('verifyBenchmarkJvmProfiles')
 }
 
 def runProcess = { List<String> command, File workingDirectory, Map<String, String> environment ->
@@ -396,13 +432,13 @@ tasks.register('runBaselineComparison', JavaExec) {
                 args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
                         '-p', 'variant=' + comparison.variants.join(','), '-p', 'accountCount=1000', '-p', 'accessPattern=uniform',
                         '-p', 'operation=' + (benchmarkOperation ?: 'deposit'), '-t', threadCount, '-wi', '1', '-i', '1', '-w', '200ms', '-r', '200ms', '-f', '1',
-                        '-jvmArgsAppend', '-XX:+UseParallelGC -Dnet.bytebuddy.experimental=true -Xmx1g',
+                        '-jvmArgsAppend', pairedJmhMeasurementProfile.jmhJvmArgs.join(' '),
                         '-rf', 'json', '-rff', resultFile.absolutePath
         } else {
             args 'noietime.syncmoney.benchmark.TransactionBenchmarks',
                     '-p', 'variant=' + comparison.variants.join(','),
                     '-t', threadCount, '-wi', '5', '-i', '10', '-w', '1s', '-r', '1s', '-f', '3', '-prof', 'gc',
-                    '-jvmArgsAppend', '-XX:+UseParallelGC -Dnet.bytebuddy.experimental=true -Xmx1g',
+                    '-jvmArgsAppend', pairedJmhMeasurementProfile.jmhJvmArgs.join(' '),
                     '-rf', 'json', '-rff', resultFile.absolutePath
             if (benchmarkOperation != null) args '-p', 'operation=' + benchmarkOperation
         }
@@ -419,8 +455,8 @@ tasks.register('runBaselineComparison', JavaExec) {
                     + ' completed rows, got ' + (rows instanceof List ? rows.size() : 'invalid JSON shape'))
         }
         if (!rows.every { row -> row instanceof Map && row.jvmArgs instanceof List
-                && row.jvmArgs.containsAll(['-XX:+UseParallelGC', '-Dnet.bytebuddy.experimental=true', '-Xmx1g']) }) {
-            throw new GradleException('Every paired JMH fork must use the recorded ParallelGC and 1 GiB heap measurement profile.')
+                && row.jvmArgs.containsAll(pairedJmhMeasurementProfile.jmhJvmArgs) }) {
+            throw new GradleException('Every paired JMH fork must use the recorded SerialGC and 1 GiB heap measurement profile.')
         }
         def invalidResult = rows.find { row ->
             !(row instanceof Map) || !(row.primaryMetric?.score instanceof Number)
@@ -492,7 +528,7 @@ tasks.register('runBaselineComparison', JavaExec) {
         String currentSha = captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
         String sourceTreeSha256 = benchmarkSourceTreeSha256.call()
         File benchmarkArtifact = tasks.named('benchmarkJar').get().archiveFile.get().asFile
-        metadata.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+        def manifest = [
                 schemaVersion: 1,
                 runId: comparison.runId,
                 sourceSHA: currentSha,
@@ -503,9 +539,10 @@ tasks.register('runBaselineComparison', JavaExec) {
                 jdk: measurementJdk,
                 gradleDaemonJdk: System.getProperty('java.version'),
                 baselineBuildJavaVersion: comparison.baselineBuildJavaVersion,
-                gcCollector: 'ParallelGC',
-                gcJvmFlag: '-XX:+UseParallelGC',
-                heapJvmFlag: '-Xmx1g',
+                gcCollector: pairedJmhMeasurementProfile.collector,
+                gcJvmFlag: pairedJmhMeasurementProfile.gcJvmFlag,
+                heapJvmFlag: pairedJmhMeasurementProfile.heapJvmFlag,
+                measurementJvmArgs: pairedJmhMeasurementProfile.jmhJvmArgs,
                 p999SampleMinimum: 100000,
                 sampleTailAssessment: tailAssessments,
                 os: System.getProperty('os.name') + ' ' + System.getProperty('os.version') + ' ' + System.getProperty('os.arch'),
@@ -521,12 +558,21 @@ tasks.register('runBaselineComparison', JavaExec) {
                         unit: 'facade acceptances/second; synthetic receipt completion does not include Redis or SQL'],
                 producerThreads: comparison.threadCount,
                 notes: ['p99.9 is reliable only for sample rows marked p999Reliable; the quick smoke is not a tail-latency conclusion.',
-                        'Measurement forks explicitly use ParallelGC after repeatable HotSpot G1 worker crashes on the pinned Java 25.0.4 host; both variants share the same collector.',
+                        'Paired measurement forks use benchmark-only SerialGC following intermittent HotSpot access violations observed under G1 and ParallelGC; the root cause remains unknown, and both variants share the same collector.',
                         'Measurement forks use a fixed 1 GiB maximum heap for both variants.',
                         'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
                         'The current facade receipt adapter drains accepted events into deterministic in-memory receipts; synthetic receipt completion is not durable persistence.',
                         'This facade pilot is not a macro Redis/SQL baseline and must not be used to calibrate the open-loop load profile.']
-        ])) + System.lineSeparator()
+        ]
+        metadata.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(manifest)) + System.lineSeparator()
+        def writtenManifest = new groovy.json.JsonSlurper().parse(metadata)
+        if (writtenManifest.gcCollector != pairedJmhMeasurementProfile.collector
+                || writtenManifest.gcJvmFlag != pairedJmhMeasurementProfile.gcJvmFlag
+                || writtenManifest.heapJvmFlag != pairedJmhMeasurementProfile.heapJvmFlag
+                || writtenManifest.measurementJvmArgs != pairedJmhMeasurementProfile.jmhJvmArgs
+                || !rows.every { row -> row.jvmArgs.containsAll(writtenManifest.measurementJvmArgs) }) {
+            throw new GradleException('Paired JMH manifest measurement profile does not match the completed result rows.')
+        }
     }
 }
 
@@ -540,7 +586,7 @@ tasks.register('runBaselineMacroPilot', JavaExec) {
         languageVersion = JavaLanguageVersion.of(25)
     }
     maxHeapSize = '1g'
-    jvmArgs '-XX:+UseParallelGC'
+    jvmArgs redisSqlMeasurementProfile.gcJvmFlag
     systemProperty 'net.bytebuddy.experimental', 'true'
     doFirst {
         def baselineProperty = providers.gradleProperty('baselineCheckout').orNull
@@ -594,7 +640,7 @@ tasks.register('loadTest', JavaExec) {
         languageVersion = JavaLanguageVersion.of(25)
     }
     maxHeapSize = '1g'
-    jvmArgs '-XX:+UseParallelGC'
+    jvmArgs redisSqlMeasurementProfile.gcJvmFlag
     systemProperty 'net.bytebuddy.experimental', 'true'
     doFirst {
         def profile = providers.gradleProperty('profile').orNull
