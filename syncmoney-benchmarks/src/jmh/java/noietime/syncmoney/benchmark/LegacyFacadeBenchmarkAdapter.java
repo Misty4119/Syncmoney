@@ -257,10 +257,15 @@ public final class LegacyFacadeBenchmarkAdapter implements TransactionBenchmarkA
                 Object event = null;
                 try {
                     synchronized (drainStateLock) {
-                        event = invoke(poll, queue, 50L, TimeUnit.MILLISECONDS);
+                        // Keep dequeue and the in-flight snapshot atomic, but never wait on the queue
+                        // while holding this monitor: trial teardown also needs it to observe drain state.
+                        event = invoke(poll, queue, 0L, TimeUnit.NANOSECONDS);
                         if (event != null) inFlight.incrementAndGet();
                     }
-                    if (event == null) continue;
+                    if (event == null) {
+                        Thread.sleep(1L);
+                        continue;
+                    }
                     String eventTypeName = ((Enum<?>) invoke(type, event)).name();
                     if (eventTypeName.equals("TRANSFER_IN") || eventTypeName.equals("TRANSFER_OUT")) {
                         Object paired = invoke(poll, queue, 1L, TimeUnit.SECONDS);

@@ -186,10 +186,15 @@ public final class CurrentFacadeBenchmarkAdapter implements TransactionBenchmark
             EconomyEvent event = null;
             try {
                 synchronized (drainStateLock) {
-                    event = queue.poll(50, TimeUnit.MILLISECONDS);
+                    // Keep dequeue and the in-flight snapshot atomic, but never wait on the queue
+                    // while holding this monitor: trial teardown also needs it to observe drain state.
+                    event = queue.poll(0L, TimeUnit.NANOSECONDS);
                     if (event != null) inFlight.incrementAndGet();
                 }
-                if (event == null) continue;
+                if (event == null) {
+                    Thread.sleep(1L);
+                    continue;
+                }
                 if (event.type() == EconomyEvent.EventType.TRANSFER_IN
                         || event.type() == EconomyEvent.EventType.TRANSFER_OUT) {
                     EconomyEvent paired = queue.poll(1, TimeUnit.SECONDS);
