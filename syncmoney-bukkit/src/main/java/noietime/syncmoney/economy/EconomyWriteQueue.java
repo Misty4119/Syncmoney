@@ -8,12 +8,15 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -76,6 +79,11 @@ public final class EconomyWriteQueue {
     }
 
     private final BlockingQueue<EconomyEvent> queue;
+    /** Serializes queue mutations with their identity-membership transitions. */
+    private final ReentrantLock queueStateLock = new ReentrantLock();
+    private final Condition queueNotEmpty = queueStateLock.newCondition();
+    /** Identity membership for queued envelopes; the bounded queue bounds this set. */
+    private final Set<EconomyEvent> queuedEvents = Collections.newSetFromMap(new IdentityHashMap<>());
     private final int capacity;
     private final Logger logger;
     private final WriteAdmission writeAdmission;
@@ -192,7 +200,23 @@ public final class EconomyWriteQueue {
 
             boolean queued;
             try {
-                queued = queue.offer(event);
+                queueStateLock.lock();
+                try {
+                    queuedEvents.add(event);
+                    try {
+                        queued = queue.offer(event);
+                    } catch (RuntimeException e) {
+                        queuedEvents.remove(event);
+                        throw e;
+                    }
+                    if (queued) {
+                        queueNotEmpty.signalAll();
+                    } else {
+                        queuedEvents.remove(event);
+                    }
+                } finally {
+                    queueStateLock.unlock();
+                }
             } catch (RuntimeException e) {
                 removeEventReservation(event);
                 completionResources.remove(id);
@@ -371,15 +395,34 @@ public final class EconomyWriteQueue {
      * @return the event, or null if timeout expires
      */
     public EconomyEvent poll(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
-        EconomyEvent event = queue.poll(timeout, unit);
-        if (event != null) {
-            // A transfer commits both adjacent legs under this same gate. A consumer that
-            // takes the first leg waits until the producer has finished committing the pair.
-            synchronized (commitGate) {
-                // The lock handoff is the visibility barrier for paired admissions.
+        long remainingNanos = unit.toNanos(timeout);
+        EconomyEvent event;
+        queueStateLock.lockInterruptibly();
+        try {
+            while (true) {
+                if (Thread.interrupted()) {
+                    throw new InterruptedException();
+                }
+                event = queue.poll();
+                if (event != null) {
+                    // Keep physical dequeue and membership removal atomic with queued completion/removal.
+                    queuedEvents.remove(event);
+                    break;
+                }
+                if (remainingNanos <= 0L) {
+                    return null;
+                }
+                remainingNanos = queueNotEmpty.awaitNanos(remainingNanos);
             }
-            decrementPendingCount(event.playerUuid(), 1);
+        } finally {
+            queueStateLock.unlock();
         }
+        // A transfer commits both adjacent legs under this same gate. A consumer that takes the
+        // first leg waits until the producer has finished committing the pair.
+        synchronized (commitGate) {
+            // The lock handoff is the visibility barrier for paired admissions.
+        }
+        decrementPendingCount(event.playerUuid(), 1);
         return event;
     }
 
@@ -392,9 +435,9 @@ public final class EconomyWriteQueue {
      * @return Number of events drained
      */
     public int drainPendingForPlayer(UUID uuid, int maxDrain) {
-        synchronized (queue) {
-            List<EconomyEvent> toRemove = new ArrayList<>();
-
+        List<EconomyEvent> toRemove = new ArrayList<>();
+        queueStateLock.lock();
+        try {
             for (EconomyEvent event : queue) {
                 if (toRemove.size() >= maxDrain) {
                     break;
@@ -404,18 +447,20 @@ public final class EconomyWriteQueue {
                 }
             }
 
-            int removed = 0;
             for (EconomyEvent event : toRemove) {
-                if (removeQueuedIdentity(event)) {
-                    removed++;
-                    complete(event);
-                }
+                removeQueuedIdentity(event);
             }
-
-            decrementPendingCount(uuid, removed);
-
-            return removed;
+        } finally {
+            queueStateLock.unlock();
         }
+
+        int removed = toRemove.size();
+        for (EconomyEvent event : toRemove) {
+            complete(event);
+        }
+        decrementPendingCount(uuid, removed);
+
+        return removed;
     }
 
     /**
@@ -566,7 +611,15 @@ public final class EconomyWriteQueue {
     }
 
     private boolean removeQueuedIdentity(EconomyEvent event) {
-        return queue.removeIf(queuedEvent -> queuedEvent == event);
+        queueStateLock.lock();
+        try {
+            if (!queuedEvents.remove(event)) {
+                return false;
+            }
+            return queue.removeIf(queuedEvent -> queuedEvent == event);
+        } finally {
+            queueStateLock.unlock();
+        }
     }
 
     private boolean hasCompletionResource(EconomyEvent event) {
