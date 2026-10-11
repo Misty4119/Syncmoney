@@ -61,16 +61,25 @@ public class QueueBenchmarks {
 
     @State(Scope.Thread)
     public static class Actor {
-        EconomyEvent event;
+        private int threadIndex;
+        private UUID account;
+        private long sequence;
+        private final BigDecimal one = new BigDecimal("1.00");
 
         @Setup(Level.Trial)
         public void setup(ThreadParams threadParams) {
-            UUID account = UUID.nameUUIDFromBytes(("queue-actor-" + threadParams.getThreadIndex())
+            threadIndex = threadParams.getThreadIndex();
+            account = UUID.nameUUIDFromBytes(("queue-actor-" + threadIndex)
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            BigDecimal one = new BigDecimal("1.00");
-            event = new EconomyEvent(account, one, one, 1L,
+            sequence = 0L;
+        }
+
+        EconomyEvent nextEvent() {
+            long nextSequence = ++sequence;
+            return new EconomyEvent(account, one, one, nextSequence,
                     EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
-                    "queue-actor-" + threadParams.getThreadIndex(), 1L, "benchmark");
+                    "queue-actor-" + threadIndex + "-" + nextSequence,
+                    nextSequence, "benchmark");
         }
     }
 
@@ -91,7 +100,7 @@ public class QueueBenchmarks {
     @Benchmark
     public boolean queueOfferDequeueComplete(QueueState queue, Actor actor, Counts counts) {
         counts.offered++;
-        if (!queue.adapter.offerPollComplete(actor.event)) {
+        if (!queue.adapter.offerPollComplete(actor.nextEvent())) {
             counts.rejected++;
             return false;
         }
@@ -103,7 +112,7 @@ public class QueueBenchmarks {
     @Benchmark
     public boolean queueFullCapacityAdmissionReject(FullQueueState queue, Actor actor, Counts counts) {
         counts.offered++;
-        if (queue.adapter.attemptBlockingOffer(actor.event)) {
+        if (queue.adapter.attemptBlockingOffer(actor.nextEvent())) {
             counts.accepted++;
             counts.completed++;
             throw new IllegalStateException("A full-capacity probe unexpectedly reserved an additional slot");
