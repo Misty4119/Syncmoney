@@ -3,9 +3,10 @@ package noietime.syncmoney.economy;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.protocol.RedisChannels;
-import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.storage.CacheManager.CachedBalance;
+import noietime.syncmoney.economy.EconomyFacade.EconomyState;
 import noietime.syncmoney.sync.PubSubMessage;
 import noietime.syncmoney.sync.MessageKeys;
 import noietime.syncmoney.util.MessageHelper;
@@ -17,11 +18,9 @@ import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import io.papermc.paper.threadedregions.scheduler.AsyncScheduler;
 
 import java.math.BigDecimal;
-import java.util.Map;
-import java.util.Set;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
  * [SYNC-ECO-030] Cross-server synchronization manager using Redis Pub/Sub.
@@ -408,45 +407,28 @@ public class CrossServerSyncManager {
             return;
         }
 
-        try (var jedis = redisManager.getResource()) {
+        for (UUID uuid : onlineUuids) {
             if (stopped) return;
-            Map<UUID, Long> redisVersions = cacheManager.getAllVersions(onlineUuids);
-            if (stopped) return;
-
-            for (UUID uuid : onlineUuids) {
-                if (stopped) return;
-                Long redisVersion = redisVersions.get(uuid);
-                if (redisVersion == null) {
-
+            try {
+                EconomyState localState = economyFacade.getMemoryState(uuid);
+                Optional<CachedBalance> redisSnapshot = cacheManager.readAuthorityBalanceSnapshotStrict(uuid);
+                if (stopped || redisSnapshot.isEmpty()) {
                     continue;
                 }
 
-                long localVersion = cacheManager.getVersion(uuid);
-                if (redisVersion > localVersion) {
-                    String balanceKey = RedisKeys.balance(uuid);
-                    String balanceStr = jedis.get(balanceKey);
-                    if (!stopped && balanceStr != null) {
-                        BigDecimal redisBalance = new BigDecimal(balanceStr);
-                        economyFacade.updateMemoryState(uuid, redisBalance, redisVersion);
-                        cacheManager.updateMemoryCache(uuid, redisBalance, redisVersion);
-
-                        plugin.getLogger().fine("Version sync: Updated " + uuid + " from v" + localVersion + " to v" + redisVersion);
-                    }
-                } else if (localVersion > redisVersion) {
-                    BigDecimal localBalance = economyFacade.getBalance(uuid);
-
-                    String balanceKey = RedisKeys.balance(uuid);
-                    String versionKey = RedisKeys.version(uuid);
-                    if (stopped) return;
-                    // Once this two-key write begins, finish the pair before shutdown can
-                    // close Redis; returning between the SETs would leave a torn snapshot.
-                    jedis.set(balanceKey, localBalance.toString());
-                    jedis.set(versionKey, String.valueOf(localVersion));
-
-                    plugin.getLogger().fine("Version sync: Pushed " + uuid + " v" + localVersion + " to Redis");
+                CachedBalance authority = redisSnapshot.get();
+                if (localState != null && authority.version() <= localState.version()) {
+                    continue;
                 }
+
+                if (economyFacade.updateMemoryState(uuid, authority.balance(), authority.version())) {
+                    long oldVersion = localState == null ? 0L : localState.version();
+                    plugin.getLogger().fine("Version sync: Updated " + uuid + " from v" + oldVersion
+                            + " to v" + authority.version());
+                }
+            } catch (Exception e) {
+                plugin.getLogger().warning("Cross-server version sync failed for " + uuid + ": " + e.getMessage());
             }
-        } catch (Exception e) {
         }
     }
 

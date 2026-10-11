@@ -8,7 +8,6 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyMode;
-import noietime.syncmoney.protocol.RedisKeys;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.Server;
@@ -17,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import redis.clients.jedis.Jedis;
 
 import java.math.BigDecimal;
-import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -101,13 +100,11 @@ class VersionCheckShutdownTest {
                 .thenReturn(new EconomyFacade.EconomyState(BigDecimal.TEN, 1, 0));
         CountDownLatch readEntered = new CountDownLatch(1);
         CountDownLatch releaseRead = new CountDownLatch(1);
-        when(cacheManager.getAllVersions(any())).thenAnswer(invocation -> {
+        when(cacheManager.readAuthorityBalanceSnapshotStrict(account.uuid)).thenAnswer(invocation -> {
             readEntered.countDown();
             releaseRead.await();
-            return Map.of(account.uuid, 2L);
+            return Optional.of(new CacheManager.CachedBalance(new BigDecimal("20.00"), 2L));
         });
-        when(cacheManager.getBalance(account.uuid)).thenReturn(new BigDecimal("20.00"));
-        when(cacheManager.getVersion(account.uuid)).thenReturn(2L);
 
         SyncManager manager = new SyncManager(plugin, config, cacheManager,
                 economyFacade, mock(RedisManager.class));
@@ -170,18 +167,18 @@ class VersionCheckShutdownTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         when(config.getServerName()).thenReturn("local");
         EconomyFacade economyFacade = mock(EconomyFacade.class);
-        when(economyFacade.getBalance(account.uuid)).thenReturn(new BigDecimal("20.00"));
+        when(economyFacade.getMemoryState(account.uuid))
+                .thenReturn(new EconomyFacade.EconomyState(new BigDecimal("20.00"), 2L, 0L));
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.getVersion(account.uuid)).thenReturn(2L);
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = mock(Jedis.class);
         when(redisManager.getResource()).thenReturn(jedis);
         CountDownLatch readEntered = new CountDownLatch(1);
         CountDownLatch releaseRead = new CountDownLatch(1);
-        when(cacheManager.getAllVersions(any())).thenAnswer(invocation -> {
+        when(cacheManager.readAuthorityBalanceSnapshotStrict(account.uuid)).thenAnswer(invocation -> {
             readEntered.countDown();
             releaseRead.await();
-            return Map.of(account.uuid, 1L);
+            return Optional.of(new CacheManager.CachedBalance(new BigDecimal("10.00"), 1L));
         });
 
         CrossServerSyncManager manager = new CrossServerSyncManager(plugin, config,
@@ -217,7 +214,7 @@ class VersionCheckShutdownTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void crossServerCheckFinishesBalanceVersionPairWhenShutdownStartsBetweenWrites() throws Exception {
+    void crossServerCheckWaitsForAndFencesAnInFlightAuthoritySnapshotRead() throws Exception {
         UUIDHolder account = new UUIDHolder();
         Syncmoney plugin = mock(Syncmoney.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("VersionCheckShutdownTest"));
@@ -252,19 +249,18 @@ class VersionCheckShutdownTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         when(config.getServerName()).thenReturn("local");
         EconomyFacade economyFacade = mock(EconomyFacade.class);
-        when(economyFacade.getBalance(account.uuid)).thenReturn(new BigDecimal("20.00"));
+        when(economyFacade.getMemoryState(account.uuid))
+                .thenReturn(new EconomyFacade.EconomyState(BigDecimal.TEN, 1L, 0L));
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.getVersion(account.uuid)).thenReturn(2L);
-        when(cacheManager.getAllVersions(any())).thenReturn(Map.of(account.uuid, 1L));
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = mock(Jedis.class);
         when(redisManager.getResource()).thenReturn(jedis);
-        CountDownLatch balanceWriteEntered = new CountDownLatch(1);
-        CountDownLatch releaseBalanceWrite = new CountDownLatch(1);
-        when(jedis.set(eq(RedisKeys.balance(account.uuid)), anyString())).thenAnswer(invocation -> {
-            balanceWriteEntered.countDown();
-            releaseBalanceWrite.await();
-            return "OK";
+        CountDownLatch snapshotReadEntered = new CountDownLatch(1);
+        CountDownLatch releaseSnapshotRead = new CountDownLatch(1);
+        when(cacheManager.readAuthorityBalanceSnapshotStrict(account.uuid)).thenAnswer(invocation -> {
+            snapshotReadEntered.countDown();
+            releaseSnapshotRead.await();
+            return Optional.of(new CacheManager.CachedBalance(new BigDecimal("20.00"), 2L));
         });
 
         CrossServerSyncManager manager = new CrossServerSyncManager(plugin, config,
@@ -274,7 +270,7 @@ class VersionCheckShutdownTest {
         Thread callback = new Thread(() -> asyncWork.get().accept(mock(ScheduledTask.class)),
                 "cross-server-version-pair-test");
         callback.start();
-        assertTrue(balanceWriteEntered.await(5, TimeUnit.SECONDS), "balance write did not start");
+        assertTrue(snapshotReadEntered.await(5, TimeUnit.SECONDS), "authority snapshot read did not start");
 
         CountDownLatch shutdownFinished = new CountDownLatch(1);
         Thread shutdown = new Thread(() -> {
@@ -284,14 +280,17 @@ class VersionCheckShutdownTest {
         shutdown.start();
         try {
             assertTrue(shutdownFencedTask.await(5, TimeUnit.SECONDS), "shutdown did not fence the task");
-            releaseBalanceWrite.countDown();
+            assertTrue(shutdownFinished.getCount() == 1,
+                    "shutdown must wait while the authority snapshot is in flight");
+            releaseSnapshotRead.countDown();
             callback.join(TimeUnit.SECONDS.toMillis(5));
             shutdown.join(TimeUnit.SECONDS.toMillis(5));
 
-            verify(jedis).set(RedisKeys.version(account.uuid), "2");
-            assertTrue(shutdownFinished.getCount() == 0, "shutdown did not wait for the paired write");
+            verify(economyFacade, never()).updateMemoryState(eq(account.uuid), any(), anyLong());
+            verify(jedis, never()).set(anyString(), anyString());
+            assertTrue(shutdownFinished.getCount() == 0, "shutdown did not wait for the snapshot read");
         } finally {
-            releaseBalanceWrite.countDown();
+            releaseSnapshotRead.countDown();
             callback.join(TimeUnit.SECONDS.toMillis(5));
             shutdown.join(TimeUnit.SECONDS.toMillis(5));
         }

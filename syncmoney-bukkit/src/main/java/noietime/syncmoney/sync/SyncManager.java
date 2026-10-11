@@ -10,7 +10,7 @@ import noietime.syncmoney.initialization.ShutdownStepRunner;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 
 import java.math.BigDecimal;
-import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -154,30 +154,25 @@ public class SyncManager {
         }
 
 
-        Map<UUID, Long> redisVersions = cacheManager.getAllVersions(onlinePlayers);
-        if (stopped || redisVersions.isEmpty()) {
-            return;
-        }
-
         int syncCount = 0;
-        for (Map.Entry<UUID, Long> entry : redisVersions.entrySet()) {
+        for (UUID uuid : onlinePlayers) {
             if (stopped) return;
-            UUID uuid = entry.getKey();
-            long redisVersion = entry.getValue();
 
             try {
                 EconomyState localState = economyFacade.getMemoryState(uuid);
-                if (localState != null && localState.version() < redisVersion) {
+                Optional<CacheManager.CachedBalance> redisSnapshot =
+                        cacheManager.readAuthorityBalanceSnapshotStrict(uuid);
+                if (stopped || redisSnapshot.isEmpty()) {
+                    continue;
+                }
 
-                    logger.info("Version sync: " + uuid + " local v" + localState.version() + " < Redis v" + redisVersion);
+                CacheManager.CachedBalance authority = redisSnapshot.get();
+                if (localState != null && authority.version() <= localState.version()) {
+                    continue;
+                }
 
-
-                    BigDecimal redisBalance = cacheManager.getBalance(uuid);
-                    long redisVersionFromCache = cacheManager.getVersion(uuid);
-
-                    if (!stopped && economyFacade.updateMemoryState(uuid, redisBalance, redisVersionFromCache)) {
-                        syncCount++;
-                    }
+                if (economyFacade.updateMemoryState(uuid, authority.balance(), authority.version())) {
+                    syncCount++;
                 }
             } catch (Exception e) {
                 logger.warning("Version sync failed for " + uuid + ": " + e.getMessage());

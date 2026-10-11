@@ -87,8 +87,13 @@ public final class PubsubSubscriber {
             return;
         }
 
-        if (redisManager.isDegraded()) {
-            plugin.getLogger().fine("Pub/Sub disabled: Redis not available (LOCAL mode).");
+        if (!redisRequired) {
+            plugin.getLogger().fine("Pub/Sub disabled because Redis is not required for this economy mode.");
+            return;
+        }
+
+        if (redisManager == null) {
+            plugin.getLogger().severe("Pub/Sub cannot start because Redis is required but RedisManager is unavailable.");
             return;
         }
 

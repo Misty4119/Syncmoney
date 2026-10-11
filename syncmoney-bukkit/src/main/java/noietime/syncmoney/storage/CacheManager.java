@@ -488,7 +488,7 @@ public final class CacheManager {
 
     /**
      * Read the current Redis authority balance/version pair without consulting the local cache.
-     * This is reserved for reconciliation after Redis has explicitly rejected a mutation.
+     * Reconciliation paths must use this rather than combining a cached version with a Redis balance.
      */
     public java.util.Optional<CachedBalance> readAuthorityBalanceSnapshotStrict(UUID uuid) {
         if (uuid == null) {
