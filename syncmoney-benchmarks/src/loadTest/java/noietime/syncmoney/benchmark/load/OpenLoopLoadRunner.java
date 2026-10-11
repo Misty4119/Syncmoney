@@ -60,9 +60,10 @@ public final class OpenLoopLoadRunner {
         if (runtimeJavaVersion == null || !runtimeJavaVersion.matches("25(?:\\..*|-.*)?")) {
             throw new IllegalStateException("Open-loop macro measurements must run on the planned Java 25 runtime");
         }
+        BenchmarkEnvironment.Snapshot launchEnvironment = BenchmarkEnvironment.capture();
         if (args.length < 1) throw new IllegalArgumentException("Usage: loadTest <profile.json> --baseline-pilot <verified-1.3.2-macro-pilot.json>");
         OpenLoopProfile profile = OpenLoopProfile.read(Path.of(args[0]));
-        BaselineMacroPilot baselinePilot = readBaselinePilot(args, profile);
+        BaselineMacroPilot baselinePilot = readBaselinePilot(args, profile, launchEnvironment);
         double baselineAcceptedRate = baselinePilot.acceptedTransactionsPerSecond();
         OpenLoopProfile.BackendSettings backend;
         try {
@@ -75,6 +76,7 @@ public final class OpenLoopLoadRunner {
 
         Path outputDirectory = Path.of(profile.outputDirectory).toAbsolutePath().normalize();
         Files.createDirectories(outputDirectory);
+        String invocationId = UUID.randomUUID().toString();
         int reportNumber = 0;
         for (double fraction : profile.arrivalRateFractions) {
             double targetRate = baselineAcceptedRate * fraction;
@@ -85,13 +87,14 @@ public final class OpenLoopLoadRunner {
                 for (int batchWait : profile.maxBatchWaitMillis) {
                     if (profile.warmupSecondsPerRate > 0) {
                         Scenario warmup = runScenario(profile, backend, targetRate, batchSize,
-                                batchWait, profile.warmupSecondsPerRate, baselinePilot);
+                                batchWait, profile.warmupSecondsPerRate, baselinePilot, false);
                         if (!warmup.valid) throw new IllegalStateException("Warmup scenario failed its correctness or drain checks");
                     }
                     Scenario measurement = runScenario(profile, backend, targetRate, batchSize,
-                            batchWait, profile.measurementSecondsPerRate, baselinePilot);
+                            batchWait, profile.measurementSecondsPerRate, baselinePilot, true);
                     Map<String, Object> report = report(profile, measurement, targetRate, fraction,
-                            baselineAcceptedRate, baselinePilot.environmentFingerprintSha256(), batchSize, batchWait);
+                            baselineAcceptedRate, baselinePilot.environmentFingerprintSha256(), batchSize, batchWait,
+                            invocationId, launchEnvironment);
                     Path reportFile = outputDirectory.resolve(String.format("%s-%s-%03d.json",
                             profile.profileId, measurement.runId, ++reportNumber));
                     Files.writeString(reportFile, GSON.toJson(report) + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -104,7 +107,8 @@ public final class OpenLoopLoadRunner {
         }
     }
 
-    private static BaselineMacroPilot readBaselinePilot(String[] args, OpenLoopProfile profile) throws IOException {
+    private static BaselineMacroPilot readBaselinePilot(String[] args, OpenLoopProfile profile,
+            BenchmarkEnvironment.Snapshot measurementEnvironment) throws IOException {
         for (int index = 1; index + 1 < args.length; index++) {
             if (args[index].equals("--baseline-pilot")) {
                 String expectedBaselineSha = requiredSystemProperty("syncmoney.benchmarks.baselineSha");
@@ -112,7 +116,7 @@ public final class OpenLoopLoadRunner {
                 String expectedPilotSha = requiredSystemProperty("syncmoney.benchmarks.baselineMacroPilotSha256");
                 return BaselineMacroPilot.read(Path.of(args[index + 1]), expectedBaselineSha,
                         expectedBaselineJarSha, profile.profileId, profile.sha256,
-                        profile.minimumMeasurementSamples, expectedPilotSha);
+                        profile.minimumMeasurementSamples, expectedPilotSha, measurementEnvironment);
             }
         }
         throw new IllegalArgumentException("Supply a hash-bound 1.3.2 Redis/SQL macro pilot with --baseline-pilot");
@@ -126,7 +130,7 @@ public final class OpenLoopLoadRunner {
 
     private static Scenario runScenario(OpenLoopProfile profile, OpenLoopProfile.BackendSettings backend,
             double targetRate, int batchSize, int batchWaitMillis, int durationSeconds,
-            BaselineMacroPilot baselinePilot) throws Exception {
+            BaselineMacroPilot baselinePilot, boolean requireMinimumSamples) throws Exception {
         RunSession session = new RunSession(profile, backend, targetRate, batchSize, batchWaitMillis);
         try {
             baselinePilot.requireBackendMatch(session.redisVersion.get(), backend.sqlDialect().name(),
@@ -152,7 +156,7 @@ public final class OpenLoopLoadRunner {
             session.finishBatchWriter();
             long finish = System.nanoTime();
             boolean valid = validateAfterDrain(session.failure, session::validateAndCleanup);
-            return session.snapshot(issuedStart, issueEnd, finish, durationSeconds, valid);
+            return session.snapshot(issuedStart, issueEnd, finish, durationSeconds, valid, requireMinimumSamples);
         } catch (InterruptedException | RuntimeException | Error runFailure) {
             session.abortAndCleanup(runFailure);
             throw runFailure;
@@ -166,12 +170,13 @@ public final class OpenLoopLoadRunner {
 
     private static Map<String, Object> report(OpenLoopProfile profile, Scenario scenario, double targetRate,
             double rateFraction, double baselineRate, String baselineEnvironmentFingerprint,
-            int batchSize, int batchWaitMillis) {
-        BenchmarkEnvironment.Snapshot environment = BenchmarkEnvironment.capture();
+            int batchSize, int batchWaitMillis, String invocationId,
+            BenchmarkEnvironment.Snapshot environment) {
         String baselineSha = System.getProperty("syncmoney.benchmarks.baselineSha");
         if (baselineSha != null && baselineSha.equals("UNSPECIFIED")) baselineSha = null;
         return Map.ofEntries(
                 Map.entry("schemaVersion", 1),
+                Map.entry("invocationId", invocationId),
                 Map.entry("runId", scenario.runId),
                 Map.entry("sourceSHA", System.getProperty("syncmoney.benchmarks.sourceSha", "UNKNOWN")),
                 Map.entry("sourceTreeSHA256", System.getProperty("syncmoney.benchmarks.sourceTreeSha256", "UNKNOWN")),
@@ -241,9 +246,22 @@ public final class OpenLoopLoadRunner {
     }
 
     static void validateDisposableTarget(OpenLoopProfile.BackendSettings backend, String acknowledgement) {
+        requireDedicatedSqlUser(backend);
         BaselineMacroPilotProducer.SqlEndpoint sql = BaselineMacroPilotProducer.parseSqlEndpoint(
                 backend.sqlUrl(), backend.sqlDialect());
         BaselineMacroPilotProducer.validateDisposableBackend(backend, sql, acknowledgement);
+    }
+
+    private static void requireDedicatedSqlUser(OpenLoopProfile.BackendSettings backend) {
+        if (backend.sqlUser() == null || backend.sqlUser().isBlank()) {
+            throw new IllegalArgumentException("A separate SQL user setting is required for the isolated benchmark.");
+        }
+    }
+
+    static boolean validMeasurementSamples(boolean postconditionsValid, long responseSamples,
+            long receiptSamples, long durableSamples, int profileMinimumSamples) {
+        return postconditionsValid && isP999Reliable(responseSamples, receiptSamples,
+                durableSamples, profileMinimumSamples);
     }
 
     static boolean isP999Reliable(long responseSamples, long receiptSamples, long durableSamples,
@@ -694,19 +712,29 @@ public final class OpenLoopLoadRunner {
             }
         }
 
-        private Scenario snapshot(long started, long issueEnd, long finished, int durationSeconds, boolean valid) {
+        private Scenario snapshot(long started, long issueEnd, long finished, int durationSeconds,
+                boolean valid, boolean requireMinimumSamples) {
             long recoveryStart = issueEnd;
             long durableEnd = durableEndNanos.get();
             long recoveryMillis = durableEnd == 0L ? 0L
                     : TimeUnit.NANOSECONDS.toMillis(Math.max(0L, durableEnd - recoveryStart));
+            HistogramSummary responseSummary = histogram(response, minimumP999Samples(profile));
+            HistogramSummary scheduleLagSummary = histogram(scheduleLag, minimumP999Samples(profile));
+            HistogramSummary receiptSummary = histogram(receipt, minimumP999Samples(profile));
+            HistogramSummary durableSummary = histogram(durable, minimumP999Samples(profile));
+            boolean measurementValid = valid && inFlight.availablePermits() == profile.maxInFlight;
+            if (requireMinimumSamples) {
+                measurementValid = validMeasurementSamples(measurementValid,
+                        responseSummary.rawTotalCount(), receiptSummary.rawTotalCount(),
+                        durableSummary.rawTotalCount(), profile.minimumMeasurementSamples);
+            }
             return new Scenario(runId, backend.sqlDialect(), durationSeconds,
                     offered.get(), accepted.get(), rejected.get(), persisted.get(),
-                    histogram(response, minimumP999Samples(profile)), histogram(scheduleLag, minimumP999Samples(profile)),
-                    histogram(receipt, minimumP999Samples(profile)), histogram(durable, minimumP999Samples(profile)),
+                    responseSummary, scheduleLagSummary, receiptSummary, durableSummary,
                     gcDelta(gcBefore, gcSnapshot()), queueMax.get(), oldestBacklogAgeMicros.get(), recoveryMillis,
                     ambiguous.get(), quarantine.get(), moneyInvariantFailures.get(), versionConflicts.get(),
                     authorityRejected.get(),
-                    valid && inFlight.availablePermits() == profile.maxInFlight,
+                    measurementValid,
                     redisVersion.get(), sqlProduct.get(), sqlVersion.get(),
                     allocation.snapshot(offered.get(), accepted.get(), profile.workerThreads + 1),
                     failure.get() == null ? "NONE" : failure.get().getClass().getSimpleName(),

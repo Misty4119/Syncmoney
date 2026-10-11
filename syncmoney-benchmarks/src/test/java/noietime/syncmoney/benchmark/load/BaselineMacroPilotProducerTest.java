@@ -1,5 +1,7 @@
 package noietime.syncmoney.benchmark.load;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import noietime.syncmoney.storage.persistence.SqlDialect;
@@ -17,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,6 +39,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class BaselineMacroPilotProducerTest {
+
+    @Test
+    void manifestSerializationPreservesRequiredNullFailureTaxonomyFields() {
+        Map<String, Object> manifest = new java.util.LinkedHashMap<>();
+        manifest.put("ambiguous", null);
+        manifest.put("quarantine", null);
+
+        JsonObject serialized = JsonParser.parseString(BaselineMacroPilotProducer.serializeManifest(manifest))
+                .getAsJsonObject();
+
+        assertTrue(serialized.has("ambiguous"));
+        assertTrue(serialized.get("ambiguous").isJsonNull());
+        assertTrue(serialized.has("quarantine"));
+        assertTrue(serialized.get("quarantine").isJsonNull());
+    }
+
+    @Test
+    void manifestEnvironmentMetadataUsesTheSuppliedLaunchSnapshot() {
+        BenchmarkEnvironment.Snapshot current = BenchmarkEnvironment.capture();
+        Map<String, Object> launchFields = new LinkedHashMap<>(current.fields());
+        launchFields.put("maxMemoryBytes", current.maxMemoryBytes() + 1_024L);
+        BenchmarkEnvironment.Snapshot launchEnvironment = BenchmarkEnvironment.fromFields(launchFields);
+        Map<String, Object> manifest = new LinkedHashMap<>();
+
+        BaselineMacroPilotProducer.addEnvironmentMetadata(manifest, launchEnvironment);
+
+        assertEquals(launchEnvironment.fields(), manifest.get("environment"));
+        assertEquals(launchEnvironment.fingerprint(), manifest.get("environmentFingerprintSHA256"));
+    }
 
     @Test
     void sampleMinimumCannotExceedTheHeapBoundedMacroPilotLimit() {
@@ -150,6 +182,34 @@ class BaselineMacroPilotProducerTest {
                     () -> requireProvenance.invoke(null));
             assertInstanceOf(IllegalStateException.class, invocation.getCause());
             assertTrue(invocation.getCause().getMessage().contains("provenance-bound Gradle task"));
+        } finally {
+            restoreProperty("syncmoney.benchmarks.sourceSha", sourceSha);
+            restoreProperty("syncmoney.benchmarks.sourceTreeSha256", sourceTreeSha);
+            restoreProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256", classpathSha);
+        }
+    }
+
+    @Test
+    void producerAcceptsOnlyCanonicalGitObjectIdWidthsForHarnessSource() throws Exception {
+        Method requireProvenance = producerMethod("requireHarnessProvenance");
+        String sourceSha = System.getProperty("syncmoney.benchmarks.sourceSha");
+        String sourceTreeSha = System.getProperty("syncmoney.benchmarks.sourceTreeSha256");
+        String classpathSha = System.getProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256");
+        try {
+            System.setProperty("syncmoney.benchmarks.sourceTreeSha256", "d".repeat(64));
+            System.setProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256", "e".repeat(64));
+
+            for (int length : new int[] {40, 64}) {
+                System.setProperty("syncmoney.benchmarks.sourceSha", "a".repeat(length));
+                assertDoesNotThrow(() -> requireProvenance.invoke(null), "Git object ID length " + length);
+            }
+
+            for (int length : new int[] {41, 63}) {
+                System.setProperty("syncmoney.benchmarks.sourceSha", "a".repeat(length));
+                InvocationTargetException invocation = assertThrows(InvocationTargetException.class,
+                        () -> requireProvenance.invoke(null), "non-canonical Git object ID length " + length);
+                assertInstanceOf(IllegalStateException.class, invocation.getCause());
+            }
         } finally {
             restoreProperty("syncmoney.benchmarks.sourceSha", sourceSha);
             restoreProperty("syncmoney.benchmarks.sourceTreeSha256", sourceTreeSha);

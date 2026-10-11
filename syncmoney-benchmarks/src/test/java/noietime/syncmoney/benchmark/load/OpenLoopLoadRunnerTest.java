@@ -56,6 +56,12 @@ class OpenLoopLoadRunnerTest {
                                 "jdbc:mariadb://127.0.0.1:13306/production", 0),
                         "syncmoney-t19-disposable"))
                 .getMessage().contains("isolated T19 MariaDB"));
+        assertTrue(org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> OpenLoopLoadRunner.validateDisposableTarget(
+                        backend("127.0.0.1", 16_379,
+                                "jdbc:mariadb://127.0.0.1:13306/syncmoney_t19", 0, null),
+                        "syncmoney-t19-disposable"))
+                .getMessage().contains("separate SQL user"));
 
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() ->
                 OpenLoopLoadRunner.validateDisposableTarget(accepted, "syncmoney-t19-disposable"));
@@ -90,6 +96,14 @@ class OpenLoopLoadRunnerTest {
     }
 
     @Test
+    void measurementValidityRequiresAllHistogramsToMeetTheSampleFloor() {
+        assertFalse(OpenLoopLoadRunner.validMeasurementSamples(true, 99_999, 100_000, 100_000, 1_000));
+        assertFalse(OpenLoopLoadRunner.validMeasurementSamples(true, 100_000, 100_000, 99_999, 1_000));
+        assertFalse(OpenLoopLoadRunner.validMeasurementSamples(false, 100_000, 100_000, 100_000, 1_000));
+        assertTrue(OpenLoopLoadRunner.validMeasurementSamples(true, 100_000, 100_000, 100_000, 1_000));
+    }
+
+    @Test
     void histogramOmitsP999ConfidenceIntervalBelowTheB00SampleFloor() {
         Histogram raw = new Histogram(3_600_000_000L, 3);
         Histogram corrected = new Histogram(3_600_000_000L, 3);
@@ -119,7 +133,12 @@ class OpenLoopLoadRunnerTest {
 
     private static OpenLoopProfile.BackendSettings backend(String redisHost, int redisPort,
             String sqlUrl, int redisDatabase) {
+        return backend(redisHost, redisPort, sqlUrl, redisDatabase, "benchmark");
+    }
+
+    private static OpenLoopProfile.BackendSettings backend(String redisHost, int redisPort,
+            String sqlUrl, int redisDatabase, String sqlUser) {
         return new OpenLoopProfile.BackendSettings(redisHost, redisPort, null, redisDatabase,
-                sqlUrl, "benchmark", null, SqlDialect.MYSQL);
+                sqlUrl, sqlUser, null, SqlDialect.MYSQL);
     }
 }

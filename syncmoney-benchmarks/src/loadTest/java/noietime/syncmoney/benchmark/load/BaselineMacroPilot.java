@@ -23,12 +23,19 @@ record BaselineMacroPilot(double acceptedTransactionsPerSecond, String manifestS
     static BaselineMacroPilot read(Path path, String expectedBaselineSha, String expectedBaselineJarSha256,
             String expectedProfileId, String expectedProfileSha256, int minimumSamples) throws IOException {
         return read(path, expectedBaselineSha, expectedBaselineJarSha256, expectedProfileId,
-                expectedProfileSha256, minimumSamples, null);
+                expectedProfileSha256, minimumSamples, null, BenchmarkEnvironment.capture());
     }
 
     static BaselineMacroPilot read(Path path, String expectedBaselineSha, String expectedBaselineJarSha256,
             String expectedProfileId, String expectedProfileSha256, int minimumSamples,
             String expectedManifestSha256) throws IOException {
+        return read(path, expectedBaselineSha, expectedBaselineJarSha256, expectedProfileId,
+                expectedProfileSha256, minimumSamples, expectedManifestSha256, BenchmarkEnvironment.capture());
+    }
+
+    static BaselineMacroPilot read(Path path, String expectedBaselineSha, String expectedBaselineJarSha256,
+            String expectedProfileId, String expectedProfileSha256, int minimumSamples,
+            String expectedManifestSha256, BenchmarkEnvironment.Snapshot measurementEnvironment) throws IOException {
         byte[] bytes = Files.readAllBytes(path);
         String actualManifestSha256 = sha256(bytes);
         if (expectedManifestSha256 != null && (!expectedManifestSha256.matches("[0-9a-f]{64}")
@@ -52,6 +59,18 @@ record BaselineMacroPilot(double acceptedTransactionsPerSecond, String manifestS
                 || !string(root, "baselineArtifactSHA256").equals(expectedBaselineJarSha256)) {
             throw new IllegalArgumentException("Baseline pilot source or artifact does not match the verified 1.3.2 checkout and JAR");
         }
+        String harnessSourceSha = string(root, "harnessSourceSHA");
+        String harnessSourceTreeSha = string(root, "harnessSourceTreeSHA256");
+        String loadTestRuntimeClasspathSha = string(root, "loadTestRuntimeClasspathSHA256");
+        if (!harnessSourceSha.matches("(?:[0-9a-f]{40}|[0-9a-f]{64})")
+                || !harnessSourceTreeSha.matches("[0-9a-f]{64}")
+                || !loadTestRuntimeClasspathSha.matches("[0-9a-f]{64}")
+                || !harnessSourceSha.equals(requiredSystemProperty("syncmoney.benchmarks.sourceSha"))
+                || !harnessSourceTreeSha.equals(requiredSystemProperty("syncmoney.benchmarks.sourceTreeSha256"))
+                || !loadTestRuntimeClasspathSha.equals(
+                        requiredSystemProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256"))) {
+            throw new IllegalArgumentException("Baseline macro pilot harness provenance does not match the current open-loop source and classpath");
+        }
         if (!string(root, "baselineBuildJavaVersion").matches("21(?:\\..*|-.*)?")) {
             throw new IllegalArgumentException("Baseline macro pilot must use the verified Java 21 build");
         }
@@ -65,7 +84,7 @@ record BaselineMacroPilot(double acceptedTransactionsPerSecond, String manifestS
         if (!environment.javaVersion().equals(string(root, "runtimeJavaVersion"))) {
             throw new IllegalArgumentException("Baseline macro pilot Java version does not match its environment metadata");
         }
-        if (!environment.fingerprint().equals(BenchmarkEnvironment.capture().fingerprint())) {
+        if (!environment.fingerprint().equals(measurementEnvironment.fingerprint())) {
             throw new IllegalArgumentException("Baseline macro pilot environment does not match the current open-loop measurement environment");
         }
         JsonObject latencySemantics = object(root, "latencySemantics");
@@ -164,6 +183,14 @@ record BaselineMacroPilot(double acceptedTransactionsPerSecond, String manifestS
         }
         return new BaselineMacroPilot(acceptedRate, actualManifestSha256, environment.fingerprint(),
                 redisVersion, sqlDialect, sqlProduct, sqlVersion);
+    }
+
+    private static String requiredSystemProperty(String name) {
+        String value = System.getProperty(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Missing verified open-loop harness provenance property " + name);
+        }
+        return value;
     }
 
     void requireBackendMatch(String actualRedisVersion, String actualSqlDialect,

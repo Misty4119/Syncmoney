@@ -3,6 +3,8 @@ package noietime.syncmoney.benchmark.load;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -12,6 +14,8 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -23,10 +27,34 @@ class BaselineMacroPilotTest {
     private static final String BASELINE_SHA = "71cc55dfeefe9a8f40a3835b051ddd324d353767";
     private static final String ARTIFACT_SHA = "a".repeat(64);
     private static final String PROFILE_SHA = "b".repeat(64);
+    private static final String HARNESS_SOURCE_SHA = "c".repeat(40);
+    private static final String HARNESS_SOURCE_TREE_SHA = "d".repeat(64);
+    private static final String RUNTIME_CLASSPATH_SHA = "e".repeat(64);
     private static final Gson GSON = new Gson();
+
+    private String previousHarnessSourceSha;
+    private String previousHarnessSourceTreeSha;
+    private String previousRuntimeClasspathSha;
 
     @TempDir
     Path temporaryDirectory;
+
+    @BeforeEach
+    void installExpectedHarnessProvenance() {
+        previousHarnessSourceSha = System.getProperty("syncmoney.benchmarks.sourceSha");
+        previousHarnessSourceTreeSha = System.getProperty("syncmoney.benchmarks.sourceTreeSha256");
+        previousRuntimeClasspathSha = System.getProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256");
+        System.setProperty("syncmoney.benchmarks.sourceSha", HARNESS_SOURCE_SHA);
+        System.setProperty("syncmoney.benchmarks.sourceTreeSha256", HARNESS_SOURCE_TREE_SHA);
+        System.setProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256", RUNTIME_CLASSPATH_SHA);
+    }
+
+    @AfterEach
+    void restoreHarnessProvenance() {
+        restoreProperty("syncmoney.benchmarks.sourceSha", previousHarnessSourceSha);
+        restoreProperty("syncmoney.benchmarks.sourceTreeSha256", previousHarnessSourceTreeSha);
+        restoreProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256", previousRuntimeClasspathSha);
+    }
 
     @Test
     void derivesRateOnlyFromCompleteArtifactAndProfileBoundMacroEvidence() throws Exception {
@@ -54,6 +82,73 @@ class BaselineMacroPilotTest {
                         "redis-sql-open-loop", PROFILE_SHA, 100_000));
 
         assertTrue(failure.getMessage().contains("current open-loop measurement environment"));
+    }
+
+    @Test
+    void validatesPilotAgainstTheLaunchSnapshotProvidedByTheOpenLoopRunner() throws Exception {
+        BenchmarkEnvironment.Snapshot current = BenchmarkEnvironment.capture();
+        Map<String, Object> differentLaunchFields = new LinkedHashMap<>(current.fields());
+        differentLaunchFields.put("maxMemoryBytes", current.maxMemoryBytes() + 1_024L);
+        BenchmarkEnvironment.Snapshot differentLaunch = BenchmarkEnvironment.fromFields(differentLaunchFields);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> BaselineMacroPilot.read(write(validManifest()), BASELINE_SHA, ARTIFACT_SHA,
+                        "redis-sql-open-loop", PROFILE_SHA, 100_000, null, differentLaunch));
+
+        assertTrue(failure.getMessage().contains("current open-loop measurement environment"));
+    }
+
+    @Test
+    void rejectsPilotBoundToDifferentHarnessSourceProvenance() throws Exception {
+        Map<String, String> mismatches = Map.of(
+                "harnessSourceSHA", "f".repeat(40),
+                "harnessSourceTreeSHA256", "f".repeat(64),
+                "loadTestRuntimeClasspathSHA256", "f".repeat(64));
+        for (Map.Entry<String, String> mismatch : mismatches.entrySet()) {
+            JsonObject manifest = JsonParser.parseString(validManifest()).getAsJsonObject();
+            manifest.addProperty(mismatch.getKey(), mismatch.getValue());
+
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> BaselineMacroPilot.read(write(GSON.toJson(manifest)), BASELINE_SHA, ARTIFACT_SHA,
+                            "redis-sql-open-loop", PROFILE_SHA, 100_000), mismatch.getKey());
+
+            assertTrue(failure.getMessage().contains("harness provenance"), mismatch.getKey());
+        }
+    }
+
+    @Test
+    void acceptsSha1AndSha256HarnessSourceIdsButRejectsIntermediateLengths() throws Exception {
+        String sha256HarnessSource = "f".repeat(64);
+        System.setProperty("syncmoney.benchmarks.sourceSha", sha256HarnessSource);
+        assertDoesNotThrow(() -> BaselineMacroPilot.read(
+                write(validManifest().replace(HARNESS_SOURCE_SHA, sha256HarnessSource)), BASELINE_SHA, ARTIFACT_SHA,
+                "redis-sql-open-loop", PROFILE_SHA, 100_000));
+
+        for (int length : new int[] {41, 63}) {
+            String nonCanonicalHarnessSource = "a".repeat(length);
+            System.setProperty("syncmoney.benchmarks.sourceSha", nonCanonicalHarnessSource);
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> BaselineMacroPilot.read(
+                            write(validManifest().replace(HARNESS_SOURCE_SHA, nonCanonicalHarnessSource)),
+                            BASELINE_SHA, ARTIFACT_SHA, "redis-sql-open-loop", PROFILE_SHA, 100_000),
+                    "non-canonical Git object ID length " + length);
+            assertTrue(failure.getMessage().contains("harness provenance"));
+        }
+    }
+
+    @Test
+    void rejectsPilotWithMissingHarnessProvenanceFields() throws Exception {
+        for (String field : new String[] {"harnessSourceSHA", "harnessSourceTreeSHA256",
+                "loadTestRuntimeClasspathSHA256"}) {
+            JsonObject manifest = JsonParser.parseString(validManifest()).getAsJsonObject();
+            manifest.remove(field);
+
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> BaselineMacroPilot.read(write(GSON.toJson(manifest)), BASELINE_SHA, ARTIFACT_SHA,
+                            "redis-sql-open-loop", PROFILE_SHA, 100_000), field);
+
+            assertTrue(failure.getMessage().contains(field), field);
+        }
     }
 
     @Test
@@ -94,7 +189,7 @@ class BaselineMacroPilotTest {
         OpenLoopProfile profile = OpenLoopProfile.readJson(profileJson);
         Path manifest = write(validManifest().replace(PROFILE_SHA, profile.sha256));
         Method readPilot = OpenLoopLoadRunner.class.getDeclaredMethod("readBaselinePilot", String[].class,
-                OpenLoopProfile.class);
+                OpenLoopProfile.class, BenchmarkEnvironment.Snapshot.class);
         readPilot.setAccessible(true);
 
         String oldBaselineSha = System.getProperty("syncmoney.benchmarks.baselineSha");
@@ -106,7 +201,8 @@ class BaselineMacroPilotTest {
             System.setProperty("syncmoney.benchmarks.baselineMacroPilotSha256", "f".repeat(64));
 
             InvocationTargetException failure = assertThrows(InvocationTargetException.class,
-                    () -> readPilot.invoke(null, (Object) new String[] {"--baseline-pilot", manifest.toString()}, profile));
+                    () -> readPilot.invoke(null, (Object) new String[] {"--baseline-pilot", manifest.toString()},
+                            profile, BenchmarkEnvironment.capture()));
 
             assertInstanceOf(IllegalArgumentException.class, failure.getCause());
             assertTrue(failure.getCause().getMessage().contains("hash"));
@@ -385,6 +481,9 @@ class BaselineMacroPilotTest {
                   "sourceSHA": "%s",
                   "baselineSHA": "%s",
                   "baselineArtifactSHA256": "%s",
+                  "harnessSourceSHA": "%s",
+                  "harnessSourceTreeSHA256": "%s",
+                  "loadTestRuntimeClasspathSHA256": "%s",
                   "baselineBuildJavaVersion": "21.0.8",
                   "runtimeJavaVersion": "%s",
                   "environment": %s,
@@ -433,7 +532,8 @@ class BaselineMacroPilotTest {
                     "sqlVersion": "3.50.0"
                   }
                 }
-                """.formatted(BASELINE_SHA, BASELINE_SHA, ARTIFACT_SHA, environment.javaVersion(),
+                """.formatted(BASELINE_SHA, BASELINE_SHA, ARTIFACT_SHA,
+                HARNESS_SOURCE_SHA, HARNESS_SOURCE_TREE_SHA, RUNTIME_CLASSPATH_SHA, environment.javaVersion(),
                 GSON.toJson(environment.fields()), environment.fingerprint(), PROFILE_SHA,
                 accepted, accepted, responseHistogram, pollingHistogram, pollingHistogram,
                 accepted, rejected, accepted, authorityRejected);

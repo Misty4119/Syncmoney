@@ -81,7 +81,7 @@ public final class BaselineMacroPilotProducer {
     private static final String SCRATCH_SQL_HOST = "127.0.0.1";
     private static final int SCRATCH_SQL_PORT = 13_306;
     private static final String SCRATCH_SQL_DATABASE = "syncmoney_t19";
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
     private static final BigDecimal ONE_DOLLAR = new BigDecimal("1.00");
     private static final String SERVER_NAME = "baseline-macro-pilot";
     private static volatile String currentPhase = "startup";
@@ -97,7 +97,7 @@ public final class BaselineMacroPilotProducer {
                     || !System.getProperty("java.version").matches("25(?:\\..*|-.*)?")) {
                 throw new IllegalStateException("The macro pilot must run on the planned Java 25 runtime.");
             }
-            run(parsed);
+            run(parsed, BenchmarkEnvironment.capture());
         } catch (Throwable failure) {
             // Backend exceptions can contain JDBC URLs, user names, or other configured data.
             // Preserve a useful phase and failure category without forwarding untrusted exception text.
@@ -152,7 +152,7 @@ public final class BaselineMacroPilotProducer {
                 Path.of(values.get("--output")).toAbsolutePath().normalize());
     }
 
-    private static void run(Arguments arguments) throws Exception {
+    private static void run(Arguments arguments, BenchmarkEnvironment.Snapshot launchEnvironment) throws Exception {
         currentPhase = "verify baseline checkout and artifact";
         VerifiedBaseline baseline = verifyBaseline(arguments);
         BaselineBuildEvidence buildEvidence = readBuildAttestation(arguments.baselineBuildAttestation(),
@@ -324,12 +324,12 @@ public final class BaselineMacroPilotProducer {
             }
             valid &= cleanupComplete;
             currentPhase = "write baseline macro-pilot manifest";
-            Map<String, Object> manifest = manifest(arguments, baseline, buildEvidence, harness,
+            Map<String, Object> manifest = manifest(arguments, baseline, buildEvidence, harness, launchEnvironment,
                     profile, backend, metadata, runId,
                     measurement, persisted, durableAtMeasurementStart, warmup, accountVersions,
                     check, dropped, overflow, failures, economyQueueDrained, databaseQueueDrained,
                     cleanupComplete, valid);
-            Files.writeString(arguments.output(), GSON.toJson(manifest) + System.lineSeparator(), StandardCharsets.UTF_8,
+            Files.writeString(arguments.output(), serializeManifest(manifest) + System.lineSeparator(), StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
             System.out.println("Observed baseline macro-pilot manifest: " + arguments.output());
             if (!valid) throw new IllegalStateException("Observed macro-pilot run failed one or more correctness, sample, drain, or cleanup checks.");
@@ -773,6 +773,7 @@ public final class BaselineMacroPilotProducer {
     private static Map<String, Object> manifest(Arguments arguments, VerifiedBaseline baseline,
             BaselineBuildEvidence buildEvidence,
             HarnessProvenance harness,
+            BenchmarkEnvironment.Snapshot launchEnvironment,
             OpenLoopProfile profile, OpenLoopProfile.BackendSettings backend, BackendMetadata metadata,
             String runId, Measurement measurement, long persisted, long durableAtMeasurementStart,
             RunCounts warmup, long[] accountVersions, ObservationCheck check, long dropped,
@@ -794,10 +795,8 @@ public final class BaselineMacroPilotProducer {
         output.put("harnessSourceSHA", harness.sourceSha());
         output.put("harnessSourceTreeSHA256", harness.sourceTreeSha256());
         output.put("loadTestRuntimeClasspathSHA256", harness.runtimeClasspathSha256());
-        output.put("runtimeJavaVersion", System.getProperty("java.version"));
-        BenchmarkEnvironment.Snapshot environment = BenchmarkEnvironment.capture();
-        output.put("environment", environment.fields());
-        output.put("environmentFingerprintSHA256", environment.fingerprint());
+        output.put("runtimeJavaVersion", launchEnvironment.javaVersion());
+        addEnvironmentMetadata(output, launchEnvironment);
         output.put("profileId", profile.profileId);
         output.put("profileSHA256", profile.sha256);
         output.put("durationSeconds", counts.durationSeconds());
@@ -854,6 +853,15 @@ public final class BaselineMacroPilotProducer {
                 "The 1.3.2 failed-event map has no ambiguity/quarantine classification. Those categories are reported as null; validity requires the observable legacy failed-event count to be zero.",
                 "The run cleaned only its generated Redis balance/version keys and SQL player rows; it did not flush either backend."));
         return output;
+    }
+
+    static String serializeManifest(Map<String, Object> manifest) {
+        return GSON.toJson(manifest);
+    }
+
+    static void addEnvironmentMetadata(Map<String, Object> manifest, BenchmarkEnvironment.Snapshot environment) {
+        manifest.put("environment", environment.fields());
+        manifest.put("environmentFingerprintSHA256", environment.fingerprint());
     }
 
     private static Map<String, Object> histogram(List<Long> samples, long offered, long measuredNanos,
@@ -967,7 +975,7 @@ public final class BaselineMacroPilotProducer {
         String sourceSha = System.getProperty("syncmoney.benchmarks.sourceSha");
         String sourceTreeSha256 = System.getProperty("syncmoney.benchmarks.sourceTreeSha256");
         String runtimeClasspathSha256 = System.getProperty("syncmoney.benchmarks.loadTestRuntimeClasspathSha256");
-        if (sourceSha == null || !sourceSha.matches("[a-f0-9]{40,64}")
+        if (sourceSha == null || !sourceSha.matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")
                 || sourceTreeSha256 == null || !sourceTreeSha256.matches("[a-f0-9]{64}")
                 || runtimeClasspathSha256 == null || !runtimeClasspathSha256.matches("[a-f0-9]{64}")) {
             throw new IllegalStateException("The baseline macro pilot must be launched by the provenance-bound Gradle task.");
