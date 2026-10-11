@@ -59,6 +59,36 @@ class ConfigUpgradeFailureTest {
     }
 
     @Test
+    void repeatedUpgradeDoesNotRewriteConfigOrCreateAnotherBackup() throws Exception {
+        Path configFile = writeOldConfig();
+        byte[] original = Files.readAllBytes(configFile);
+        int[] fileOperationCalls = {0};
+        ConfigMerger configMerger = merger(countingOperations(fileOperationCalls));
+
+        assertTrue(configMerger.mergeAndSave("config.yml"));
+
+        byte[] upgraded = Files.readAllBytes(configFile);
+        int callsAfterUpgrade = fileOperationCalls[0];
+        assertTrue(callsAfterUpgrade > 0);
+        Path backup;
+        try (var backups = Files.list(dataFolder)) {
+            var backupFiles = backups.filter(path -> path.getFileName().toString().endsWith(".bak")).toList();
+            assertEquals(1, backupFiles.size());
+            backup = backupFiles.get(0);
+        }
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, Files.readAllBytes(backup));
+
+        assertFalse(configMerger.mergeAndSave("config.yml"));
+
+        assertEquals(callsAfterUpgrade, fileOperationCalls[0], "rerun must perform no file writes or replacements");
+        org.junit.jupiter.api.Assertions.assertArrayEquals(upgraded, Files.readAllBytes(configFile));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, Files.readAllBytes(backup));
+        try (var backups = Files.list(dataFolder)) {
+            assertEquals(1, backups.filter(path -> path.getFileName().toString().endsWith(".bak")).count());
+        }
+    }
+
+    @Test
     void backupFailureLeavesTheOriginalConfigUntouched() throws Exception {
         Path configFile = writeOldConfig();
         byte[] original = Files.readAllBytes(configFile);
@@ -245,6 +275,34 @@ class ConfigUpgradeFailureTest {
 
             @Override
             public void deleteIfExists(Path target) throws IOException {
+                Files.deleteIfExists(target);
+            }
+        };
+    }
+
+    private ConfigMerger.FileOperations countingOperations(int[] calls) {
+        return new ConfigMerger.FileOperations() {
+            @Override
+            public void copy(Path source, Path target) throws IOException {
+                calls[0]++;
+                Files.copy(source, target);
+            }
+
+            @Override
+            public void write(Path target, String contents) throws IOException {
+                calls[0]++;
+                Files.writeString(target, contents, StandardCharsets.UTF_8);
+            }
+
+            @Override
+            public void move(Path source, Path target, CopyOption... options) throws IOException {
+                calls[0]++;
+                Files.move(source, target, options);
+            }
+
+            @Override
+            public void deleteIfExists(Path target) throws IOException {
+                calls[0]++;
                 Files.deleteIfExists(target);
             }
         };
