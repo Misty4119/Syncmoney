@@ -6,13 +6,21 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.math.BigDecimal;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import noietime.syncmoney.storage.persistence.SqlDialect;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenLoopLoadRunnerTest {
@@ -28,6 +36,20 @@ class OpenLoopLoadRunnerTest {
 
         assertTrue(postDrainValidationCalled.get());
         assertFalse(valid);
+    }
+
+    @Test
+    void sqlWriterInitializationDisablesAutoCommitBeforeCreatingAndCommittingTemporaryTable() {
+        List<String> calls = new ArrayList<>();
+        AtomicBoolean autoCommit = new AtomicBoolean(true);
+        AtomicReference<String> createSql = new AtomicReference<>();
+        Connection connection = autoCommitConnection(calls, autoCommit, createSql);
+
+        assertDoesNotThrow(() -> OpenLoopLoadRunner.initializeSqlWriterConnection(connection, SqlDialect.MYSQL));
+
+        assertEquals(List.of("setAutoCommit:false", "createStatement", "execute", "closeStatement", "commit"), calls);
+        assertFalse(autoCommit.get());
+        assertTrue(createSql.get().startsWith("CREATE TEMPORARY TABLE players"));
     }
 
     @Test
@@ -140,5 +162,50 @@ class OpenLoopLoadRunnerTest {
             String sqlUrl, int redisDatabase, String sqlUser) {
         return new OpenLoopProfile.BackendSettings(redisHost, redisPort, null, redisDatabase,
                 sqlUrl, sqlUser, null, SqlDialect.MYSQL);
+    }
+
+    private static Connection autoCommitConnection(List<String> calls, AtomicBoolean autoCommit,
+            AtomicReference<String> createSql) {
+        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                new Class<?>[] {Connection.class}, (proxy, method, args) -> switch (method.getName()) {
+                    case "setAutoCommit" -> {
+                        autoCommit.set((boolean) args[0]);
+                        calls.add("setAutoCommit:" + args[0]);
+                        yield null;
+                    }
+                    case "getAutoCommit" -> autoCommit.get();
+                    case "createStatement" -> {
+                        calls.add("createStatement");
+                        yield Proxy.newProxyInstance(Statement.class.getClassLoader(),
+                                new Class<?>[] {Statement.class}, (statement, statementMethod, statementArgs) ->
+                                        switch (statementMethod.getName()) {
+                                            case "execute" -> {
+                                                createSql.set((String) statementArgs[0]);
+                                                calls.add("execute");
+                                                yield false;
+                                            }
+                                            case "close" -> {
+                                                calls.add("closeStatement");
+                                                yield null;
+                                            }
+                                            case "isClosed" -> false;
+                                            case "toString" -> "recording statement";
+                                            case "hashCode" -> System.identityHashCode(statement);
+                                            case "equals" -> statement == statementArgs[0];
+                                            default -> throw new UnsupportedOperationException(statementMethod.getName());
+                                        });
+                    }
+                    case "commit" -> {
+                        calls.add("commit");
+                        if (autoCommit.get()) throw new SQLException("Can't call commit when autocommit=true");
+                        yield null;
+                    }
+                    case "close" -> null;
+                    case "isClosed" -> false;
+                    case "toString" -> "recording connection";
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
     }
 }

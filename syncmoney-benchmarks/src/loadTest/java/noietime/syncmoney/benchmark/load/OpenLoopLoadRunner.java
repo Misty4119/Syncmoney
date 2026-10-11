@@ -286,6 +286,22 @@ public final class OpenLoopLoadRunner {
                 && sqlBalance.compareTo(expectedBalance) == 0 && sqlVersion == expectedMutationCount;
     }
 
+    static void initializeSqlWriterConnection(Connection connection, SqlDialect dialect) throws SQLException {
+        connection.setAutoCommit(false);
+        String create = switch (dialect) {
+            case SQLITE -> "CREATE TEMP TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
+                    + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP)";
+            case MYSQL -> "CREATE TEMPORARY TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
+                    + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP)";
+            case POSTGRESQL -> "CREATE TEMPORARY TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
+                    + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP) ON COMMIT PRESERVE ROWS";
+        };
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(create);
+        }
+        connection.commit();
+    }
+
     private static final class RunSession {
         private final OpenLoopProfile profile;
         private final OpenLoopProfile.BackendSettings backend;
@@ -556,10 +572,9 @@ public final class OpenLoopLoadRunner {
             Connection connection = null;
             try {
                 connection = openSqlConnection();
-                createTemporaryPlayersTable(connection, backend.sqlDialect());
+                initializeSqlWriterConnection(connection, backend.sqlDialect());
                 sqlProduct.set(connection.getMetaData().getDatabaseProductName());
                 sqlVersion.set(connection.getMetaData().getDatabaseProductVersion());
-                connection.setAutoCommit(false);
                 sqlConnection.set(connection);
             } catch (Throwable setupFailure) {
                 sqlSetupFailure.set(setupFailure);
@@ -760,21 +775,6 @@ public final class OpenLoopLoadRunner {
                             backend.sqlPassword() == null ? "" : backend.sqlPassword());
             connection.setNetworkTimeout(Runnable::run, 5_000);
             return connection;
-        }
-
-        private void createTemporaryPlayersTable(Connection connection, SqlDialect dialect) throws SQLException {
-            String create = switch (dialect) {
-                case SQLITE -> "CREATE TEMP TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
-                        + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP)";
-                case MYSQL -> "CREATE TEMPORARY TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
-                        + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP)";
-                case POSTGRESQL -> "CREATE TEMPORARY TABLE players (player_uuid VARCHAR(36) PRIMARY KEY, player_name VARCHAR(64), "
-                        + "balance DECIMAL(20,2) NOT NULL, version BIGINT NOT NULL, last_server VARCHAR(128), updated_at TIMESTAMP) ON COMMIT PRESERVE ROWS";
-            };
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(create);
-            }
-            connection.commit();
         }
 
         private String loadAddScript() {
