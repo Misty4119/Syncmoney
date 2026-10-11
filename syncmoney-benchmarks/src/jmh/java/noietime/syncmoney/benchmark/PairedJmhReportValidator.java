@@ -58,6 +58,8 @@ public final class PairedJmhReportValidator {
         List<String> accessPatterns = quick ? List.of("uniform") : ALL_ACCESS_PATTERNS;
         Set<String> expectedTuples = expectedTuples(requestedVariants, operations, accountCounts, accessPatterns);
         Set<String> observedTuples = new LinkedHashSet<>();
+        Set<String> observedJdks = new LinkedHashSet<>();
+        Set<List<String>> observedJvmArguments = new LinkedHashSet<>();
         List<Map<String, Object>> sampleTailAssessment = new ArrayList<>();
         int sampleTimeRows = 0;
 
@@ -96,7 +98,8 @@ public final class PairedJmhReportValidator {
             if (!jdkVersion.startsWith("25.")) {
                 throw new IllegalArgumentException("Paired JMH tuple must run on Java 25: " + tuple);
             }
-            validateJvmArguments(row.get("jvmArgs"), tuple);
+            observedJdks.add(jdkVersion);
+            observedJvmArguments.add(validateJvmArguments(row.get("jvmArgs"), tuple));
 
             Map<?, ?> primaryMetric = objectMap(row.get("primaryMetric"),
                     "Paired JMH tuple is missing primaryMetric: " + tuple);
@@ -146,13 +149,89 @@ public final class PairedJmhReportValidator {
         if (observedTuples.size() != rows.size() || rows.size() != expectedTuples.size()) {
             throw new IllegalArgumentException("Paired JMH result row count does not match its unique expected matrix");
         }
+        if (observedJdks.size() != 1) {
+            throw new IllegalArgumentException("Paired JMH result rows must use the same Java runtime; observed " + observedJdks);
+        }
+        if (observedJvmArguments.size() != 1) {
+            throw new IllegalArgumentException("Paired JMH result rows must use the same JVM arguments");
+        }
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("expectedRows", expectedTuples.size());
         summary.put("rowCount", rows.size());
         summary.put("sampleTimeRows", sampleTimeRows);
+        summary.put("measurementJdk", observedJdks.iterator().next());
+        summary.put("variants", List.copyOf(requestedVariants));
+        summary.put("comparisonType", requestedVariants.size() == 2 ? "PAIRED" : "SINGLE_VARIANT_DIAGNOSTIC");
+        summary.put("producerThreads", producerThreads);
+        summary.put("measurementJvmArgs", EXPECTED_JVM_ARGS);
+        summary.put("observedJvmArgs", List.copyOf(observedJvmArguments.iterator().next()));
+        summary.put("baselineFacadeAcceptedRatePilot", baselineFacadeAcceptedRatePilot(
+                rows, requestedVariants, operations));
         summary.put("sampleTailAssessment", sampleTailAssessment);
         return summary;
+    }
+
+    private static Map<String, Object> baselineFacadeAcceptedRatePilot(List<?> rows,
+            List<String> requestedVariants, List<String> operations) {
+        if (!requestedVariants.contains("legacy132") || !operations.contains("deposit")) {
+            return Map.of("available", false,
+                    "reason", "This filtered operation/variant run is not a baseline accepted-rate calibration profile.");
+        }
+
+        Map<?, ?> baselinePilot = null;
+        for (Object candidate : rows) {
+            Map<?, ?> row = objectMap(candidate, "Paired JMH result row must be an object");
+            Map<?, ?> params = objectMap(row.get("params"), "Paired JMH result row is missing params");
+            if ("legacy132".equals(params.get("variant")) && "deposit".equals(params.get("operation"))
+                    && "1000".equals(params.get("accountCount")) && "uniform".equals(params.get("accessPattern"))
+                    && "thrpt".equals(row.get("mode"))) {
+                baselinePilot = row;
+                break;
+            }
+        }
+        if (baselinePilot == null) {
+            throw new IllegalArgumentException("Paired report omitted the baseline accepted-rate pilot case");
+        }
+
+        Map<?, ?> primaryMetric = objectMap(baselinePilot.get("primaryMetric"),
+                "Baseline pilot is missing primaryMetric");
+        if (!"ops/us".equals(primaryMetric.get("scoreUnit"))) {
+            throw new IllegalArgumentException("Baseline pilot throughput must be in ops/us");
+        }
+        double throughput = finiteNumber(primaryMetric.get("score"), "primaryMetric.score", "baseline-pilot");
+        Map<?, ?> secondaryMetrics = objectMap(baselinePilot.get("secondaryMetrics"),
+                "Baseline pilot is missing secondaryMetrics");
+        double accepted = secondaryScore(secondaryMetrics, "accepted");
+        double offered = secondaryScore(secondaryMetrics, "offered");
+        double rejected = secondaryScore(secondaryMetrics, "rejected");
+        if (accepted < 0d || offered <= 0d || rejected < 0d
+                || Math.abs(offered - accepted - rejected) > Math.max(1e-6d, offered * 1e-9d)) {
+            throw new IllegalArgumentException("Baseline pilot outcome counters are invalid or do not conserve offered operations");
+        }
+        double acceptedRate = throughput * (accepted / offered) * 1_000_000d;
+        if (!Double.isFinite(acceptedRate) || acceptedRate <= 0d) {
+            throw new IllegalArgumentException("Baseline facade accepted rate must be positive and finite");
+        }
+
+        Map<String, Object> pilot = new LinkedHashMap<>();
+        pilot.put("available", true);
+        pilot.put("operation", "deposit");
+        pilot.put("accountCount", 1000);
+        pilot.put("accessPattern", "uniform");
+        pilot.put("producerThreads", exactInteger(baselinePilot.get("threads"), "threads"));
+        pilot.put("acceptedTransactionsPerSecond", acceptedRate);
+        pilot.put("meanOfferedPerMeasurement", offered);
+        pilot.put("meanAcceptedPerMeasurement", accepted);
+        pilot.put("meanRejectedPerMeasurement", rejected);
+        pilot.put("derivation", "JMH throughput (ops/us) × accepted/offered × 1,000,000");
+        pilot.put("unit", "facade acceptances/second; synthetic receipt completion does not include Redis or SQL");
+        return pilot;
+    }
+
+    private static double secondaryScore(Map<?, ?> secondaryMetrics, String name) {
+        Map<?, ?> metric = objectMap(secondaryMetrics.get(name), "Baseline pilot is missing secondary metric " + name);
+        return finiteNumber(metric.get("score"), "secondaryMetrics." + name + ".score", "baseline-pilot");
     }
 
     /** Ensures the manifest binds both the exact result JSON bytes and their digest. */
@@ -229,6 +308,7 @@ public final class PairedJmhReportValidator {
         switch (args[0]) {
             case "summarize" -> summarize(args);
             case "verify-binding" -> verifyBinding(args);
+            case "validate-finalization-paths" -> validateFinalizationPaths(args);
             default -> throw new IllegalArgumentException("Unknown paired JMH report validation mode");
         }
     }
@@ -237,17 +317,147 @@ public final class PairedJmhReportValidator {
         if (args.length != 10) {
             throw new IllegalArgumentException("summarize requires result, output, variants, operation, quick, threads, forks, iterations, and p99.9 minimum");
         }
-        List<Map<String, Object>> rows = readRows(Path.of(args[1]));
+        Path resultFile = Path.of(args[1]);
+        Path output = Path.of(args[2]);
+        if (sameFilePath(canonicalPath(resultFile), canonicalPath(output))) {
+            throw new IllegalArgumentException("Paired JMH result and validation summary output paths must not alias");
+        }
         List<String> variants = csvValues(args[3]);
         String operation = args[4].equals("all") ? null : args[4];
-        Map<String, Object> summary = validateRows(rows, variants, operation, Boolean.parseBoolean(args[5]),
+        Map<String, Object> summary = summarizeReport(resultFile, variants, operation,
+                Boolean.parseBoolean(args[5]),
                 Integer.parseInt(args[6]), Integer.parseInt(args[7]), Integer.parseInt(args[8]),
                 Long.parseLong(args[9]));
-        Path output = Path.of(args[2]);
         if (output.getParent() != null) Files.createDirectories(output.getParent());
         Files.writeString(output, GSON.toJson(summary) + System.lineSeparator());
         System.out.println("Validated paired JMH matrix rows=" + summary.get("rowCount")
                 + ", sampleTimeRows=" + summary.get("sampleTimeRows"));
+    }
+
+    private static void validateFinalizationPaths(String[] args) throws IOException {
+        if (args.length != 4) {
+            throw new IllegalArgumentException(
+                    "validate-finalization-paths requires repository root, benchmark project root, and run-context paths");
+        }
+        verifyFinalizationPaths(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
+        System.out.println("Verified paired JMH report, context, recovery evidence, and output paths.");
+    }
+
+    /** Rejects report/evidence aliases before any summary, marker, or manifest write can occur. */
+    public static void verifyFinalizationPaths(Path projectRoot, Path runContextFile) throws IOException {
+        verifyFinalizationPaths(projectRoot, projectRoot, runContextFile);
+    }
+
+    /**
+     * Rejects aliases using the same path bases as the Gradle writers: project-relative output paths resolve
+     * from the benchmark subproject, while recovery evidence and resultFileRelativePath resolve from the repository.
+     */
+    public static void verifyFinalizationPaths(Path repositoryRoot, Path benchmarkProjectRoot, Path runContextFile)
+            throws IOException {
+        if (repositoryRoot == null || benchmarkProjectRoot == null || runContextFile == null) {
+            throw new IllegalArgumentException(
+                    "Paired JMH repository root, benchmark project root, and run-context paths are required");
+        }
+        Path root = canonicalPath(repositoryRoot);
+        Path project = canonicalPath(benchmarkProjectRoot);
+        Path contextFile = canonicalPath(runContextFile);
+        if (!Files.isRegularFile(contextFile)) {
+            throw new IllegalArgumentException("Paired JMH run context is missing: " + contextFile);
+        }
+        Map<?, ?> context = readObject(contextFile);
+        Object declaredContextValue = context.get("runContextFile");
+        if (declaredContextValue != null) {
+            Path declaredContext = resolveContextPath(project, declaredContextValue, "runContextFile");
+            if (!contextFile.equals(declaredContext)) {
+                throw new IllegalArgumentException("Paired JMH runContextFile does not identify the supplied context file");
+            }
+        }
+
+        Path resultFile = resolveContextPath(project, context.get("resultFile"), "resultFile");
+        String relativeReportValue = requiredString(context.get("resultFileRelativePath"), "resultFileRelativePath");
+        Path relativeReport = Path.of(relativeReportValue);
+        if (relativeReport.isAbsolute()) {
+            throw new IllegalArgumentException("Paired JMH resultFileRelativePath must be project-relative");
+        }
+        Path declaredReport = canonicalPath(root.resolve(relativeReport));
+        if (!declaredReport.startsWith(root) || !declaredReport.equals(resultFile)) {
+            throw new IllegalArgumentException(
+                    "Paired JMH resultFileRelativePath does not resolve to the validated resultFile");
+        }
+
+        Map<String, Path> inputs = new LinkedHashMap<>();
+        inputs.put("resultFile", resultFile);
+        inputs.put("runContextFile", contextFile);
+        Map<?, ?> recovery = null;
+        Object recoveryValue = context.get("recoveryProvenance");
+        if (recoveryValue != null) {
+            recovery = objectMap(recoveryValue, "Paired JMH recoveryProvenance must be an object");
+            for (String key : List.of("originalLog", "originalExit", "originalValidationSummary",
+                    "sourceIdentityManifest")) {
+                Object path = recovery.get(key);
+                if (path != null) inputs.put("recoveryProvenance." + key,
+                        resolveContextPath(root, path, "recoveryProvenance." + key));
+            }
+        }
+        List<Map.Entry<String, Path>> inputEntries = new ArrayList<>(inputs.entrySet());
+        for (int index = 0; index < inputEntries.size(); index++) {
+            Map.Entry<String, Path> input = inputEntries.get(index);
+            for (int otherIndex = index + 1; otherIndex < inputEntries.size(); otherIndex++) {
+                Map.Entry<String, Path> other = inputEntries.get(otherIndex);
+                if (sameFilePath(input.getValue(), other.getValue())) {
+                    throw new IllegalArgumentException("Paired JMH input paths alias each other: "
+                            + input.getKey() + " and " + other.getKey());
+                }
+            }
+        }
+
+        Path validationSummary = resolveContextPath(project, context.get("validationSummaryFile"),
+                "validationSummaryFile");
+        Path manifest = resolveContextPath(project, context.get("manifestFile"), "manifestFile");
+        Path marker = resolveContextPath(project, context.get("measurementSuccessMarkerFile"),
+                "measurementSuccessMarkerFile");
+        Map<String, Path> outputs = new LinkedHashMap<>();
+        outputs.put("validationSummaryFile", validationSummary);
+        outputs.put("manifestFile", manifest);
+        outputs.put("manifest temporary file", appendSuffix(manifest, ".tmp"));
+        outputs.put("manifest temporary staging file", appendSuffix(manifest, ".tmp.tmp"));
+        outputs.put("measurementSuccessMarkerFile", marker);
+        outputs.put("measurement success marker temporary file", appendSuffix(marker, ".tmp"));
+
+        List<Map.Entry<String, Path>> outputEntries = new ArrayList<>(outputs.entrySet());
+        for (int index = 0; index < outputEntries.size(); index++) {
+            Map.Entry<String, Path> output = outputEntries.get(index);
+            for (Map.Entry<String, Path> input : inputs.entrySet()) {
+                if (sameFilePath(output.getValue(), input.getValue())) {
+                    throw new IllegalArgumentException("Paired JMH output path aliases immutable input "
+                            + input.getKey() + ": " + output.getKey());
+                }
+            }
+            for (int otherIndex = index + 1; otherIndex < outputEntries.size(); otherIndex++) {
+                Map.Entry<String, Path> other = outputEntries.get(otherIndex);
+                if (sameFilePath(output.getValue(), other.getValue())) {
+                    throw new IllegalArgumentException("Paired JMH output paths alias each other: "
+                            + output.getKey() + " and " + other.getKey());
+                }
+            }
+        }
+    }
+
+    private static Path resolveContextPath(Path root, Object value, String label) throws IOException {
+        Path path = Path.of(requiredString(value, label));
+        return canonicalPath(path.isAbsolute() ? path : root.resolve(path));
+    }
+
+    private static Path canonicalPath(Path path) throws IOException {
+        return path.toFile().getCanonicalFile().toPath();
+    }
+
+    private static boolean sameFilePath(Path first, Path second) throws IOException {
+        return first.equals(second) || (Files.exists(first) && Files.exists(second) && Files.isSameFile(first, second));
+    }
+
+    private static Path appendSuffix(Path path, String suffix) {
+        return path.resolveSibling(path.getFileName() + suffix);
     }
 
     private static void verifyBinding(String[] args) throws IOException {
@@ -273,6 +483,28 @@ public final class PairedJmhReportValidator {
             rows.add(GSON.fromJson(element, ROW_TYPE));
         }
         return rows;
+    }
+
+    /** Validates a report and binds the generated summary to a stable snapshot of its exact bytes. */
+    public static Map<String, Object> summarizeReport(Path resultFile, List<String> variants,
+            String operation, boolean quick, int producerThreads, int expectedForks,
+            int expectedMeasurementIterations, long minimumP999Samples) throws IOException {
+        if (resultFile == null || !Files.isRegularFile(resultFile) || Files.size(resultFile) == 0L) {
+            throw new IllegalArgumentException("Paired JMH result JSON is missing or empty");
+        }
+        long bytesBefore = Files.size(resultFile);
+        String digestBefore = sha256(resultFile);
+        List<Map<String, Object>> rows = readRows(resultFile);
+        Map<String, Object> summary = validateRows(rows, variants, operation, quick, producerThreads,
+                expectedForks, expectedMeasurementIterations, minimumP999Samples);
+        long bytesAfter = Files.size(resultFile);
+        String digestAfter = sha256(resultFile);
+        if (bytesBefore != bytesAfter || !digestBefore.equals(digestAfter)) {
+            throw new IllegalArgumentException("Paired JMH result changed while it was being validated");
+        }
+        summary.put("resultBytes", bytesAfter);
+        summary.put("resultSHA256", digestAfter);
+        return summary;
     }
 
     private static Map<?, ?> readObject(Path file) throws IOException {
@@ -328,11 +560,37 @@ public final class PairedJmhReportValidator {
         return String.join("/", variant, operation, accessPattern, accountCount, mode);
     }
 
-    private static void validateJvmArguments(Object value, String tuple) {
-        List<?> args = listValue(value, "jvmArgs", tuple);
+    private static List<String> validateJvmArguments(Object value, String tuple) {
+        List<?> rawArgs = listValue(value, "jvmArgs", tuple);
+        List<String> args = new ArrayList<>(rawArgs.size());
+        for (Object rawArg : rawArgs) {
+            if (!(rawArg instanceof String argument)) {
+                throw new IllegalArgumentException("Paired JMH JVM arguments must be strings: " + tuple);
+            }
+            args.add(argument);
+        }
         if (!args.containsAll(EXPECTED_JVM_ARGS)) {
             throw new IllegalArgumentException("Paired JMH tuple is missing the recorded SerialGC/ByteBuddy/heap flags: " + tuple);
         }
+        List<String> collectorArgs = args.stream()
+                .filter(argument -> argument.matches("-XX:[+-]Use[A-Za-z0-9]+GC"))
+                .toList();
+        if (!collectorArgs.equals(List.of(EXPECTED_JVM_ARGS.getFirst()))) {
+            throw new IllegalArgumentException("Paired JMH tuple has conflicting or duplicate garbage collector arguments: " + tuple);
+        }
+        List<String> maximumHeapArgs = args.stream()
+                .filter(argument -> argument.startsWith("-Xmx") || argument.startsWith("-XX:MaxHeapSize="))
+                .toList();
+        if (!maximumHeapArgs.equals(List.of(EXPECTED_JVM_ARGS.getLast()))) {
+            throw new IllegalArgumentException("Paired JMH tuple has conflicting or duplicate maximum heap arguments: " + tuple);
+        }
+        List<String> byteBuddyArgs = args.stream()
+                .filter(argument -> argument.startsWith("-Dnet.bytebuddy.experimental"))
+                .toList();
+        if (!byteBuddyArgs.equals(List.of(EXPECTED_JVM_ARGS.get(1)))) {
+            throw new IllegalArgumentException("Paired JMH tuple has conflicting or duplicate ByteBuddy arguments: " + tuple);
+        }
+        return List.copyOf(args);
     }
 
     private static void validateRawDataPartitions(List<?> rawData, int expectedForks,

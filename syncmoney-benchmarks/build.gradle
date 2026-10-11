@@ -291,8 +291,432 @@ def captureHostProvenance = {
 }
 
 def sha256 = { File file ->
-    java.security.MessageDigest.getInstance('SHA-256')
-            .digest(file.bytes).collect { String.format('%02x', it & 0xff) }.join()
+    java.security.MessageDigest digest = java.security.MessageDigest.getInstance('SHA-256')
+    byte[] buffer = new byte[64 * 1024]
+    file.withInputStream { input ->
+        int read
+        while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read)
+    }
+    digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+
+def writeJsonAtomically = { File target, Object value ->
+    target.parentFile.mkdirs()
+    File temporary = new File(target.parentFile, target.name + '.tmp')
+    java.nio.file.Files.writeString(temporary.toPath(),
+            groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(value)) + System.lineSeparator(),
+            java.nio.charset.StandardCharsets.UTF_8)
+    try {
+        java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+    } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+        java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+def recoveryEvidenceFor = { Map context, File resultFile, Object resultBytes, String resultSHA256 ->
+    Map recovery = context.recoveryProvenance as Map
+    if (recovery == null || recovery.type != 'POST_PROCESSING_ONLY' || recovery.measurementRerun != false
+            || recovery.originalRunId != context.runId) {
+        throw new GradleException('Recovery context must identify the same run and a post-processing-only recovery.')
+    }
+    if (!(recovery.originalLogSHA256 instanceof String)
+            || !(recovery.originalLogSHA256 ==~ /[0-9a-f]{64}/)
+            || !(recovery.originalValidationSummarySHA256 instanceof String)
+            || !(recovery.originalValidationSummarySHA256 ==~ /[0-9a-f]{64}/)
+            || !(recovery.sourceIdentityManifestSHA256 instanceof String)
+            || !(recovery.sourceIdentityManifestSHA256 ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException('Recovery context is missing a valid digest for its original evidence.')
+    }
+
+    File originalLog = rootProject.file(recovery.originalLog as String).canonicalFile
+    File originalExit = rootProject.file(recovery.originalExit as String).canonicalFile
+    if (!originalLog.isFile() || sha256(originalLog) != recovery.originalLogSHA256
+            || !originalExit.isFile() || (recovery.originalGradleExitCode as int) != 1
+            || originalExit.text.trim() != (recovery.originalGradleExitCode as String)) {
+        throw new GradleException('Recovery evidence does not bind the original failed Gradle log and exit code.')
+    }
+    String logText = originalLog.getText('UTF-8')
+    int runCompleteAt = logText.indexOf('# Run complete.')
+    int resultSavedAt = logText.indexOf('Benchmark result is saved to ' + resultFile.absolutePath)
+    int heapFailureAt = logText.indexOf('Java heap space')
+    int buildFailedAt = logText.lastIndexOf('BUILD FAILED')
+    if (runCompleteAt < 0 || resultSavedAt <= runCompleteAt || heapFailureAt <= resultSavedAt
+            || buildFailedAt <= heapFailureAt) {
+        throw new GradleException('Original log does not establish a completed JMH report followed by Gradle post-processing failure.')
+    }
+
+    File originalSummary = rootProject.file(recovery.originalValidationSummary as String).canonicalFile
+    if (!originalSummary.isFile() || sha256(originalSummary) != recovery.originalValidationSummarySHA256) {
+        throw new GradleException('Recovery evidence does not bind the original validation summary.')
+    }
+    Map originalValidation = new groovy.json.JsonSlurper().parse(originalSummary) as Map
+    if ((originalValidation.rowCount as int) != (context.expectedRows as int)
+            || (originalValidation.expectedRows as int) != (context.expectedRows as int)
+            || (originalValidation.sampleTimeRows as int) != ((context.expectedRows as int) / 2)) {
+        throw new GradleException('Original validation summary does not attest the recovered report rows and bytes.')
+    }
+    boolean originalSummaryHasBytes = originalValidation.resultBytes != null
+    boolean originalSummaryHasDigest = originalValidation.resultSHA256 != null
+    if (!originalSummaryHasBytes || !originalSummaryHasDigest) {
+        throw new GradleException('Original validation summary did not bind the exact report bytes; refusing recovery.')
+    }
+    if ((originalValidation.resultBytes as long) != (resultBytes as long)
+            || originalValidation.resultSHA256 != resultSHA256) {
+        throw new GradleException('Original validation summary has a mismatched report byte/hash binding.')
+    }
+
+    File recoveredSummary = file(context.validationSummaryFile as String).canonicalFile
+    if (!recoveredSummary.isFile()) {
+        throw new GradleException('Fresh recovery validation summary is missing: ' + recoveredSummary)
+    }
+    Map recoveredValidation = new groovy.json.JsonSlurper().parse(recoveredSummary) as Map
+    if ((recoveredValidation.rowCount as int) != (context.expectedRows as int)
+            || (recoveredValidation.expectedRows as int) != (context.expectedRows as int)
+            || (recoveredValidation.sampleTimeRows as int) != ((context.expectedRows as int) / 2)
+            || (recoveredValidation.resultBytes as long) != (resultBytes as long)
+            || recoveredValidation.resultSHA256 != resultSHA256
+            || recoveredValidation.comparisonType != context.comparisonType
+            || recoveredValidation.variants != context.variants
+            || (recoveredValidation.producerThreads as int) != (context.threadCount as int)
+            || recoveredValidation.measurementJvmArgs != context.measurementJvmArgs) {
+        throw new GradleException('Fresh recovery validation summary does not attest the exact report and paired context.')
+    }
+
+    File sourceIdentityManifest = rootProject.file(recovery.sourceIdentityManifest as String).canonicalFile
+    if (!sourceIdentityManifest.isFile() || sha256(sourceIdentityManifest) != recovery.sourceIdentityManifestSHA256) {
+        throw new GradleException('Recovery evidence does not bind its source identity manifest.')
+    }
+    Map sourceIdentity = new groovy.json.JsonSlurper().parse(sourceIdentityManifest) as Map
+    if (sourceIdentity.sourceSHA != context.sourceSHA
+            || sourceIdentity.sourceTreeSHA256 != context.sourceTreeSHA256
+            || sourceIdentity.baselineSHA != context.baselineSHA
+            || sourceIdentity.artifactSHA256?.benchmarkJar != recovery.benchmarkJarSHA256Observed
+            || recovery.benchmarkJarSHA256Observed != context.artifactSHA256?.benchmarkJar
+            || sourceIdentity.hostProvenance != context.hostProvenance) {
+        throw new GradleException('Recovery source identity or inherited host facts do not match their bound t=2 manifest.')
+    }
+
+    [kind: 'RECOVERED_GRADLE_POST_PROCESSING_FAILURE',
+     originalLog: recovery.originalLog,
+     originalLogSHA256: recovery.originalLogSHA256,
+     originalExit: recovery.originalExit,
+     originalGradleExitCode: recovery.originalGradleExitCode,
+     originalValidationSummary: recovery.originalValidationSummary,
+     originalValidationSummarySHA256: recovery.originalValidationSummarySHA256,
+     originalValidationSummaryHadReportBinding: originalSummaryHasBytes,
+     sourceIdentityManifest: recovery.sourceIdentityManifest,
+     sourceIdentityManifestSHA256: recovery.sourceIdentityManifestSHA256,
+     benchmarkJarSHA256Observed: recovery.benchmarkJarSHA256Observed,
+     recoveredValidationSummary: context.validationSummaryFile,
+     recoveredValidationSummarySHA256: sha256(recoveredSummary),
+     recoveredReportBytes: resultBytes,
+     recoveredReportSHA256: resultSHA256]
+}
+
+def expectedMeasurementSuccessMarker = { Map context, File resultFile, Object resultBytes, String resultSHA256 ->
+    boolean recovered = context.recoveryProvenance != null
+    Map evidence = recovered
+            ? recoveryEvidenceFor.call(context, resultFile, resultBytes, resultSHA256) as Map
+            : [kind: 'GRADLE_JAVAEXEC_COMPLETED',
+               description: 'The JMH JavaExec action returned successfully before Gradle post-processing.']
+    [markerSchemaVersion: 1,
+     measurementOutcome: recovered ? 'JMH_REPORT_RECOVERED_AFTER_POST_PROCESSING_FAILURE' : 'JAVAEXEC_EXIT_ZERO',
+     runId: context.runId,
+     sourceSHA: context.sourceSHA,
+     sourceTreeSHA256: context.sourceTreeSHA256,
+     resultFileRelativePath: context.resultFileRelativePath,
+     resultBytes: resultBytes,
+     resultSHA256: resultSHA256,
+     evidence: evidence]
+}
+
+def validateFinalizationPaths = { Map context ->
+    String contextPath = context.runContextFile as String
+    if (contextPath == null || contextPath.isBlank()) {
+        throw new GradleException('Paired run context is missing its run-context file path.')
+    }
+    File validatorJava = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }.get().executablePath.asFile
+    runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+            'noietime.syncmoney.benchmark.PairedJmhReportValidator', [
+                    'validate-finalization-paths', rootProject.projectDir.canonicalPath,
+                    project.projectDir.canonicalPath,
+                    file(contextPath).canonicalPath
+            ])
+}
+
+def writeMeasurementSuccessMarker = { Map context ->
+    validateFinalizationPaths.call(context)
+    File resultFile = file(context.resultFile as String).canonicalFile
+    if (!resultFile.isFile() || resultFile.length() == 0L) {
+        throw new GradleException('JMH JavaExec completed without a non-empty result file: ' + resultFile)
+    }
+    String markerPath = context.measurementSuccessMarkerFile as String
+    if (markerPath == null || markerPath.isBlank()) {
+        throw new GradleException('Paired run context is missing its measurement success marker path.')
+    }
+    File markerFile = file(markerPath).canonicalFile
+    Map expected = expectedMeasurementSuccessMarker.call(context, resultFile,
+            resultFile.length(), sha256(resultFile)) as Map
+    if (markerFile.isFile()) {
+        Map existing = new groovy.json.JsonSlurper().parse(markerFile) as Map
+        boolean exactMarkerMatch = groovy.json.JsonOutput.toJson(existing)
+                == groovy.json.JsonOutput.toJson(expected)
+        boolean safeRecoveryRefresh = false
+        if (!exactMarkerMatch && context.recoveryProvenance != null) {
+            Map oldEvidence = existing.evidence as Map
+            Map newEvidence = expected.evidence as Map
+            List<String> stableEvidenceFields = ['kind', 'originalLog', 'originalLogSHA256', 'originalExit',
+                    'originalGradleExitCode', 'originalValidationSummary', 'originalValidationSummarySHA256',
+                    'sourceIdentityManifest', 'sourceIdentityManifestSHA256', 'benchmarkJarSHA256Observed',
+                    'recoveredReportBytes', 'recoveredReportSHA256']
+            safeRecoveryRefresh = existing.markerSchemaVersion == expected.markerSchemaVersion
+                    && existing.measurementOutcome == expected.measurementOutcome
+                    && existing.runId == expected.runId
+                    && existing.sourceSHA == expected.sourceSHA
+                    && existing.sourceTreeSHA256 == expected.sourceTreeSHA256
+                    && existing.resultFileRelativePath == expected.resultFileRelativePath
+                    && (existing.resultBytes as long) == (expected.resultBytes as long)
+                    && existing.resultSHA256 == expected.resultSHA256
+                    && oldEvidence != null && newEvidence != null
+                    && stableEvidenceFields.every { String key ->
+                        groovy.json.JsonOutput.toJson(oldEvidence.get(key))
+                                == groovy.json.JsonOutput.toJson(newEvidence.get(key))
+                    }
+                    && oldEvidence.recoveredValidationSummary instanceof String
+                    && oldEvidence.recoveredValidationSummarySHA256 instanceof String
+                    && (oldEvidence.recoveredValidationSummarySHA256 ==~ /[0-9a-f]{64}/)
+        }
+        if (!exactMarkerMatch && !safeRecoveryRefresh) {
+            throw new GradleException('Existing paired measurement marker does not match its verified evidence; refusing overwrite.')
+        }
+        if (exactMarkerMatch) {
+            logger.lifecycle('Paired measurement marker already exists and matches verified evidence: ' + markerFile)
+            return
+        }
+        logger.lifecycle('Refreshing recovery marker metadata after revalidating the same immutable report and original failure evidence.')
+    }
+    writeJsonAtomically.call(markerFile, expected)
+}
+
+def recordMeasurementSuccess = { Map context ->
+    if (context.recoveryProvenance != null) {
+        throw new GradleException('Recovered reports must be finalized through the evidence-bound recovery path.')
+    }
+    writeMeasurementSuccessMarker.call(context)
+}
+
+def verifyMeasurementSuccessMarker = { Map context, File resultFile, Object resultBytes, String resultSHA256 ->
+    String markerPath = context.measurementSuccessMarkerFile as String
+    if (markerPath == null || markerPath.isBlank()) {
+        throw new GradleException('Paired run context is missing its measurement success marker path.')
+    }
+    File markerFile = file(markerPath).canonicalFile
+    if (!markerFile.isFile()) {
+        throw new GradleException('Paired measurement success marker is missing: ' + markerFile)
+    }
+    Map actual = new groovy.json.JsonSlurper().parse(markerFile) as Map
+    Map expected = expectedMeasurementSuccessMarker.call(context, resultFile, resultBytes, resultSHA256) as Map
+    if (groovy.json.JsonOutput.toJson(actual) != groovy.json.JsonOutput.toJson(expected)) {
+        throw new GradleException('Paired measurement marker does not match the run context, provenance, and exact report bytes.')
+    }
+}
+
+def finalizeComparisonReport = { Map context ->
+    validateFinalizationPaths.call(context)
+    File resultFile = file(context.resultFile as String).canonicalFile
+    File summaryFile = file(context.validationSummaryFile as String).canonicalFile
+    File manifestFile = file(context.manifestFile as String).canonicalFile
+    if (!resultFile.isFile() || resultFile.length() == 0L) {
+        throw new GradleException('Paired JMH result JSON is missing or empty: ' + resultFile)
+    }
+    if (!(context.sourceSHA ==~ /[0-9a-f]{40}/)
+            || !(context.sourceTreeSHA256 ==~ /[0-9a-f]{64}/)
+            || !(context.baselineSHA ==~ /[0-9a-f]{40}/)) {
+        throw new GradleException('Paired JMH run context has invalid source provenance hashes.')
+    }
+    long resultBytes = resultFile.length()
+    String resultSHA256 = sha256(resultFile)
+
+    File validatorJava = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }.get().executablePath.asFile
+    runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+            'noietime.syncmoney.benchmark.PairedJmhReportValidator', [
+                    'summarize', resultFile.absolutePath, summaryFile.absolutePath,
+                    (context.variants as List<String>).join(','), context.operationFilter as String,
+                    (context.quick as boolean).toString(), context.threadCount.toString(),
+                    context.expectedForks.toString(), context.expectedMeasurementIterations.toString(),
+                    context.p999SampleMinimum.toString()
+            ])
+    Map validationSummary = new groovy.json.JsonSlurper().parse(summaryFile) as Map
+    int expectedRows = context.expectedRows as int
+    if ((validationSummary.rowCount as int) != expectedRows
+            || (validationSummary.expectedRows as int) != expectedRows
+            || (validationSummary.sampleTimeRows as int) != (expectedRows / 2)
+            || (validationSummary.producerThreads as int) != (context.threadCount as int)
+            || validationSummary.variants != context.variants
+            || validationSummary.comparisonType != context.comparisonType
+            || validationSummary.measurementJvmArgs != context.measurementJvmArgs
+            || !(validationSummary.measurementJdk as String).startsWith('25.')
+            || !(validationSummary.resultSHA256 ==~ /[0-9a-f]{64}/)
+            || validationSummary.resultSHA256 != resultSHA256
+            || (validationSummary.resultBytes as long) != resultBytes) {
+        throw new GradleException('Paired JMH validation summary does not match its persisted run context.')
+    }
+    if (context.recoveryProvenance != null) writeMeasurementSuccessMarker.call(context)
+    verifyMeasurementSuccessMarker.call(context, resultFile, resultBytes, resultSHA256)
+
+    Map baselinePilot = validationSummary.baselineFacadeAcceptedRatePilot as Map
+    boolean pilotExpected = context.variants.contains('legacy132')
+            && context.operationFilter in ['all', 'deposit']
+    if ((baselinePilot.available as boolean) != pilotExpected) {
+        throw new GradleException('Paired JMH baseline accepted-rate pilot availability does not match the requested matrix.')
+    }
+
+    String resultRelativePath = context.resultFileRelativePath as String
+    Map hostProvenance = context.hostProvenance as Map
+    File measurementSuccessMarkerFile = file(context.measurementSuccessMarkerFile as String).canonicalFile
+    Map measurementSuccessMarker = new groovy.json.JsonSlurper().parse(measurementSuccessMarkerFile) as Map
+    String markerRelativePath = rootProject.projectDir.toPath().relativize(measurementSuccessMarkerFile.toPath())
+            .toString().replace('\\', '/')
+    Map manifest = [
+            schemaVersion: 2,
+            runId: context.runId,
+            sourceSHA: context.sourceSHA,
+            sourceTreeSHA256: context.sourceTreeSHA256,
+            baselineSHA: context.baselineSHA,
+            artifactSHA256: context.artifactSHA256,
+            profileId: context.profileId,
+            jdk: validationSummary.measurementJdk,
+            gradleDaemonJdk: context.gradleDaemonJdk,
+            baselineBuildJavaVersion: context.baselineBuildJavaVersion,
+            gcCollector: context.gcCollector,
+            gcJvmFlag: context.gcJvmFlag,
+            heapJvmFlag: context.heapJvmFlag,
+            measurementJvmArgs: context.measurementJvmArgs,
+            observedJvmArgs: validationSummary.observedJvmArgs,
+            p999SampleMinimum: context.p999SampleMinimum,
+            comparisonType: context.comparisonType,
+            sampleTailAssessment: validationSummary.sampleTailAssessment,
+            expectedMatrix: context.expectedMatrix,
+            reportValidation: [expectedRows: validationSummary.expectedRows,
+                    rowCount: validationSummary.rowCount, sampleTimeRows: validationSummary.sampleTimeRows],
+            measurementEvidence: [markerFile: markerRelativePath,
+                    markerSHA256: sha256(measurementSuccessMarkerFile), marker: measurementSuccessMarker],
+            os: hostProvenance.osName + ' ' + hostProvenance.osVersion + ' ' + hostProvenance.osArch,
+            availableProcessors: hostProvenance.availableProcessors,
+            hostProvenance: hostProvenance,
+            resultFile: resultRelativePath,
+            resultBytes: validationSummary.resultBytes,
+            resultSHA256: validationSummary.resultSHA256,
+            baselineFacadeAcceptedRatePilot: baselinePilot,
+            producerThreads: context.threadCount,
+            notes: [
+                    'A p99.9 estimate includes an approximate 95% binomial order-statistic interval only when the sample minimum is met; this interval does not establish independence or cross-fork stationarity.',
+                    'The quick smoke is not a tail-latency conclusion.',
+                    'Fork affinity is explicitly NOT_CAPTURED; the paired result does not claim affinity parity.',
+                    'Paired measurement forks use benchmark-only SerialGC following intermittent HotSpot access violations observed under G1 and ParallelGC; the root cause remains unknown, and both variants share the same collector.',
+                    'Measurement forks use a fixed 1 GiB maximum heap for both variants.',
+                    'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
+                    'The current facade receipt adapter drains accepted events into deterministic in-memory receipts; synthetic receipt completion is not durable persistence.',
+                    'This facade pilot is not a macro Redis/SQL baseline and must not be used to calibrate the open-loop load profile.'
+            ]
+    ]
+    if (context.recoveryProvenance != null) manifest.recoveryProvenance = context.recoveryProvenance
+
+    if (manifestFile.isFile()) {
+        runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+                'noietime.syncmoney.benchmark.PairedJmhReportValidator',
+                ['verify-binding', resultFile.absolutePath, manifestFile.absolutePath])
+        Map existingManifest = new groovy.json.JsonSlurper().parse(manifestFile) as Map
+        boolean exactManifestMatch = groovy.json.JsonOutput.toJson(existingManifest)
+                == groovy.json.JsonOutput.toJson(manifest)
+        if (!exactManifestMatch) {
+            def manifestSubsetMatches
+            manifestSubsetMatches = { Object existingValue, Object expectedValue, String path ->
+                if (path == 'comparisonType' && existingValue == null && expectedValue == 'PAIRED') return true
+                if (path == 'measurementEvidence' && context.recoveryProvenance != null
+                        && existingValue instanceof Map && expectedValue instanceof Map) {
+                    Map oldMeasurement = existingValue as Map
+                    Map newMeasurement = expectedValue as Map
+                    Map oldMarker = oldMeasurement.marker as Map
+                    Map newMarker = newMeasurement.marker as Map
+                    Map oldEvidence = oldMarker?.evidence as Map
+                    Map newEvidence = newMarker?.evidence as Map
+                    List<String> stableMarkerFields = ['markerSchemaVersion', 'measurementOutcome', 'runId',
+                            'sourceSHA', 'sourceTreeSHA256', 'resultFileRelativePath', 'resultBytes', 'resultSHA256']
+                    List<String> stableEvidenceFields = ['kind', 'originalLog', 'originalLogSHA256', 'originalExit',
+                            'originalGradleExitCode', 'originalValidationSummary', 'originalValidationSummarySHA256',
+                            'originalValidationSummaryHadReportBinding', 'sourceIdentityManifest',
+                            'sourceIdentityManifestSHA256', 'benchmarkJarSHA256Observed',
+                            'recoveredReportBytes', 'recoveredReportSHA256']
+                    return oldMeasurement.markerFile == newMeasurement.markerFile
+                            && oldMeasurement.markerSHA256 instanceof String
+                            && (oldMeasurement.markerSHA256 ==~ /[0-9a-f]{64}/)
+                            && oldMarker != null && newMarker != null
+                            && stableMarkerFields.every { String key ->
+                                groovy.json.JsonOutput.toJson(oldMarker.get(key))
+                                        == groovy.json.JsonOutput.toJson(newMarker.get(key))
+                            }
+                            && oldEvidence != null && newEvidence != null
+                            && stableEvidenceFields.every { String key ->
+                                groovy.json.JsonOutput.toJson(oldEvidence.get(key))
+                                        == groovy.json.JsonOutput.toJson(newEvidence.get(key))
+                            }
+                }
+                if (existingValue instanceof Map && expectedValue instanceof Map) {
+                    Map existingMap = existingValue as Map
+                    Map expectedMap = expectedValue as Map
+                    return existingMap.every { Object key, Object value ->
+                        expectedMap.containsKey(key) && manifestSubsetMatches.call(value,
+                                expectedMap.get(key), path.isEmpty() ? key.toString() : path + '.' + key)
+                    }
+                }
+                if (existingValue instanceof List && expectedValue instanceof List) {
+                    return groovy.json.JsonOutput.toJson(existingValue)
+                            == groovy.json.JsonOutput.toJson(expectedValue)
+                }
+                groovy.json.JsonOutput.toJson(existingValue) == groovy.json.JsonOutput.toJson(expectedValue)
+            }
+            boolean verifiedRecoveryUpgrade = context.recoveryProvenance != null
+                    && manifestSubsetMatches.call(existingManifest, manifest, '')
+            if (!verifiedRecoveryUpgrade) {
+                throw new GradleException('Existing paired JMH manifest does not match the verified run context; refusing overwrite.')
+            }
+            logger.lifecycle('Upgrading an older recovery manifest after verifying every existing field against the exact result and run context.')
+            writeJsonAtomically.call(manifestFile, manifest)
+            runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+                    'noietime.syncmoney.benchmark.PairedJmhReportValidator',
+                    ['verify-binding', resultFile.absolutePath, manifestFile.absolutePath])
+            logger.lifecycle('Upgraded the hash-bound recovery manifest with explicit comparison and measurement evidence: '
+                    + manifestFile)
+            return
+        }
+        logger.lifecycle('JMH report is already finalized and matches its verified context: ' + manifestFile)
+        return
+    }
+
+    File temporaryManifest = new File(manifestFile.parentFile, manifestFile.name + '.tmp')
+    writeJsonAtomically.call(temporaryManifest, manifest)
+    runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+            'noietime.syncmoney.benchmark.PairedJmhReportValidator',
+            ['verify-binding', resultFile.absolutePath, temporaryManifest.absolutePath])
+    try {
+        java.nio.file.Files.move(temporaryManifest.toPath(), manifestFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+    } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+        java.nio.file.Files.move(temporaryManifest.toPath(), manifestFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+    runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
+            'noietime.syncmoney.benchmark.PairedJmhReportValidator',
+            ['verify-binding', resultFile.absolutePath, manifestFile.absolutePath])
+    logger.lifecycle('Finalized JMH report rows=' + validationSummary.rowCount
+            + ', bytes=' + validationSummary.resultBytes + ', sha256=' + validationSummary.resultSHA256
+            + ', manifest=' + manifestFile)
 }
 
 def benchmarkProjectPaths = {
@@ -500,21 +924,59 @@ tasks.register('runBaselineComparison', JavaExec) {
         File resultFile = new File(reportDir, 'transaction-paired-jmh-t' + threadCount + '-' + runId + '.json')
         File validationSummaryFile = new File(layout.buildDirectory.dir('tmp').get().asFile,
                 'transaction-paired-validation-' + runId + '.json')
+        File runContextFile = new File(layout.buildDirectory.dir('tmp').get().asFile,
+                'transaction-paired-context-' + runId + '.json')
+        File manifestFile = new File(reportDir,
+                'transaction-paired-manifest-t' + threadCount + '-' + runId + '.json')
+        File measurementSuccessMarkerFile = new File(layout.buildDirectory.dir('tmp').get().asFile,
+                'transaction-paired-success-' + runId + '.json')
+        String candidateSha = captureOutput.call(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
+        String sourceTreeSha256 = benchmarkSourceTreeSha256.call()
+        File benchmarkArtifact = tasks.named('benchmarkJar').get().archiveFile.get().asFile
+        def resultRelativePath = rootProject.projectDir.toPath().relativize(resultFile.toPath())
+                .toString().replace('\\', '/')
+        def expectedMatrix = [
+                variants: variants.split(',').toList(),
+                operation: benchmarkOperation ?: (quick ? 'deposit' : 'all'),
+                accountCounts: quick ? ['1000'] : ['1', '1000', '10000'],
+                accessPatterns: quick ? ['uniform'] : ['uniform', 'hot'],
+                modes: ['thrpt', 'sample'],
+                producerThreads: Integer.parseInt(threadCount),
+                forks: quick ? 1 : 3,
+                measurementIterations: quick ? 1 : 10
+        ]
+        int operationCount = quick || benchmarkOperation != null ? 1 : 8
+        int expectedRows = variants.split(',').length * operationCount
+                * (quick ? 1 : 3) * (quick ? 1 : 2) * 2
+        String comparisonType = variants.split(',').length == 2 ? 'PAIRED' : 'SINGLE_VARIANT_DIAGNOSTIC'
+        String profileId = comparisonType == 'PAIRED'
+                ? 'transaction-paired-jmh' : 'transaction-single-variant-diagnostic-jmh'
+        Map hostProvenance = captureHostProvenance.call()
         comparison.putAll([
                 baseline: baseline,
                 baselineSha: baselineSha,
                 baselineArtifact: baselineArtifact,
                 baselineArtifactSha256: baselineBuild.artifactSha256,
+                benchmarkArtifact: benchmarkArtifact,
+                benchmarkArtifactSha256: sha256(benchmarkArtifact),
+                sourceSHA: candidateSha,
+                sourceTreeSHA256: sourceTreeSha256,
                 resultFile: resultFile,
+                resultFileRelativePath: resultRelativePath,
                 reportDir: reportDir,
+                manifestFile: manifestFile,
                 threadCount: Integer.parseInt(threadCount),
                 variants: variants.split(',').toList(),
                 benchmarkOperation: benchmarkOperation,
                 quick: quick,
                 expectedForks: quick ? 1 : 3,
                 expectedMeasurementIterations: quick ? 1 : 10,
+                expectedRows: expectedRows,
+                expectedMatrix: expectedMatrix,
                 validationSummaryFile: validationSummaryFile,
-                hostProvenance: captureHostProvenance.call(),
+                measurementSuccessMarkerFile: measurementSuccessMarkerFile,
+                hostProvenance: hostProvenance,
+                runContextFile: runContextFile,
                 runId: runId,
                 baselineBuildJavaVersion: baselineBuild.buildJavaVersion
         ])
@@ -536,138 +998,73 @@ tasks.register('runBaselineComparison', JavaExec) {
                     '-rf', 'json', '-rff', resultFile.absolutePath
             if (benchmarkOperation != null) args '-p', 'operation=' + benchmarkOperation
         }
-    }
-    doLast {
-        File validatorJava = javaToolchains.launcherFor {
-            languageVersion = JavaLanguageVersion.of(25)
-        }.get().executablePath.asFile
-        runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
-                'noietime.syncmoney.benchmark.PairedJmhReportValidator', [
-                        'summarize', comparison.resultFile.absolutePath, comparison.validationSummaryFile.absolutePath,
-                        comparison.variants.join(','), comparison.benchmarkOperation ?: 'all',
-                        comparison.quick.toString(), comparison.threadCount.toString(), comparison.expectedForks.toString(),
-                        comparison.expectedMeasurementIterations.toString(), '100000'
-                ])
-        def validationSummary = new groovy.json.JsonSlurper().parse(comparison.validationSummaryFile)
-        def rows = new groovy.json.JsonSlurper().parse(comparison.resultFile)
-        Set measurementJdks = rows.collect { it.jdkVersion }.findAll { it instanceof String }.toSet()
-        if (measurementJdks.size() != 1 || !measurementJdks.first().startsWith('25.')) {
-            throw new GradleException('Paired JMH rows must all run on the planned Java 25 measurement runtime; observed '
-                    + measurementJdks)
-        }
-        String measurementJdk = measurementJdks.first()
-        Set variants = rows.collect { it.params.variant }.toSet()
-        if (variants != (comparison.variants as Set)) {
-            throw new GradleException('Paired JMH variant rows do not match the requested variants.')
-        }
-        int expectedRows = validationSummary.expectedRows as int
-        List<Map> tailAssessments = validationSummary.sampleTailAssessment as List<Map>
-        def baselinePilot = rows.find { row ->
-            row.params.variant == 'legacy132' && row.params.operation == 'deposit'
-                    && row.params.accountCount == '1000' && row.params.accessPattern == 'uniform'
-                    && row.mode == 'thrpt'
-        }
-        double accepted = 0d
-        double offered = 0d
-        double rejected = 0d
-        if (comparison.variants.contains('legacy132') && comparison.benchmarkOperation in [null, 'deposit']) {
-            if (baselinePilot == null) throw new GradleException('Paired report omitted the baseline accepted-rate pilot case.')
-            def acceptedScore = baselinePilot.secondaryMetrics?.accepted?.score
-            def offeredScore = baselinePilot.secondaryMetrics?.offered?.score
-            def rejectedScore = baselinePilot.secondaryMetrics?.rejected?.score
-            if (!(acceptedScore instanceof Number) || !(offeredScore instanceof Number)
-                    || !(rejectedScore instanceof Number) || baselinePilot.primaryMetric.scoreUnit != 'ops/us') {
-                throw new GradleException('Baseline pilot must include accepted/offered/rejected counters and throughput in ops/us.')
-            }
-            accepted = acceptedScore.doubleValue()
-            offered = offeredScore.doubleValue()
-            rejected = rejectedScore.doubleValue()
-            if (![accepted, offered, rejected].every { Double.isFinite(it) && it >= 0d }
-                    || offered <= 0d || Math.abs(offered - accepted - rejected) > Math.max(1e-6d, offered * 1e-9d)) {
-                throw new GradleException('Baseline pilot outcome counters are invalid or do not conserve offered operations.')
-            }
-            comparison.baselineAcceptedRate = baselinePilot.primaryMetric.score.doubleValue()
-                    * (accepted / offered) * 1_000_000d
-            if (!Double.isFinite(comparison.baselineAcceptedRate) || comparison.baselineAcceptedRate <= 0d) {
-                throw new GradleException('Baseline facade accepted rate must be positive and finite.')
-            }
-        } else {
-            comparison.baselineAcceptedRate = null
-        }
 
-        File metadata = new File(comparison.reportDir, 'transaction-paired-manifest-t' + comparison.threadCount + '-' + comparison.runId + '.json')
-        String currentSha = captureOutput(['git', '-C', rootProject.projectDir.absolutePath, 'rev-parse', 'HEAD'])
-        String sourceTreeSha256 = benchmarkSourceTreeSha256.call()
-        File benchmarkArtifact = tasks.named('benchmarkJar').get().archiveFile.get().asFile
-        String resultSha256 = sha256(comparison.resultFile)
-        String resultRelativePath = rootProject.projectDir.toPath().relativize(comparison.resultFile.toPath())
-                .toString().replace('\\', '/')
-        def expectedMatrix = [
-                variants: comparison.variants,
-                operation: comparison.benchmarkOperation ?: (comparison.quick ? 'deposit' : 'all'),
-                accountCounts: comparison.quick ? ['1000'] : ['1', '1000', '10000'],
-                accessPatterns: comparison.quick ? ['uniform'] : ['uniform', 'hot'],
-                modes: ['thrpt', 'sample'],
-                producerThreads: comparison.threadCount,
-                forks: comparison.expectedForks,
-                measurementIterations: comparison.expectedMeasurementIterations
-        ]
-        def manifest = [
-                schemaVersion: 2,
-                runId: comparison.runId,
-                sourceSHA: currentSha,
+        Map runContext = [
+                contextSchemaVersion: 1,
+                runId: runId,
+                sourceSHA: candidateSha,
                 sourceTreeSHA256: sourceTreeSha256,
-                baselineSHA: comparison.baselineSha,
-                artifactSHA256: [benchmarkJar: sha256(benchmarkArtifact), baselineJar: comparison.baselineArtifactSha256],
-                profileId: 'transaction-paired-jmh',
-                jdk: measurementJdk,
+                baselineSHA: baselineSha,
+                artifactSHA256: [benchmarkJar: comparison.benchmarkArtifactSha256,
+                        baselineJar: baselineBuild.artifactSha256],
+                profileId: profileId,
+                comparisonType: comparisonType,
                 gradleDaemonJdk: System.getProperty('java.version'),
-                baselineBuildJavaVersion: comparison.baselineBuildJavaVersion,
+                baselineBuildJavaVersion: baselineBuild.buildJavaVersion,
                 gcCollector: pairedJmhMeasurementProfile.collector,
                 gcJvmFlag: pairedJmhMeasurementProfile.gcJvmFlag,
                 heapJvmFlag: pairedJmhMeasurementProfile.heapJvmFlag,
                 measurementJvmArgs: pairedJmhMeasurementProfile.jmhJvmArgs,
                 p999SampleMinimum: 100000,
-                sampleTailAssessment: tailAssessments,
                 expectedMatrix: expectedMatrix,
-                reportValidation: [expectedRows: expectedRows, rowCount: validationSummary.rowCount,
-                        sampleTimeRows: validationSummary.sampleTimeRows],
-                os: System.getProperty('os.name') + ' ' + System.getProperty('os.version') + ' ' + System.getProperty('os.arch'),
-                availableProcessors: comparison.hostProvenance.availableProcessors,
-                hostProvenance: comparison.hostProvenance,
-                resultFile: resultRelativePath,
-                resultBytes: comparison.resultFile.length(),
-                resultSHA256: resultSha256,
-                baselineFacadeAcceptedRatePilot: comparison.baselineAcceptedRate == null ? [available: false,
-                        reason: 'This filtered operation/variant run is not a baseline accepted-rate calibration profile.'] : [available: true,
-                        operation: 'deposit', accountCount: 1000, accessPattern: 'uniform',
-                        producerThreads: comparison.threadCount, acceptedTransactionsPerSecond: comparison.baselineAcceptedRate,
-                        meanOfferedPerMeasurement: offered, meanAcceptedPerMeasurement: accepted,
-                        meanRejectedPerMeasurement: rejected,
-                        derivation: 'JMH throughput (ops/us) × accepted/offered × 1,000,000',
-                        unit: 'facade acceptances/second; synthetic receipt completion does not include Redis or SQL'],
-                producerThreads: comparison.threadCount,
-                notes: ['A p99.9 estimate includes an approximate 95% binomial order-statistic interval only when the sample minimum is met; this interval does not establish independence or cross-fork stationarity.',
-                        'The quick smoke is not a tail-latency conclusion.',
-                        'Fork affinity is explicitly NOT_CAPTURED; the paired result does not claim affinity parity.',
-                        'Paired measurement forks use benchmark-only SerialGC following intermittent HotSpot access violations observed under G1 and ParallelGC; the root cause remains unknown, and both variants share the same collector.',
-                        'Measurement forks use a fixed 1 GiB maximum heap for both variants.',
-                        'Latency covers synchronous facade acceptance; it does not claim Redis receipt or SQL durability.',
-                        'The current facade receipt adapter drains accepted events into deterministic in-memory receipts; synthetic receipt completion is not durable persistence.',
-                        'This facade pilot is not a macro Redis/SQL baseline and must not be used to calibrate the open-loop load profile.']
+                expectedRows: expectedRows,
+                hostProvenance: hostProvenance,
+                threadCount: Integer.parseInt(threadCount),
+                variants: comparison.variants,
+                operationFilter: benchmarkOperation ?: 'all',
+                quick: quick,
+                expectedForks: comparison.expectedForks,
+                expectedMeasurementIterations: comparison.expectedMeasurementIterations,
+                resultFile: resultFile.absolutePath,
+                resultFileRelativePath: resultRelativePath,
+                validationSummaryFile: validationSummaryFile.absolutePath,
+                manifestFile: manifestFile.absolutePath,
+                measurementSuccessMarkerFile: measurementSuccessMarkerFile.absolutePath,
+                runContextFile: runContextFile.absolutePath,
+                startedAtUtc: java.time.Instant.now().toString()
         ]
-        metadata.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(manifest)) + System.lineSeparator()
-        def writtenManifest = new groovy.json.JsonSlurper().parse(metadata)
-        if (writtenManifest.gcCollector != pairedJmhMeasurementProfile.collector
-                || writtenManifest.gcJvmFlag != pairedJmhMeasurementProfile.gcJvmFlag
-                || writtenManifest.heapJvmFlag != pairedJmhMeasurementProfile.heapJvmFlag
-                || writtenManifest.measurementJvmArgs != pairedJmhMeasurementProfile.jmhJvmArgs
-                || !rows.every { row -> row.jvmArgs.containsAll(writtenManifest.measurementJvmArgs) }) {
-            throw new GradleException('Paired JMH manifest measurement profile does not match the completed result rows.')
+        comparison.runContext = runContext
+        writeJsonAtomically.call(runContextFile, runContext)
+    }
+    doLast {
+        recordMeasurementSuccess.call(comparison.runContext as Map)
+    }
+    doLast {
+        finalizeComparisonReport.call(comparison.runContext as Map)
+    }
+}
+
+tasks.register('finalizePairedComparisonReport') {
+    group = 'verification'
+    description = 'Revalidates an existing JMH report and creates its hash-bound manifest without rerunning measurements.'
+    dependsOn tasks.named('jmhClasses'), configurations.jmhRuntimeClasspath.buildDependencies
+    doLast {
+        def contextProperty = providers.gradleProperty('pairedReportContext').orNull
+        if (contextProperty == null || contextProperty.isBlank()) {
+            throw new GradleException('Supply -PpairedReportContext=<persisted paired run context JSON>.')
         }
-        runJavaMain.call(validatorJava, sourceSets.jmh.runtimeClasspath.asPath,
-                'noietime.syncmoney.benchmark.PairedJmhReportValidator',
-                ['verify-binding', comparison.resultFile.absolutePath, metadata.absolutePath])
+        File contextFile = rootProject.file(contextProperty).canonicalFile
+        if (!contextFile.isFile()) throw new GradleException('Paired JMH run context does not exist: ' + contextFile)
+        Map context = new groovy.json.JsonSlurper().parse(contextFile) as Map
+        if ((context.contextSchemaVersion as int) != 1) {
+            throw new GradleException('Unsupported paired JMH run-context schema version.')
+        }
+        if (context.runContextFile != null
+                && rootProject.file(context.runContextFile as String).canonicalFile != contextFile) {
+            throw new GradleException('Paired JMH runContextFile does not identify the supplied context file.')
+        }
+        context.runContextFile = contextFile.absolutePath
+        finalizeComparisonReport.call(context)
     }
 }
 

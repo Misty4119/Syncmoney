@@ -1,5 +1,6 @@
 package noietime.syncmoney.benchmark;
 
+import com.google.gson.Gson;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -37,6 +39,15 @@ class PairedJmhReportValidatorTest {
 
         assertEquals(192, summary.get("rowCount"));
         assertEquals(96, summary.get("sampleTimeRows"));
+        assertEquals("PAIRED", summary.get("comparisonType"));
+        assertEquals("25.0.4", summary.get("measurementJdk"));
+        assertEquals(List.of("current", "legacy132"), summary.get("variants"));
+        assertEquals(List.of("-XX:+UseSerialGC", "-Dnet.bytebuddy.experimental=true", "-Xmx1g"),
+                summary.get("measurementJvmArgs"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> baselinePilot = (Map<String, Object>) summary.get("baselineFacadeAcceptedRatePilot");
+        assertEquals(Boolean.TRUE, baselinePilot.get("available"));
+        assertEquals(800_000d, baselinePilot.get("acceptedTransactionsPerSecond"));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> assessments = (List<Map<String, Object>>) summary.get("sampleTailAssessment");
         assertEquals(96, assessments.size());
@@ -68,6 +79,88 @@ class PairedJmhReportValidatorTest {
                         false, PRODUCERS, FULL_FORKS, FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES));
 
         assertTrue(failure.getMessage().contains("duplicate"));
+    }
+
+    @Test
+    void rejectsRowsMeasuredByDifferentJdkBuilds() {
+        List<Map<String, Object>> rows = fullRows(List.of("current", "legacy132"), null, FULL_FORKS, 100_000);
+        rows.getLast().put("jdkVersion", "25.0.5");
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.validateRows(rows, List.of("current", "legacy132"), null,
+                        false, PRODUCERS, FULL_FORKS, FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES));
+
+        assertTrue(failure.getMessage().contains("same Java runtime"));
+    }
+
+    @Test
+    void rejectsConflictingMaximumHeapArgument() {
+        List<Map<String, Object>> rows = fullRows(List.of("current", "legacy132"), null, FULL_FORKS, 100_000);
+        @SuppressWarnings("unchecked")
+        List<Object> jvmArgs = new ArrayList<>((List<Object>) rows.getFirst().get("jvmArgs"));
+        jvmArgs.add("-Xmx2g");
+        rows.getFirst().put("jvmArgs", jvmArgs);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.validateRows(rows, List.of("current", "legacy132"), null,
+                        false, PRODUCERS, FULL_FORKS, FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES));
+
+        assertTrue(failure.getMessage().contains("heap"));
+    }
+
+    @Test
+    void rejectsConflictingGarbageCollectorArgument() {
+        List<Map<String, Object>> rows = fullRows(List.of("current", "legacy132"), null, FULL_FORKS, 100_000);
+        @SuppressWarnings("unchecked")
+        List<Object> jvmArgs = new ArrayList<>((List<Object>) rows.getFirst().get("jvmArgs"));
+        jvmArgs.add("-XX:+UseParallelGC");
+        rows.getFirst().put("jvmArgs", jvmArgs);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.validateRows(rows, List.of("current", "legacy132"), null,
+                        false, PRODUCERS, FULL_FORKS, FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES));
+
+        assertTrue(failure.getMessage().contains("collector"));
+    }
+
+    @Test
+    void rejectsDifferentJvmArgumentsAcrossPairedRows() {
+        List<Map<String, Object>> rows = fullRows(List.of("current", "legacy132"), null, FULL_FORKS, 100_000);
+        rows.getLast().put("jvmArgs", List.of("-XX:+UseSerialGC", "-Dnet.bytebuddy.experimental=true",
+                "-Xmx1g", "-Duser.timezone=UTC"));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.validateRows(rows, List.of("current", "legacy132"), null,
+                        false, PRODUCERS, FULL_FORKS, FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES));
+
+        assertTrue(failure.getMessage().contains("same JVM arguments"));
+    }
+
+    @Test
+    void recordsAdditionalJvmArgumentsSharedByAllRows() {
+        List<Map<String, Object>> rows = fullRows(List.of("current", "legacy132"), null, FULL_FORKS, 100_000);
+        List<String> actualArguments = List.of("-XX:+UseSerialGC", "-Dnet.bytebuddy.experimental=true",
+                "-Xmx1g", "-Duser.timezone=UTC");
+        for (Map<String, Object> row : rows) {
+            row.put("jvmArgs", actualArguments);
+        }
+
+        Map<String, Object> summary = PairedJmhReportValidator.validateRows(rows,
+                List.of("current", "legacy132"), null, false, PRODUCERS, FULL_FORKS,
+                FULL_MEASUREMENTS, P999_MINIMUM_SAMPLES);
+
+        assertEquals(actualArguments, summary.get("observedJvmArgs"));
+        assertEquals(List.of("-XX:+UseSerialGC", "-Dnet.bytebuddy.experimental=true", "-Xmx1g"),
+                summary.get("measurementJvmArgs"));
+    }
+
+    @Test
+    void marksSingleVariantRunAsDiagnosticRatherThanPaired() {
+        Map<String, Object> summary = PairedJmhReportValidator.validateRows(
+                quickRows(List.of("current"), "set", 1, 100), List.of("current"), "set",
+                true, PRODUCERS, 1, 1, P999_MINIMUM_SAMPLES);
+
+        assertEquals("SINGLE_VARIANT_DIAGNOSTIC", summary.get("comparisonType"));
     }
 
     @Test
@@ -169,6 +262,186 @@ class PairedJmhReportValidatorTest {
     }
 
     @Test
+    void sha256StreamsLargeResultFiles(@TempDir Path temporaryDirectory) throws Exception {
+        Path result = temporaryDirectory.resolve("large-paired.json");
+        MessageDigest expected = MessageDigest.getInstance("SHA-256");
+        byte[] block = new byte[64 * 1024];
+        for (int index = 0; index < block.length; index++) block[index] = (byte) (index * 31);
+        try (var output = Files.newOutputStream(result)) {
+            for (int index = 0; index < 1024; index++) {
+                output.write(block);
+                expected.update(block);
+            }
+        }
+
+        assertEquals(HexFormat.of().formatHex(expected.digest()), PairedJmhReportValidator.sha256(result));
+    }
+
+    @Test
+    void validatedSummaryBindsResultBytesAndDigest(@TempDir Path temporaryDirectory) throws Exception {
+        Path result = temporaryDirectory.resolve("paired.json");
+        Files.writeString(result, new Gson().toJson(quickRows(List.of("current"), "set", 1, 100)));
+        byte[] bytes = Files.readAllBytes(result);
+
+        Map<String, Object> summary = PairedJmhReportValidator.summarizeReport(result, List.of("current"),
+                "set", true, PRODUCERS, 1, 1, P999_MINIMUM_SAMPLES);
+
+        assertEquals((long) bytes.length, summary.get("resultBytes"));
+        assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)),
+                summary.get("resultSHA256"));
+        assertEquals(2, summary.get("rowCount"));
+    }
+
+    @Test
+    void summarizeRejectsResultOutputAliasBeforeOverwritingReport(@TempDir Path temporaryDirectory) throws Exception {
+        Path result = temporaryDirectory.resolve("paired.json");
+        Files.writeString(result, new Gson().toJson(quickRows(List.of("current"), "set", 1, 100)));
+        byte[] original = Files.readAllBytes(result);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.main(new String[] {"summarize", result.toString(), result.toString(),
+                        "current", "set", "true", Integer.toString(PRODUCERS), "1", "1",
+                        Long.toString(P999_MINIMUM_SAMPLES)}));
+
+        assertTrue(failure.getMessage().contains("alias"));
+        assertArrayEquals(original, Files.readAllBytes(result));
+    }
+
+    @Test
+    void finalizationRejectsSummaryAliasToOriginalRecoveryEvidence(@TempDir Path temporaryDirectory) throws Exception {
+        Path root = temporaryDirectory.toRealPath();
+        Path report = root.resolve("build/reports/paired.json");
+        Path originalSummary = root.resolve("build/reports/original-validation.json");
+        Path manifest = root.resolve("build/reports/manifest.json");
+        Path marker = root.resolve("build/tmp/success.json");
+        Path runContext = root.resolve("build/tmp/context.json");
+        Files.createDirectories(report.getParent());
+        Files.createDirectories(marker.getParent());
+        Files.writeString(report, "[]\n");
+        byte[] originalEvidence = "original recovery summary evidence".getBytes(StandardCharsets.UTF_8);
+        Files.write(originalSummary, originalEvidence);
+
+        Map<String, Object> context = finalizationContext(root, report, originalSummary, manifest, marker, runContext);
+        context.put("recoveryProvenance", Map.of(
+                "originalLog", "build/reports/original-run.log",
+                "originalExit", "build/reports/original-run.exit",
+                "originalValidationSummary", root.relativize(originalSummary).toString().replace('\\', '/'),
+                "sourceIdentityManifest", "build/reports/source-identity.json"));
+        Files.writeString(runContext, new Gson().toJson(context));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.verifyFinalizationPaths(root, runContext));
+
+        assertTrue(failure.getMessage().contains("alias"));
+        assertArrayEquals(originalEvidence, Files.readAllBytes(originalSummary));
+    }
+
+    @Test
+    void finalizationUsesBenchmarkProjectRootForRelativeOutputs(@TempDir Path temporaryDirectory) throws Exception {
+        Path root = temporaryDirectory.toRealPath();
+        Path project = root.resolve("syncmoney-benchmarks");
+        Path report = project.resolve("build/reports/paired.json");
+        Path originalSummary = report.getParent().resolve("original-validation.json");
+        Path manifest = project.resolve("build/reports/manifest.json");
+        Path marker = project.resolve("build/tmp/success.json");
+        Path runContext = project.resolve("build/tmp/context.json");
+        Files.createDirectories(report.getParent());
+        Files.createDirectories(marker.getParent());
+        Files.writeString(report, "[]\n");
+        byte[] originalEvidence = "original recovery summary evidence".getBytes(StandardCharsets.UTF_8);
+        Files.write(originalSummary, originalEvidence);
+
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("resultFile", "build/reports/paired.json");
+        context.put("resultFileRelativePath", "syncmoney-benchmarks/build/reports/paired.json");
+        context.put("validationSummaryFile", "build/reports/original-validation.json");
+        context.put("manifestFile", "build/reports/manifest.json");
+        context.put("measurementSuccessMarkerFile", "build/tmp/success.json");
+        context.put("runContextFile", "build/tmp/context.json");
+        context.put("recoveryProvenance", Map.of(
+                "originalLog", "build/reports/original-run.log",
+                "originalExit", "build/reports/original-run.exit",
+                "originalValidationSummary", "syncmoney-benchmarks/build/reports/original-validation.json",
+                "sourceIdentityManifest", "build/reports/source-identity.json"));
+        Files.writeString(runContext, new Gson().toJson(context));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.verifyFinalizationPaths(root, project, runContext));
+
+        assertTrue(failure.getMessage().contains("alias"));
+        assertArrayEquals(originalEvidence, Files.readAllBytes(originalSummary));
+    }
+
+    @Test
+    void finalizationRejectsManifestTemporaryHardLinkToReport(@TempDir Path temporaryDirectory) throws Exception {
+        Path root = temporaryDirectory.toRealPath();
+        Path report = root.resolve("build/reports/paired.json");
+        Path summary = root.resolve("build/tmp/validation.json");
+        Path manifest = root.resolve("build/reports/manifest.json");
+        Path marker = root.resolve("build/tmp/success.json");
+        Path runContext = root.resolve("build/tmp/context.json");
+        Files.createDirectories(report.getParent());
+        Files.createDirectories(summary.getParent());
+        byte[] originalReport = "immutable benchmark result".getBytes(StandardCharsets.UTF_8);
+        Files.write(report, originalReport);
+        Files.createLink(manifest.resolveSibling(manifest.getFileName() + ".tmp"), report);
+        Map<String, Object> context = finalizationContext(root, report, summary, manifest, marker, runContext);
+        Files.writeString(runContext, new Gson().toJson(context));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.verifyFinalizationPaths(root, runContext));
+
+        assertTrue(failure.getMessage().contains("manifest temporary file"));
+        assertArrayEquals(originalReport, Files.readAllBytes(report));
+    }
+
+    @Test
+    void finalizationAcceptsRecoveryContextWithoutEmbeddedContextPath(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path root = temporaryDirectory.toRealPath();
+        Path report = root.resolve("build/reports/paired.json");
+        Path summary = root.resolve("build/tmp/recovery-validation.json");
+        Path manifest = root.resolve("build/reports/manifest.json");
+        Path marker = root.resolve("build/tmp/success.json");
+        Path runContext = root.resolve("build/tmp/recovery-context.json");
+        Files.createDirectories(report.getParent());
+        Files.createDirectories(summary.getParent());
+        Files.writeString(report, "[]\n");
+        Map<String, Object> context = finalizationContext(root, report, summary, manifest, marker, runContext);
+        context.remove("runContextFile");
+        context.put("recoveryProvenance", Map.of(
+                "originalLog", "build/reports/original-run.log",
+                "originalExit", "build/reports/original-run.exit",
+                "originalValidationSummary", "build/tmp/original-validation.json",
+                "sourceIdentityManifest", "build/reports/source-identity.json"));
+        Files.writeString(runContext, new Gson().toJson(context));
+
+        assertDoesNotThrow(() -> PairedJmhReportValidator.verifyFinalizationPaths(root, runContext));
+    }
+
+    @Test
+    void finalizationRequiresManifestReportPathToResolveToValidatedReport(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path root = temporaryDirectory.toRealPath();
+        Path report = root.resolve("build/reports/paired.json");
+        Path summary = root.resolve("build/tmp/validation.json");
+        Path manifest = root.resolve("build/reports/manifest.json");
+        Path marker = root.resolve("build/tmp/success.json");
+        Path runContext = root.resolve("build/tmp/context.json");
+        Files.createDirectories(report.getParent());
+        Files.createDirectories(summary.getParent());
+        Files.writeString(report, "[]\n");
+        Map<String, Object> context = finalizationContext(root, report, summary, manifest, marker, runContext);
+        context.put("resultFileRelativePath", "build/reports/another-report.json");
+        Files.writeString(runContext, new Gson().toJson(context));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PairedJmhReportValidator.verifyFinalizationPaths(root, runContext));
+
+        assertTrue(failure.getMessage().contains("resultFileRelativePath"));
+    }
+
+    @Test
     void hostProvenanceRequiresPlatformFactsAndExplicitAffinityAndPowerCaptureStatus() {
         Map<String, Object> host = new LinkedHashMap<>();
         host.put("osName", "Windows 11");
@@ -225,6 +498,18 @@ class PairedJmhReportValidatorTest {
                 "totalPhysicalMemoryBytes", 32L * 1024L * 1024L * 1024L,
                 "forkAffinity", Map.of("status", "NOT_CAPTURED", "reason", "The fork mask was not observed."),
                 "powerPlan", Map.of("status", "CAPTURED", "value", "381b4222-f694-41f0-9685-ff5bb260df2e")));
+    }
+
+    private static Map<String, Object> finalizationContext(Path root, Path report, Path summary,
+            Path manifest, Path marker, Path runContext) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("resultFile", report.toAbsolutePath().toString());
+        context.put("resultFileRelativePath", root.relativize(report).toString().replace('\\', '/'));
+        context.put("validationSummaryFile", summary.toAbsolutePath().toString());
+        context.put("manifestFile", manifest.toAbsolutePath().toString());
+        context.put("measurementSuccessMarkerFile", marker.toAbsolutePath().toString());
+        context.put("runContextFile", runContext.toAbsolutePath().toString());
+        return context;
     }
 
     private static List<Map<String, Object>> quickRows(List<String> variants, String operation,
@@ -300,6 +585,12 @@ class PairedJmhReportValidatorTest {
             metric.put("scorePercentiles", Map.of("99.9", 20.0d));
         }
         row.put("primaryMetric", metric);
+        if (mode.equals("thrpt")) {
+            row.put("secondaryMetrics", Map.of(
+                    "accepted", Map.of("score", 80.0d),
+                    "offered", Map.of("score", 100.0d),
+                    "rejected", Map.of("score", 20.0d)));
+        }
         return row;
     }
 }
