@@ -151,12 +151,14 @@ class SqlSnapshotWriterIntegrationTest {
                  Connection isolated = connect(backend)) {
                 namespace.select(isolated);
                 createPlayersTable(isolated);
+                createSchemaVersionFixture(isolated);
                 assertSnapshotSemantics(isolated, backend.dialect());
                 try (Connection contender = connect(backend)) {
                     namespace.select(contender);
                     assertConcurrentSnapshotSemantics(isolated, contender, backend);
                 }
                 assertLegacyWriterCanRegress(isolated, backend);
+                assertSchemaVersionIdsPreserved(isolated);
             }
         }
     }
@@ -176,8 +178,45 @@ class SqlSnapshotWriterIntegrationTest {
                         last_server VARCHAR(64),
                         updated_at TIMESTAMP
                     )
+            """);
+        }
+    }
+
+    private static void createSchemaVersionFixture(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE syncmoney_schema_version (
+                        id VARCHAR(50) PRIMARY KEY,
+                        version INT NOT NULL,
+                        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        description VARCHAR(255)
+                    )
                     """);
         }
+        try (var insert = connection.prepareStatement(
+                "INSERT INTO syncmoney_schema_version (id, version, description) VALUES (?, ?, ?)")) {
+            insert.setString(1, "1");
+            insert.setInt(2, 12);
+            insert.setString(3, "M05 primary schema ID fixture");
+            insert.executeUpdate();
+
+            insert.setString(1, "audit");
+            insert.setInt(2, 11);
+            insert.setString(3, "M05 audit schema ID fixture");
+            insert.executeUpdate();
+        }
+    }
+
+    private static void assertSchemaVersionIdsPreserved(Connection connection) throws SQLException {
+        Set<String> actual = new java.util.HashSet<>();
+        try (var statement = connection.createStatement();
+             var result = statement.executeQuery("SELECT id, version FROM syncmoney_schema_version")) {
+            while (result.next()) {
+                actual.add(result.getString("id") + ":" + result.getInt("version"));
+            }
+        }
+        assertEquals(Set.of("1:12", "audit:11"), actual,
+                "guarded and legacy player writers must preserve the existing primary and audit schema IDs");
     }
 
     private static void assertSnapshotSemantics(Connection connection, SqlDialect dialect) throws SQLException {
