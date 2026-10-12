@@ -13,12 +13,15 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
 /** Explicit RCON-triggered tests against an isolated development server, never production. */
 public final class AcceptanceProbe extends JavaPlugin implements Listener {
     private static final long ACCOUNT_LOAD_TIMEOUT_MILLIS = 10_000L;
+    private static final UUID LEGACY_SQLITE_ACCOUNT_A = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID LEGACY_SQLITE_ACCOUNT_B = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private final java.util.concurrent.ConcurrentMap<UUID, String> expectedTeleportWorlds =
             new ConcurrentHashMap<>();
 
@@ -63,9 +66,30 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 getServer().getGlobalRegionScheduler().run(this, task -> runVersionChecks(args[0]));
                 return true;
             }
+            if (args.length > 0 && args[0].equalsIgnoreCase("quiescence")) {
+                getServer().getGlobalRegionScheduler().run(this, task -> runQuiescenceCheck());
+                return true;
+            }
             getServer().getAsyncScheduler().runNow(this, task -> runChecks(args));
             return true;
         });
+    }
+
+    private void runQuiescenceCheck() {
+        try {
+            Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
+            require(plugin != null && plugin.isEnabled(), "plugin enabled");
+            verifyPluginVersion(plugin);
+            int onlinePlayers = getServer().getOnlinePlayers().size();
+            require(onlinePlayers == 0, "quiesced upgrade requires zero online players; observed " + onlinePlayers);
+            String loadedPlugins = java.util.Arrays.stream(getServer().getPluginManager().getPlugins())
+                    .map(org.bukkit.plugin.Plugin::getName)
+                    .sorted()
+                    .collect(java.util.stream.Collectors.joining(","));
+            getLogger().info("T21_QUIESCENCE_PASS online-players=0 loaded-plugins=" + loadedPlugins);
+        } catch (Throwable e) {
+            getLogger().log(java.util.logging.Level.SEVERE, "T21_QUIESCENCE_FAIL", e);
+        }
     }
 
     @EventHandler
@@ -196,6 +220,7 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         try {
             Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
             require(plugin != null && plugin.isEnabled(), "plugin enabled");
+            verifyPluginVersion(plugin);
             String suffix = switch (command.toLowerCase(java.util.Locale.ROOT)) {
                 case "version" -> "";
                 case "version-full" -> " full";
@@ -214,7 +239,12 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         try {
             Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
             require(plugin != null && plugin.isEnabled(), "plugin enabled");
+            verifyPluginVersion(plugin);
             var facade = plugin.getEconomyFacade();
+            if (args.length > 0 && args[0].equalsIgnoreCase("legacy-sqlite")) {
+                runLegacySqliteCheck(plugin, facade, args);
+                return;
+            }
             UUID a = UUID.nameUUIDFromBytes("OfflinePlayer:AcceptanceA".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             UUID b = UUID.nameUUIDFromBytes("OfflinePlayer:AcceptanceB".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             plugin.getNameResolver().cacheName("AcceptanceA", a);
@@ -226,24 +256,61 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             VaultUnlockedAccess vaultUnlocked = vaultUnlockedAccess(plugin);
             OfflinePlayer offlineA = getServer().getOfflinePlayer(a);
             OfflinePlayer offlineB = getServer().getOfflinePlayer(b);
-            if (args.length > 0 && args[0].equals("read")) {
+            boolean rollbackRead = args.length > 0 && args[0].equals("rollback-read");
+            boolean sharedStateRead = args.length > 0 && args[0].equals("state-read");
+            if (args.length > 0 && (args[0].equals("read") || rollbackRead || sharedStateRead)) {
+                BigDecimal expectedA = args.length > 1 ? new BigDecimal(args[1]) : new BigDecimal("1000");
+                BigDecimal expectedB = args.length > 2 ? new BigDecimal(args[2]) : new BigDecimal("520");
                 double coldVaultA = vault.getBalance(offlineA);
                 BigDecimal coldVaultUnlockedB = vaultUnlocked.balance(b);
-                require(Double.isNaN(coldVaultA), "cold Vault account A is unavailable");
-                require(coldVaultUnlockedB == null, "cold VaultUnlocked account B is unavailable");
+                if (!rollbackRead && !sharedStateRead) {
+                    require(Double.isNaN(coldVaultA), "cold Vault account A is unavailable");
+                    require(coldVaultUnlockedB == null, "cold VaultUnlocked account B is unavailable");
+                }
                 awaitAccountReady(facade, a);
                 awaitAccountReady(facade, b);
                 BigDecimal persistedA = facade.getBalance(a);
                 BigDecimal persistedB = facade.getBalance(b);
                 BigDecimal warmVaultUnlockedB = vaultUnlocked.balance(b);
-                require(persistedA.compareTo(new BigDecimal("1000")) == 0, "persisted account A");
-                require(persistedB.compareTo(new BigDecimal("520")) == 0, "persisted account B");
-                require(new BigDecimal("520.00").compareTo(warmVaultUnlockedB) == 0,
+                require(persistedA.compareTo(expectedA) == 0, "persisted account A expected=" + expectedA);
+                require(persistedB.compareTo(expectedB) == 0, "persisted account B expected=" + expectedB);
+                require(expectedB.compareTo(warmVaultUnlockedB) == 0,
                         "VaultUnlocked account B after background load");
+                if (rollbackRead || sharedStateRead) {
+                    require(Double.compare(vault.getBalance(offlineA), expectedA.doubleValue()) == 0,
+                            "warm Vault account A expected=" + expectedA);
+                    if (rollbackRead) {
+                        getLogger().info("T21_ROLLBACK_READ_PASS expected-a=" + expectedA
+                                + " expected-b=" + expectedB + " actual-a=" + persistedA + " actual-b=" + persistedB);
+                    } else {
+                        getLogger().info("T21_READ_PASS expected-a=" + expectedA
+                                + " expected-b=" + expectedB + " actual-a=" + persistedA + " actual-b=" + persistedB);
+                    }
+                    return;
+                }
                 getLogger().info("ACCEPTANCE READ cold-vault-a=" + coldVaultA
                         + " cold-vault-unlocked-b=" + coldVaultUnlockedB
                         + " a=" + persistedA + " b=" + persistedB
                         + " vault-unlocked-b=" + warmVaultUnlockedB);
+                getLogger().info("T21_READ_PASS expected-a=" + expectedA + " expected-b=" + expectedB);
+                return;
+            }
+            if (args.length > 0 && args[0].equals("write")) {
+                require(args.length == 3, "usage: smaccept write <balance-a> <balance-b>");
+                BigDecimal expectedA = new BigDecimal(args[1]);
+                BigDecimal expectedB = new BigDecimal(args[2]);
+                require(expectedA.signum() >= 0 && expectedB.signum() >= 0, "nonnegative fixture balances");
+                facade.unlockPlayer(a);
+                facade.unlockPlayer(b);
+                awaitAccountReady(facade, a);
+                awaitAccountReady(facade, b);
+                VaultMutationReceipt receiptA = mutateThroughVault(vault, offlineA, a, expectedA, facade);
+                VaultMutationReceipt receiptB = mutateThroughVault(vault, offlineB, b, expectedB, facade);
+                require(facade.getBalance(a).compareTo(expectedA) == 0, "written account A");
+                require(facade.getBalance(b).compareTo(expectedB) == 0, "written account B");
+                getLogger().info("T21_WRITE_PASS expected-a=" + formatT21Amount(expectedA)
+                        + " expected-b=" + formatT21Amount(expectedB)
+                        + " receipt-a=" + receiptA.marker() + " receipt-b=" + receiptB.marker());
                 return;
             }
             // Seed only these disposable accounts through the existing administrative path.
@@ -265,19 +332,49 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             require(facade.atomicTransfer(a, b, new BigDecimal("1001"), source).signum() < 0,
                     "insufficient funds rejected");
             require(facade.getBalance(a).add(facade.getBalance(b)).compareTo(before) == 0, "failed transfer conservation");
-            String expectedVersion = expectedVersion();
-            String actualVersion = plugin.getDescription().getVersion();
-            require(!actualVersion.isBlank(), "plugin version is present");
-            if (expectedVersion != null) {
-                require(actualVersion.equals(expectedVersion), "plugin version expected=" + expectedVersion
-                        + " actual=" + actualVersion);
-            }
             require(facade.getBalanceForPlaceholder(a).compareTo(new BigDecimal("1000")) == 0, "cached placeholder");
             getLogger().info("ACCEPTANCE PASS platform=" + getServer().getName()
                     + " server=" + getServer().getVersion() + " mode=" + plugin.getSyncmoneyConfig().getEconomyMode()
                     + " java=" + Runtime.version() + " total=" + before);
         } catch (Throwable e) {
             getLogger().log(java.util.logging.Level.SEVERE, "ACCEPTANCE FAIL", e);
+        }
+    }
+
+    private VaultMutationReceipt mutateThroughVault(
+            Economy vault,
+            OfflinePlayer player,
+            UUID uuid,
+            BigDecimal target,
+            noietime.syncmoney.economy.EconomyFacade facade) {
+        BigDecimal before = facade.getBalance(uuid);
+        BigDecimal delta = target.subtract(before);
+        require(delta.signum() != 0, "Vault mutation must change the disposable account balance " + uuid);
+        BigDecimal amount = delta.abs();
+        String operation = delta.signum() > 0 ? "DEPOSIT" : "WITHDRAW";
+        var response = delta.signum() > 0
+                ? vault.depositPlayer(player, amount.doubleValue())
+                : vault.withdrawPlayer(player, amount.doubleValue());
+        require(response.transactionSuccess(), "Vault " + operation + " rejected: " + response.errorMessage);
+
+        BigDecimal receiptAmount = BigDecimal.valueOf(response.amount);
+        BigDecimal receiptBalance = BigDecimal.valueOf(response.balance);
+        require(receiptAmount.compareTo(amount) == 0,
+                "Vault " + operation + " receipt amount expected=" + amount + " actual=" + receiptAmount);
+        require(receiptBalance.compareTo(target) == 0,
+                "Vault " + operation + " receipt balance expected=" + target + " actual=" + receiptBalance);
+        require(facade.getBalance(uuid).compareTo(target) == 0,
+                "Vault " + operation + " did not update the accepted in-memory balance");
+        return new VaultMutationReceipt(response.type.name(), operation, receiptAmount, receiptBalance);
+    }
+
+    private static String formatT21Amount(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+    }
+
+    private record VaultMutationReceipt(String type, String operation, BigDecimal amount, BigDecimal balance) {
+        private String marker() {
+            return type + ":" + operation + ":" + formatT21Amount(amount) + ":" + formatT21Amount(balance);
         }
     }
 
@@ -311,6 +408,61 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         BigDecimal balance(UUID account) throws ReflectiveOperationException {
             return (BigDecimal) getBalanceMethod.invoke(provider, "SyncmoneyAcceptanceProbe", account);
         }
+    }
+
+    private void runLegacySqliteCheck(
+            Syncmoney plugin,
+            noietime.syncmoney.economy.EconomyFacade facade,
+            String[] args) throws InterruptedException {
+        String operation = args.length > 1 ? args[1].toLowerCase(java.util.Locale.ROOT) : "read";
+        plugin.getNameResolver().cacheName("fixture-a", LEGACY_SQLITE_ACCOUNT_A);
+        plugin.getNameResolver().cacheName("fixture-b", LEGACY_SQLITE_ACCOUNT_B);
+
+        if (operation.equals("write")) {
+            require(args.length == 4, "usage: smaccept legacy-sqlite write <balance-a> <balance-b>");
+            BigDecimal expectedA = new BigDecimal(args[2]);
+            BigDecimal expectedB = new BigDecimal(args[3]);
+            require(expectedA.signum() >= 0 && expectedB.signum() >= 0, "nonnegative legacy fixture balances");
+            awaitAccountReady(facade, LEGACY_SQLITE_ACCOUNT_A);
+            awaitAccountReady(facade, LEGACY_SQLITE_ACCOUNT_B);
+            var source = EconomyEvent.EventSource.COMMAND_ADMIN;
+            facade.setBalance(LEGACY_SQLITE_ACCOUNT_A, expectedA, source);
+            facade.setBalance(LEGACY_SQLITE_ACCOUNT_B, expectedB, source);
+            require(facade.getBalance(LEGACY_SQLITE_ACCOUNT_A).compareTo(expectedA) == 0,
+                    "legacy fixture account A write");
+            require(facade.getBalance(LEGACY_SQLITE_ACCOUNT_B).compareTo(expectedB) == 0,
+                    "legacy fixture account B write");
+            getLogger().info("T21_LEGACY_SQLITE_PASS operation=write expected-a=" + expectedA
+                    + " expected-b=" + expectedB);
+            return;
+        }
+
+        require(operation.equals("read"), "usage: smaccept legacy-sqlite [read [balance-a balance-b]|write balance-a balance-b]");
+        BigDecimal expectedA = args.length > 2 ? new BigDecimal(args[2]) : new BigDecimal("100.00");
+        BigDecimal expectedB = args.length > 3 ? new BigDecimal(args[3]) : new BigDecimal("0.00");
+        awaitAccountReady(facade, LEGACY_SQLITE_ACCOUNT_A);
+        awaitAccountReady(facade, LEGACY_SQLITE_ACCOUNT_B);
+        BigDecimal observedA = facade.getBalance(LEGACY_SQLITE_ACCOUNT_A);
+        BigDecimal observedB = facade.getBalance(LEGACY_SQLITE_ACCOUNT_B);
+        require(observedA.compareTo(expectedA) == 0,
+                "legacy SQLite account A expected=" + expectedA + " actual=" + observedA);
+        require(observedB.compareTo(expectedB) == 0,
+                "legacy SQLite account B expected=" + expectedB + " actual=" + observedB);
+        getLogger().info("T21_LEGACY_SQLITE_PASS operation=read expected-a=" + expectedA
+                + " expected-b=" + expectedB + " actual-a=" + observedA + " actual-b=" + observedB
+                + " sqlite-path=" + plugin.getConfig().getString("economy.local.sqlite-path"));
+    }
+
+    private void verifyPluginVersion(Syncmoney plugin) {
+        String expectedVersion = expectedVersion();
+        String actualVersion = plugin.getDescription().getVersion();
+        require(!actualVersion.isBlank(), "plugin version is present");
+        if (expectedVersion != null) {
+            require(actualVersion.equals(expectedVersion), "plugin version expected=" + expectedVersion
+                    + " actual=" + actualVersion);
+        }
+        getLogger().info("T21_VERSION_PASS expected="
+                + (expectedVersion == null ? actualVersion : expectedVersion) + " actual=" + actualVersion);
     }
 
     private static String expectedVersion() {

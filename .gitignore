@@ -131,6 +131,18 @@ tools/plugdev/*
 !tools/plugdev/prepare.mjs
 !tools/plugdev/prepare.test.mjs
 !tools/plugdev/README.md
+!tools/plugdev/run-upgrade-cycle.ps1
+!tools/plugdev/run-sync-upgrade-cycle.ps1
+!tools/plugdev/run-redis-aof-restart.ps1
+!tools/plugdev/run-redis-aof-restart.test.ps1
+!tools/plugdev/run-sync-upgrade-cleanup.ps1
+!tools/plugdev/run-sync-upgrade-cleanup.test.ps1
+!tools/plugdev/recovery-spool-validator.ps1
+!tools/plugdev/recovery-spool-validator.test.ps1
+!tools/plugdev/t21-upgrade-validation.ps1
+!tools/plugdev/t21-upgrade-validation.test.ps1
+!tools/plugdev/run-quiesced-network-upgrade.ps1
+!tools/plugdev/run-quiesced-network-upgrade.test.ps1
 plugdev.yml
 
 # Accidental archive/JAR extraction and scratch output

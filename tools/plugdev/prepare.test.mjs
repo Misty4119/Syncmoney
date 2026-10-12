@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { assertStopped, createEconomySettings, createProfileConfig, validateOptions } from "./prepare.mjs";
 
@@ -18,6 +19,30 @@ async function getClosedPort() {
   return address.port;
 }
 
+async function canBindLoopbackPort(port) {
+  const server = createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", resolve);
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  }
+}
+
+async function getClosedPortPair() {
+  for (let port = 25_677; port <= 45_535; port += 1) {
+    if (await canBindLoopbackPort(port) && await canBindLoopbackPort(port + 10_000)) return port;
+  }
+  throw new Error("Could not find closed loopback game and RCON ports for the acceptance fixture.");
+}
+
 test("the minimum Paper profile loads the exact candidate without rebuilding it", () => {
   const options = validateOptions(["paper", "1.21.6", "local", "off", "1.4.0-alpha.1"]);
   const profile = createProfileConfig(options);
@@ -31,6 +56,63 @@ test("the minimum Paper profile loads the exact candidate without rebuilding it"
   assert.deepEqual(profile.deps, [
     { name: "VaultUnlocked", source: "hangar", author: "TNE", slug: "VaultUnlocked", version: "2.20.2" },
   ]);
+});
+
+test("an isolated runtime may reserve a specific loopback game and derived RCON port", () => {
+  const options = validateOptions(["paper", "1.21.6", "sync", "off", "1.4.0-alpha.1"]);
+  const profile = createProfileConfig(options, { SYNCMONEY_TEST_GAME_PORT: "25677" });
+
+  assert.equal(profile.bind, "127.0.0.1");
+  assert.equal(profile.port, 25677);
+  assert.equal(profile.port + 10_000, 35677);
+  assert.throws(
+    () => createProfileConfig(options, { SYNCMONEY_TEST_GAME_PORT: "55536" }),
+    /Invalid acceptance game port/,
+  );
+});
+
+test("prepareProfile writes the injected game port into the generated PlugDev profile", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "syncmoney-prepare-profile-"));
+  const root = join(fixture, "workspace");
+  const plugdevRoot = join(fixture, "plugdev");
+  const preparePath = join(root, "tools", "plugdev", "prepare.mjs");
+  const port = await getClosedPortPair();
+  try {
+    await mkdir(join(root, "build", "libs"), { recursive: true });
+    await mkdir(join(root, "build", "acceptance"), { recursive: true });
+    await mkdir(join(root, "src", "main", "resources"), { recursive: true });
+    await mkdir(join(root, "tools", "plugdev"), { recursive: true });
+    await mkdir(join(plugdevRoot, "node_modules", "yaml"), { recursive: true });
+    await copyFile(fileURLToPath(new URL("./prepare.mjs", import.meta.url)), preparePath);
+    await writeFile(join(root, "build", "libs", "Syncmoney-1.4.0-alpha.1.jar"), "candidate", "utf8");
+    await writeFile(join(root, "build", "acceptance", "SyncmoneyAcceptance.jar"), "acceptance", "utf8");
+    await writeFile(join(root, "build", "acceptance", "SyncmoneyApiConsumer.jar"), "api-consumer", "utf8");
+    await writeFile(join(root, "src", "main", "resources", "config.yml"), "fixture: true\n", "utf8");
+    await writeFile(join(plugdevRoot, "package.json"), JSON.stringify({ private: true }), "utf8");
+    await writeFile(join(plugdevRoot, "node_modules", "yaml", "index.js"),
+      "module.exports = { parse: () => ({}), stringify: (value) => JSON.stringify(value) };\n", "utf8");
+
+    const { prepareProfile } = await import(pathToFileURL(preparePath).href);
+    const result = await prepareProfile(
+      ["paper", "1.21.6", "sync", "off", "1.4.0-alpha.1"],
+      { PLUGDEV_ROOT: plugdevRoot, SYNCMONEY_TEST_GAME_PORT: String(port) },
+    );
+    const profile = JSON.parse(await readFile(result.profilePath, "utf8"));
+
+    assert.equal(profile.port, port);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("an explicitly supplied server JAR is pinned through PlugDev's custom provider", () => {
+  const options = validateOptions(["paper", "26.3", "local", "off", "1.4.0-alpha.1"]);
+  const profile = createProfileConfig({ ...options, serverJar: "build/reports/foundation/paper-26.3-175.jar" });
+
+  assert.equal(profile.server, "custom");
+  assert.equal(profile.serverJar, resolve("build/reports/foundation/paper-26.3-175.jar"));
+  assert.equal(profile.version, "26.3");
+  assert.equal(profile.build.jarTask, "help");
 });
 
 test("1.4 runtime profiles reject Paper below the minimum", () => {

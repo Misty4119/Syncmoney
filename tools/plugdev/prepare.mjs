@@ -9,6 +9,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const DEFAULT_CANDIDATE_VERSION = "1.4.0-alpha.1";
 const MINIMUM_PAPER = [1, 21, 6];
 const ACCEPTANCE_PORT = 25675;
+
+function resolveAcceptancePort(env = process.env) {
+  const port = Number(env.SYNCMONEY_TEST_GAME_PORT ?? ACCEPTANCE_PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 55_535) {
+    throw new Error("Invalid acceptance game port: " + port + "; expected 1 through 55535 so PlugDev can reserve RCON.");
+  }
+  return port;
+}
 const VAULT_UNLOCKED = {
   name: "VaultUnlocked",
   source: "hangar",
@@ -53,14 +61,14 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
   return { software, minecraftVersion, mode, features, candidateVersion };
 }
 
-export function createProfileConfig(options) {
-  const { software, minecraftVersion, candidateVersion } = options;
-  return {
+export function createProfileConfig(options, env = process.env) {
+  const { software, minecraftVersion, candidateVersion, serverJar } = options;
+  const profile = {
     type: "plugin",
     server: software,
     version: minecraftVersion,
     bind: "127.0.0.1",
-    port: ACCEPTANCE_PORT,
+    port: resolveAcceptancePort(env),
     rcon: { enabled: true },
     build: {
       system: "gradle",
@@ -74,6 +82,11 @@ export function createProfileConfig(options) {
     run: { cleanup: "never", autoStop: false },
     client: { launcher: "none", joinOnReady: false },
   };
+  if (serverJar) {
+    profile.server = "custom";
+    profile.serverJar = resolve(ROOT, serverJar);
+  }
+  return profile;
 }
 
 export function createEconomySettings(defaultConfig, options, env = process.env) {
@@ -253,20 +266,28 @@ export async function prepareProfile(args, env = process.env) {
   const candidateJar = join(ROOT, "build", "libs", `Syncmoney-${options.candidateVersion}.jar`);
   const acceptanceJar = join(ROOT, "build", "acceptance", "SyncmoneyAcceptance.jar");
   const apiConsumerJar = join(ROOT, "build", "acceptance", "SyncmoneyApiConsumer.jar");
+  const exactServerJar = env.SYNCMONEY_TEST_SERVER_JAR?.trim()
+    ? resolve(ROOT, env.SYNCMONEY_TEST_SERVER_JAR.trim())
+    : undefined;
   const run = join(ROOT, ".plugdev", "run");
   const plugins = join(run, "plugins");
   const pluginData = join(plugins, "Syncmoney");
   await access(candidateJar);
   await access(acceptanceJar);
   await access(apiConsumerJar);
-  await assertStopped(ROOT);
+  if (exactServerJar) await access(exactServerJar);
+  await assertStopped(ROOT, resolveAcceptancePort(env));
 
   const plugdevRoot = env.PLUGDEV_ROOT ?? resolve(ROOT, "../plugdev-main");
   const require = createRequire(join(plugdevRoot, "package.json"));
   const YAML = require("yaml");
   const defaultConfig = YAML.parse(await readFile(join(ROOT, "src", "main", "resources", "config.yml"), "utf8"));
-  const optionsWithVault = { ...options, vaultVersion: VAULT_UNLOCKED.version };
-  const profile = createProfileConfig(optionsWithVault);
+  const optionsWithVault = {
+    ...options,
+    vaultVersion: VAULT_UNLOCKED.version,
+    ...(exactServerJar ? { serverJar: exactServerJar } : {}),
+  };
+  const profile = createProfileConfig(optionsWithVault, env);
   const settings = createEconomySettings(defaultConfig, options, env);
 
   await mkdir(pluginData, { recursive: true });
@@ -282,6 +303,8 @@ export async function prepareProfile(args, env = process.env) {
     acceptanceJar,
     apiConsumerJar,
     profilePath: join(ROOT, ".plugdev", "profile.yml"),
+    exactServerJar,
+    exactServerSha256: exactServerJar ? await sha256(exactServerJar) : undefined,
   };
 }
 
@@ -289,6 +312,9 @@ async function main() {
   const result = await prepareProfile(process.argv.slice(2));
   console.log(`Prepared ${result.software} ${result.minecraftVersion}, mode=${result.mode}, features=${result.features}.`);
   console.log(`Candidate: Syncmoney-${result.candidateVersion}.jar sha256=${result.candidateSha256}`);
+  if (result.exactServerJar) {
+    console.log(`Exact local server JAR: sha256=${result.exactServerSha256}; PlugDev will use its custom-JAR provider.`);
+  }
   console.log(`VaultUnlocked: ${VAULT_UNLOCKED.version}; profile: .plugdev/profile.yml`);
   console.log("Start with: plugdev server start --config .plugdev/profile.yml");
 }
