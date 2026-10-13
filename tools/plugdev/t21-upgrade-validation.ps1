@@ -141,6 +141,26 @@ function Test-T21PathsEqual([string]$actual, [string]$expected) {
     return [string]::Equals($actualPath, $expectedPath, $comparison)
 }
 
+function Test-T21PathContainsReparsePoint([string]$path) {
+    if ([string]::IsNullOrWhiteSpace($path)) { return $true }
+    try {
+        $currentPath = [IO.Path]::GetFullPath($path)
+        while (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+            if (Test-Path -LiteralPath $currentPath) {
+                $item = Get-Item -LiteralPath $currentPath -Force -ErrorAction Stop
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $true }
+            }
+
+            $parent = [IO.Directory]::GetParent($currentPath)
+            if ($null -eq $parent -or $parent.FullName -ceq $currentPath) { break }
+            $currentPath = $parent.FullName
+        }
+        return $false
+    } catch {
+        return $true
+    }
+}
+
 function Test-T21ServerJarProvenanceObservation(
     [object]$observation,
     [string]$expectedInputPath,
@@ -366,4 +386,252 @@ function Assert-T21SchemaVersionRows(
         throw "SQL schema version rows changed at $stage."
     }
     return $true
+}
+
+function Test-T21MySqlRuntimeAccountParity([object[]]$sqlAccounts, [object[]]$redisAccounts) {
+    try {
+        $expected = [ordered]@{
+            AcceptanceA = [ordered]@{ uuid='35c93f74-c540-3b38-8093-b5cb3c2263be'; balance='1337.25'; version=1 }
+            AcceptanceB = [ordered]@{ uuid='b748781d-824c-36d9-9de4-59cee731f37f'; balance='765.50'; version=1 }
+        }
+        if ($sqlAccounts.Count -ne 2 -or $redisAccounts.Count -ne 2) { return $false }
+        $sqlByName = @{}
+        $redisByName = @{}
+        foreach ($entry in @(@{ rows = $sqlAccounts; target = $sqlByName }, @{ rows = $redisAccounts; target = $redisByName })) {
+            foreach ($row in $entry.rows) {
+                $name = [string](Get-T21ObservedValue $row 'name')
+                $uuid = ([string](Get-T21ObservedValue $row 'uuid')).ToLowerInvariant()
+                $balance = [string](Get-T21ObservedValue $row 'balance')
+                $version = [string](Get-T21ObservedValue $row 'version')
+                if (-not $expected.Contains($name) -or $uuid -cne $expected[$name].uuid -or
+                    $balance -cne $expected[$name].balance -or $version -cne [string]$expected[$name].version -or
+                    $entry.target.ContainsKey($name)) { return $false }
+                $entry.target[$name] = [ordered]@{ uuid = $uuid; balance = $balance; version = [long]$version }
+            }
+        }
+        foreach ($name in $expected.Keys) {
+            if (-not $sqlByName.ContainsKey($name) -or -not $redisByName.ContainsKey($name)) { return $false }
+            $sql = $sqlByName[$name]
+            $redis = $redisByName[$name]
+            if ($sql.uuid -cne $redis.uuid -or $sql.balance -cne $redis.balance -or
+                [long]$sql.version -ne [long]$redis.version) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-T21MySqlRuntimeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedCandidateSha256
+) {
+    try {
+        if ($null -eq $report -or
+            (Get-T21ObservedValue $report 'schemaVersion') -ne 1 -or
+            (Get-T21ObservedValue $report 'task') -cne 'T21-M05-SYNC-MySQL-minimum-Paper' -or
+            (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
+
+        $hasFailureField = if ($report -is [Collections.IDictionary]) {
+            $report.Contains('failure')
+        } else {
+            $null -ne $report.PSObject.Properties['failure']
+        }
+        $hasCleanupFailuresField = if ($report -is [Collections.IDictionary]) {
+            $report.Contains('cleanupFailures')
+        } else {
+            $null -ne $report.PSObject.Properties['cleanupFailures']
+        }
+        if (-not $hasFailureField -or -not $hasCleanupFailuresField -or
+            $null -ne (Get-T21ObservedValue $report 'failure') -or
+            @(Get-T21ObservedValue $report 'cleanupFailures').Count -ne 0) { return $false }
+
+        $server = Get-T21ObservedValue $report 'server'
+        $candidate = Get-T21ObservedValue $report 'candidate'
+        $java = Get-T21ObservedValue $report 'java'
+        $configuration = Get-T21ObservedValue $report 'configuration'
+        if ((Get-T21ObservedValue $server 'software') -cne 'paper' -or
+            (Get-T21ObservedValue $server 'minecraftVersion') -cne '1.21.6' -or
+            (Get-T21ObservedValue $server 'build') -ne 48 -or
+            ([string](Get-T21ObservedValue $server 'sha256')).ToLowerInvariant() -cne $expectedServerSha256.ToLowerInvariant() -or
+            (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
+            ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
+            (Get-T21ObservedValue $java 'feature') -ne 25) { return $false }
+
+        if ((Get-T21ObservedValue $configuration 'schema') -ne 12 -or
+            (Get-T21ObservedValue $configuration 'configSchema') -ne 12 -or
+            (Get-T21ObservedValue $configuration 'mode') -cne 'sync' -or
+            (Get-T21ObservedValue $configuration 'observedMode') -cne 'sync' -or
+            (Get-T21ObservedValue $configuration 'databaseEnabled') -ne $true -or
+            (Get-T21ObservedValue $configuration 'databaseType') -cne 'mysql' -or
+            (Get-T21ObservedValue $configuration 'databaseIsolated') -ne $true -or
+            (Get-T21ObservedValue $configuration 'databaseHost') -cne '127.0.0.1' -or
+            [int](Get-T21ObservedValue $configuration 'databasePort') -lt 1 -or
+            [int](Get-T21ObservedValue $configuration 'databasePort') -gt 65535 -or
+            [string](Get-T21ObservedValue $configuration 'databaseName') -notmatch '^syncmoney_t21(?:_[a-f0-9]{8})?$' -or
+            (Get-T21ObservedValue $configuration 'databaseNameObserved') -cne (Get-T21ObservedValue $configuration 'databaseName') -or
+            (Get-T21ObservedValue $configuration 'redisEnabled') -ne $true -or
+            (Get-T21ObservedValue $configuration 'redisDatabase') -ne 15 -or
+            (Get-T21ObservedValue $configuration 'redisIsolated') -ne $true -or
+            (Get-T21ObservedValue $configuration 'redisHost') -cne '127.0.0.1' -or
+            [int](Get-T21ObservedValue $configuration 'redisPort') -lt 1 -or
+            [int](Get-T21ObservedValue $configuration 'redisPort') -gt 65535 -or
+            [int](Get-T21ObservedValue $configuration 'databasePort') -eq [int](Get-T21ObservedValue $configuration 'redisPort')) { return $false }
+
+        $backendProcesses = Get-T21ObservedValue $report 'backendProcesses'
+        $mysql = Get-T21ObservedValue $report 'mysql'
+        $redis = Get-T21ObservedValue $report 'redis'
+        $mysqlProcess = Get-T21ObservedValue $backendProcesses 'mysql'
+        $redisProcess = Get-T21ObservedValue $backendProcesses 'redis'
+        $mysqlListenerAddresses = @(Get-T21ObservedValue $mysqlProcess 'listenerAddresses')
+        if ((Get-T21ObservedValue $mysql 'version') -cne '8.0.42' -or
+            (Get-T21ObservedValue $redis 'version') -cne '8.10.1' -or
+            (Get-T21ObservedValue $mysqlProcess 'version') -cne '8.0.42' -or
+            (Get-T21ObservedValue $mysqlProcess 'runOwned') -ne $true -or
+            (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') -ne $true -or
+            [int](Get-T21ObservedValue $mysqlProcess 'processId') -le 0 -or
+            [int](Get-T21ObservedValue $mysqlProcess 'launchProcessId') -le 0 -or
+            $mysqlListenerAddresses.Count -eq 0 -or
+            @($mysqlListenerAddresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0 -or
+            (Get-T21ObservedValue $redisProcess 'version') -cne '8.10.1' -or
+            (Get-T21ObservedValue $redisProcess 'runOwned') -ne $true -or
+            (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') -ne $true -or
+            [int](Get-T21ObservedValue $redisProcess 'processId') -le 0) { return $false }
+
+        $backendShutdowns = @(Get-T21ObservedValue $report 'backendShutdowns')
+        if ($backendShutdowns.Count -ne 2) { return $false }
+        $mysqlShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq 'mysql' })
+        $redisShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq 'redis' })
+        if ($mysqlShutdown.Count -ne 1 -or $redisShutdown.Count -ne 1 -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'command') -cne 'mysqladmin shutdown' -or
+            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'commandExitCode') 0) -or
+            [int](Get-T21ObservedValue $mysqlShutdown[0] 'processId') -ne [int](Get-T21ObservedValue $mysqlProcess 'processId') -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'shutdownTargetVerified') -ne $true -or
+            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'processExitCode') 0) -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'processExitCodeObserved') -ne $true -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'processExited') -ne $true -or
+            [int](Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessId') -ne [int](Get-T21ObservedValue $mysqlProcess 'launchProcessId') -or
+            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExitCode') 0) -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExitCodeObserved') -ne $true -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExited') -ne $true -or
+            (Get-T21ObservedValue $mysqlShutdown[0] 'forced') -ne $false -or
+            (Get-T21ObservedValue $redisShutdown[0] 'command') -cne 'SHUTDOWN SAVE' -or
+            (Get-T21ObservedValue $redisShutdown[0] 'commandExitCode') -notin @(0, 1) -or
+            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $redisShutdown[0] 'processExitCode') 0) -or
+            (Get-T21ObservedValue $redisShutdown[0] 'processExitCodeObserved') -ne $true -or
+            (Get-T21ObservedValue $redisShutdown[0] 'processExited') -ne $true -or
+            (Get-T21ObservedValue $redisShutdown[0] 'forced') -ne $false) { return $false }
+
+        $expectedStages = @('candidate-write', 'candidate-restart-read')
+        $startupObservations = @(Get-T21ObservedValue $report 'startupObservations')
+        if ($startupObservations.Count -ne $expectedStages.Count) { return $false }
+        foreach ($index in 0..($expectedStages.Count - 1)) {
+            $startup = $startupObservations[$index]
+            $runtimeIdentity = Get-T21ObservedValue $startup 'runtimeIdentity'
+            if ((Get-T21ObservedValue $startup 'stage') -cne $expectedStages[$index] -or
+                (Get-T21ObservedValue $startup 'enabled') -ne $true -or
+                (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
+                [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
+                ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
+                (Get-T21ObservedValue $runtimeIdentity 'software') -cne 'paper' -or
+                (Get-T21ObservedValue $runtimeIdentity 'runtimeVersion') -cne '1.21.6' -or
+                (Get-T21ObservedValue $runtimeIdentity 'minecraftVersion') -cne '1.21.6' -or
+                (Get-T21ObservedValue $runtimeIdentity 'build') -ne 48) {
+                return $false
+            }
+        }
+
+        $writeReceipts = @(Get-T21ObservedValue $report 'writeReceipts')
+        if ($writeReceipts.Count -ne 2 -or
+            [string]$writeReceipts[0] -cne 'SUCCESS:DEPOSIT:1337.25:1337.25' -or
+            [string]$writeReceipts[1] -cne 'SUCCESS:DEPOSIT:765.50:765.50') { return $false }
+        $writeMarker = [string](Get-T21ObservedValue $report 'writeMarker')
+        if ($writeMarker -cnotmatch '^\[\d{2}:\d{2}:\d{2}\] \[[^\]]+/INFO\]: \[SyncmoneyAcceptance\] T21_WRITE_PASS expected-a=1337\.25 expected-b=765\.50 receipt-a=SUCCESS:DEPOSIT:1337\.25:1337\.25 receipt-b=SUCCESS:DEPOSIT:765\.50:765\.50$') { return $false }
+        $paperLogs = @(Get-T21ObservedValue $report 'paperLogs')
+        $logMap = Get-T21ObservedValue $report 'logs'
+        $expectedPaperLogStages = @('candidate-write', 'candidate-restart-read')
+        $expectedPaperLogPaths = @('logs\paper-candidate-write.txt', 'logs\paper-candidate-restart-read.txt')
+        if ($paperLogs.Count -ne $expectedPaperLogStages.Count -or
+            $null -eq $logMap) { return $false }
+        $runDirectory = [string](Get-T21ObservedValue $report 'runDirectory')
+        if ([string]::IsNullOrWhiteSpace($runDirectory)) { return $false }
+        $runRoot = [IO.Path]::GetFullPath($runDirectory).TrimEnd([char[]]@('\', '/'))
+        $runRootPrefix = $runRoot + [IO.Path]::DirectorySeparatorChar
+        $writeMarkerLines = @($writeMarker)
+        $restartReadMarkerLines = @(
+            [string](Get-T21ObservedValue $report 'restartReadMarker'),
+            [string](Get-T21ObservedValue $report 'restartReadObservation')
+        )
+        foreach ($index in 0..($expectedPaperLogStages.Count - 1)) {
+            $paperLog = $paperLogs[$index]
+            $logPath = [string](Get-T21ObservedValue $paperLog 'path')
+            $logBytes = [long](Get-T21ObservedValue $paperLog 'bytes')
+            $logSha256 = [string](Get-T21ObservedValue $paperLog 'sha256')
+            $hasLogEntry = if ($logMap -is [Collections.IDictionary]) {
+                $logMap.Contains($logPath)
+            } else {
+                $null -ne $logMap.PSObject.Properties[$logPath]
+            }
+            if ((Get-T21ObservedValue $paperLog 'stage') -cne $expectedPaperLogStages[$index] -or
+                $logPath -cne $expectedPaperLogPaths[$index] -or
+                $logBytes -le 0 -or $logSha256 -notmatch '^[0-9a-f]{64}$' -or
+                -not $hasLogEntry) { return $false }
+            $hashedLog = Get-T21ObservedValue $logMap $logPath
+            if ([long](Get-T21ObservedValue $hashedLog 'bytes') -ne $logBytes -or
+                ([string](Get-T21ObservedValue $hashedLog 'sha256')).ToLowerInvariant() -cne $logSha256) { return $false }
+
+            $fullLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $logPath))
+            if (-not $fullLogPath.StartsWith($runRootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                (Test-T21PathContainsReparsePoint $fullLogPath) -or
+                -not (Test-Path -LiteralPath $fullLogPath -PathType Leaf)) { return $false }
+            $actualLog = Get-Item -LiteralPath $fullLogPath -ErrorAction Stop
+            $actualLogSha256 = (Get-FileHash -LiteralPath $fullLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ([long]$actualLog.Length -ne $logBytes -or $actualLogSha256 -cne $logSha256) { return $false }
+            $actualLogLines = @(Get-Content -LiteralPath $fullLogPath -ErrorAction Stop)
+            $requiredMarkers = if ($expectedPaperLogStages[$index] -ceq 'candidate-write') { $writeMarkerLines } else { $restartReadMarkerLines }
+            foreach ($requiredMarker in $requiredMarkers) {
+                if (-not ($actualLogLines -ccontains $requiredMarker)) { return $false }
+            }
+        }
+        $restartReadMarker = [string](Get-T21ObservedValue $report 'restartReadMarker')
+        $restartReadObservation = [string](Get-T21ObservedValue $report 'restartReadObservation')
+        if ($restartReadMarker -cnotmatch '^\[\d{2}:\d{2}:\d{2}\] \[[^\]]+/INFO\]: \[SyncmoneyAcceptance\] T21_READ_PASS expected-a=1337\.25 expected-b=765\.50$' -or
+            $restartReadObservation -cnotmatch '^\[\d{2}:\d{2}:\d{2}\] \[[^\]]+/INFO\]: \[SyncmoneyAcceptance\] ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1337\.25 b=765\.50 vault-unlocked-b=765\.50$') { return $false }
+
+        $normalStops = @(Get-T21ObservedValue $report 'normalStops')
+        $expectedStopStages = @('after-write', 'after-restart-read')
+        if ($normalStops.Count -ne $expectedStopStages.Count) { return $false }
+        foreach ($index in 0..($expectedStopStages.Count - 1)) {
+            $stop = $normalStops[$index]
+            if ((Get-T21ObservedValue $stop 'stage') -cne $expectedStopStages[$index] -or
+                [int](Get-T21ObservedValue $stop 'processId') -ne [int](Get-T21ObservedValue $startupObservations[$index] 'processId') -or
+                -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $stop 'commandExitCode') 0) -or
+                -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $stop 'processExitCode') 0) -or
+                (Get-T21ObservedValue $stop 'processExitCodeObserved') -ne $true -or
+                (Get-T21ObservedValue $stop 'processExited') -ne $true -or
+                (Get-T21ObservedValue $stop 'disabledMarker') -ne $true) { return $false }
+        }
+
+        $snapshots = @(Get-T21ObservedValue $report 'snapshots')
+        $expectedSnapshotStages = @('after-write-stop', 'after-restart-read-stop')
+        if ($snapshots.Count -ne $expectedSnapshotStages.Count) { return $false }
+        $priorRows = $null
+        foreach ($index in 0..($expectedSnapshotStages.Count - 1)) {
+            $snapshot = $snapshots[$index]
+            $sqlAccounts = @(Get-T21ObservedValue $snapshot 'sqlAccounts')
+            $redisAccounts = @(Get-T21ObservedValue $snapshot 'redisAccounts')
+            if ((Get-T21ObservedValue $snapshot 'stage') -cne $expectedSnapshotStages[$index] -or
+                -not (Test-T21MySqlRuntimeAccountParity $sqlAccounts $redisAccounts)) { return $false }
+            if ($index -eq 0) {
+                $priorRows = @($sqlAccounts | Sort-Object name | ForEach-Object { '{0}|{1}|{2}' -f $_.name, $_.balance, $_.version })
+            } else {
+                $currentRows = @($sqlAccounts | Sort-Object name | ForEach-Object { '{0}|{1}|{2}' -f $_.name, $_.balance, $_.version })
+                if (($priorRows -join "`n") -cne ($currentRows -join "`n")) { return $false }
+            }
+        }
+        return $true
+    } catch {
+        return $false
+    }
 }

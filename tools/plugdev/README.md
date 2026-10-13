@@ -106,6 +106,27 @@ For the user-confirmed maximum endpoints, use the exact JARs from the T15 artifa
 
 `run-sync-upgrade-cycle.ps1` runs a bounded M01–M03 SYNC cycle against one or two sequential node identities with isolated PostgreSQL and Redis: 1.3.2 baseline, 1.4 Vault-provider writes, normal drain, backend/config verification, then normal 1.3.2 rollback. Pass `-PlatformSoftware` (`paper`, `folia`, or `canvas`), `-MinecraftVersion`, and `-PlatformBuildNumber` with the exact server JAR path and SHA-256 pin, baseline paths and pins, baseline source commit, local PlugDev checkout, and Java 25. The runner checks the startup log against the requested platform identity at every stage and derives its report label from that observed runtime. For each baseline, candidate, and rollback start it requires exactly one deployed Syncmoney JAR with the expected filename and SHA-256; the pass gate also requires exact runtime and normal-shutdown stage coverage for every node. It preserves a synthetic operator config entry and requires each candidate `recovery-v1.jsonl` to exist, contain validated frames, pass format/checksum validation, and have zero pending records before rollback; after rollback it revalidates each journal and requires its SHA-256 to remain unchanged. Shutdown checks detect numeric stale-transfer and audit-flush failure markers. `PASS_BOUNDED_SUBCASE` is bounded evidence for the selected endpoint only; it does not close M01–M03 or T21's fleet, mode, backend, failure, scheduler, or platform matrix. Final cleanup stops Gradle daemons only when their command lines match this run's isolated Gradle User Home, verifies they exit, and records the before/after PIDs and stop result. Stop, process-query, or timeout failures fail the cycle. Run-owned server fallback cleanup stops only a uniquely identified PID and verifies process exit. Verify these runner checks with `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1`, the cleanup policy with `pwsh -NoProfile -File tools/plugdev/run-sync-upgrade-cleanup.test.ps1`, and recovery journal validation with `pwsh -NoProfile -File tools/plugdev/recovery-spool-validator.test.ps1`.
 
+## T21 M05 minimum-Paper MySQL SYNC runtime cell
+
+The focused runner exercises only the Paper `1.21.6#48` / Java 25 / MySQL `8.0.42` / Redis `8.10.1` cell. It starts Syncmoney in `SYNC` with config schema 12 and isolated loopback SQL/Redis, performs two accepted Vault deposits through the registered provider, stops normally, checks SQL/Redis balances and versions, restarts for a persisted read, and stops normally again. After each normal stop it copies that session's Paper `latest.log` into the run-owned log directory. The report gate requires the exact pinned Paper and candidate JAR hashes, successful cold-read semantics, complete SQL/Redis parity, observed process exit codes, backend ownership and graceful shutdown, and both stage-specific Paper logs. Offline validation recomputes each Paper log's byte count and SHA-256 and checks the captured write/read markers against the retained log contents. It does not cover the maximum Paper endpoint, Folia/Canvas, PostgreSQL/MariaDB runtime in this scenario, other modes/resources, schema migration, fault injection, or the remaining T21 matrix.
+
+Build the pinned candidate and prepare the local PlugDev checkout and Paper JAR from the T15 artifact manifest. The runner uses the repository-local PlugDev source; do not substitute a public npm package.
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$paperJar = (Resolve-Path 'build\reports\foundation\T21-inputs\paper-1.21.6-48.jar').Path
+$plugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main'
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd' `
+  -PlugDevRoot $plugDevRoot `
+  -JavaHome $env:JAVA_HOME
+```
+
+The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. The accepted minimum-Paper report and its exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. This bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
+
 ## T21 player lifecycle scheduler matrix
 
 Rebuild `acceptanceJar` after changing the acceptance probe, then run the exact six endpoint pins from the user-confirmed range with Java 25 and the local PlugDev and Mineflayer checkouts:

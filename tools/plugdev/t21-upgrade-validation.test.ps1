@@ -430,4 +430,442 @@ if (Test-T21BackendShutdownCoverage $unobservedRedisExitCode) {
 }
 Write-Output 'PASS: reject Redis process exit code without explicit observation'
 
+if ($null -eq (Get-Command Test-T21MySqlRuntimeReport -ErrorAction SilentlyContinue)) {
+    throw 'Missing MySQL SYNC runtime report validator for the T21 minimum-Paper dialect cell.'
+}
+
+$paperMinimumSha = 'a' * 64
+$candidateSha = 'b' * 64
+$accountA = '35c93f74-c540-3b38-8093-b5cb3c2263be'
+$accountB = 'b748781d-824c-36d9-9de4-59cee731f37f'
+$mysqlRuntimeTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney-t21-mysql-report-' + [guid]::NewGuid().ToString('N'))
+$mysqlRuntimeReparseTarget = $null
+try {
+$mysqlRuntimeTestLogs = Join-Path $mysqlRuntimeTestRoot 'logs'
+New-Item -ItemType Directory -Path $mysqlRuntimeTestLogs -Force | Out-Null
+$mysqlWriteMarker = '[13:32:16] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_WRITE_PASS expected-a=1337.25 expected-b=765.50 receipt-a=SUCCESS:DEPOSIT:1337.25:1337.25 receipt-b=SUCCESS:DEPOSIT:765.50:765.50'
+$mysqlRestartReadMarker = '[13:32:16] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_READ_PASS expected-a=1337.25 expected-b=765.50'
+$mysqlRestartReadObservation = '[13:32:16] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1337.25 b=765.50 vault-unlocked-b=765.50'
+$mysqlWriteLogPath = Join-Path $mysqlRuntimeTestLogs 'paper-candidate-write.txt'
+$mysqlRestartReadLogPath = Join-Path $mysqlRuntimeTestLogs 'paper-candidate-restart-read.txt'
+$null = [IO.File]::WriteAllText($mysqlWriteLogPath, $mysqlWriteMarker + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+$null = [IO.File]::WriteAllText($mysqlRestartReadLogPath, ($mysqlRestartReadMarker + [Environment]::NewLine + $mysqlRestartReadObservation + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+$mysqlWriteLogItem = Get-Item -LiteralPath $mysqlWriteLogPath
+$mysqlRestartReadLogItem = Get-Item -LiteralPath $mysqlRestartReadLogPath
+$mysqlWriteLogSha = (Get-FileHash -LiteralPath $mysqlWriteLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$mysqlRestartReadLogSha = (Get-FileHash -LiteralPath $mysqlRestartReadLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$mysqlRuntimeRows = @(
+    [ordered]@{ name='AcceptanceA'; uuid=$accountA; balance='1337.25'; version=1 },
+    [ordered]@{ name='AcceptanceB'; uuid=$accountB; balance='765.50'; version=1 }
+)
+$mysqlRuntimeReport = [ordered]@{
+    schemaVersion = 1
+    task = 'T21-M05-SYNC-MySQL-minimum-Paper'
+    status = 'PASS_BOUNDED_SUBCASE'
+    server = [ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$paperMinimumSha }
+    candidate = [ordered]@{ version='1.4.0-alpha.1'; sha256=$candidateSha }
+    java = [ordered]@{ feature=25 }
+    mysql = [ordered]@{ version='8.0.42' }
+    redis = [ordered]@{ version='8.10.1' }
+    backendProcesses = [ordered]@{
+        mysql = [ordered]@{ version='8.0.42'; processId=1111; launchProcessId=1110; listenerAddresses=@('127.0.0.1'); runOwned=$true; listenerOwnerVerified=$true }
+        redis = [ordered]@{ version='8.10.1'; processId=2222; runOwned=$true; listenerOwnerVerified=$true }
+    }
+    configuration = [ordered]@{
+        schema=12; mode='sync'; databaseEnabled=$true; databaseType='mysql'; databaseIsolated=$true
+        databaseHost='127.0.0.1'; databasePort=3306; databaseName='syncmoney_t21'
+        redisEnabled=$true; redisDatabase=15; redisIsolated=$true; redisHost='127.0.0.1'; redisPort=16379
+        configSchema=12; observedMode='sync'; databaseNameObserved='syncmoney_t21'
+    }
+    backendShutdowns = @(
+        [ordered]@{ backend='mysql'; command='mysqladmin shutdown'; commandExitCode=0; processId=1111; shutdownTargetVerified=$true; processExitCode=0; processExitCodeObserved=$true; processExited=$true; launchProcessId=1110; launchProcessExitCode=0; launchProcessExitCodeObserved=$true; launchProcessExited=$true; forced=$false },
+        [ordered]@{ backend='redis'; command='SHUTDOWN SAVE'; commandExitCode=1; processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$false }
+    )
+    startupObservations = @(
+        [ordered]@{ stage='candidate-write'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=3333; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48} },
+        [ordered]@{ stage='candidate-restart-read'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=4444; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48} }
+    )
+    writeReceipts = @(
+        'SUCCESS:DEPOSIT:1337.25:1337.25',
+        'SUCCESS:DEPOSIT:765.50:765.50'
+    )
+    writeMarker = $mysqlWriteMarker
+    paperLogs = @(
+        [ordered]@{ stage='candidate-write'; path='logs\paper-candidate-write.txt'; bytes=[long]$mysqlWriteLogItem.Length; sha256=$mysqlWriteLogSha },
+        [ordered]@{ stage='candidate-restart-read'; path='logs\paper-candidate-restart-read.txt'; bytes=[long]$mysqlRestartReadLogItem.Length; sha256=$mysqlRestartReadLogSha }
+    )
+    logs = [ordered]@{
+        'logs\paper-candidate-write.txt' = [ordered]@{ bytes=[long]$mysqlWriteLogItem.Length; sha256=$mysqlWriteLogSha }
+        'logs\paper-candidate-restart-read.txt' = [ordered]@{ bytes=[long]$mysqlRestartReadLogItem.Length; sha256=$mysqlRestartReadLogSha }
+    }
+    runDirectory = $mysqlRuntimeTestRoot
+    restartReadMarker = $mysqlRestartReadMarker
+    restartReadObservation = $mysqlRestartReadObservation
+    normalStops = @(
+        [ordered]@{ stage='after-write'; commandExitCode=0; processId=3333; processExitCode=0; processExitCodeObserved=$true; processExited=$true; disabledMarker=$true },
+        [ordered]@{ stage='after-restart-read'; commandExitCode=0; processId=4444; processExitCode=0; processExitCodeObserved=$true; processExited=$true; disabledMarker=$true }
+    )
+    snapshots = @(
+        [ordered]@{ stage='after-write-stop'; sqlAccounts=$mysqlRuntimeRows; redisAccounts=$mysqlRuntimeRows },
+        [ordered]@{ stage='after-restart-read-stop'; sqlAccounts=$mysqlRuntimeRows; redisAccounts=$mysqlRuntimeRows }
+    )
+    cleanupFailures = @()
+    failure = $null
+}
+if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReport $paperMinimumSha $candidateSha)) {
+    throw 'The complete isolated minimum-Paper MySQL SYNC runtime report was rejected.'
+}
+Write-Output 'PASS: accept complete MySQL SYNC write, normal-restart, SQL/Redis parity evidence'
+
+$mysqlRuntimeReportJsonRoundtrip = $mysqlRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json
+if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportJsonRoundtrip $paperMinimumSha $candidateSha)) {
+    throw 'The complete MySQL SYNC report was rejected after JSON serialization and deserialization.'
+}
+Write-Output 'PASS: accept the serialized report with rehashed Paper server logs'
+if (Test-T21PathContainsReparsePoint $mysqlWriteLogPath) {
+    throw 'A normal temporary Paper report fixture unexpectedly traverses a reparse point.'
+}
+Write-Output 'PASS: accept the normal report fixture path without reparse points'
+
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\', '/'))
+$tempRootPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar
+$mysqlRuntimeReparseTarget = Join-Path $tempRoot ('syncmoney-t21-mysql-reparse-target-' + [guid]::NewGuid().ToString('N'))
+$mysqlRuntimeReparseTarget = [IO.Path]::GetFullPath($mysqlRuntimeReparseTarget)
+if (-not $mysqlRuntimeReparseTarget.StartsWith($tempRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Refusing to create a T21 reparse fixture outside the current temporary directory.'
+}
+Move-Item -LiteralPath $mysqlRuntimeTestLogs -Destination $mysqlRuntimeReparseTarget
+try {
+    New-Item -ItemType Junction -Path $mysqlRuntimeTestLogs -Target $mysqlRuntimeReparseTarget -ErrorAction Stop | Out-Null
+    if (-not (Test-T21PathContainsReparsePoint $mysqlWriteLogPath)) {
+        throw 'The validator did not detect a junction in the retained Paper log path.'
+    }
+    if (Test-T21MySqlRuntimeReport $mysqlRuntimeReport $paperMinimumSha $candidateSha) {
+        throw 'A report that reaches retained Paper logs through a junction was accepted.'
+    }
+    Write-Output 'PASS: reject a report whose retained Paper log path traverses a junction'
+}
+finally {
+    if (Test-Path -LiteralPath $mysqlRuntimeTestLogs) {
+        $junction = Get-Item -LiteralPath $mysqlRuntimeTestLogs -Force
+        if (($junction.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Remove-Item -LiteralPath $mysqlRuntimeTestLogs -Force
+        } else {
+            throw 'Refusing to replace a non-junction path while restoring the T21 fixture.'
+        }
+    }
+    if (Test-Path -LiteralPath $mysqlRuntimeReparseTarget -PathType Container) {
+        if (Test-Path -LiteralPath $mysqlRuntimeTestLogs) {
+            throw 'Refusing to restore the original T21 log fixture over an existing path.'
+        }
+        Move-Item -LiteralPath $mysqlRuntimeReparseTarget -Destination $mysqlRuntimeTestLogs
+    }
+}
+
+$mysqlWriteLogContents = [IO.File]::ReadAllText($mysqlWriteLogPath)
+Remove-Item -LiteralPath $mysqlWriteLogPath -Force
+if (Test-T21MySqlRuntimeReport $mysqlRuntimeReport $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report whose retained Paper write log is absent was accepted.'
+}
+Write-Output 'PASS: reject a missing retained Paper write log'
+$null = [IO.File]::WriteAllText($mysqlWriteLogPath, $mysqlWriteLogContents, [Text.UTF8Encoding]::new($false))
+
+$null = [IO.File]::WriteAllText($mysqlWriteLogPath, ($mysqlWriteLogContents + 'tampered' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+if (Test-T21MySqlRuntimeReport $mysqlRuntimeReport $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report whose retained Paper write log changed after hashing was accepted.'
+}
+Write-Output 'PASS: reject Paper write-log hash drift after capture'
+$null = [IO.File]::WriteAllText($mysqlWriteLogPath, $mysqlWriteLogContents, [Text.UTF8Encoding]::new($false))
+
+$mysqlReportMissingWriteMarker = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportMissingWriteMarker[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportMissingWriteMarker.Remove('writeMarker')
+if (Test-T21MySqlRuntimeReport $mysqlReportMissingWriteMarker $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report without its captured Vault write marker was accepted.'
+}
+Write-Output 'PASS: reject missing captured Vault write marker'
+
+$mysqlReportWrongWriteMarker = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongWriteMarker[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWrongWriteMarker.writeMarker = '[13:32:17] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_WRITE_PASS expected-a=1337.25 expected-b=765.50 receipt-a=SUCCESS:DEPOSIT:1337.25:1337.25 receipt-b=SUCCESS:DEPOSIT:765.50:765.50'
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongWriteMarker $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report whose write marker does not match the recorded capture was accepted.'
+}
+Write-Output 'PASS: reject a mismatched captured Vault write marker'
+
+$mysqlReportMissingPaperLog = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportMissingPaperLog[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportMissingPaperLog.logs = [ordered]@{
+    'logs\paper-candidate-restart-read.txt' = $mysqlRuntimeReport.logs['logs\paper-candidate-restart-read.txt']
+}
+if (Test-T21MySqlRuntimeReport $mysqlReportMissingPaperLog $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report without the Paper log containing the accepted write was accepted.'
+}
+Write-Output 'PASS: reject missing hashed Paper server log'
+
+$mysqlReportPaperLogPinMismatch = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportPaperLogPinMismatch[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportPaperLogPinMismatch.logs = [ordered]@{
+    'logs\paper-candidate-write.txt' = [ordered]@{ bytes=1024; sha256=('e' * 64) }
+    'logs\paper-candidate-restart-read.txt' = $mysqlRuntimeReport.logs['logs\paper-candidate-restart-read.txt']
+}
+if (Test-T21MySqlRuntimeReport $mysqlReportPaperLogPinMismatch $paperMinimumSha $candidateSha) {
+    throw 'A MySQL SYNC report whose Paper log manifest disagrees with the hashed log map was accepted.'
+}
+Write-Output 'PASS: reject Paper server-log hash metadata that disagrees with the report log map'
+
+$mysqlReportWrongRestartRead = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongRestartRead[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWrongRestartRead.restartReadObservation = '[13:32:16] [Folia Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=0.00 b=765.50 vault-unlocked-b=765.50'
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongRestartRead $paperMinimumSha $candidateSha) {
+    throw 'A restart read whose actual SQL-backed balance differs from the accepted write was accepted.'
+}
+Write-Output 'PASS: reject a restart read with balances that differ from accepted writes'
+
+$mysqlReportColdVaultMismatch = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportColdVaultMismatch[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportColdVaultMismatch.restartReadObservation = '[13:32:16] [Folia Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] ACCEPTANCE READ cold-vault-a=0.0 cold-vault-unlocked-b=null a=1337.25 b=765.50 vault-unlocked-b=765.50'
+if (Test-T21MySqlRuntimeReport $mysqlReportColdVaultMismatch $paperMinimumSha $candidateSha) {
+    throw 'A restart read that violated the accepted cold-Vault unavailable contract was accepted.'
+}
+Write-Output 'PASS: reject restart read evidence that violates cold-Vault semantics'
+
+$mysqlReportWrongShutdownPid = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongShutdownPid[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWrongShutdownPid.backendShutdowns = @(
+    [ordered]@{ backend='mysql'; command='mysqladmin shutdown'; commandExitCode=0; processId=3333; shutdownTargetVerified=$true; processExitCode=0; processExitCodeObserved=$true; processExited=$true; launchProcessId=1110; launchProcessExitCode=0; launchProcessExitCodeObserved=$true; launchProcessExited=$true; forced=$false },
+    $mysqlRuntimeReport.backendShutdowns[1]
+)
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongShutdownPid $paperMinimumSha $candidateSha) {
+    throw 'A MySQL shutdown targeting a different listener process was accepted.'
+}
+Write-Output 'PASS: reject MySQL shutdown evidence for a different listener process'
+
+$mysqlReportUnverifiedShutdown = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportUnverifiedShutdown[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportUnverifiedShutdown.backendShutdowns = @(
+    [ordered]@{ backend='mysql'; command='mysqladmin shutdown'; commandExitCode=0; processId=1111; shutdownTargetVerified=$false; processExitCode=0; processExitCodeObserved=$true; processExited=$true; launchProcessId=1110; launchProcessExitCode=0; launchProcessExitCodeObserved=$true; launchProcessExited=$true; forced=$false },
+    $mysqlRuntimeReport.backendShutdowns[1]
+)
+if (Test-T21MySqlRuntimeReport $mysqlReportUnverifiedShutdown $paperMinimumSha $candidateSha) {
+    throw 'A MySQL shutdown without run-owned listener verification was accepted.'
+}
+Write-Output 'PASS: reject MySQL shutdown evidence without run-owned target verification'
+
+$mysqlReportWrongDialect = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongDialect[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWrongDialect.configuration = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.configuration.Keys) { $mysqlReportWrongDialect.configuration[$key] = $mysqlRuntimeReport.configuration[$key] }
+$mysqlReportWrongDialect.configuration.databaseType = 'postgresql'
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongDialect $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL report was accepted as MySQL dialect evidence.'
+}
+Write-Output 'PASS: reject a report for the wrong SQL dialect'
+
+$mysqlReportForeignDatabase = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportForeignDatabase[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportForeignDatabase.configuration = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.configuration.Keys) { $mysqlReportForeignDatabase.configuration[$key] = $mysqlRuntimeReport.configuration[$key] }
+$mysqlReportForeignDatabase.configuration.databaseHost = '10.10.10.10'
+if (Test-T21MySqlRuntimeReport $mysqlReportForeignDatabase $paperMinimumSha $candidateSha) {
+    throw 'A report that used a non-loopback SQL host was accepted as isolated test evidence.'
+}
+Write-Output 'PASS: reject a SQL snapshot from a non-loopback host'
+
+$mysqlReportInvalidPort = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportInvalidPort[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportInvalidPort.configuration = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.configuration.Keys) { $mysqlReportInvalidPort.configuration[$key] = $mysqlRuntimeReport.configuration[$key] }
+$mysqlReportInvalidPort.configuration.redisPort = 0
+if (Test-T21MySqlRuntimeReport $mysqlReportInvalidPort $paperMinimumSha $candidateSha) {
+    throw 'A report with no isolated Redis port was accepted.'
+}
+Write-Output 'PASS: reject missing isolated backend port evidence'
+
+$mysqlReportForcedBackendStop = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportForcedBackendStop[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportForcedBackendStop.backendShutdowns = @(
+    $mysqlRuntimeReport.backendShutdowns[0],
+    [ordered]@{ backend='redis'; command='SHUTDOWN SAVE'; commandExitCode=1; processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$true }
+)
+if (Test-T21MySqlRuntimeReport $mysqlReportForcedBackendStop $paperMinimumSha $candidateSha) {
+    throw 'A forced Redis cleanup was accepted as normal backend shutdown evidence.'
+}
+Write-Output 'PASS: reject forced backend cleanup from a passing runtime report'
+
+$mysqlReportMismatch = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportMismatch[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportMismatch.snapshots = @(
+    $mysqlRuntimeReport.snapshots[0],
+    [ordered]@{
+        stage='after-restart-read-stop'
+        sqlAccounts=$mysqlRuntimeRows
+        redisAccounts=@(
+            [ordered]@{ name='AcceptanceA'; uuid=$accountA; balance='1337.25'; version=3 },
+            [ordered]@{ name='AcceptanceB'; uuid=$accountB; balance='765.50'; version=2 }
+        )
+    }
+)
+if (Test-T21MySqlRuntimeReport $mysqlReportMismatch $paperMinimumSha $candidateSha) {
+    throw 'SQL/Redis version disagreement after restart was accepted.'
+}
+Write-Output 'PASS: reject SQL/Redis version disagreement after restart'
+
+$mysqlReportMissingStop = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportMissingStop[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportMissingStop.normalStops = @($mysqlRuntimeReport.normalStops[0])
+if (Test-T21MySqlRuntimeReport $mysqlReportMissingStop $paperMinimumSha $candidateSha) {
+    throw 'A report missing the second normal server stop was accepted.'
+}
+Write-Output 'PASS: reject incomplete candidate restart/shutdown lifecycle evidence'
+
+$mysqlReportWrongPersistedValues = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongPersistedValues[$key] = $mysqlRuntimeReport[$key] }
+$wrongPersistedRows = @(
+    [ordered]@{ name='AcceptanceA'; uuid=$accountA; balance='0.00'; version=2 },
+    [ordered]@{ name='AcceptanceB'; uuid=$accountB; balance='0.00'; version=2 }
+)
+$mysqlReportWrongPersistedValues.snapshots = @(
+    [ordered]@{ stage='after-write-stop'; sqlAccounts=$wrongPersistedRows; redisAccounts=$wrongPersistedRows },
+    [ordered]@{ stage='after-restart-read-stop'; sqlAccounts=$wrongPersistedRows; redisAccounts=$wrongPersistedRows }
+)
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongPersistedValues $paperMinimumSha $candidateSha) {
+    throw 'Matching SQL and Redis snapshots with balances different from the accepted Vault writes were accepted.'
+}
+Write-Output 'PASS: reject SQL/Redis snapshots that agree with each other but disagree with accepted Vault writes'
+
+$mysqlReportWrongStartupIdentity = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongStartupIdentity[$key] = $mysqlRuntimeReport[$key] }
+$wrongStartupWrite = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.startupObservations[0].Keys) { $wrongStartupWrite[$key] = $mysqlRuntimeReport.startupObservations[0][$key] }
+$wrongStartupWrite.runtimeIdentity = [ordered]@{ software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=47 }
+$mysqlReportWrongStartupIdentity.startupObservations = @($wrongStartupWrite, $mysqlRuntimeReport.startupObservations[1])
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongStartupIdentity $paperMinimumSha $candidateSha) {
+    throw 'A Paper startup observation for the wrong build was accepted under the minimum-endpoint report label.'
+}
+Write-Output 'PASS: reject startup runtime identity that differs from the pinned Paper build'
+
+$mysqlReportWithFailure = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWithFailure[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWithFailure.failure = 'A runtime stage failed.'
+if (Test-T21MySqlRuntimeReport $mysqlReportWithFailure $paperMinimumSha $candidateSha) {
+    throw 'A passing runtime report with a recorded failure was accepted.'
+}
+Write-Output 'PASS: reject a passing status with a recorded runtime failure'
+
+$mysqlReportWithCleanupFailure = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWithCleanupFailure[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWithCleanupFailure.cleanupFailures = @('A run-owned process remained after cleanup.')
+if (Test-T21MySqlRuntimeReport $mysqlReportWithCleanupFailure $paperMinimumSha $candidateSha) {
+    throw 'A passing runtime report with a cleanup failure was accepted.'
+}
+Write-Output 'PASS: reject a passing status with a cleanup failure'
+
+$mysqlReportConfigAuditMismatch = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportConfigAuditMismatch[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportConfigAuditMismatch.configuration = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.configuration.Keys) { $mysqlReportConfigAuditMismatch.configuration[$key] = $mysqlRuntimeReport.configuration[$key] }
+$mysqlReportConfigAuditMismatch.configuration.databaseNameObserved = 'syncmoney_t21_different'
+if (Test-T21MySqlRuntimeReport $mysqlReportConfigAuditMismatch $paperMinimumSha $candidateSha) {
+    throw 'A runtime report whose captured database name differs from its isolated profile was accepted.'
+}
+Write-Output 'PASS: reject disagreement between configured and observed SQL schema names'
+
+$mysqlReportWrongBackendVersion = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongBackendVersion[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportWrongBackendVersion.mysql = [ordered]@{ version='8.0.41' }
+if (Test-T21MySqlRuntimeReport $mysqlReportWrongBackendVersion $paperMinimumSha $candidateSha) {
+    throw 'A report with conflicting top-level MySQL version evidence was accepted.'
+}
+Write-Output 'PASS: reject conflicting MySQL runtime version evidence'
+
+$mysqlRunnerPath = Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1'
+if (-not (Test-Path -LiteralPath $mysqlRunnerPath -PathType Leaf)) {
+    throw 'Missing isolated MySQL SYNC runtime runner for the T21 minimum-Paper dialect cell.'
+}
+$runnerTokens = $null
+$runnerParseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($mysqlRunnerPath, [ref]$runnerTokens, [ref]$runnerParseErrors) > $null
+if (@($runnerParseErrors).Count -gt 0) {
+    $details = @($runnerParseErrors | ForEach-Object { '{0}: {1}' -f $_.Extent.StartLineNumber, $_.Message }) -join '; '
+    throw "The isolated MySQL SYNC runtime runner has PowerShell parse errors: $details"
+}
+Write-Output 'PASS: parse the isolated MySQL SYNC runtime runner'
+
+$runnerSource = Get-Content -LiteralPath $mysqlRunnerPath -Raw
+$mysqlPortAssignments = [regex]::Matches($runnerSource, '(?m)^\s*\$script:mysqlPort\s*=\s*Get-FreeLoopbackPort')
+if ($mysqlPortAssignments.Count -ne 1) {
+    throw "The isolated MySQL SYNC runtime runner must allocate its database port once before publishing it to services and PlugDev; observed $($mysqlPortAssignments.Count) allocations."
+}
+Write-Output 'PASS: keep one reserved MySQL port across backend and PlugDev configuration'
+
+if ($runnerSource -notmatch "Invoke-PlugDev @\('server', 'command', 'stop'\)" -or
+    $runnerSource -match "Invoke-PlugDev @\('server', 'stop'\)") {
+    throw 'The runtime runner must send a graceful RCON stop command and then observe process exit; PlugDev server stop may terminate its process tree before plugin shutdown completes.'
+}
+Write-Output 'PASS: use graceful RCON stop and observe normal plugin shutdown'
+
+if ($runnerSource -notmatch '\$processExitCode\s*=\s*\[int\]\$serverProcess\.ExitCode' -or
+    $runnerSource -notmatch 'processExitCodeObserved\s*=\s*\$true') {
+    throw 'The runtime report must capture the actual run-owned Paper exit code instead of synthesizing a successful shutdown.'
+}
+Write-Output 'PASS: report the observed run-owned Paper exit code'
+
+if ($runnerSource -notmatch '--database=\$script:databaseName') {
+    throw 'MySQL snapshot reads must select the isolated schema instead of relying on a default database.'
+}
+Write-Output 'PASS: bind MySQL snapshots to the isolated schema'
+
+$mysqlShutdownCallIndex = $runnerSource.IndexOf('try { Stop-MySqlBackend }', [StringComparison]::Ordinal)
+$redisShutdownCallIndex = $runnerSource.IndexOf('try { Stop-RedisBackend }', [StringComparison]::Ordinal)
+$logHashIndex = $runnerSource.IndexOf('foreach ($log in @(Get-ChildItem -LiteralPath $script:logsRoot -File -Recurse))', [StringComparison]::Ordinal)
+if ($mysqlShutdownCallIndex -lt 0 -or $redisShutdownCallIndex -lt 0 -or $logHashIndex -lt 0 -or
+    $logHashIndex -lt [Math]::Max($mysqlShutdownCallIndex, $redisShutdownCallIndex)) {
+    throw 'Log hashes must be computed only after run-owned MySQL and Redis processes release their redirected log files.'
+}
+Write-Output 'PASS: hash runtime logs after isolated backends exit'
+
+if ($runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$paperLogPath' -or
+    $runnerSource -notmatch '\$script:report\.paperLogs = @\(\$script:paperServerLogs\)') {
+    throw 'The runner must preserve each stopped Paper session log and bind its metadata into the report.'
+}
+Write-Output 'PASS: preserve and report each stage-specific Paper server log'
+
 Write-Output 'T21 runner validation tests PASS'
+}
+finally {
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\', '/'))
+    $testRoot = [IO.Path]::GetFullPath($mysqlRuntimeTestRoot).TrimEnd([char[]]@('\', '/'))
+    $tempRootPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not $testRoot.StartsWith($tempRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Refusing to clean a T21 validation fixture outside the current temporary directory.'
+    }
+    if (Test-Path -LiteralPath $testRoot -PathType Container) {
+        $fixtureRoot = Get-Item -LiteralPath $testRoot -Force
+        if (($fixtureRoot.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Remove-Item -LiteralPath $testRoot -Force
+        } else {
+            $fixtureLogs = Join-Path $testRoot 'logs'
+            if (Test-Path -LiteralPath $fixtureLogs -PathType Container) {
+                $logsItem = Get-Item -LiteralPath $fixtureLogs -Force
+                if (($logsItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    Remove-Item -LiteralPath $fixtureLogs -Force
+                } else {
+                    $reparseChildren = @(Get-ChildItem -LiteralPath $fixtureLogs -Force | Where-Object {
+                        ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                    })
+                    if ($reparseChildren.Count -gt 0) {
+                        throw 'Refusing recursive cleanup while a T21 fixture log path contains a reparse point.'
+                    }
+                }
+            }
+            if ($mysqlRuntimeReparseTarget -and (Test-Path -LiteralPath $mysqlRuntimeReparseTarget -PathType Container)) {
+                if (Test-Path -LiteralPath $fixtureLogs) {
+                    throw 'Refusing to clean the T21 fixture while its reparse target has not been restored.'
+                }
+                Move-Item -LiteralPath $mysqlRuntimeReparseTarget -Destination $fixtureLogs
+            }
+            Remove-Item -LiteralPath $testRoot -Recurse -Force
+        }
+    }
+}
