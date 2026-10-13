@@ -648,6 +648,7 @@ function Stop-IsolatedRedis {
         shutdownCommand = 'SHUTDOWN SAVE'
         shutdownExitCode = $exitCode
         processExitCode = $script:redisProcess.ExitCode
+        processExitCodeObserved = $true
         processExitVerified = $true
     })
     $script:cleanupActions.Add([ordered]@{
