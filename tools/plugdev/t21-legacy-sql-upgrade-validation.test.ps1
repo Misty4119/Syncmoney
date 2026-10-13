@@ -252,13 +252,27 @@ try {
     }
     Write-Output 'PASS: reject maximum-Paper legacy-data evidence under the minimum-Paper endpoint contract'
 
+    $currentStableEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentStable
+    # Endpoint fixtures share temporary log paths, so regenerate the minimum baseline before mutating it.
+    $currentStableBase = New-T21ValidFixtureReport
+    $currentStableValid = $currentStableBase | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $currentStableValid = Set-T21FixturePlatform $currentStableValid $currentStableEndpoint
+    if (-not (Test-T21MySqlLegacyDataUpgradeReport $currentStableValid $currentStableEndpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint CurrentStable)) {
+        throw 'A complete current-stable Paper MySQL legacy-data upgrade report was rejected.'
+    }
+    Write-Output 'PASS: accept existing 1.3.2 MySQL data on the supplemental current-stable Paper endpoint'
+    if (Test-T21MySqlLegacyDataUpgradeReport $currentStableValid $maximumEndpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint Maximum) {
+        throw 'A current-stable Paper report was accepted under the user-pinned maximum-Paper endpoint contract.'
+    }
+    Write-Output 'PASS: reject current-stable Paper legacy-data evidence under the user-pinned maximum-Paper endpoint contract'
+
     $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
     if (-not (
-        $runnerSource.Contains('$script:databaseProduct -cne ''MySQL'' -or $PlatformEndpoint -notin @(''Minimum'', ''Maximum'')') -and
+        $runnerSource.Contains('$script:databaseProduct -cne ''MySQL'' -or $PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
         $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-MySQL-$($script:platformTarget.taskSuffix)"') -and
         $runnerSource.Contains('Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint')
-    )) { throw 'The runner does not expose the exact maximum-Paper legacy-data endpoint in its report predicate.' }
-    Write-Output 'PASS: expose the exact endpoint in the MySQL legacy-data runner and report'
+    )) { throw 'The runner does not expose the exact minimum, maximum, and current-stable Paper legacy-data endpoints in its report predicate.' }
+    Write-Output 'PASS: expose each supported Paper endpoint in the MySQL legacy-data runner and report'
 
     # Restore the minimum fixture logs because the endpoint mutation reuses the same isolated fixture paths.
     $valid = New-T21ValidFixtureReport

@@ -132,9 +132,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
-### MySQL legacy-data compatibility on minimum and maximum Paper
+### MySQL legacy-data compatibility on minimum, maximum, and current-stable Paper
 
-Pass `-LegacySqlDataUpgrade`, a verified 1.3.2 baseline JAR, and its SHA-256 to exercise the legacy-data lifecycle. This subcase is intentionally limited to MySQL `8.0.42` and the user-pinned Paper `Minimum` (`1.21.6#48`) or `Maximum` (`26.3#166`) endpoint. It seeds two disposable account rows under 1.3.2, verifies that 1.4 reads balances and versions unchanged while applying the observed additive audit-index repair, then verifies a 1.3.2 rollback read. Both Paper endpoints have bounded E2 evidence; the same legacy-data scenario on Folia, Canvas, other SQL dialects, and other modes remains `NOT RUN`.
+Pass `-LegacySqlDataUpgrade`, a verified 1.3.2 baseline JAR, and its SHA-256 to exercise the legacy-data lifecycle. This subcase is intentionally limited to MySQL `8.0.42` and three pinned Paper selectors: `Minimum` (`1.21.6#48`), user-pinned `Maximum` (`26.3#166`), or supplemental `CurrentStable` (`26.3#178`). The current-stable target is required by V03 and does not change the user-confirmed maximum. It seeds two disposable account rows under 1.3.2, verifies that 1.4 reads balances and versions unchanged while applying the observed additive audit-index repair, then verifies a 1.3.2 rollback read. The same legacy-data scenario on Folia, Canvas, other SQL dialects, and other modes remains `NOT RUN`.
 
 Example for the maximum Paper endpoint (set `$baselineJar` to the locally verified 1.3.2 artifact):
 
@@ -154,7 +154,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ExpectedBaselinePluginSha256 '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10'
 ```
 
-Run both focused validators and the report-specific offline audit after a runtime cycle. The final minimum- and maximum-Paper reports, source pins, test outputs, audit hashes, and evidence limits are recorded in the T21 M05 legacy SQL compatibility sections of the foundation validation plan.
+For supplemental current-stable Paper, use `paper-26.3-178.jar`, its pinned SHA-256 `5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757`, and `-PlatformEndpoint CurrentStable`.
+
+Run both focused validators and the report-specific offline audit after a runtime cycle. The final minimum-, maximum-, and current-stable Paper reports, source pins, test outputs, audit hashes, and evidence limits are recorded in the T21 M05 legacy SQL compatibility sections of the foundation validation plan.
 
 ## T21 player lifecycle scheduler matrix
 
