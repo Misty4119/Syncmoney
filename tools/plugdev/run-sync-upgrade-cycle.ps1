@@ -424,6 +424,7 @@ function Start-Paper([string]$jarPattern, [string]$version, [string]$stage, [str
     $serverLog = Join-Path $script:activeNodeRoot '.plugdev\run\logs\latest.log'
     $runtimeIdentity = Get-T21PlatformIdentity (Get-Content -LiteralPath $serverLog -Raw)
     Assert-T21PlatformIdentity $runtimeIdentity $PlatformSoftware $MinecraftVersion $PlatformBuildNumber
+    $serverJarProvenance = Get-T21ServerJarProvenance $stage
     $script:runtimeObservations.Add([ordered]@{
         stage = $stage
         serverName = $serverName
@@ -431,6 +432,7 @@ function Start-Paper([string]$jarPattern, [string]$version, [string]$stage, [str
         runtimeVersion = $runtimeIdentity.runtimeVersion
         build = $runtimeIdentity.build
         minecraftVersion = $runtimeIdentity.minecraftVersion
+        serverJarProvenance = $serverJarProvenance
     })
     Invoke-PlugDev @('server', 'command', 'smaccept version') ($stage + '-version-command.txt') | Out-Null
     Wait-ServerLog ("T21_VERSION_PASS expected=" + $version + ' actual=' + $version)
@@ -763,6 +765,159 @@ function Get-RuntimePluginManifest([string]$stage) {
     }
 }
 
+function Get-T21YamlScalar([string]$yamlText, [string]$name) {
+    $pattern = '(?m)^' + [regex]::Escape($name) + '\s*:\s*(?<value>.*)\s*$'
+    $match = [regex]::Match($yamlText, $pattern)
+    if (-not $match.Success) { throw "PlugDev profile is missing '$name'." }
+    $value = $match.Groups['value'].Value.Trim()
+    if ($value.Length -ge 2 -and $value[0] -eq '"' -and $value[$value.Length - 1] -eq '"') {
+        try { return [string](ConvertFrom-Json -InputObject $value -ErrorAction Stop) }
+        catch { throw "PlugDev profile has an invalid double-quoted '$name'." }
+    }
+    if ($value.Length -ge 2 -and $value[0] -eq "'" -and $value[$value.Length - 1] -eq "'") {
+        return $value.Substring(1, $value.Length - 2).Replace("''", "'")
+    }
+    return $value
+}
+
+function Get-T21JarManifest([string]$path) {
+    $archive = [IO.Compression.ZipFile]::OpenRead($path)
+    try {
+        $entry = $archive.GetEntry('META-INF/MANIFEST.MF')
+        if ($null -eq $entry) { throw "JAR has no META-INF/MANIFEST.MF: $path" }
+        $reader = [IO.StreamReader]::new($entry.Open(), [Text.Encoding]::UTF8, $true)
+        try { $contents = $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+    } finally {
+        $archive.Dispose()
+    }
+
+    $contents = [regex]::Replace($contents, "\r?\n ", '')
+    $fields = [Collections.Specialized.OrderedDictionary]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in ($contents -split "\r?\n")) {
+        if ($line -match '^([^:]+):\s?(.*)$') { $fields[$Matches[1]] = $Matches[2] }
+    }
+    return [ordered]@{
+        mainClass = $fields['Main-Class']
+        implementationTitle = $fields['Implementation-Title']
+        implementationVersion = $fields['Implementation-Version']
+        specificationVersion = $fields['Specification-Version']
+        buildNumber = $fields['Build-Number']
+    }
+}
+
+function Get-T21ServerJarProvenance([string]$stage) {
+    $profilePath = Join-Path $script:activeNodeRoot '.plugdev\profile.yml'
+    $profileText = Get-Content -LiteralPath $profilePath -Raw
+    $profileServer = Get-T21YamlScalar $profileText 'server'
+    $profileVersion = Get-T21YamlScalar $profileText 'version'
+    $profileServerJar = Get-T21YamlScalar $profileText 'serverJar'
+    if ($profileServer -cne 'custom' -or $profileVersion -cne $MinecraftVersion -or
+        -not (Test-T21PathsEqual $profileServerJar $serverPath)) {
+        throw "PlugDev profile at stage $stage does not identify the pinned custom server JAR."
+    }
+
+    $runDirectory = Join-Path $script:activeNodeRoot '.plugdev\run'
+    $markerPath = Join-Path $runDirectory '.plugdev-server-jar.json'
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw "PlugDev server JAR metadata is missing at stage $stage." }
+    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    $serverBytes = [long](Get-Item -LiteralPath $serverPath).Length
+    if (-not (Test-T21PathsEqual ([string]$marker.source) $serverPath) -or
+        -not (Test-T21PathsEqual ([string]$marker.preparedSource) $serverPath) -or
+        [long]$marker.size -ne $serverBytes) {
+        throw "PlugDev server JAR metadata does not match the pinned input at stage $stage."
+    }
+
+    $bootstrapPath = Join-Path $runDirectory 'server.jar'
+    if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) { throw "PlugDev bootstrap JAR is missing at stage $stage." }
+    $bootstrapItem = Get-Item -LiteralPath $bootstrapPath -Force
+    $linkType = 'COPY_OF_PINNED_INPUT'
+    $linkTarget = $null
+    if ($bootstrapItem.LinkType -eq 'SymbolicLink') {
+        $target = [string](@($bootstrapItem.Target)[0])
+        if ([IO.Path]::IsPathRooted($target)) { $linkTarget = [IO.Path]::GetFullPath($target) }
+        else { $linkTarget = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $bootstrapPath) $target)) }
+        if (-not (Test-T21PathsEqual $linkTarget $serverPath)) {
+            throw "PlugDev server.jar symbolic-link target differs from the pinned input at stage $stage."
+        }
+        $linkType = 'SYMBOLIC_LINK'
+    }
+    $bootstrapSha256 = (Get-FileHash -LiteralPath $bootstrapPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($bootstrapSha256 -cne $serverSha) { throw "PlugDev server.jar SHA-256 differs from the pinned input at stage $stage." }
+
+    $processes = @(Get-RunOwnedPaperProcesses)
+    if ($processes.Count -ne 1) { throw "Expected exactly one run-owned Java process while observing server JAR provenance at stage $stage." }
+    $commandLine = [string]$processes[0].CommandLine
+    $jarArgument = [regex]::Match($commandLine, '(?i)(?:^|\s)-jar\s+(?:"(?<quoted>[^"]+)"|(?<plain>\S+))')
+    $argumentPath = if ($jarArgument.Groups['quoted'].Success) {
+        $jarArgument.Groups['quoted'].Value
+    } else {
+        $jarArgument.Groups['plain'].Value
+    }
+    if (-not $jarArgument.Success -or -not (Test-T21PathsEqual $argumentPath $bootstrapPath)) {
+        throw "Run-owned Java process did not launch PlugDev's pinned server.jar with -jar at stage $stage."
+    }
+    $bootstrapManifest = Get-T21JarManifest $bootstrapPath
+
+    $software = $PlatformSoftware.ToLowerInvariant()
+    $runtimeRelativePath = ".plugdev/run/versions/$MinecraftVersion/$software-$MinecraftVersion.jar"
+    $runtimePath = Join-Path $runDirectory ("versions\{0}\{1}-{0}.jar" -f $MinecraftVersion, $software)
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw "Expected versioned runtime JAR is missing at stage ${stage}: $runtimePath" }
+    $runtimeManifest = Get-T21JarManifest $runtimePath
+    $expectedTitle = switch ($software) {
+        'paper' { 'Paper' }
+        'folia' { 'Folia' }
+        'canvas' { 'Canvas' }
+        default { throw "Unsupported server software in T21 provenance: $software" }
+    }
+    $expectedVersionPrefix = [regex]::Escape($MinecraftVersion + '-' + $PlatformBuildNumber)
+    if ($runtimeManifest.mainClass -cne 'org.bukkit.craftbukkit.Main' -or
+        $runtimeManifest.implementationTitle -cne $expectedTitle -or
+        [string]$runtimeManifest.implementationVersion -notmatch ('^' + $expectedVersionPrefix + '(?:-|$)') -or
+        [string]$runtimeManifest.buildNumber -cne [string]$PlatformBuildNumber) {
+        throw "Versioned runtime JAR manifest does not match $expectedTitle $MinecraftVersion`#$PlatformBuildNumber at stage $stage."
+    }
+
+    $profileObservation = [ordered]@{
+        path = $profilePath
+        server = $profileServer
+        version = $profileVersion
+        serverJar = $profileServerJar
+    }
+    $provenance = [ordered]@{
+        runDirectory = $runDirectory
+        input = [ordered]@{ path = $serverPath; bytes = $serverBytes; sha256 = $serverSha }
+        profile = $profileObservation
+        plugDev = [ordered]@{
+            markerPath = $markerPath
+            source = [string]$marker.source
+            preparedSource = [string]$marker.preparedSource
+            sourceBytes = [long]$marker.size
+            sourceMtimeMs = $marker.mtimeMs
+        }
+        bootstrap = [ordered]@{
+            path = $bootstrapPath
+            runRelativePath = '.plugdev/run/server.jar'
+            sha256 = $bootstrapSha256
+            linkType = $linkType
+            linkTarget = $linkTarget
+            manifest = $bootstrapManifest
+            launchCommand = [ordered]@{ observed = $true; processId = [int]$processes[0].ProcessId; argumentPath = $argumentPath }
+        }
+        runtimeOutput = [ordered]@{
+            path = $runtimePath
+            runRelativePath = $runtimeRelativePath
+            sha256 = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            manifest = $runtimeManifest
+        }
+    }
+    $observation = [ordered]@{ serverName = $script:activeNodeName; stage = $stage; serverJarProvenance = $provenance }
+    if (-not (Test-T21ServerJarProvenanceObservation $observation $serverPath $serverSha $serverBytes $software $MinecraftVersion $PlatformBuildNumber)) {
+        throw "Server JAR provenance failed its report contract at stage $stage."
+    }
+    return $provenance
+}
+
 function Initialize-T21ProjectWorkspace([string]$projectRoot) {
     New-Item -ItemType Directory -Force -Path (Join-Path $projectRoot 'tools\plugdev'),
         (Join-Path $projectRoot 'src\main\resources'), (Join-Path $projectRoot 'build\libs'),
@@ -808,6 +963,7 @@ $script:serverNames = @($ServerNames)
 $serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
 $serverSha = (Get-FileHash -LiteralPath $serverPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($serverSha -ne $ExpectedServerSha256.ToLowerInvariant()) { throw "Server JAR SHA-256 mismatch: $serverSha." }
+$serverBytes = [long](Get-Item -LiteralPath $serverPath).Length
 $baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
 $baselineSha = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($baselineSha -ne $ExpectedBaselinePluginSha256.ToLowerInvariant()) { throw "Baseline plugin SHA-256 mismatch: $baselineSha." }
@@ -1308,6 +1464,7 @@ try {
         $workspaceCount -eq $script:serverNames.Count -and $portCount -eq $script:serverNames.Count -and
         $script:stages.Count -ge (6 * $script:serverNames.Count) -and
         (Test-T21RuntimeObservationCoverage @($script:runtimeObservations) @($script:serverNames)) -and
+        (Test-T21ServerJarProvenanceCoverage @($script:runtimeObservations) @($script:serverNames) $serverPath $serverSha $serverBytes $PlatformSoftware $MinecraftVersion $PlatformBuildNumber) -and
         $script:snapshots.Count -eq $expectedSnapshotCount -and
         $script:shutdownObservations.Count -eq $expectedShutdownCount -and
         (Test-T21StageObservationCoverage @($script:shutdownObservations) @($script:serverNames)) -and
@@ -1335,7 +1492,13 @@ try {
             notEstablished = @('fleet-wide quiescence or external producer fencing', 'complete queue/retry/in-flight/audit drain counters', 'all mode/backend/runtime combinations', 'Java 21 rejection', 'rollback of SQLite', 'hard-crash or power-loss recovery', 'simultaneous live mixed-version writers', 'Folia/Canvas scheduler behavior', 'licensed CMI runtime')
         }
         evidenceLevel = 'E2_REAL_SERVER_AND_ISOLATED_BACKENDS'
-        platform = [ordered]@{ software = $PlatformSoftware.ToLowerInvariant(); minecraftVersion = $MinecraftVersion; build = $PlatformBuildNumber; serverJarSha256 = $serverSha }
+        platform = [ordered]@{
+            software = $PlatformSoftware.ToLowerInvariant()
+            minecraftVersion = $MinecraftVersion
+            build = $PlatformBuildNumber
+            serverJarSha256 = $serverSha
+            serverJarInput = [ordered]@{ path = $serverPath; bytes = $serverBytes; sha256 = $serverSha }
+        }
         runtimeObservations = @($script:runtimeObservations)
         java = $javaBanner.Trim()
         candidate = [ordered]@{ version = $CandidateVersion; sha256 = $candidateSha }

@@ -125,6 +125,148 @@ function Get-T21ObservedValue([object]$observation, [string]$name) {
     return $property.Value
 }
 
+function Test-T21PathsEqual([string]$actual, [string]$expected) {
+    if ([string]::IsNullOrWhiteSpace($actual) -or [string]::IsNullOrWhiteSpace($expected)) { return $false }
+    try {
+        $actualPath = [IO.Path]::GetFullPath($actual).TrimEnd([char[]]@('\', '/'))
+        $expectedPath = [IO.Path]::GetFullPath($expected).TrimEnd([char[]]@('\', '/'))
+    } catch {
+        return $false
+    }
+    $comparison = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    return [string]::Equals($actualPath, $expectedPath, $comparison)
+}
+
+function Test-T21ServerJarProvenanceObservation(
+    [object]$observation,
+    [string]$expectedInputPath,
+    [string]$expectedInputSha256,
+    [long]$expectedInputBytes,
+    [string]$expectedSoftware,
+    [string]$expectedMinecraftVersion,
+    [int]$expectedBuild
+) {
+    if ($null -eq $observation) { return $false }
+    $provenance = Get-T21ObservedValue $observation 'serverJarProvenance'
+    if ($null -eq $provenance) { return $false }
+    $runDirectory = [string](Get-T21ObservedValue $provenance 'runDirectory')
+    if ([string]::IsNullOrWhiteSpace($runDirectory)) { return $false }
+
+    $input = Get-T21ObservedValue $provenance 'input'
+    if ($null -eq $input -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $input 'path')) $expectedInputPath) -or
+        ([string](Get-T21ObservedValue $input 'sha256')).ToLowerInvariant() -cne $expectedInputSha256.ToLowerInvariant() -or
+        [long](Get-T21ObservedValue $input 'bytes') -ne $expectedInputBytes) {
+        return $false
+    }
+
+    $profile = Get-T21ObservedValue $provenance 'profile'
+    $expectedProfilePath = Join-Path (Split-Path -Parent $runDirectory) 'profile.yml'
+    if ($null -eq $profile -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $profile 'path')) $expectedProfilePath) -or
+        [string](Get-T21ObservedValue $profile 'server') -cne 'custom' -or
+        [string](Get-T21ObservedValue $profile 'version') -cne $expectedMinecraftVersion -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $profile 'serverJar')) $expectedInputPath)) {
+        return $false
+    }
+
+    $plugDev = Get-T21ObservedValue $provenance 'plugDev'
+    $expectedMarkerPath = Join-Path $runDirectory '.plugdev-server-jar.json'
+    if ($null -eq $plugDev -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $plugDev 'markerPath')) $expectedMarkerPath) -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $plugDev 'source')) $expectedInputPath) -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $plugDev 'preparedSource')) $expectedInputPath) -or
+        [long](Get-T21ObservedValue $plugDev 'sourceBytes') -ne $expectedInputBytes) {
+        return $false
+    }
+
+    $bootstrap = Get-T21ObservedValue $provenance 'bootstrap'
+    $expectedBootstrapPath = Join-Path $runDirectory 'server.jar'
+    if ($null -eq $bootstrap -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $bootstrap 'path')) $expectedBootstrapPath) -or
+        [string](Get-T21ObservedValue $bootstrap 'runRelativePath') -cne '.plugdev/run/server.jar' -or
+        ([string](Get-T21ObservedValue $bootstrap 'sha256')).ToLowerInvariant() -cne $expectedInputSha256.ToLowerInvariant()) {
+        return $false
+    }
+
+    $linkType = [string](Get-T21ObservedValue $bootstrap 'linkType')
+    $linkTarget = [string](Get-T21ObservedValue $bootstrap 'linkTarget')
+    if ($linkType -ceq 'SYMBOLIC_LINK') {
+        if (-not (Test-T21PathsEqual $linkTarget $expectedInputPath)) { return $false }
+    } elseif ($linkType -cne 'COPY_OF_PINNED_INPUT' -or -not [string]::IsNullOrWhiteSpace($linkTarget)) {
+        return $false
+    }
+
+    $bootstrapManifest = Get-T21ObservedValue $bootstrap 'manifest'
+    $bootstrapMainClass = [string](Get-T21ObservedValue $bootstrapManifest 'mainClass')
+    if ([string]::IsNullOrWhiteSpace($bootstrapMainClass) -or
+        ($expectedSoftware -ieq 'paper' -and $bootstrapMainClass -cne 'io.papermc.paperclip.Main')) {
+        return $false
+    }
+
+    $launchCommand = Get-T21ObservedValue $bootstrap 'launchCommand'
+    $launchPid = 0
+    if ($null -eq $launchCommand -or
+        (Get-T21ObservedValue $launchCommand 'observed') -ne $true -or
+        -not [int]::TryParse([string](Get-T21ObservedValue $launchCommand 'processId'), [ref]$launchPid) -or
+        $launchPid -le 0 -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $launchCommand 'argumentPath')) $expectedBootstrapPath)) {
+        return $false
+    }
+
+    $runtimeOutput = Get-T21ObservedValue $provenance 'runtimeOutput'
+    $software = $expectedSoftware.ToLowerInvariant()
+    $expectedRuntimePath = Join-Path $runDirectory ("versions\{0}\{1}-{0}.jar" -f $expectedMinecraftVersion, $software)
+    $expectedRuntimeRelativePath = ".plugdev/run/versions/$expectedMinecraftVersion/$software-$expectedMinecraftVersion.jar"
+    if ($null -eq $runtimeOutput -or
+        -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $runtimeOutput 'path')) $expectedRuntimePath) -or
+        [string](Get-T21ObservedValue $runtimeOutput 'runRelativePath') -cne $expectedRuntimeRelativePath -or
+        [string](Get-T21ObservedValue $runtimeOutput 'sha256') -notmatch '^[0-9a-fA-F]{64}$') {
+        return $false
+    }
+
+    $manifest = Get-T21ObservedValue $runtimeOutput 'manifest'
+    $expectedTitle = switch ($software) {
+        'paper' { 'Paper' }
+        'folia' { 'Folia' }
+        'canvas' { 'Canvas' }
+        default { return $false }
+    }
+    $expectedVersionPrefix = [regex]::Escape($expectedMinecraftVersion + '-' + $expectedBuild)
+    if ($null -eq $manifest -or
+        [string](Get-T21ObservedValue $manifest 'mainClass') -cne 'org.bukkit.craftbukkit.Main' -or
+        [string](Get-T21ObservedValue $manifest 'implementationTitle') -cne $expectedTitle -or
+        [string](Get-T21ObservedValue $manifest 'implementationVersion') -notmatch ('^' + $expectedVersionPrefix + '(?:-|$)') -or
+        [string](Get-T21ObservedValue $manifest 'buildNumber') -cne [string]$expectedBuild) {
+        return $false
+    }
+
+    return $true
+}
+
+function Test-T21ServerJarProvenanceCoverage(
+    [object[]]$runtimeObservations,
+    [string[]]$serverNames,
+    [string]$expectedInputPath,
+    [string]$expectedInputSha256,
+    [long]$expectedInputBytes,
+    [string]$expectedSoftware,
+    [string]$expectedMinecraftVersion,
+    [int]$expectedBuild
+) {
+    if (-not (Test-T21StageObservationCoverage $runtimeObservations $serverNames)) { return $false }
+    foreach ($observation in $runtimeObservations) {
+        if (-not (Test-T21ServerJarProvenanceObservation $observation $expectedInputPath $expectedInputSha256 $expectedInputBytes $expectedSoftware $expectedMinecraftVersion $expectedBuild)) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Test-T21ExpectedExitCode([object]$actual, [int]$expected) {
     if ($null -eq $actual) { return $false }
     $parsed = 0

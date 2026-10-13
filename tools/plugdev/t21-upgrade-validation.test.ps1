@@ -171,6 +171,126 @@ if (Test-T21RuntimeArtifactPinCoverage $runtimeArtifactWithMismatch @('node-a', 
 }
 Write-Output 'PASS: reject runtime artifact pin mismatches in lifecycle coverage'
 
+$serverInputPath = [IO.Path]::GetFullPath((Join-Path $env:TEMP 't21-provenance\paperclip-bootstrap.jar'))
+$serverRunRoot = [IO.Path]::GetFullPath((Join-Path $env:TEMP 't21-provenance\node-a'))
+$serverRunDirectory = Join-Path $serverRunRoot '.plugdev\run'
+$serverProfilePath = Join-Path $serverRunRoot '.plugdev\profile.yml'
+$bootstrapPath = Join-Path $serverRunDirectory 'server.jar'
+$runtimeJarPath = Join-Path $serverRunDirectory 'versions\26.3\paper-26.3.jar'
+$serverInputSha = 'a' * 64
+$serverRuntimeSha = 'b' * 64
+$serverProvenanceStages = @('baseline-1.3.2-node-1', 'upgrade-1.4-node-1', 'rollback-1.3.2-node-1')
+$serverProvenanceObservations = @($serverProvenanceStages | ForEach-Object {
+    [ordered]@{
+        serverName = 'node-a'
+        stage = $_
+        serverJarProvenance = [ordered]@{
+            runDirectory = $serverRunDirectory
+            input = [ordered]@{ path = $serverInputPath; bytes = 54212025; sha256 = $serverInputSha }
+            profile = [ordered]@{
+                path = $serverProfilePath; server = 'custom'; version = '26.3'; serverJar = $serverInputPath
+            }
+            plugDev = [ordered]@{
+                markerPath = Join-Path $serverRunDirectory '.plugdev-server-jar.json'
+                source = $serverInputPath; preparedSource = $serverInputPath; sourceBytes = 54212025
+            }
+            bootstrap = [ordered]@{
+                path = $bootstrapPath; runRelativePath = '.plugdev/run/server.jar'; sha256 = $serverInputSha
+                linkType = 'SYMBOLIC_LINK'; linkTarget = $serverInputPath
+                manifest = [ordered]@{ mainClass = 'io.papermc.paperclip.Main' }
+                launchCommand = [ordered]@{ observed = $true; processId = 1234; argumentPath = $bootstrapPath }
+            }
+            runtimeOutput = [ordered]@{
+                path = $runtimeJarPath; runRelativePath = '.plugdev/run/versions/26.3/paper-26.3.jar'
+                sha256 = $serverRuntimeSha
+                manifest = [ordered]@{
+                    mainClass = 'org.bukkit.craftbukkit.Main'; implementationTitle = 'Paper'
+                    implementationVersion = '26.3-166-cc7b98a'; buildNumber = '166'
+                }
+            }
+        }
+    }
+})
+if (-not (Test-T21ServerJarProvenanceCoverage $serverProvenanceObservations @('node-a') $serverInputPath $serverInputSha 54212025 'paper' '26.3' 166)) {
+    throw 'A pinned Paperclip input linked to a distinct, correctly identified Paper runtime JAR was rejected.'
+}
+Write-Output 'PASS: accept end-to-end server JAR provenance with distinct bootstrap and runtime hashes'
+
+$wrongServerInputPath = @($serverProvenanceObservations | ForEach-Object {
+    $copy = [ordered]@{ serverName = $_.serverName; stage = $_.stage; serverJarProvenance = $_.serverJarProvenance }
+    if ($_.stage -ceq 'upgrade-1.4-node-1') {
+        $provenance = [ordered]@{}
+        foreach ($key in $_.serverJarProvenance.Keys) { $provenance[$key] = $_.serverJarProvenance[$key] }
+        $input = [ordered]@{}
+        foreach ($key in $provenance.input.Keys) { $input[$key] = $provenance.input[$key] }
+        $input.path = $serverInputPath + '.wrong'
+        $provenance.input = $input
+        $copy.serverJarProvenance = $provenance
+    }
+    $copy
+})
+if (Test-T21ServerJarProvenanceCoverage $wrongServerInputPath @('node-a') $serverInputPath $serverInputSha 54212025 'paper' '26.3' 166) {
+    throw 'A runtime stage with a different pinned input path was accepted.'
+}
+Write-Output 'PASS: reject a mismatched pinned server input path'
+
+$wrongServerBootstrapHash = @($serverProvenanceObservations | ForEach-Object {
+    $copy = [ordered]@{ serverName = $_.serverName; stage = $_.stage; serverJarProvenance = $_.serverJarProvenance }
+    if ($_.stage -ceq 'upgrade-1.4-node-1') {
+        $provenance = [ordered]@{}
+        foreach ($key in $_.serverJarProvenance.Keys) { $provenance[$key] = $_.serverJarProvenance[$key] }
+        $bootstrap = [ordered]@{}
+        foreach ($key in $provenance.bootstrap.Keys) { $bootstrap[$key] = $provenance.bootstrap[$key] }
+        $bootstrap.sha256 = 'c' * 64
+        $provenance.bootstrap = $bootstrap
+        $copy.serverJarProvenance = $provenance
+    }
+    $copy
+})
+if (Test-T21ServerJarProvenanceCoverage $wrongServerBootstrapHash @('node-a') $serverInputPath $serverInputSha 54212025 'paper' '26.3' 166) {
+    throw 'A bootstrap JAR with a different SHA-256 from the pinned input was accepted.'
+}
+Write-Output 'PASS: reject a bootstrap hash that differs from the pinned input'
+
+$wrongPaperclipOutputHash = @($serverProvenanceObservations | ForEach-Object {
+    $copy = [ordered]@{ serverName = $_.serverName; stage = $_.stage; serverJarProvenance = $_.serverJarProvenance }
+    if ($_.stage -ceq 'upgrade-1.4-node-1') {
+        $provenance = [ordered]@{}
+        foreach ($key in $_.serverJarProvenance.Keys) { $provenance[$key] = $_.serverJarProvenance[$key] }
+        $runtimeOutput = [ordered]@{}
+        foreach ($key in $provenance.runtimeOutput.Keys) { $runtimeOutput[$key] = $provenance.runtimeOutput[$key] }
+        $runtimeOutput.sha256 = 'not-a-sha256'
+        $provenance.runtimeOutput = $runtimeOutput
+        $copy.serverJarProvenance = $provenance
+    }
+    $copy
+})
+if (Test-T21ServerJarProvenanceCoverage $wrongPaperclipOutputHash @('node-a') $serverInputPath $serverInputSha 54212025 'paper' '26.3' 166) {
+    throw 'A runtime JAR without its independently recorded output hash was accepted.'
+}
+Write-Output 'PASS: validate the runtime output hash independently from the bootstrap hash'
+
+$wrongPaperclipRuntimeIdentity = @($serverProvenanceObservations | ForEach-Object {
+    $copy = [ordered]@{ serverName = $_.serverName; stage = $_.stage; serverJarProvenance = $_.serverJarProvenance }
+    if ($_.stage -ceq 'rollback-1.3.2-node-1') {
+        $provenance = [ordered]@{}
+        foreach ($key in $_.serverJarProvenance.Keys) { $provenance[$key] = $_.serverJarProvenance[$key] }
+        $runtimeOutput = [ordered]@{}
+        foreach ($key in $provenance.runtimeOutput.Keys) { $runtimeOutput[$key] = $provenance.runtimeOutput[$key] }
+        $manifest = [ordered]@{}
+        foreach ($key in $runtimeOutput.manifest.Keys) { $manifest[$key] = $runtimeOutput.manifest[$key] }
+        $manifest.buildNumber = '175'
+        $runtimeOutput.manifest = $manifest
+        $provenance.runtimeOutput = $runtimeOutput
+        $copy.serverJarProvenance = $provenance
+    }
+    $copy
+})
+if (Test-T21ServerJarProvenanceCoverage $wrongPaperclipRuntimeIdentity @('node-a') $serverInputPath $serverInputSha 54212025 'paper' '26.3' 166) {
+    throw 'A Paperclip runtime JAR from a different server build was accepted.'
+}
+Write-Output 'PASS: reject a runtime output manifest for the wrong platform build'
+
 $expectedArtifactHash = 'a' * 64
 $wrongArtifactHash = 'b' * 64
 $pinnedArtifact = [ordered]@{ name = 'Syncmoney-1.4.0-alpha.1.jar'; sha256 = $expectedArtifactHash }
