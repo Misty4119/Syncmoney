@@ -204,7 +204,14 @@ function New-T21ValidFixtureReport {
 }
 
 function Set-T21FixturePlatform([object]$report, [object]$platform) {
-    $report.task = "T21-M05-LEGACY-SQL-DATA-MySQL-$($platform.taskSuffix)"
+    $mysql = Get-T21ObservedValue $report 'mysql'
+    $product = [string](Get-T21ObservedValue $mysql 'product')
+    if ([string]::IsNullOrWhiteSpace($product)) {
+        $postgresql = Get-T21ObservedValue $report 'postgresql'
+        $product = [string](Get-T21ObservedValue $postgresql 'product')
+    }
+    if ([string]::IsNullOrWhiteSpace($product)) { throw 'Fixture report does not identify a SQL product.' }
+    $report.task = "T21-M05-LEGACY-SQL-DATA-$product-$($platform.taskSuffix)"
     $report.server.software = $platform.software
     $report.server.minecraftVersion = $platform.minecraftVersion
     $report.server.build = $platform.build
@@ -217,7 +224,9 @@ function Set-T21FixturePlatform([object]$report, [object]$platform) {
         $stage.runtimeIdentity.build = $platform.build
     }
     $oldIdentity = '[20:30:00] [ServerMain/INFO]: Loading Paper 1.21.6-48 for Minecraft 1.21.6'
-    $newIdentity = "[20:30:00] [ServerMain/INFO]: Loading Paper $($platform.minecraftVersion)-$($platform.build) for Minecraft $($platform.minecraftVersion)"
+    $softwareDisplay = [string]$platform.software
+    $softwareDisplay = $softwareDisplay.Substring(0, 1).ToUpperInvariant() + $softwareDisplay.Substring(1)
+    $newIdentity = "[20:30:00] [ServerMain/INFO]: Loading $softwareDisplay $($platform.minecraftVersion)-$($platform.build) for Minecraft $($platform.minecraftVersion)"
     foreach ($entry in $report.platformLogs) {
         $path = Join-Path $root $entry.path
         $content = [IO.File]::ReadAllText($path)
@@ -419,8 +428,9 @@ try {
 
     $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
     if (-not (
-        $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
-        $runnerSource.Contains('$script:databaseProduct -notin @(''MySQL'', ''MariaDB'', ''PostgreSQL'')') -and
+        $runnerSource.Contains('Test-T21LegacySqlRuntimeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint') -and
+        -not $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
+        -not $runnerSource.Contains('$script:databaseProduct -notin @(''MySQL'', ''MariaDB'', ''PostgreSQL'')') -and
         $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"') -and
         $runnerSource.Contains('Get-T21LegacyAuditSchemaMetadata $stage') -and
         $runnerSource.Contains('Test-T21MariaDbLegacyDataUpgradeReport') -and
@@ -431,7 +441,49 @@ try {
         $runnerSource.Contains("COALESCE(table_column.attname, '<EXPRESSION>')") -and
         $runnerSource.Contains('index_info.indisprimary')
     )) { throw 'The runner does not expose the expected SQL products and configuration type on the supported Paper legacy-data endpoints.' }
-    Write-Output 'PASS: expose MySQL, MariaDB, and PostgreSQL legacy-data endpoints with their correct configuration types'
+    Write-Output 'PASS: route legacy SQL acceptance through the exact pinned platform and backend target guard'
+
+    $legacyTargets = @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    $legacyProducts = @('MySQL', 'MariaDB', 'PostgreSQL')
+    foreach ($product in $legacyProducts) {
+        foreach ($targetName in $legacyTargets) {
+            if (-not (Test-T21LegacySqlRuntimeTarget -DatabaseProduct $product -PlatformEndpoint $targetName)) {
+                throw "The legacy SQL runtime target guard rejected supported target $product / $targetName."
+            }
+        }
+    }
+    if ((Test-T21LegacySqlRuntimeTarget -DatabaseProduct SQLite -PlatformEndpoint Minimum) -or
+        (Test-T21LegacySqlRuntimeTarget -DatabaseProduct MySQL -PlatformEndpoint Unpinned)) {
+        throw 'The legacy SQL runtime target guard accepted an unsupported backend or unpinned platform.'
+    }
+    Write-Output 'PASS: accept all 21 pinned legacy SQL backend/platform targets and reject unsupported inputs'
+
+    $foliaCanvasTargets = @('MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    for ($targetIndex = 0; $targetIndex -lt $foliaCanvasTargets.Count; $targetIndex++) {
+        $targetName = $foliaCanvasTargets[$targetIndex]
+        $platform = Get-T21PlatformEndpoint -PlatformEndpoint $targetName
+        $mismatchName = $foliaCanvasTargets[($targetIndex + 1) % $foliaCanvasTargets.Count]
+        $mismatch = Get-T21PlatformEndpoint -PlatformEndpoint $mismatchName
+        foreach ($product in $legacyProducts) {
+            $fixture = New-T21ValidFixtureReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            if ($product -ceq 'MariaDB') { $fixture = Convert-T21FixtureToMariaDb $fixture }
+            if ($product -ceq 'PostgreSQL') { $fixture = Convert-T21FixtureToPostgreSql $fixture }
+            $fixture = Set-T21FixturePlatform $fixture $platform
+            $valid = switch ($product) {
+                'MariaDB' { Test-T21MariaDbLegacyDataUpgradeReport $fixture $platform.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $targetName }
+                'PostgreSQL' { Test-T21PostgresLegacyDataUpgradeReport $fixture $platform.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $targetName }
+                default { Test-T21MySqlLegacyDataUpgradeReport $fixture $platform.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $targetName }
+            }
+            if (-not $valid) { throw "The legacy report predicate rejected $product / $targetName." }
+            $mismatched = switch ($product) {
+                'MariaDB' { Test-T21MariaDbLegacyDataUpgradeReport $fixture $mismatch.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $mismatchName }
+                'PostgreSQL' { Test-T21PostgresLegacyDataUpgradeReport $fixture $mismatch.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $mismatchName }
+                default { Test-T21MySqlLegacyDataUpgradeReport $fixture $mismatch.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint $mismatchName }
+            }
+            if ($mismatched) { throw "The legacy report predicate relabeled $product / $targetName as $mismatchName." }
+        }
+    }
+    Write-Output 'PASS: accept and correctly bind MySQL, MariaDB, and PostgreSQL legacy reports on each Folia/Canvas endpoint'
 
     $legacyPostgresIndexOrderQuery = "position(' DESC' in upper(pg_get_indexdef(index_relation.oid, key_column.ordinality::integer, true)))"
     if (-not $runnerSource.Contains('index_info.indoption[key_column.ordinality - 1] & 1') -or

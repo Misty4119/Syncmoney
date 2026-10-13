@@ -4,6 +4,16 @@ function Test-T21LegacySqlHasField([object]$observation, [string]$name) {
     return $null -ne $observation.PSObject.Properties[$name]
 }
 
+function Test-T21LegacySqlRuntimeTarget([string]$DatabaseProduct, [string]$PlatformEndpoint) {
+    if ($DatabaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { return $false }
+    try {
+        [void](Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Test-T21LegacySqlAccountState(
     [object]$snapshot,
     [string]$expectedBalanceA,

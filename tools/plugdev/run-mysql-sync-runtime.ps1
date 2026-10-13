@@ -95,8 +95,8 @@ if ($script:legacySqlDataUpgrade) {
     if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
         throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
     }
-    if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL') -or $PlatformEndpoint -notin @('Minimum', 'Maximum', 'CurrentStable')) {
-        throw 'The legacy SQL data upgrade subcase supports MySQL 8.0.42, MariaDB 12.3.3, or PostgreSQL 18.1 on minimum Paper, user-pinned maximum Paper, or supplemental current-stable Paper.'
+    if (-not (Test-T21LegacySqlRuntimeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+        throw 'The legacy SQL data upgrade requires a supported SQL backend and one of the exact pinned Paper, Folia, or Canvas endpoints.'
     }
     $script:baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
     $script:baselineSha256 = (Get-FileHash -LiteralPath $script:baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
