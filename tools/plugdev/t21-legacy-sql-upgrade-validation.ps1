@@ -162,7 +162,7 @@ function Test-T21LegacySqlSnapshotLogRows(
     try {
         if ([string]::IsNullOrWhiteSpace($snapshotStage) -or
             $snapshotStage -notmatch '^after-(legacy-seed|candidate-existing-read|legacy-rollback-read)-stop$' -or
-            $suffix -cnotin @('mysql-snapshot', 'postgresql-snapshot', 'schema-version-snapshot', 'audit-columns-snapshot', 'audit-indexes-snapshot')) {
+            $suffix -cnotin @('mysql-snapshot', 'mariadb-snapshot', 'postgresql-snapshot', 'schema-version-snapshot', 'audit-columns-snapshot', 'audit-indexes-snapshot')) {
             return $false
         }
         $relativePath = 'logs\' + $snapshotStage + '-' + $suffix + '.txt'
@@ -194,7 +194,7 @@ function Test-T21LegacySqlSnapshotLogRows(
     }
 }
 
-function Test-T21LegacySqlSnapshotLogBinding([object]$report, [object]$snapshot, [string]$databaseKey) {
+function Test-T21LegacySqlSnapshotLogBinding([object]$report, [object]$snapshot, [string]$databaseKey, [string]$databaseProduct) {
     try {
         $snapshotStage = [string](Get-T21ObservedValue $snapshot 'stage')
         $sqlAccounts = @(Get-T21ObservedValue $snapshot 'sqlAccounts' | Sort-Object -Property name)
@@ -208,7 +208,7 @@ function Test-T21LegacySqlSnapshotLogBinding([object]$report, [object]$snapshot,
         $auditSchema = Get-T21ObservedValue $snapshot 'auditSchema'
         $columnRows = @(Get-T21ObservedValue $auditSchema 'columns' | ForEach-Object { [string]$_ })
         $indexRows = @(Get-T21ObservedValue $auditSchema 'indexes' | ForEach-Object { [string]$_ })
-        $sqlBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage ($databaseKey + '-snapshot') $sqlRows
+        $sqlBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage ($databaseProduct.ToLowerInvariant() + '-snapshot') $sqlRows
         $schemaBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'schema-version-snapshot' $schemaRows
         $columnsBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'audit-columns-snapshot' $columnRows
         $indexesBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'audit-indexes-snapshot' $indexRows
@@ -226,7 +226,7 @@ function Test-T21LegacySqlDataUpgradeReport(
     [string]$expectedCandidateSha256,
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
-    [ValidateSet('MySQL', 'PostgreSQL')]
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')]
     [string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
@@ -235,8 +235,8 @@ function Test-T21LegacySqlDataUpgradeReport(
     try {
         if ($null -eq $report) { return $false }
         $databaseKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
-        $expectedDatabaseVersion = if ($DatabaseProduct -ceq 'PostgreSQL') { '18.1' } else { '8.0.42' }
-        $expectedDatabaseType = $DatabaseProduct.ToLowerInvariant()
+        $expectedDatabaseVersion = switch ($DatabaseProduct) { 'MariaDB' { '12.3.3-MariaDB' } 'PostgreSQL' { '18.1' } default { '8.0.42' } }
+        $expectedDatabaseType = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
         $expectedTask = "T21-M05-LEGACY-SQL-DATA-$DatabaseProduct-$($expectedPlatform.taskSuffix)"
         if ((Get-T21ObservedValue $report 'schemaVersion') -ne 2 -or
@@ -355,7 +355,7 @@ function Test-T21LegacySqlDataUpgradeReport(
             $snapshot = Get-T21ObservedValue $stage 'snapshot'
             if ((Get-T21ObservedValue $snapshot 'stage') -cne "after-$($expected.name)-stop" -or
                 -not (Test-T21LegacySqlAccountState $snapshot $expected.expectedVersion $expected.expectedVersionB) -or
-                -not (Test-T21LegacySqlSnapshotLogBinding $report $snapshot $databaseKey)) { return $false }
+                -not (Test-T21LegacySqlSnapshotLogBinding $report $snapshot $databaseKey $DatabaseProduct)) { return $false }
             Write-Verbose "T21 legacy SQL report accepted SQL/Redis snapshot for $($expected.name)."
             $auditSchema = Get-T21LegacySqlAuditSchema $snapshot $DatabaseProduct
             if ($null -eq $auditSchema) { return $false }
@@ -363,7 +363,7 @@ function Test-T21LegacySqlDataUpgradeReport(
             if ($index -eq 0) {
                 $baselineSnapshot = $snapshot
                 $baselineAuditSchema = $auditSchema
-                try { $null = Assert-T21SchemaVersionRows $schemaRows $schemaRows '1.3.2 MySQL baseline' }
+                try { $null = Assert-T21SchemaVersionRows $schemaRows $schemaRows "1.3.2 $DatabaseProduct baseline" }
                 catch { return $false }
             } elseif ($index -eq 1) {
                 $candidateAuditSchema = $auditSchema
@@ -382,6 +382,20 @@ function Test-T21LegacySqlDataUpgradeReport(
                     )
                     if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedPostgresIndexes) -or
                         -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedPostgresIndexes)) { return $false }
+                } elseif ($DatabaseProduct -ceq 'MariaDB') {
+                    $expectedMariaDbIndexes = @(
+                        'idx_audit_player|1|1|player_uuid|A|BTREE|<NULL>',
+                        'idx_audit_player|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_player|1|3|sequence|D|BTREE|<NULL>',
+                        'idx_audit_timestamp|1|1|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_timestamp|1|2|sequence|D|BTREE|<NULL>',
+                        'idx_audit_type|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type|1|3|sequence|D|BTREE|<NULL>',
+                        'PRIMARY|0|1|id|A|BTREE|<NULL>'
+                    )
+                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedMariaDbIndexes) -or
+                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedMariaDbIndexes)) { return $false }
                 } else {
                     $removedIndexes = @($baselineAuditSchema.indexes | Where-Object { $_ -notin $candidateAuditSchema.indexes })
                     $addedIndexes = @($candidateAuditSchema.indexes | Where-Object { $_ -notin $baselineAuditSchema.indexes })
@@ -466,6 +480,8 @@ function Test-T21LegacySqlDataUpgradeReport(
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'runOwned') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') $true) -or
             -not (Test-T21IntegralNumber (Get-T21ObservedValue $redisProcess 'processId') 1 ([int]::MaxValue))) { return $false }
+        if ($DatabaseProduct -in @('MySQL', 'MariaDB') -and
+            -not (Test-T21IntegralNumber (Get-T21ObservedValue $databaseProcess 'launchProcessId') 1 ([int]::MaxValue))) { return $false }
         Write-Verbose "T21 legacy SQL report accepted $DatabaseProduct and Redis process ownership."
         $backendStops = @(Get-T21ObservedValue $report 'backendShutdowns')
         Write-Verbose ("T21 backend shutdown count={0}" -f $backendStops.Count)
@@ -495,8 +511,9 @@ function Test-T21LegacySqlDataUpgradeReport(
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'forced') $false)) { return $false }
             if ($backend -ceq $databaseKey -and
                 (-not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'shutdownTargetVerified') $true) -or
-                 ($DatabaseProduct -ceq 'MySQL' -and
+                 ($DatabaseProduct -in @('MySQL', 'MariaDB') -and
                   (-not (Test-T21IntegralNumber (Get-T21ObservedValue $matches[0] 'launchProcessId') 1 ([int]::MaxValue)) -or
+                   (Get-T21ObservedValue $matches[0] 'launchProcessId') -ne (Get-T21ObservedValue $databaseProcess 'launchProcessId') -or
                    -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $matches[0] 'launchProcessExitCode') 0) -or
                    -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExitCodeObserved') $true) -or
                    -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExited') $true))))) { return $false }
@@ -536,6 +553,22 @@ function Test-T21MySqlLegacyDataUpgradeReport(
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
         $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
         -DatabaseProduct MySQL -PlatformEndpoint $PlatformEndpoint
+}
+
+function Test-T21MariaDbLegacyDataUpgradeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedBaselineSha256,
+    [string]$expectedCandidateSha256,
+    [string]$expectedAcceptanceSha256,
+    [string]$expectedApiConsumerSha256,
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
+) {
+    return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
+        $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
+        -DatabaseProduct MariaDB -PlatformEndpoint $PlatformEndpoint
 }
 
 function Test-T21PostgresLegacyDataUpgradeReport(

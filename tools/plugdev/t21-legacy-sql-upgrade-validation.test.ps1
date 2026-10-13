@@ -171,7 +171,7 @@ function New-T21ValidFixtureReport {
         platformLogs = @($logEntries | ForEach-Object { [ordered]@{ stage=$_.stage; path=$_.path; bytes=$_.bytes; sha256=$_.sha256 } })
         logs = $logManifest
         backendProcesses = [ordered]@{
-            mysql = [ordered]@{ product='MySQL'; version='8.0.42'; processId=1111; runOwned=$true; listenerOwnerVerified=$true }
+            mysql = [ordered]@{ product='MySQL'; version='8.0.42'; processId=1111; launchProcessId=1212; runOwned=$true; listenerOwnerVerified=$true }
             redis = [ordered]@{ version='8.10.1'; processId=2222; runOwned=$true; listenerOwnerVerified=$true }
         }
         backendShutdowns = @(
@@ -291,6 +291,48 @@ function Convert-T21FixtureToPostgreSql([object]$report) {
     return $report
 }
 
+function Convert-T21FixtureToMariaDb([object]$report) {
+    $report.task = 'T21-M05-LEGACY-SQL-DATA-MariaDB-minimum-Paper'
+    $report.mysql.product = 'MariaDB'
+    $report.mysql.version = '12.3.3-MariaDB'
+    $report.mysql.serverVersion = '12.3.3-MariaDB'
+    $report.configuration.databaseType = 'mysql'
+    $report.backendProcesses.mysql.product = 'MariaDB'
+    $report.backendProcesses.mysql.version = '12.3.3-MariaDB'
+    $mariaDbIndexes = @(
+        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 1, 'player_uuid', 'A', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_timestamp', 1, 1, 'timestamp', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_timestamp', 1, 2, 'sequence', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 1, 'type', 'A', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('PRIMARY', 0, 1, 'id', 'A', 'BTREE', $null) -Compress)
+    )
+    foreach ($stage in $report.stages) {
+        $stage.snapshot.auditSchema.indexes = @($mariaDbIndexes)
+        $snapshotStage = [string]$stage.snapshot.stage
+        $sqlRows = @($stage.snapshot.sqlAccounts | Sort-Object -Property name | ForEach-Object {
+            '{0}|{1}|{2}|{3}' -f $_.name, $_.uuid, $_.balance, $_.version
+        })
+        $sqlLog = New-T21FixtureSnapshotLog $snapshotStage 'mariadb-snapshot' $sqlRows
+        $report.logs[$sqlLog.path] = $sqlLog.manifest
+        $oldSqlPath = "logs\$snapshotStage-mysql-snapshot.txt"
+        $report.logs.Remove($oldSqlPath)
+        $oldSqlFile = Join-Path $root $oldSqlPath
+        if (Test-Path -LiteralPath $oldSqlFile) { Remove-Item -LiteralPath $oldSqlFile -Force }
+        $indexLog = New-T21FixtureSnapshotLog $snapshotStage 'audit-indexes-snapshot' $mariaDbIndexes
+        $report.logs[$indexLog.path] = $indexLog.manifest
+    }
+    return $report
+}
+
+function New-T21MariaDbFixtureReport {
+    $report = New-T21ValidFixtureReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    return Convert-T21FixtureToMariaDb $report
+}
+
 try {
     $valid = New-T21ValidFixtureReport
     if (-not (Test-T21MySqlLegacyDataUpgradeReport $valid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
@@ -324,17 +366,72 @@ try {
     }
     Write-Output 'PASS: reject current-stable Paper legacy-data evidence under the user-pinned maximum-Paper endpoint contract'
 
+    $mariaDb = New-T21MariaDbFixtureReport
+    if (-not (Test-T21MariaDbLegacyDataUpgradeReport $mariaDb $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
+        throw 'A complete minimum-Paper MariaDB legacy-data read/rollback report was rejected.'
+    }
+    Write-Output 'PASS: accept MariaDB legacy data with its observed index set preserved through candidate read and rollback'
+    if (Test-T21MySqlLegacyDataUpgradeReport $mariaDb $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'MariaDB legacy-data evidence was accepted under the MySQL product contract.'
+    }
+    Write-Output 'PASS: reject MariaDB legacy-data evidence under the MySQL product contract'
+
+    $mariaDbWrongVersion = $mariaDb | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $mariaDbWrongVersion.mysql.version = '8.0.42'
+    if (Test-T21MariaDbLegacyDataUpgradeReport $mariaDbWrongVersion $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MariaDB legacy-data report with a MySQL version was accepted.'
+    }
+    Write-Output 'PASS: reject MariaDB legacy-data reports with a mismatched backend version'
+
+    $mariaDbWrongConfiguration = $mariaDb | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $mariaDbWrongConfiguration.configuration.databaseType = 'mariadb'
+    if (Test-T21MariaDbLegacyDataUpgradeReport $mariaDbWrongConfiguration $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MariaDB legacy-data report with a non-Syncmoney database configuration type was accepted.'
+    }
+    Write-Output 'PASS: require MariaDB report configuration to use Syncmoney database type mysql'
+
+    $mariaDbIndexDrift = $mariaDb | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $candidateIndexes = @($mariaDbIndexDrift.stages[1].snapshot.auditSchema.indexes | Where-Object {
+        (ConvertFrom-Json -InputObject ([string]$_) -AsHashtable)[0] -cne 'idx_audit_timestamp'
+    })
+    $mariaDbIndexDrift.stages[1].snapshot.auditSchema.indexes = $candidateIndexes
+    $candidateSnapshotStage = [string]$mariaDbIndexDrift.stages[1].snapshot.stage
+    $candidateIndexLog = New-T21FixtureSnapshotLog $candidateSnapshotStage 'audit-indexes-snapshot' $candidateIndexes
+    $mariaDbIndexDrift.logs[$candidateIndexLog.path] = $candidateIndexLog.manifest
+    if (Test-T21MariaDbLegacyDataUpgradeReport $mariaDbIndexDrift $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MariaDB candidate report with audit indexes removed after baseline was accepted.'
+    }
+    Write-Output 'PASS: reject MariaDB candidate audit-index drift after the 1.3.2 baseline'
+
+    $failedMariaDbLauncher = New-T21MariaDbFixtureReport
+    $failedMariaDbLauncher.backendShutdowns[0].launchProcessExitCode = 1
+    if (Test-T21MariaDbLegacyDataUpgradeReport $failedMariaDbLauncher $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MariaDB shutdown with a failed launcher exit was accepted.'
+    }
+    Write-Output 'PASS: reject MariaDB shutdown with a failed launcher process'
+
+    $mariaDbLauncherMismatch = New-T21MariaDbFixtureReport
+    $mariaDbLauncherMismatch.backendShutdowns[0].launchProcessId = 1313
+    if (Test-T21MariaDbLegacyDataUpgradeReport $mariaDbLauncherMismatch $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MariaDB shutdown receipt for a different launcher process was accepted.'
+    }
+    Write-Output 'PASS: reject MariaDB launcher exit evidence for a different startup process'
+
     $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
     if (-not (
         $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
+        $runnerSource.Contains('$script:databaseProduct -notin @(''MySQL'', ''MariaDB'', ''PostgreSQL'')') -and
         $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"') -and
         $runnerSource.Contains('Get-T21LegacyAuditSchemaMetadata $stage') -and
+        $runnerSource.Contains('Test-T21MariaDbLegacyDataUpgradeReport') -and
+        $runnerSource.Contains('$databaseProcessEvidence.launchProcessId = [int]$databaseProcess.launchProcessId') -and
+        $runnerSource.Contains('databaseType=$(if ($script:databaseProduct -ceq ''PostgreSQL'') { ''postgresql'' } else { ''mysql'' })') -and
         $runnerSource.Contains('Test-T21PostgresLegacyDataUpgradeReport') -and
         $runnerSource.Contains('LEFT JOIN pg_attribute table_column') -and
         $runnerSource.Contains("COALESCE(table_column.attname, '<EXPRESSION>')") -and
         $runnerSource.Contains('index_info.indisprimary')
-    )) { throw 'The runner does not expose the exact minimum, maximum, and current-stable Paper legacy-data endpoints for both SQL products.' }
-    Write-Output 'PASS: expose both SQL products on the supported Paper legacy-data endpoints'
+    )) { throw 'The runner does not expose the expected SQL products and configuration type on the supported Paper legacy-data endpoints.' }
+    Write-Output 'PASS: expose MySQL, MariaDB, and PostgreSQL legacy-data endpoints with their correct configuration types'
 
     $legacyPostgresIndexOrderQuery = "position(' DESC' in upper(pg_get_indexdef(index_relation.oid, key_column.ordinality::integer, true)))"
     if (-not $runnerSource.Contains('index_info.indoption[key_column.ordinality - 1] & 1') -or
@@ -460,6 +557,20 @@ try {
         throw 'A MySQL shutdown with a failed launcher exit was accepted.'
     }
     Write-Output 'PASS: reject MySQL shutdown with a failed launcher process'
+
+    $mysqlLauncherMismatch = New-T21ValidFixtureReport
+    $mysqlLauncherMismatch.backendShutdowns[0].launchProcessId = 1313
+    if (Test-T21MySqlLegacyDataUpgradeReport $mysqlLauncherMismatch $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MySQL shutdown receipt for a different launcher process was accepted.'
+    }
+    Write-Output 'PASS: reject MySQL launcher exit evidence for a different startup process'
+
+    $invalidMySqlStartupLauncher = New-T21ValidFixtureReport
+    $invalidMySqlStartupLauncher.backendProcesses.mysql.launchProcessId = '1212'
+    if (Test-T21MySqlLegacyDataUpgradeReport $invalidMySqlStartupLauncher $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A MySQL startup launcher ID encoded as a string was accepted.'
+    }
+    Write-Output 'PASS: require an integral MySQL startup launcher process ID'
 
     $redisZeroShutdownCommand = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $redisZeroShutdownCommand.backendShutdowns[1].commandExitCode = 0

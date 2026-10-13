@@ -95,8 +95,8 @@ if ($script:legacySqlDataUpgrade) {
     if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
         throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
     }
-    if ($script:databaseProduct -notin @('MySQL', 'PostgreSQL') -or $PlatformEndpoint -notin @('Minimum', 'Maximum', 'CurrentStable')) {
-        throw 'The legacy SQL data upgrade subcase supports only MySQL 8.0.42 or PostgreSQL 18.1 on minimum Paper, user-pinned maximum Paper, or supplemental current-stable Paper.'
+    if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL') -or $PlatformEndpoint -notin @('Minimum', 'Maximum', 'CurrentStable')) {
+        throw 'The legacy SQL data upgrade subcase supports MySQL 8.0.42, MariaDB 12.3.3, or PostgreSQL 18.1 on minimum Paper, user-pinned maximum Paper, or supplemental current-stable Paper.'
     }
     $script:baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
     $script:baselineSha256 = (Get-FileHash -LiteralPath $script:baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -1453,6 +1453,9 @@ try {
                 runOwned=[bool]$databaseProcess.runOwned
                 listenerOwnerVerified=[bool]$databaseProcess.listenerOwnerVerified
             }
+            if ($script:databaseProduct -in @('MySQL', 'MariaDB')) {
+                $databaseProcessEvidence.launchProcessId = [int]$databaseProcess.launchProcessId
+            }
             $backendProcessEvidence = [ordered]@{}
             $backendProcessEvidence[$script:sqlReportKey] = $databaseProcessEvidence
             $backendProcessEvidence.redis = [ordered]@{
@@ -1481,7 +1484,7 @@ try {
                     schema=[int]$configObservation.schema
                     mode=[string]$configObservation.mode
                     databaseEnabled=$true
-                    databaseType=$script:databaseProduct.ToLowerInvariant()
+                    databaseType=$(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
                     databaseIsolated=$true
                     redisEnabled=$true
                     redisDatabase=15
@@ -1511,10 +1514,10 @@ try {
                 }
             }
             $script:finalReport[$script:sqlReportKey] = $databaseEvidence
-            $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
-                Test-T21PostgresLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
-            } else {
-                Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
+            $reportAccepted = switch ($script:databaseProduct) {
+                'PostgreSQL' { Test-T21PostgresLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
+                'MariaDB' { Test-T21MariaDbLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
+                default { Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
             }
         } else {
             $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
