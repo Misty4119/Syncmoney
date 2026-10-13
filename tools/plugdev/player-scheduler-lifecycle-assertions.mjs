@@ -74,6 +74,62 @@ export function isTeleportArrivalConfirmed(clientObservedNether, serverReportedA
   return clientObservedNether === true && serverReportedArrival === true;
 }
 
+export function hasTwoRegionOwnershipProof(logLines) {
+  if (!Array.isArray(logLines)) return false;
+
+  const observations = [];
+  let passMarkers = 0;
+  for (const rawLine of logLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("T21_CROSS_OWNER_FAIL")) return false;
+    if (line.includes("T21_CROSS_OWNER_PASS")) {
+      if ((line.match(/T21_CROSS_OWNER_PASS/g) ?? []).length !== 1) return false;
+      passMarkers += 1;
+      if (!/\bT21_CROSS_OWNER_PASS\s+players=AcceptanceA,AcceptanceB(?:\s+distanceBlocks=\d+)?\s*$/.test(line)) return false;
+    }
+    if (!line.includes("T21_REGION_OWNER")) continue;
+
+    if ((line.match(/T21_REGION_OWNER/g) ?? []).length !== 1) return false;
+    const match = line.match(/\bT21_REGION_OWNER\s+player=(AcceptanceA|AcceptanceB)\s+world=(\S+)\s+blockX=(-?\d+)\s+blockZ=(-?\d+)\s+chunkX=(-?\d+)\s+chunkZ=(-?\d+)\s+selfOwned=(true|false)\s+otherPlayer=(AcceptanceA|AcceptanceB)\s+otherWorld=(\S+)\s+otherBlockX=(-?\d+)\s+otherBlockZ=(-?\d+)\s+otherChunkX=(-?\d+)\s+otherChunkZ=(-?\d+)\s+otherOwned=(true|false)\s*$/);
+    if (!match) return false;
+    observations.push({
+      player: match[1], world: match[2], blockX: Number(match[3]), blockZ: Number(match[4]),
+      chunkX: Number(match[5]), chunkZ: Number(match[6]), selfOwned: match[7] === "true",
+      otherPlayer: match[8], otherWorld: match[9], otherBlockX: Number(match[10]),
+      otherBlockZ: Number(match[11]), otherChunkX: Number(match[12]),
+      otherChunkZ: Number(match[13]), otherOwned: match[14] === "true",
+    });
+  }
+
+  if (passMarkers !== 1 || observations.length !== 2) return false;
+  const byPlayer = new Map(observations.map((observation) => [observation.player, observation]));
+  if (byPlayer.size !== 2 || !byPlayer.has("AcceptanceA") || !byPlayer.has("AcceptanceB")) return false;
+
+  const a = byPlayer.get("AcceptanceA");
+  const b = byPlayer.get("AcceptanceB");
+  const matchesCoordinates = (observation, other) =>
+    observation.otherPlayer === other.player &&
+    observation.otherWorld === other.world &&
+    observation.otherBlockX === other.blockX &&
+    observation.otherBlockZ === other.blockZ &&
+    observation.otherChunkX === other.chunkX &&
+    observation.otherChunkZ === other.chunkZ;
+  if (a.world !== b.world || a.world === "unknown" || a.otherWorld === "unknown") return false;
+  if (a.chunkX !== Math.floor(a.blockX / 16) || a.chunkZ !== Math.floor(a.blockZ / 16) ||
+      b.chunkX !== Math.floor(b.blockX / 16) || b.chunkZ !== Math.floor(b.blockZ / 16)) return false;
+  if (!a.selfOwned || !b.selfOwned || a.otherOwned || b.otherOwned) return false;
+  if (!matchesCoordinates(a, b) || !matchesCoordinates(b, a)) return false;
+  const distance = Math.hypot(a.blockX - b.blockX, a.blockZ - b.blockZ);
+  return Number.isFinite(distance) && distance >= 4096 && (a.chunkX !== b.chunkX || a.chunkZ !== b.chunkZ);
+}
+
+export function observeCrossOwnerClientPass(passedPlayers, playerName, messageText) {
+  if (!(passedPlayers instanceof Set) || !["AcceptanceA", "AcceptanceB"].includes(playerName)) return false;
+  if (typeof messageText !== "string" || !messageText.includes(`T21_CROSS_OWNER_PASS player=${playerName}`)) return false;
+  passedPlayers.add(playerName);
+  return passedPlayers.has("AcceptanceA") && passedPlayers.has("AcceptanceB");
+}
+
 export function normalizedDimension(value) {
   return String(value ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
 }
@@ -113,6 +169,16 @@ if (process.argv[2] === "--has-exact-server-kick-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasExactExpectedServerKick(evidence.logLines, evidence.playerName) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-two-region-ownership-proof-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasTwoRegionOwnershipProof(evidence.logLines) ? "true" : "false");
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;

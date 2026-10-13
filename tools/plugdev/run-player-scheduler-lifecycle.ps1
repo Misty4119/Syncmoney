@@ -5,7 +5,8 @@ param(
     [string]$JavaHome = 'C:\Program Files\Java\jdk-25.0.4',
     [string]$PlugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main',
     [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master',
-    [int]$RedisPauseMilliseconds = 2500
+    [int]$RedisPauseMilliseconds = 2500,
+    [switch]$CrossOwner
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,9 @@ $pins = @{
 }
 
 $pin = $pins[$Endpoint]
+if ($CrossOwner.IsPresent -and $pin.software -ne 'folia') {
+    throw '-CrossOwner is only supported for Folia endpoints.'
+}
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $candidateVersion = '1.4.0-alpha.1'
 $candidateJar = Join-Path $root "build\libs\Syncmoney-$candidateVersion.jar"
@@ -371,7 +375,8 @@ function Stop-OwnedGradleDaemons {
     throw 'A run-owned Gradle daemon remained after isolated --stop.'
 }
 
-function Assert-ObservedScenario([string[]]$serverLines, [object]$teleport, [object]$logout) {
+function Assert-ObservedScenario(
+    [string[]]$serverLines, [object]$teleport, [object]$logout, [object]$crossOwnerClient = $null) {
     if (@($serverLines | Where-Object { $_ -match 'T15_LIFECYCLE_FAIL' }).Count -gt 0) { throw 'Server logged T15_LIFECYCLE_FAIL.' }
     if (@($serverLines | Where-Object { $_ -match 'API CLASSLOADER PASS' }).Count -ne 1) { throw 'Expected exactly one API CLASSLOADER PASS marker.' }
     $writes = @($serverLines | Where-Object { $_ -match 'T15_ACCEPTED_WRITE ' })
@@ -436,7 +441,31 @@ function Assert-ObservedScenario([string[]]$serverLines, [object]$teleport, [obj
     $kickEvidenceExit = $LASTEXITCODE
     $exactKickVerified = ($kickEvidenceOutput | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim() -ceq 'true'
     if ($kickEvidenceExit -ne 0 -or -not $exactKickVerified) { throw 'Expected exact logout reason for AcceptanceA is absent, duplicated, or suffixed.' }
-    return [ordered]@{ acceptedWriteMarkers = 4; pendingBoundaries = $pending; actionThreads = $threads; teleportDisposition = $teleportDisposition; teleportEventCancellationStates = $teleportEventStates; teleportFutureSucceeded = $futureSuccess; deferredTeleport = ($teleportDisposition -eq 'deferred-retry'); serverNetherArrival = $true; clientNetherArrival = $true; expectedLogoutKick = $true; clientObservedExpectedKickPacket = $clientObservedKickReason; clientObservedExpectedLogoutAbort = $clientObservedTransportAbort; exactServerKickReasonVerified = $exactKickVerified }
+    $crossOwnerEvidence = $null
+    if ($null -ne $crossOwnerClient) {
+        $ownerEvidenceLines = @($serverLines | Where-Object { $_ -match 'T21_(?:REGION_OWNER(?:\b|_)|CROSS_OWNER_)' })
+        $ownerEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{ logLines = @($ownerEvidenceLines) }) -Compress
+        $ownerEvidenceOutput = @(& node $assertionModule '--has-two-region-ownership-proof-json' $ownerEvidenceJson 2>&1)
+        $ownerEvidenceExit = $LASTEXITCODE
+        $ownerEvidenceResult = ($ownerEvidenceOutput | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim()
+        if ($ownerEvidenceExit -ne 0 -or $ownerEvidenceResult -cne 'true') {
+            throw "Two-region owner proof failed offline validation: $($ownerEvidenceOutput -join ' ')."
+        }
+        $clientPassMarkers = @($crossOwnerClient.lines | Where-Object { $_ -match '^BOT_CROSS_OWNER_PASS player=(AcceptanceA|AcceptanceB)$' })
+        $passedClients = @($clientPassMarkers | ForEach-Object { if ($_ -match '^BOT_CROSS_OWNER_PASS player=(AcceptanceA|AcceptanceB)$') { $Matches[1] } } | Sort-Object -Unique)
+        if ($clientPassMarkers.Count -ne 2 -or $passedClients.Count -ne 2 -or
+            $passedClients[0] -cne 'AcceptanceA' -or $passedClients[1] -cne 'AcceptanceB') {
+            throw 'Both live clients must receive their own owner-proof completion marker.'
+        }
+        $crossOwnerEvidence = [ordered]@{
+            serverOwnerProof = $true
+            clientCompletionMessage = $true
+            clientLogPath = $crossOwnerClient.logPath
+            clientLogSha256 = $crossOwnerClient.logSha256
+            ownerEvidenceLines = $ownerEvidenceLines
+        }
+    }
+    return [ordered]@{ acceptedWriteMarkers = 4; pendingBoundaries = $pending; actionThreads = $threads; teleportDisposition = $teleportDisposition; teleportEventCancellationStates = $teleportEventStates; teleportFutureSucceeded = $futureSuccess; deferredTeleport = ($teleportDisposition -eq 'deferred-retry'); serverNetherArrival = $true; clientNetherArrival = $true; expectedLogoutKick = $true; clientObservedExpectedKickPacket = $clientObservedKickReason; clientObservedExpectedLogoutAbort = $clientObservedTransportAbort; exactServerKickReasonVerified = $exactKickVerified; crossOwner = $crossOwnerEvidence }
 }
 
 try {
@@ -511,6 +540,13 @@ plugins {
     if ($ownedServer.Count -ne 1 -or [int]$ownedServer[0].ProcessId -ne [int]$session.pid) { throw 'Server PID was not the unique run-marked Java process.' }
     $script:serverProcessId = [int]$session.pid
 
+    $crossOwnerEnabled = $CrossOwner.IsPresent
+    $crossOwnerClient = $null
+    if ($crossOwnerEnabled) {
+        $crossOwnerClient = Invoke-Client 'cross-owner'
+        $null = Wait-ServerLog 'T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB' 30 'two-region owner proof'
+    }
+
     $teleport = Invoke-Client 'teleport'
     $null = Wait-ServerLog 'T15_TELEPORT_REACHED .* world=world_nether' 30 'server-reported Nether arrival'
     $null = Wait-ServerLog 'T15_PLAYER_QUIT' 30 'teleport client disconnect'
@@ -524,7 +560,7 @@ plugins {
     Copy-Item -LiteralPath $serverLogPath -Destination (Join-Path $logsRoot 'server.log')
     if (-not $serverLog.Contains('Syncmoney disabled.')) { throw 'Normal shutdown did not log Syncmoney disabled.' }
     $serverLines = @($serverLog -split "`r?`n")
-    $scenarioEvidence = Assert-ObservedScenario $serverLines $teleport $logout
+    $scenarioEvidence = Assert-ObservedScenario $serverLines $teleport $logout $crossOwnerClient
 
     $uuid = '35c93f74-c540-3b38-8093-b5cb3c2263be'
     $balanceKey = "syncmoney:balance:$uuid"
@@ -537,6 +573,8 @@ plugins {
     $redisFiles = @(Get-ChildItem -LiteralPath $redisData -Recurse -File | ForEach-Object {
         [ordered]@{ path = $_.FullName.Substring($runRoot.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
     })
+    $notEstablished = @('CMI callback retirement', 'hard-kill recovery', 'fleet-wide quiescence', 'full backend/failure matrix')
+    if (-not $crossOwnerEnabled) { $notEstablished += 'Folia two-region cross-owner behavior' }
     $script:result = [ordered]@{
         schemaVersion = 1
         status = 'PASS'
@@ -560,12 +598,13 @@ plugins {
         server = [ordered]@{ processId = $script:serverProcessId; normalStartExitCode = $startExit; normalStopExitCode = $script:normalServerStopExitCode; processExitVerified = $true; syncmoneyDisabledMarker = $true; logSha256 = (Get-FileHash (Join-Path $logsRoot 'server.log') -Algorithm SHA256).Hash.ToLowerInvariant() }
         redis = [ordered]@{ processId = $script:redisProcessId; normalShutdownExitCode = $script:normalRedisStopExitCode; processExitCode = $script:redisExitCode; processExitVerified = $true; databaseSize = $redisDbSize; balanceKey = $balanceKey; balance = $redisBalance; versionKey = $versionKey; version = [int]$accountVersion; files = $redisFiles }
         client = [ordered]@{
+            crossOwner = if ($null -eq $crossOwnerClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $crossOwnerClient.exitCode; logSha256 = $crossOwnerClient.logSha256 } }
             teleport = [ordered]@{ protocol = $pin.version; exitCode = $teleport.exitCode; logSha256 = $teleport.logSha256; observedNetherDimension = $true }
             logout = [ordered]@{ protocol = $pin.version; exitCode = $logout.exitCode; logSha256 = $logout.logSha256; expectedKickReason = 'T15 accepted-write logout scenario'; clientObservedExpectedKickPacket = $scenarioEvidence.clientObservedExpectedKickPacket; clientObservedExpectedLogoutAbort = $scenarioEvidence.clientObservedExpectedLogoutAbort; exactServerKickReasonVerified = $scenarioEvidence.exactServerKickReasonVerified }
         }
         observed = $scenarioEvidence
         forcedCleanup = $false
-        notEstablished = @('Folia two-region cross-owner behavior', 'CMI callback retirement', 'hard-kill recovery', 'fleet-wide quiescence', 'full backend/failure matrix')
+        notEstablished = $notEstablished
     }
     Write-RunnerLog "PASS endpoint=$Endpoint Redis=$redisBalance/v$accountVersion teleport=$($scenarioEvidence.teleportDisposition) pending=$($scenarioEvidence.pendingBoundaries.teleport)/$($scenarioEvidence.pendingBoundaries.logout)"
 } catch {

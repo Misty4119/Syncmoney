@@ -8,9 +8,11 @@ import {
   chatComponentText,
   hasExactExpectedServerKick,
   hasSingleSuccessfulTeleportFuture,
+  hasTwoRegionOwnershipProof,
   isExpectedLogoutKick,
   isNetherDimension,
   normalizedDimension,
+  observeCrossOwnerClientPass,
 } from "./player-scheduler-lifecycle-assertions.mjs";
 
 test("extracts nested Minecraft disconnect component text", () => {
@@ -80,6 +82,46 @@ test("accepts eventless Folia teleport only with entity-scheduler confirmation",
   assert.equal(classifyTeleportOutcome?.([], false, true), null);
 });
 
+test("requires matching owner proofs for two distant players in distinct Folia regions", () => {
+  const valid = [
+    "T21_REGION_OWNER player=AcceptanceA world=world blockX=0 blockZ=0 chunkX=0 chunkZ=0 selfOwned=true otherPlayer=AcceptanceB otherWorld=world otherBlockX=16384 otherBlockZ=16384 otherChunkX=1024 otherChunkZ=1024 otherOwned=false",
+    "T21_REGION_OWNER player=AcceptanceB world=world blockX=16384 blockZ=16384 chunkX=1024 chunkZ=1024 selfOwned=true otherPlayer=AcceptanceA otherWorld=world otherBlockX=0 otherBlockZ=0 otherChunkX=0 otherChunkZ=0 otherOwned=false",
+    "T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB",
+  ];
+  assert.equal(hasTwoRegionOwnershipProof(valid), true);
+  const ownerMarkerFilter = /T21_(?:REGION_OWNER(?:\b|_)|CROSS_OWNER_)/;
+  assert.equal(valid.filter((line) => ownerMarkerFilter.test(line)).length, 3);
+  assert.equal(hasTwoRegionOwnershipProof(valid.map((line) => line.replace("otherOwned=false", "otherOwned=true"))), false);
+  assert.equal(hasTwoRegionOwnershipProof(valid.filter((line) => !line.includes("player=AcceptanceB"))), false);
+  assert.equal(hasTwoRegionOwnershipProof([...valid, valid[0]]), false);
+  assert.equal(hasTwoRegionOwnershipProof([
+    valid[0], valid[1], `${valid[2]} T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB`,
+  ]), false);
+  assert.equal(hasTwoRegionOwnershipProof([
+    valid[0], valid[1], `${valid[2]} contradictory=true`,
+  ]), false);
+  assert.equal(hasTwoRegionOwnershipProof([
+    `${valid[0]} T21_REGION_OWNER player=AcceptanceA`, valid[1], valid[2],
+  ]), false);
+  assert.equal(hasTwoRegionOwnershipProof([
+    `${valid[0]} contradictory=true`, valid[1], valid[2],
+  ]), false);
+  assert.equal(hasTwoRegionOwnershipProof([
+    ...valid, "[SEVERE]: T21_CROSS_OWNER_FAIL reason=AcceptanceB-retired-before-result",
+  ]), false);
+  assert.equal(hasTwoRegionOwnershipProof(valid.map((line) => line.replace("blockX=16384", "blockX=512").replace("otherBlockX=16384", "otherBlockX=512"))), false);
+  assert.equal(hasTwoRegionOwnershipProof(valid.map((line) => line.replace("otherChunkX=1024", "otherChunkX=0"))), false);
+  assert.equal(hasTwoRegionOwnershipProof(valid.slice(0, 2)), false);
+});
+
+test("cross-owner client completion requires the targeted marker from both live clients", () => {
+  const passed = new Set();
+  assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceA", "T21_CROSS_OWNER_PASS player=AcceptanceA"), false);
+  assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceA", "T21_CROSS_OWNER_PASS player=AcceptanceB"), false);
+  assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceB", "T21_CROSS_OWNER_PASS player=AcceptanceB"), true);
+  assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceB", "T21_CROSS_OWNER_PASS player=AcceptanceB"), true);
+});
+
 test("requires exactly one exact logout reason for the expected player", () => {
   assert.equal(hasExactExpectedServerKick([
     "[INFO]: AcceptanceA lost connection: Disconnected",
@@ -127,6 +169,36 @@ test("runner passes only focused lifecycle lines to Node instead of the full ser
   assert.match(runner, /logLines = @\(\$futureEvidenceLines\)/);
   assert.match(runner, /\$kickEvidenceLines = @\(\$serverLines \| Where-Object \{ \$_ -match 'AcceptanceA lost connection: T15 accepted-write logout scenario' \}\)/);
   assert.match(runner, /logLines = @\(\$kickEvidenceLines\); playerName = 'AcceptanceA'/);
+});
+
+test("cross-owner gate requires two live clients and both entity-owner checks", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
+  const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
+  const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
+  assert.match(runner, /CrossOwner/);
+  assert.match(runner, /\$CrossOwner\.IsPresent/);
+  assert.doesNotMatch(runner, /\$crossowner\s*=/i, "do not overwrite the case-insensitive PowerShell switch parameter");
+  assert.match(runner, /T21_\(\?:REGION_OWNER\(\?:\\b\|_\)\|CROSS_OWNER_\)/);
+  assert.match(runner, /--has-two-region-ownership-proof-json/);
+  assert.match(client, /createAcceptanceBot\("AcceptanceB"\)/);
+  assert.match(client, /\/smaccept lifecycle cross-owner AcceptanceB/);
+  assert.match(probe, /Bukkit\.isOwnedByCurrentRegion\(player\)/);
+  assert.match(probe, /Bukkit\.isOwnedByCurrentRegion\(otherLocation\.world\(\)/);
+  assert.match(probe, /T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB/);
+  assert.match(probe, /sendCrossOwnerClientCompletion\(anchor, "AcceptanceA"\)/);
+  assert.match(probe, /sendCrossOwnerClientCompletion\(other, "AcceptanceB"\)/);
+  assert.match(client, /observeCrossOwnerPass\(bot, text\)/);
+  assert.match(client, /observeCrossOwnerPass\(otherBot, text\)/);
+});
+
+test("cross-owner runner rejects non-Folia endpoints before creating a run or starting services", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8")
+    .replaceAll("\r\n", "\n");
+  const guard = runner.indexOf("$CrossOwner.IsPresent -and $pin.software -ne 'folia'");
+  assert.ok(guard > runner.indexOf("$pin = $pins[$Endpoint]"));
+  assert.ok(guard < runner.indexOf("$root = [IO.Path]::GetFullPath"));
+  assert.ok(guard < runner.indexOf("New-Item -ItemType Directory -Path $runRoot"));
+  assert.match(runner, /-CrossOwner is only supported for Folia endpoints\./);
 });
 
 test("selects test ports only after the operating system accepts a local bind", () => {

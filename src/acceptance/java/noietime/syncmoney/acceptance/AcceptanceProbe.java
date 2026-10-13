@@ -4,7 +4,9 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyWriteQueue;
 import net.milkbowl.vault.economy.Economy;
+import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.World;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -15,6 +17,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
@@ -42,6 +45,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                     return true;
                 }
                 String scenario = args[1];
+                if (scenario.equalsIgnoreCase("cross-owner")) {
+                    if (sender instanceof org.bukkit.entity.Player player && args.length > 2) {
+                        runCrossOwnerScenario(player, args[2]);
+                    } else {
+                        getLogger().warning("T21 cross-owner scenario requires an Acceptance player and its peer name");
+                    }
+                    return true;
+                }
                 if (sender instanceof org.bukkit.entity.Player player) {
                     runLifecycleScenario(player, scenario);
                 } else if (args.length > 2) {
@@ -182,6 +193,170 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         }
     }
 
+    private void runCrossOwnerScenario(org.bukkit.entity.Player anchor, String otherPlayerName) {
+        if (!anchor.getName().equals("AcceptanceA") || !otherPlayerName.equals("AcceptanceB")) {
+            getLogger().severe("T21_CROSS_OWNER_FAIL reason=unexpected-acceptance-player-pair");
+            return;
+        }
+        getServer().getGlobalRegionScheduler().run(this, task -> {
+            try {
+                var other = getServer().getPlayerExact(otherPlayerName);
+                require(other != null, "second Acceptance player is online");
+                require(other != anchor, "cross-owner participants are different entities");
+                World overworld = getServer().getWorlds().stream()
+                        .filter(world -> world.getEnvironment() == World.Environment.NORMAL)
+                        .findFirst().orElseThrow(() -> new IllegalStateException("Overworld unavailable"));
+
+                var anchorLocation = captureRegionLocation(anchor, overworld, "AcceptanceA");
+                var otherLocation = moveAndCaptureRegionLocation(other, overworld, "AcceptanceB",
+                        new org.bukkit.Location(overworld, 16_384.5, 100, 16_384.5));
+                anchorLocation.thenCombine(otherLocation, RegionPair::new)
+                        .whenComplete((pair, failure) -> {
+                            if (failure != null) {
+                                reportCrossOwnerFailure("prepare", failure);
+                                return;
+                            }
+                            verifyDistinctRegionOwners(anchor, other, pair);
+                        });
+            } catch (Throwable failure) {
+                reportCrossOwnerFailure("start", failure);
+            }
+        });
+    }
+
+    private CompletableFuture<RegionLocation> captureRegionLocation(
+            org.bukkit.entity.Player player, World expectedWorld, String playerName) {
+        var result = new CompletableFuture<RegionLocation>();
+        player.getScheduler().run(this, task -> {
+            try {
+                require(Bukkit.isOwnedByCurrentRegion(player), "entity scheduler owns " + playerName);
+                require(player.getWorld().equals(expectedWorld), playerName + " is in the Overworld");
+                result.complete(snapshot(player.getLocation()));
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        }, () -> result.completeExceptionally(new IllegalStateException(
+                "player retired before region location snapshot: " + playerName)));
+        return result;
+    }
+
+    private CompletableFuture<RegionLocation> moveAndCaptureRegionLocation(
+            org.bukkit.entity.Player player, World world, String playerName, org.bukkit.Location destination) {
+        var result = new CompletableFuture<RegionLocation>();
+        player.getScheduler().run(this, task -> {
+            try {
+                player.teleportAsync(destination, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN)
+                        .whenComplete((success, failure) -> {
+                            if (failure != null) {
+                                result.completeExceptionally(failure);
+                            } else if (!Boolean.TRUE.equals(success)) {
+                                result.completeExceptionally(new IllegalStateException(
+                                        "teleportAsync returned false for " + playerName));
+                            } else {
+                                captureRegionLocation(player, world, playerName).whenComplete((location, captureFailure) -> {
+                                    if (captureFailure != null) result.completeExceptionally(captureFailure);
+                                    else result.complete(location);
+                                });
+                            }
+                        });
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        }, () -> result.completeExceptionally(new IllegalStateException(
+                "player retired before remote-region teleport: " + playerName)));
+        return result;
+    }
+
+    private RegionLocation snapshot(org.bukkit.Location location) {
+        World world = location.getWorld();
+        require(world != null, "region probe world is available");
+        int blockX = location.getBlockX();
+        int blockZ = location.getBlockZ();
+        return new RegionLocation(world, world.getUID(), world.getName(), blockX, blockZ,
+                blockX >> 4, blockZ >> 4);
+    }
+
+    private void verifyDistinctRegionOwners(
+            org.bukkit.entity.Player anchor, org.bukkit.entity.Player other, RegionPair pair) {
+        var anchorProof = observeRegionOwnership(
+                anchor, "AcceptanceA", pair.anchor(), "AcceptanceB", pair.other());
+        var otherProof = observeRegionOwnership(
+                other, "AcceptanceB", pair.other(), "AcceptanceA", pair.anchor());
+        CompletableFuture.allOf(anchorProof, otherProof).whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                reportCrossOwnerFailure("owner-scheduler", failure);
+                return;
+            }
+            OwnerObservation first = anchorProof.getNow(null);
+            OwnerObservation second = otherProof.getNow(null);
+            double distance = Math.hypot((double) first.blockX() - second.blockX(),
+                    (double) first.blockZ() - second.blockZ());
+            boolean pass = first.selfOwned() && second.selfOwned()
+                    && !first.otherOwned() && !second.otherOwned()
+                    && first.worldId().equals(second.worldId()) && distance >= 4096.0;
+            if (!pass) {
+                getLogger().severe("T21_CROSS_OWNER_FAIL reason=owner-or-separation-check");
+                return;
+            }
+            getLogger().info("T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB distanceBlocks="
+                    + Math.round(distance));
+            sendCrossOwnerClientCompletion(anchor, "AcceptanceA");
+            sendCrossOwnerClientCompletion(other, "AcceptanceB");
+        });
+    }
+
+    private void sendCrossOwnerClientCompletion(org.bukkit.entity.Player player, String playerName) {
+        try {
+            player.getScheduler().run(this, task -> {
+                if (!player.isOnline()) {
+                    getLogger().severe("T21_CROSS_OWNER_FAIL reason=" + playerName + "-offline-before-result");
+                    return;
+                }
+                player.sendMessage("T21_CROSS_OWNER_PASS player=" + playerName);
+            }, () -> getLogger().severe(
+                    "T21_CROSS_OWNER_FAIL reason=" + playerName + "-retired-before-result"));
+        } catch (Throwable failure) {
+            reportCrossOwnerFailure(playerName + "-completion", failure);
+        }
+    }
+
+    private CompletableFuture<OwnerObservation> observeRegionOwnership(
+            org.bukkit.entity.Player player, String playerName, RegionLocation expectedLocation,
+            String otherPlayerName, RegionLocation otherLocation) {
+        var result = new CompletableFuture<OwnerObservation>();
+        player.getScheduler().run(this, task -> {
+            try {
+                var currentLocation = snapshot(player.getLocation());
+                require(currentLocation.worldId().equals(expectedLocation.worldId())
+                                && currentLocation.chunkX() == expectedLocation.chunkX()
+                                && currentLocation.chunkZ() == expectedLocation.chunkZ(),
+                        "player stayed in the expected region during owner check: " + playerName);
+                boolean selfOwned = Bukkit.isOwnedByCurrentRegion(player);
+                boolean otherOwned = Bukkit.isOwnedByCurrentRegion(otherLocation.world(),
+                        otherLocation.chunkX(), otherLocation.chunkZ());
+                getLogger().info("T21_REGION_OWNER player=" + playerName
+                        + " world=" + currentLocation.worldName()
+                        + " blockX=" + currentLocation.blockX() + " blockZ=" + currentLocation.blockZ()
+                        + " chunkX=" + currentLocation.chunkX() + " chunkZ=" + currentLocation.chunkZ()
+                        + " selfOwned=" + selfOwned
+                        + " otherPlayer=" + otherPlayerName + " otherWorld=" + otherLocation.worldName()
+                        + " otherBlockX=" + otherLocation.blockX() + " otherBlockZ=" + otherLocation.blockZ()
+                        + " otherChunkX=" + otherLocation.chunkX() + " otherChunkZ=" + otherLocation.chunkZ()
+                        + " otherOwned=" + otherOwned);
+                result.complete(new OwnerObservation(currentLocation.worldId(), currentLocation.blockX(),
+                        currentLocation.blockZ(), selfOwned, otherOwned));
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        }, () -> result.completeExceptionally(new IllegalStateException(
+                "player retired before owner check: " + playerName)));
+        return result;
+    }
+
+    private void reportCrossOwnerFailure(String phase, Throwable failure) {
+        getLogger().log(java.util.logging.Level.SEVERE, "T21_CROSS_OWNER_FAIL phase=" + phase, failure);
+    }
+
     private void runReadyLifecycleScenario(
             org.bukkit.entity.Player player, String scenario, LifecycleContext context) {
         try {
@@ -272,6 +447,13 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 "accepted-write ownership count available for lifecycle observation");
         return ((java.util.concurrent.atomic.AtomicInteger) count).get();
     }
+
+    private record RegionLocation(
+            World world, UUID worldId, String worldName, int blockX, int blockZ, int chunkX, int chunkZ) {}
+
+    private record RegionPair(RegionLocation anchor, RegionLocation other) {}
+
+    private record OwnerObservation(UUID worldId, int blockX, int blockZ, boolean selfOwned, boolean otherOwned) {}
 
     private record LifecycleContext(
             Economy economy,
