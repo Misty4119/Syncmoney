@@ -276,7 +276,6 @@ $missingRedisExitCode = @($backendShutdownObservations | ForEach-Object {
         $copy = [ordered]@{}
         foreach ($key in $_.Keys) { $copy[$key] = $_[$key] }
         $null = $copy.Remove('processExitCode')
-        $null = $copy.Remove('processExitCodeObserved')
         $copy
     } else { $_ }
 })
@@ -290,7 +289,6 @@ $nullRedisExitCode = @($backendShutdownObservations | ForEach-Object {
         $copy = [ordered]@{}
         foreach ($key in $_.Keys) { $copy[$key] = $_[$key] }
         $copy['processExitCode'] = $null
-        $copy['processExitCodeObserved'] = $false
         $copy
     } else { $_ }
 })
@@ -298,5 +296,18 @@ if (Test-T21BackendShutdownCoverage $nullRedisExitCode) {
     throw 'Redis cleanup with a null process exit code was accepted as zero.'
 }
 Write-Output 'PASS: reject null Redis process exit code instead of casting it to zero'
+
+$unobservedRedisExitCode = @($backendShutdownObservations | ForEach-Object {
+    if ($_.backend -ceq 'redis' -and $_.stage -ceq 'final-cleanup') {
+        $copy = [ordered]@{}
+        foreach ($key in $_.Keys) { $copy[$key] = $_[$key] }
+        $copy['processExitCodeObserved'] = $false
+        $copy
+    } else { $_ }
+})
+if (Test-T21BackendShutdownCoverage $unobservedRedisExitCode) {
+    throw 'Redis cleanup without an explicit process exit-code observation was accepted.'
+}
+Write-Output 'PASS: reject Redis process exit code without explicit observation'
 
 Write-Output 'T21 runner validation tests PASS'
