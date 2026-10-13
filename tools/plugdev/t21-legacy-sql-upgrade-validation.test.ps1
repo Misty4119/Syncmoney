@@ -203,6 +203,36 @@ function New-T21ValidFixtureReport {
     }
 }
 
+function Set-T21FixturePlatform([object]$report, [object]$platform) {
+    $report.task = "T21-M05-LEGACY-SQL-DATA-MySQL-$($platform.taskSuffix)"
+    $report.server.software = $platform.software
+    $report.server.minecraftVersion = $platform.minecraftVersion
+    $report.server.build = $platform.build
+    $report.server.sha256 = $platform.sha256
+    $report.sourcePins.paperJarSha256 = $platform.sha256
+    foreach ($stage in $report.stages) {
+        $stage.runtimeIdentity.software = $platform.software
+        $stage.runtimeIdentity.runtimeVersion = $platform.minecraftVersion
+        $stage.runtimeIdentity.minecraftVersion = $platform.minecraftVersion
+        $stage.runtimeIdentity.build = $platform.build
+    }
+    $oldIdentity = '[20:30:00] [ServerMain/INFO]: Loading Paper 1.21.6-48 for Minecraft 1.21.6'
+    $newIdentity = "[20:30:00] [ServerMain/INFO]: Loading Paper $($platform.minecraftVersion)-$($platform.build) for Minecraft $($platform.minecraftVersion)"
+    foreach ($entry in $report.platformLogs) {
+        $path = Join-Path $root $entry.path
+        $content = [IO.File]::ReadAllText($path)
+        if (-not $content.Contains($oldIdentity)) { throw "Fixture platform log does not contain the expected startup identity: $($entry.path)" }
+        $content = $content.Replace($oldIdentity, $newIdentity)
+        [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+        $item = Get-Item -LiteralPath $path
+        $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $entry.bytes = [long]$item.Length
+        $entry.sha256 = $sha
+        $report.logs[$entry.path] = [ordered]@{ bytes=[long]$item.Length; sha256=$sha }
+    }
+    return $report
+}
+
 try {
     $valid = New-T21ValidFixtureReport
     if (-not (Test-T21MySqlLegacyDataUpgradeReport $valid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
@@ -210,6 +240,28 @@ try {
     }
     Write-Output 'PASS: accept existing 1.3.2 MySQL data through candidate startup/read and 1.3.2 rollback'
 
+    $maximumEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumValid = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $maximumValid = Set-T21FixturePlatform $maximumValid $maximumEndpoint
+    if (-not (Test-T21MySqlLegacyDataUpgradeReport $maximumValid $maximumEndpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint Maximum)) {
+        throw 'A complete maximum-Paper MySQL legacy-data upgrade report was rejected.'
+    }
+    Write-Output 'PASS: accept existing 1.3.2 MySQL data on the pinned maximum Paper endpoint'
+    if (Test-T21MySqlLegacyDataUpgradeReport $maximumValid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -PlatformEndpoint Minimum) {
+        throw 'A maximum-Paper report was accepted under the minimum-Paper endpoint contract.'
+    }
+    Write-Output 'PASS: reject maximum-Paper legacy-data evidence under the minimum-Paper endpoint contract'
+
+    $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
+    if (-not (
+        $runnerSource.Contains('$script:databaseProduct -cne ''MySQL'' -or $PlatformEndpoint -notin @(''Minimum'', ''Maximum'')') -and
+        $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-MySQL-$($script:platformTarget.taskSuffix)"') -and
+        $runnerSource.Contains('Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint')
+    )) { throw 'The runner does not expose the exact maximum-Paper legacy-data endpoint in its report predicate.' }
+    Write-Output 'PASS: expose the exact endpoint in the MySQL legacy-data runner and report'
+
+    # Restore the minimum fixture logs because the endpoint mutation reuses the same isolated fixture paths.
+    $valid = New-T21ValidFixtureReport
     $unboundAuditIndexLog = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $candidateIndexPath = Join-Path $root 'logs\after-candidate-existing-read-stop-audit-indexes-snapshot.txt'
     $originalCandidateIndexLog = [IO.File]::ReadAllText($candidateIndexPath)

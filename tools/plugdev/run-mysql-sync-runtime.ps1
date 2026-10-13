@@ -95,8 +95,8 @@ if ($script:legacySqlDataUpgrade) {
     if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
         throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
     }
-    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -cne 'Minimum') {
-        throw 'The legacy SQL data upgrade subcase is pinned to MySQL 8.0.42 and minimum Paper 1.21.6#48.'
+    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -notin @('Minimum', 'Maximum')) {
+        throw 'The legacy SQL data upgrade subcase supports only MySQL 8.0.42 on user-pinned minimum or maximum Paper.'
     }
     $script:baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
     $script:baselineSha256 = (Get-FileHash -LiteralPath $script:baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -1419,7 +1419,7 @@ try {
             $redisProcess = $backendProcesses.redis
             $script:finalReport = [ordered]@{
                 schemaVersion=2
-                task='T21-M05-LEGACY-SQL-DATA-MySQL-minimum-Paper'
+                task="T21-M05-LEGACY-SQL-DATA-MySQL-$($script:platformTarget.taskSuffix)"
                 status='PASS_BOUNDED_SUBCASE'
                 runDirectory=$script:runRoot
                 server=[ordered]@{
@@ -1481,7 +1481,7 @@ try {
                     apiConsumerJarSha256=$apiConsumerSha256
                 }
             }
-            $reportAccepted = Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256
+            $reportAccepted = Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
         } else {
             $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
                 Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint

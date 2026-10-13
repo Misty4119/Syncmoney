@@ -132,6 +132,30 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
+### MySQL legacy-data compatibility on minimum and maximum Paper
+
+Pass `-LegacySqlDataUpgrade`, a verified 1.3.2 baseline JAR, and its SHA-256 to exercise the legacy-data lifecycle. This subcase is intentionally limited to MySQL `8.0.42` and the user-pinned Paper `Minimum` (`1.21.6#48`) or `Maximum` (`26.3#166`) endpoint. It seeds two disposable account rows under 1.3.2, verifies that 1.4 reads balances and versions unchanged while applying the observed additive audit-index repair, then verifies a 1.3.2 rollback read. Both Paper endpoints have bounded E2 evidence; the same legacy-data scenario on Folia, Canvas, other SQL dialects, and other modes remains `NOT RUN`.
+
+Example for the maximum Paper endpoint (set `$baselineJar` to the locally verified 1.3.2 artifact):
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$paperJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\paper-26.3-166.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
+  -ExpectedCandidateSha256 '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint Maximum `
+  -LegacySqlDataUpgrade `
+  -BaselinePluginJar $baselineJar `
+  -ExpectedBaselinePluginSha256 '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10'
+```
+
+Run both focused validators and the report-specific offline audit after a runtime cycle. The final minimum- and maximum-Paper reports, source pins, test outputs, audit hashes, and evidence limits are recorded in the T21 M05 legacy SQL compatibility sections of the foundation validation plan.
+
 ## T21 player lifecycle scheduler matrix
 
 Rebuild `acceptanceJar` after changing the acceptance probe, then run the exact six endpoint pins from the user-confirmed range with Java 25 and the local PlugDev and Mineflayer checkouts:
