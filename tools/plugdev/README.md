@@ -12,24 +12,57 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 $env:PLUGDEV_ROOT = 'C:\path\to\plugdev-main'
 
 .\gradlew.bat -PreleaseVersion=1.4.0-alpha.1 test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+$acceptanceLog = '.plugdev/run/logs/latest.log'
+function Get-ServerLogLineCount {
+    param([Parameter(Mandatory)][string]$Path)
+    if (Test-Path -LiteralPath $Path) { return @(Get-Content -LiteralPath $Path).Count }
+    return 0
+}
+function Wait-ServerLogMarker {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Pattern,
+        [string]$FailurePattern,
+        [int]$AfterLine = 0,
+        [int]$TimeoutSeconds = 60
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $allLines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+        $skip = if ($allLines.Count -ge $AfterLine) { $AfterLine } else { 0 }
+        $sessionLines = @($allLines | Select-Object -Skip $skip)
+        if ($FailurePattern) {
+            $failure = @($sessionLines | Select-String -Pattern $FailurePattern | Select-Object -First 1)
+            if ($failure.Count -gt 0) { throw "Server reported failure marker: $($failure[0].Line)" }
+        }
+        $match = @($sessionLines | Select-String -Pattern $Pattern | Select-Object -Last 1)
+        if ($match.Count -gt 0) { return $match[0].Line }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for server log marker '$Pattern' in $Path"
+}
 node tools/plugdev/prepare.mjs paper 1.21.6 local off 1.4.0-alpha.1
+$beforeStart = Get-ServerLogLineCount -Path $acceptanceLog
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server start --config .plugdev/profile.yml
+Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'API CLASSLOADER PASS' -FailurePattern 'API CLASSLOADER FAIL' -AfterLine $beforeStart
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "version"
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "plugins"
+$beforeAcceptance = Get-ServerLogLineCount -Path $acceptanceLog
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "smaccept"
-Select-String .plugdev/run/logs/latest.log -Pattern 'ACCEPTANCE PASS|ACCEPTANCE FAIL'
-Select-String .plugdev/run/logs/latest.log -Pattern 'API CLASSLOADER PASS|API CLASSLOADER FAIL'
+# The RCON reply only means the asynchronous acceptance command was queued.
+Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'ACCEPTANCE PASS' -FailurePattern 'ACCEPTANCE FAIL' -AfterLine $beforeAcceptance
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server stop
 
 # Start the same profile again after the first graceful stop.
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server start --config .plugdev/profile.yml
+$beforeRead = Get-ServerLogLineCount -Path $acceptanceLog
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "smaccept read"
-Select-String .plugdev/run/logs/latest.log -Pattern 'ACCEPTANCE READ a='
+Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'ACCEPTANCE READ a=' -FailurePattern 'ACCEPTANCE READ FAIL' -AfterLine $beforeRead
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server stop
 ```
 
-The generated profile disables PlugDev's idle/orphan auto-stop so the detached server remains available for the RCON acceptance commands. The first `smaccept` call seeds only the synthetic `AcceptanceA` and `AcceptanceB` accounts and checks Vault and VaultUnlocked service registration plus deposit, withdrawal, transfer, and insufficient-funds behavior. The probe waits up to 10 seconds for the existing asynchronous account loader before seeding; it never turns a cold mutation into a synchronous load. After graceful stop and restart, verify the `ACCEPTANCE READ` line reports `cold-vault-a=NaN`, `cold-vault-unlocked-b=null`, `a=1000`, `b=520`, and `vault-unlocked-b=520`; the command response alone is not the assertion. The cold getter checks use separate accounts so the first asynchronous load cannot warm the second check. Check the normal shutdown log for persistence completion. Unit tests separately verify that cold reads return while the cache/SQL loader is blocked. Record the exact Paper build, Java version, Syncmoney JAR SHA-256, VaultUnlocked JAR version/hash, startup/shutdown results, and restart balances. Do not copy server config, RCON credentials, logs, worlds, or `.plugdev/` data into Git.
+The generated profile disables PlugDev's idle/orphan auto-stop so the detached server remains available for the RCON acceptance commands. `smaccept` runs asynchronously: its RCON response is not completion evidence. Capture the current log line count before server start and each asynchronous `smaccept` command, then wait for a new success marker (the sample above also fails immediately on its matching failure marker) before stopping the server. The first `smaccept` call seeds only the synthetic `AcceptanceA` and `AcceptanceB` accounts and checks Vault and VaultUnlocked service registration plus deposit, withdrawal, transfer, and insufficient-funds behavior. The probe waits up to 10 seconds for the existing asynchronous account loader before seeding; it never turns a cold mutation into a synchronous load. After graceful stop and restart, verify the `ACCEPTANCE READ` line reports `cold-vault-a=NaN`, `cold-vault-unlocked-b=null`, `a=1000`, `b=520`, and `vault-unlocked-b=520`; the command response alone is not the assertion. The cold getter checks use separate accounts so the first asynchronous load cannot warm the second check. Check the normal shutdown log for persistence completion. Unit tests separately verify that cold reads return while the cache/SQL loader is blocked. Record the exact Paper build, Java version, Syncmoney JAR SHA-256, VaultUnlocked JAR version/hash, startup/shutdown results, and restart balances. Do not copy server config, RCON credentials, logs, worlds, or `.plugdev/` data into Git.
 
 ## Exact server artifact pin and migration cycle
 
