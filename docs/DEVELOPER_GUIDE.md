@@ -305,11 +305,29 @@ For 1.4.0, use JDK 25 or newer with the repository Gradle 9.8.0 wrapper; servers
 
 ### Upgrade and rollback runbook
 
-Before upgrading, quiesce economy producers and administrator writes on every node. Drain accepted writes, retries, database work, and audit work to a known state, then stop each node normally. Back up configuration, messages, aliases, SQL databases, local SQLite files and WAL/SHM state, Redis RDB/AOF data, and recovery or overflow files. Record versions and hashes without recording secrets. Verify the Java/Paper minimums, candidate JAR checksum, and required dependencies in a disposable environment.
+This is the operator sequence for V03/M01–M03. A successful PlugDev report is bounded evidence for its disposable test fleet; it does not establish that a production fleet has stopped every writer or drained every queue.
 
-Install one candidate Syncmoney JAR per server and keep the existing data directories. Keep producers quiesced while checking startup, configuration/schema handling, Vault provider readiness, and disposable-account reads and writes. Resume producers only after every node is ready and recorded balances reconcile. T00A's minimum Paper smoke is documented in [`tools/plugdev/README.md`](../tools/plugdev/README.md); it does not replace the full persisted-state upgrade and rollback gate in V03/M00–M12.
+#### M01 — Maintenance window and backup
 
-To roll back, quiesce producers, drain accepted work, stop every node normally, and preserve current SQL, Redis, SQLite, and recovery state. Replace the candidate with the verified 1.3.2 JAR; keep Java 25 and the supported server where possible. If the JVM or server must also be downgraded, use a runtime supported by 1.3.2; do not assume a newer server runs on Java 21. Keep compatible current data and versions. Do not flush Redis or reset balances. An older backup can discard valid transactions made after it and should be restored only through a separately authorized disaster-recovery procedure. Full persisted-data upgrade and rollback acceptance remains a separate V03/M00–M12 gate.
+1. Confirm Java 25 or newer, Paper 1.21.6 or newer, the exact server builds, unique `server-name` values, configured economy modes, optional dependencies, SQL schema versions, Redis topology, Syncmoney artifact hashes, and config schema. For acceptance, use the exact user-pinned server artifacts listed in the [PlugDev guide](../tools/plugdev/README.md); any additional current-stable build is supplemental. Keep a redacted inventory; do not put credentials in reports.
+2. Announce maintenance and stop all economy producers on every node: player/admin commands, Web Admin writes, scheduled rewards, automation, and third-party integrations. If CMI is the configured authority, stop its economy commands/module and quiesce external CMI API and SQL writers too. A post-change CMI balance event cannot veto an arbitrary direct API mutation; licensed CMI runtime acceptance remains **BLOCKED / NOT RUN**.
+3. Establish that accepted writes, retries, in-flight work, database writes, and audit work have drained before continuing. The current runtime does not expose complete fleet-wide queue/retry/in-flight counters. A `Syncmoney disabled.` log line and zero pending recovery records alone do not prove a production fleet is drained. If the available evidence cannot establish the state for every node and writer, keep the maintenance window open and do not proceed with the upgrade.
+4. Stop every node normally and verify its process has exited. Only then capture the latest configuration, messages, aliases, SQL data, local SQLite database and any WAL/SHM files, Redis RDB/AOF state, and recovery/overflow files. Record versions and SHA-256 hashes. These backups are for separately authorized disaster recovery, not the ordinary rollback path.
+
+#### M02 — Candidate canary and rollout
+
+1. Keep producers disabled. Install exactly one candidate `Syncmoney-1.4.0.jar` on a canary node, preserve its existing data directory, and leave the remaining old nodes stopped. Check the candidate JAR hash, startup, config/schema retention, optional-module state, and Vault provider readiness.
+2. Use disposable accounts to verify reads and writes, accepted transaction results, and SQL/Redis balance and version parity where configured. Do not inject destructive faults into real player balances. A production canary write requires separate operator authorization.
+3. Upgrade the remaining nodes while producers remain disabled. Resume producers only after every node runs the verified candidate, reports ready, and reconciles its recorded balances and versions. Do not resume while an old writer remains active; the legacy 1.3.2 SQL writer can regress a newer row.
+
+#### M03 — Normal rollback
+
+1. Quiesce all producers again, establish drain completion, and normally stop every node. Preserve the latest SQL, Redis, SQLite, and recovery/overflow state before changing artifacts.
+2. Do not roll back while a recovery journal contains pending or ambiguous work. Preserve that state and resolve it before starting 1.3.2; never delete a journal to make rollback appear successful.
+3. Replace the candidate JAR with a checksum-verified 1.3.2 JAR while keeping compatible current data and versions. Verify that 1.3.2 reads transactions written during the upgrade. Keep Java 25 and the supported server where possible; if the JVM or server must also be downgraded, use versions supported by 1.3.2 rather than assuming a newer server runs on Java 21.
+4. Do not flush Redis, reset balances, or restore the pre-upgrade backup as ordinary rollback. Restoring an old backup can discard valid transactions made afterward. Reintroducing 1.3.2 also restores its known stale SQL-writer limitation, so do not run old and new writers together.
+
+The current M01–M03 runtime reports cover two synthetic nodes on the six user-pinned Paper/Folia/Canvas endpoints; a separate current-stable Paper report is supplemental. They verify normal stop, candidate writes, data snapshots, and recovery-journal state for those test nodes. They do not prove production fleet-wide quiescence, complete drain counters, or licensed CMI behavior. T00A's minimum-Paper smoke is documented in [`tools/plugdev/README.md`](../tools/plugdev/README.md); it does not replace the full persisted-state upgrade and rollback gate in V03/M00–M12.
 
 ## 18. Documentation, security, and release hygiene
 

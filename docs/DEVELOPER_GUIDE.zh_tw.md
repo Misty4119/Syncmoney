@@ -279,11 +279,29 @@ Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不�
 
 ### 升級與回復 runbook
 
-升級前，在所有節點暫停經濟 producer 與管理員寫入。將已接受的寫入、重試、資料庫工作與 audit work 排空至可確認狀態，再正常停止各節點。備份設定、訊息、aliases、SQL database、local SQLite 檔案與 WAL/SHM、Redis RDB/AOF，以及 recovery 或 overflow 檔案。記錄版本與 hash，不記錄 secrets。先在 disposable environment 驗證 Java/Paper minimum、候選 JAR checksum 與必要 dependencies。
+以下是 V03/M01–M03 的 operator 流程。PlugDev 成功報告只代表其 disposable test fleet 的有限證據，不能證明 production fleet 已停止所有 writer 或排空所有 queue。
 
-每台 server 安裝一份候選 Syncmoney JAR，沿用現有資料目錄。producer 保持暫停，先檢查 startup、設定與 schema handling、Vault provider ready，以及 disposable account 的讀寫。所有節點 ready 且已記錄餘額核對一致後才恢復 producer。T00A minimum Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 的完整 persisted-state upgrade 與 rollback gate。
+#### M01 — 維護窗口與備份
 
-回復時暫停 producer、排空 accepted work、正常停止所有節點，並保存目前 SQL、Redis、SQLite 與 recovery state。將候選 JAR 換回已驗證的 1.3.2 JAR；可行時保留 Java 25 與受支援的 server。若也要降級 JVM 或 server，使用 1.3.2 支援的 runtime；不可假設較新的 server 能在 Java 21 執行。保留相容的目前資料與版本，不清 Redis、不重設餘額。較舊備份可能丟失備份後的有效交易，只能透過另行授權的 disaster-recovery procedure 還原。完整 persisted-data upgrade 與 rollback acceptance 仍由 V03/M00–M12 gate 負責。
+1. 確認 Java 25 或更新版本、Paper 1.21.6 或更新版本、實際 server build、每個節點唯一的 `server-name`、economy mode、optional dependencies、SQL schema version、Redis topology、Syncmoney artifact hash 與 config schema。Acceptance 使用 [PlugDev guide](../tools/plugdev/README.md) 列出的 user-pinned server artifacts；額外的 current-stable build 只能作 supplemental evidence。保存移除 secrets 的版本清單；report 不得包含 credentials。
+2. 宣告維護並在每個節點停止所有 economy producer：玩家／管理員命令、Web Admin 寫入、定時獎勵、自動化與第三方整合。若 CMI 是設定中的 authority，也要停用 CMI economy commands/module，並 quiesce 外部 CMI API 與 SQL writers。CMI 在 authority mutation 後才發出 balance event，因此該 event 無法 veto 任意直接 API mutation；licensed CMI runtime acceptance 仍是 **BLOCKED / NOT RUN**。
+3. 確認 accepted writes、retry、in-flight work、database writes 與 audit work 已排空後才繼續。目前 runtime 沒有提供完整的 fleet-wide queue/retry/in-flight counters。單獨看到 `Syncmoney disabled.` 或 zero pending recovery records，不能證明 production fleet 已排空。若現有證據無法確認每個節點與 writer 的狀態，維持 maintenance window，不要進行升級。
+4. 正常停止每個節點並確認 process 已結束。之後才保存最新 config、messages、aliases、SQL data、local SQLite database 與可能存在的 WAL/SHM、Redis RDB/AOF state、recovery/overflow files。記錄版本與 SHA-256。這些備份只供另行授權的 disaster recovery，不是一般 rollback 流程。
+
+#### M02 — Candidate canary 與 rollout
+
+1. 維持 producers 停止。在 canary 節點只安裝一份 candidate `Syncmoney-1.4.0.jar` 並沿用原資料目錄；其他舊節點保持停止。核對 candidate JAR hash、startup、config/schema 保留、optional-module 狀態與 Vault provider readiness。
+2. 使用 disposable accounts 驗證 read/write、transaction result，以及適用時 SQL/Redis 的 balance 與 version parity。不要對真實玩家餘額注入破壞性 fault。production canary 寫入需要另外取得 operator authorization。
+3. producers 繼續停止時更新其他節點。只有所有節點都執行已驗證的 candidate、回報 ready，並核對其餘額與版本後，才恢復 producers。仍有舊 writer 執行時不可恢復；已知 1.3.2 SQL writer 可能使較新的資料列回退。
+
+#### M03 — 正常 rollback
+
+1. 再次 quiesce 所有 producers、確認 drain 完成，並正常停止每個節點。更換 artifact 前先保存最新 SQL、Redis、SQLite 與 recovery/overflow state。
+2. recovery journal 若仍有 pending 或 ambiguous work，不可 rollback。保留資料並先解決，不能刪除 journal 讓 rollback 看起來成功。
+3. 將 candidate JAR 換成 checksum 已驗證的 1.3.2 JAR，同時保留相容的目前資料與版本。確認 1.3.2 能讀取升級期間寫入的交易。可行時保留 Java 25 與受支援的 server；如果也要降級 JVM 或 server，必須選 1.3.2 支援的版本，不可假設較新的 server 能在 Java 21 執行。
+4. 一般 rollback 不可 flush Redis、重設餘額或還原升級前備份。舊備份會丟失其建立後的有效交易。重新使用 1.3.2 也會重新引入已知 stale SQL-writer 限制，因此不得讓新舊 writer 同時運作。
+
+目前 M01–M03 runtime reports 覆蓋六個 user-pinned Paper/Folia/Canvas endpoints 上的兩個 synthetic nodes；另有一份 supplemental current-stable Paper report。它們驗證這些測試節點的正常停止、candidate writes、data snapshots 與 recovery journal state，尚未證明 production fleet-wide quiescence、完整 drain counters 或 licensed CMI behavior。T00A minimum-Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 完整 persisted-state upgrade 與 rollback gate。
 
 ## 18. Documentation、security 與 release hygiene
 
