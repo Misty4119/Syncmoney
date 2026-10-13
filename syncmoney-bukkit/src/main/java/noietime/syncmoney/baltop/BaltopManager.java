@@ -139,15 +139,7 @@ public final class BaltopManager {
      * Initializes database schema.
      */
     private void initializeSchema() {
-        String sql = """
-                CREATE TABLE IF NOT EXISTS syncmoney_baltop (
-                    player_uuid VARCHAR(36) PRIMARY KEY,
-                    player_name VARCHAR(16),
-                    balance DECIMAL(20, 2) NOT NULL,
-                    rank INT,
-                    last_update BIGINT NOT NULL
-                )
-                """;
+        String sql = buildSchemaSql(isPostgres);
 
         try (Connection conn = dataSource.getConnection();
                 PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -158,6 +150,19 @@ public final class BaltopManager {
         } catch (SQLException e) {
             logger.severe("Failed to initialize baltop table: " + e.getMessage());
         }
+    }
+
+    static String buildSchemaSql(boolean postgres) {
+        String rankIdentifier = rankIdentifier(postgres);
+        return """
+                CREATE TABLE IF NOT EXISTS syncmoney_baltop (
+                    player_uuid VARCHAR(36) PRIMARY KEY,
+                    player_name VARCHAR(16),
+                    balance DECIMAL(20, 2) NOT NULL,
+                    %s INT,
+                    last_update BIGINT NOT NULL
+                )
+                """.formatted(rankIdentifier);
     }
 
     /**
@@ -279,20 +284,7 @@ public final class BaltopManager {
             return;
         }
 
-        String sql;
-        if (isPostgres) {
-            sql = """
-                INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (player_uuid) DO UPDATE SET player_name = EXCLUDED.player_name, balance = EXCLUDED.balance, rank = EXCLUDED.rank, last_update = EXCLUDED.last_update
-                """;
-        } else {
-            sql = """
-                INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, rank, last_update)
-                VALUES (?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), balance = VALUES(balance), rank = VALUES(rank), last_update = VALUES(last_update)
-                """;
-        }
+        String sql = buildUpsertSql(isPostgres);
 
         try (Connection conn = dataSource.getConnection();
                 PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -327,6 +319,27 @@ public final class BaltopManager {
             logger.severe("Failed to save baltop to database: " + e.getMessage());
             logger.log(java.util.logging.Level.SEVERE, "Baltop save stacktrace", e);
         }
+    }
+
+    static String buildUpsertSql(boolean postgres) {
+        String rankIdentifier = rankIdentifier(postgres);
+        if (postgres) {
+            return """
+                    INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, %s, last_update)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (player_uuid) DO UPDATE SET player_name = EXCLUDED.player_name, balance = EXCLUDED.balance, %s = EXCLUDED.%s, last_update = EXCLUDED.last_update
+                    """.formatted(rankIdentifier, rankIdentifier, rankIdentifier);
+        }
+
+        return """
+                INSERT INTO syncmoney_baltop (player_uuid, player_name, balance, %s, last_update)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), balance = VALUES(balance), %s = VALUES(%s), last_update = VALUES(last_update)
+                """.formatted(rankIdentifier, rankIdentifier, rankIdentifier);
+    }
+
+    private static String rankIdentifier(boolean postgres) {
+        return postgres ? "\"rank\"" : "`rank`";
     }
 
     /**
