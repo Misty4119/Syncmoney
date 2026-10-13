@@ -1913,6 +1913,11 @@ if ($mysqlShutdownCallIndex -lt 0 -or $redisShutdownCallIndex -lt 0 -or $logHash
 }
 Write-Output 'PASS: hash runtime logs after isolated backends exit'
 
+if ($runnerSource -notmatch 'backend=''redis''; command=''SHUTDOWN SAVE''; commandExitCode=\$commandExitCode; processId=\[int\]\$process\.Id') {
+    throw 'The Redis shutdown observation must bind its exit evidence to the run-owned backend process ID.'
+}
+Write-Output 'PASS: bind Redis shutdown evidence to the run-owned process ID'
+
 if ($runnerSource -notmatch 'Get-T21PlatformEndpoint -PlatformEndpoint \$PlatformEndpoint' -or
     $runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$platformLogPath' -or
     $runnerSource -notmatch '\$script:report\.platformLogs = @\(\$script:platformServerLogs\)' -or

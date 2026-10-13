@@ -141,6 +141,8 @@ tools/plugdev/*
 !tools/plugdev/recovery-spool-validator.test.ps1
 !tools/plugdev/t21-upgrade-validation.ps1
 !tools/plugdev/t21-upgrade-validation.test.ps1
+!tools/plugdev/t21-legacy-sql-upgrade-validation.ps1
+!tools/plugdev/t21-legacy-sql-upgrade-validation.test.ps1
 !tools/plugdev/run-mysql-sync-runtime.ps1
 !tools/plugdev/run-quiesced-network-upgrade.ps1
 !tools/plugdev/run-quiesced-network-upgrade.test.ps1

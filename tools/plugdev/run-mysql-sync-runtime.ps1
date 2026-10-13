@@ -12,13 +12,17 @@ param(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [string]$CandidateVersion = '1.4.0-alpha.1'
+    [string]$CandidateVersion = '1.4.0-alpha.1',
+    [switch]$LegacySqlDataUpgrade,
+    [string]$BaselinePluginJar,
+    [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedBaselinePluginSha256
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 SQL runtime validation requires PowerShell 7 or newer.' }
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
+. (Join-Path $PSScriptRoot 't21-legacy-sql-upgrade-validation.ps1')
 
 $requestedDatabaseProduct = $DatabaseProduct
 $script:databaseProduct = Resolve-T21SqlRuntimeProduct $requestedDatabaseProduct
@@ -30,6 +34,11 @@ $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
 $script:candidatePath = Join-Path $script:root "build\libs\Syncmoney-$CandidateVersion.jar"
+$script:baselinePath = $null
+$script:baselineSha256 = $null
+$script:baselineSourceCommit = $null
+$script:legacySqlStages = [Collections.Generic.List[object]]::new()
+$script:legacySqlDataUpgrade = $LegacySqlDataUpgrade.IsPresent
 $script:acceptancePath = Join-Path $script:root 'build\acceptance\SyncmoneyAcceptance.jar'
 $script:apiConsumerPath = Join-Path $script:root 'build\acceptance\SyncmoneyApiConsumer.jar'
 $script:plugDevRoot = (Resolve-Path -LiteralPath $PlugDevRoot).Path
@@ -82,6 +91,26 @@ if ($ExpectedServerSha256.ToLowerInvariant() -cne $script:platformTarget.sha256)
     throw "The $($script:platformTarget.taskSuffix) runtime requires its exact pinned server SHA-256."
 }
 if ($CandidateVersion -cne '1.4.0-alpha.1') { throw 'This T21 runtime cell is pinned to candidate 1.4.0-alpha.1.' }
+if ($script:legacySqlDataUpgrade) {
+    if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
+        throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
+    }
+    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -cne 'Minimum') {
+        throw 'The legacy SQL data upgrade subcase is pinned to MySQL 8.0.42 and minimum Paper 1.21.6#48.'
+    }
+    $script:baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
+    $script:baselineSha256 = (Get-FileHash -LiteralPath $script:baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($script:baselineSha256 -cne $ExpectedBaselinePluginSha256.ToLowerInvariant()) {
+        throw "Baseline plugin SHA-256 mismatch: $script:baselineSha256."
+    }
+    $baselineSourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $script:baselinePath))
+    $script:baselineSourceCommit = (& git -C $baselineSourceRoot rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or $script:baselineSourceCommit -notmatch '^[0-9a-f]{40}$') {
+        throw 'Could not resolve the baseline artifact source commit.'
+    }
+} elseif (-not [string]::IsNullOrWhiteSpace($BaselinePluginJar) -or -not [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
+    throw 'Baseline plugin inputs are accepted only with -LegacySqlDataUpgrade.'
+}
 
 function Assert-NoReparsePointAncestors([string]$path) {
     $current = [IO.Path]::GetFullPath($path)
@@ -466,6 +495,9 @@ function Initialize-T21ProjectWorkspace([string]$projectRoot) {
         Copy-Item -LiteralPath (Join-Path $script:root "src\main\resources\$name") -Destination (Join-Path $projectRoot "src\main\resources\$name")
     }
     Copy-Item -LiteralPath $script:candidatePath -Destination (Join-Path $projectRoot "build\libs\Syncmoney-$CandidateVersion.jar")
+    if ($script:legacySqlDataUpgrade) {
+        Copy-Item -LiteralPath $script:baselinePath -Destination (Join-Path $projectRoot 'build\libs\Syncmoney-1.3.2.jar')
+    }
     Copy-Item -LiteralPath $script:acceptancePath -Destination (Join-Path $projectRoot 'build\acceptance\SyncmoneyAcceptance.jar')
     Copy-Item -LiteralPath $script:apiConsumerPath -Destination (Join-Path $projectRoot 'build\acceptance\SyncmoneyApiConsumer.jar')
 }
@@ -480,7 +512,7 @@ function Invoke-PlugDev([string[]]$arguments, [string]$label) {
     }
 }
 
-function Set-T21RunMarkerInProfile {
+function Set-T21PluginInProfile([string]$pluginVersion) {
     $editor = @'
 const fs = require("node:fs");
 const path = require("node:path");
@@ -488,19 +520,27 @@ const { createRequire } = require("node:module");
 const yaml = createRequire(path.join(process.env.PLUGDEV_ROOT, "package.json"))("yaml");
 const file = path.resolve(".plugdev/profile.yml");
 const profile = yaml.parse(fs.readFileSync(file, "utf8"));
+profile.build.jarPattern = process.env.T21_PLUGIN_JAR_PATTERN;
 profile.jvm.args = [
-  `-Dsyncmoney.acceptance.version=${process.env.SYNCMONEY_CANDIDATE_VERSION}`,
+  `-Dsyncmoney.acceptance.version=${process.env.T21_PLUGIN_VERSION}`,
   `-Dsyncmoney.t21.database.run=${process.env.T21_RUN_MARKER}`,
 ];
 fs.writeFileSync(file, yaml.stringify(profile), "utf8");
+console.log(JSON.stringify({ version: process.env.T21_PLUGIN_VERSION, exactJarPattern: profile.build.jarPattern }));
 '@
-    $editorPath = Join-Path $script:runRoot 'set-run-marker.cjs'
+    $env:T21_PLUGIN_VERSION = $pluginVersion
+    $env:T21_PLUGIN_JAR_PATTERN = "build/libs/Syncmoney-$pluginVersion.jar"
+    $editorPath = Join-Path $script:runRoot 'set-plugin-profile.cjs'
     Set-Content -LiteralPath $editorPath -Value $editor -Encoding utf8
     Push-Location $script:workspace
     try {
-        $result = Invoke-LoggedCommand $script:node @($editorPath) 'set-run-marker' (Join-Path $script:logsRoot 'set-run-marker.txt')
+        $result = Invoke-LoggedCommand $script:node @($editorPath) ('set-plugin-profile-' + $pluginVersion) (Join-Path $script:logsRoot ('set-plugin-profile-' + $pluginVersion + '.json'))
     } finally { Pop-Location }
-    if ($result.exitCode -ne 0) { throw 'Could not set the unique run marker in the isolated PlugDev profile.' }
+    if ($result.exitCode -ne 0) { throw "Could not set the isolated PlugDev profile for Syncmoney $pluginVersion." }
+    $observation = $result.output | ConvertFrom-Json
+    if ($observation.version -cne $pluginVersion -or $observation.exactJarPattern -cne $env:T21_PLUGIN_JAR_PATTERN) {
+        throw "PlugDev profile did not select the exact Syncmoney $pluginVersion artifact."
+    }
 }
 
 function Assert-IsolatedSyncConfig {
@@ -526,42 +566,73 @@ console.log(JSON.stringify({schema:c["config-version"],mode:c.economy.mode,datab
     return ($result.output | ConvertFrom-Json)
 }
 
-function Get-PinnedCandidatePlugin {
+function Get-PinnedSyncmoneyPlugin([string]$pluginVersion, [string]$expectedSha256) {
     $plugins = Join-Path $script:workspace '.plugdev\run\plugins'
     $observed = @(Get-ChildItem -LiteralPath $plugins -Filter '*.jar' -File | ForEach-Object {
         [ordered]@{ name=$_.Name; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); path=$_.FullName }
     })
-    $matching = @($observed | Where-Object { $_.sha256 -ceq $script:candidateSha256 })
-    if ($matching.Count -ne 1) { throw "Expected exactly one deployed candidate JAR by SHA-256; observed $($matching.Count)." }
+    $matching = @($observed | Where-Object { $_.sha256 -ceq $expectedSha256 })
+    $expectedName = "Syncmoney-$pluginVersion.jar"
+    if ($matching.Count -ne 1 -or $matching[0].name -cne $expectedName) {
+        throw "Expected exactly one deployed $expectedName with SHA-256 $expectedSha256; observed $($matching.Count)."
+    }
     return $matching[0]
 }
 
-function Start-T21Server([string]$stage) {
+function Set-T21PluginStage([string]$pluginVersion) {
+    $plugins = Join-Path $script:workspace '.plugdev\run\plugins'
+    $pluginJars = @(Get-ChildItem -LiteralPath $plugins -Filter 'Syncmoney-*.jar' -File -ErrorAction Stop)
+    foreach ($pluginJar in $pluginJars) { Remove-Item -LiteralPath $pluginJar.FullName -Force -ErrorAction Stop }
+    $consumerPath = Join-Path $plugins 'SyncmoneyApiConsumer.jar'
+    if ($pluginVersion -ceq '1.3.2') {
+        if (Test-Path -LiteralPath $consumerPath -PathType Leaf) { Remove-Item -LiteralPath $consumerPath -Force -ErrorAction Stop }
+    } else {
+        Copy-Item -LiteralPath $script:apiConsumerPath -Destination $consumerPath -Force -ErrorAction Stop
+        $consumerSha = (Get-FileHash -LiteralPath $consumerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($consumerSha -cne $script:apiConsumerSha256) { throw 'The candidate API consumer artifact pin changed while staging.' }
+    }
+    Set-T21PluginInProfile $pluginVersion
+}
+
+function Start-T21Server([string]$stage, [string]$pluginVersion = $CandidateVersion) {
     if (@(Get-T21ServerProcesses).Count -ne 0) { throw 'A run-marked server process exists before startup.' }
+    if ($script:legacySqlDataUpgrade) {
+        Set-T21PluginStage $pluginVersion
+    } elseif ($pluginVersion -cne $CandidateVersion) {
+        throw 'The normal SQL runtime mode accepts only the pinned candidate plugin version.'
+    }
     $before = Get-ServerLogLineCount
     $start = Invoke-PlugDev @('server', 'start', '--config', '.plugdev/profile.yml') ($stage + '-start')
     if ($start.exitCode -ne 0) { throw "PlugDev server start failed at $stage." }
     $null = Wait-ServerLogMarker 'Syncmoney enabled successfully' 'Error occurred while enabling Syncmoney|Could not load plugin|T21_\w+_FAIL' $before
-    $null = Wait-ServerLogMarker 'API CLASSLOADER PASS provider=Syncmoney' 'API CLASSLOADER FAIL|Error occurred while enabling Syncmoney|T21_\w+_FAIL' $before
+    $null = Wait-ServerLogMarker ("Loading server plugin Syncmoney v" + [regex]::Escape($pluginVersion)) 'Error occurred while enabling Syncmoney|Could not load plugin|T21_\w+_FAIL' $before
+    $apiConsumerMarker = 'NOT_REQUIRED_FOR_BASELINE'
+    if ($pluginVersion -cne '1.3.2') {
+        $null = Wait-ServerLogMarker 'API CLASSLOADER PASS provider=Syncmoney' 'API CLASSLOADER FAIL|Error occurred while enabling Syncmoney|T21_\w+_FAIL' $before
+        $apiConsumerMarker = 'PASS'
+    } elseif (Test-Path -LiteralPath (Join-Path $script:workspace '.plugdev\run\plugins\SyncmoneyApiConsumer.jar') -PathType Leaf) {
+        throw 'The 1.3.2 baseline stage must not load the 1.4 API consumer.'
+    }
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw
     $identity = Get-T21PlatformIdentity $fullLog
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
-    if ($fullLog -notmatch '(?m)\[Syncmoney\] Loading server plugin Syncmoney v1\.4\.0-alpha\.1') {
-        throw 'The selected platform server did not load the expected candidate version.'
+    if ($fullLog -notmatch ('(?m)\[Syncmoney\] Loading server plugin Syncmoney v' + [regex]::Escape($pluginVersion))) {
+        throw "The selected platform server did not load Syncmoney $pluginVersion."
     }
-    $pluginPin = Get-PinnedCandidatePlugin
+    $expectedPluginSha = if ($pluginVersion -ceq '1.3.2') { $script:baselineSha256 } else { $script:candidateSha256 }
+    $pluginPin = Get-PinnedSyncmoneyPlugin $pluginVersion $expectedPluginSha
     $processes = @(Get-T21ServerProcesses)
     if ($processes.Count -ne 1) { throw "Expected one run-owned Java server after $stage; observed $($processes.Count)." }
     $observation = [ordered]@{
         stage = $stage
         enabled = $true
-        pluginVersion = '1.4.0-alpha.1'
+        pluginVersion = $pluginVersion
         artifactSha256 = $pluginPin.sha256
         artifactName = $pluginPin.name
         processId = [int]$processes[0].ProcessId
         runtimeIdentity = $identity
         startupLogMarker = 'Syncmoney enabled successfully'
-        apiConsumerMarker = 'API CLASSLOADER PASS provider=Syncmoney'
+        apiConsumerMarker = $apiConsumerMarker
     }
     $script:startups.Add($observation)
     return $observation
@@ -596,6 +667,9 @@ function Stop-T21Server([string]$stage) {
     $platformLogStage = switch ($stage) {
         'after-write' { 'candidate-write' }
         'after-restart-read' { 'candidate-restart-read' }
+        'after-legacy-seed' { 'legacy-seed' }
+        'after-candidate-existing-read' { 'candidate-existing-read' }
+        'after-legacy-rollback-read' { 'legacy-rollback-read' }
         default { throw "Unexpected platform log snapshot stage: $stage" }
     }
     $platformLogRelativePath = 'logs\platform-' + $platformLogStage + '.txt'
@@ -617,6 +691,7 @@ function Stop-T21Server([string]$stage) {
         processExitCodeObserved = $true
         processExited = $processExited
         disabledMarker = $true
+        forced = $false
     })
 }
 
@@ -626,7 +701,32 @@ function Invoke-Redis([string[]]$arguments, [string]$label, [switch]$allowExitOn
     return Invoke-LoggedCommand $script:redisCli (@('-h', '127.0.0.1', '-p', [string]$script:redisPort) + $arguments) $label $logPath -allowExitOne:$allowExitOne
 }
 
-function Get-BackendSnapshot([string]$stage) {
+function Get-T21MySqlAuditSchemaMetadata([string]$stage) {
+    if ($script:databaseProduct -cne 'MySQL') { throw 'Audit schema metadata capture is limited to the pinned MySQL legacy-data case.' }
+    $columnsSql = @"
+SELECT JSON_ARRAY(TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE,
+    COLUMN_DEFAULT, EXTRA, CHARACTER_SET_NAME, COLLATION_NAME, GENERATION_EXPRESSION)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'syncmoney_audit_log'
+ORDER BY ORDINAL_POSITION, COLUMN_NAME;
+"@
+    $indexesSql = @"
+SELECT JSON_ARRAY(INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, COLLATION, INDEX_TYPE, SUB_PART)
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'syncmoney_audit_log'
+ORDER BY INDEX_NAME, SEQ_IN_INDEX;
+"@
+    $columns = @(Invoke-MySqlQuery $columnsSql ($stage + '-audit-columns-snapshot'))
+    $indexes = @(Invoke-MySqlQuery $indexesSql ($stage + '-audit-indexes-snapshot'))
+    return [ordered]@{ columns=$columns; indexes=$indexes }
+}
+
+function Get-BackendSnapshot(
+    [string]$stage,
+    [string]$expectedBalanceA = '1337.25',
+    [string]$expectedBalanceB = '765.50',
+    [switch]$IncludeSchemaVersionRows
+) {
     $uuidA = Get-OfflineUuid 'AcceptanceA'
     $uuidB = Get-OfflineUuid 'AcceptanceB'
     $sql = if ($script:databaseProduct -ceq 'PostgreSQL') {
@@ -659,10 +759,59 @@ function Get-BackendSnapshot([string]$stage) {
         $balance = ([decimal]::Parse($balanceRaw, [Globalization.CultureInfo]::InvariantCulture)).ToString('0.00', [Globalization.CultureInfo]::InvariantCulture)
         $redisAccounts.Add([ordered]@{ name=$account.name; uuid=$account.uuid; balance=$balance; version=[long]$versionRaw })
     }
-    if (-not (Test-T21MySqlRuntimeAccountParity @($sqlAccounts) @($redisAccounts))) {
-        throw "$script:databaseProduct and Redis disagree for the synthetic accounts after $stage."
+    $snapshot = [ordered]@{ stage=$stage; sqlAccounts=@($sqlAccounts); redisAccounts=@($redisAccounts) }
+    if ($IncludeSchemaVersionRows) {
+        $schemaSql = if ($script:databaseProduct -ceq 'PostgreSQL') {
+            'SELECT id || ''|'' || version::text FROM syncmoney_schema_version ORDER BY id;'
+        } else {
+            "SELECT CONCAT_WS('|', id, version) FROM syncmoney_schema_version ORDER BY id;"
+        }
+        $snapshot.schemaVersionRows = @(Invoke-MySqlQuery $schemaSql ($stage + '-schema-version-snapshot'))
+        if ($script:legacySqlDataUpgrade) {
+            $snapshot.auditSchema = Get-T21MySqlAuditSchemaMetadata $stage
+        }
     }
-    return [ordered]@{ stage=$stage; sqlAccounts=@($sqlAccounts); redisAccounts=@($redisAccounts) }
+    $validState = if ($script:legacySqlDataUpgrade) {
+        Test-T21LegacySqlAccountState $snapshot $expectedBalanceA $expectedBalanceB
+    } else {
+        Test-T21MySqlRuntimeAccountParity @($sqlAccounts) @($redisAccounts)
+    }
+    if (-not $validState) { throw "$script:databaseProduct and Redis did not match the expected synthetic account state after $stage." }
+    return $snapshot
+}
+
+function Add-T21LegacySqlStage(
+    [string]$stage,
+    [string]$pluginVersion,
+    [string]$acceptanceMarker,
+    [object]$startup,
+    [object]$snapshot
+) {
+    $stopMatches = @($script:normalStops | Where-Object { [string]$_.stage -ceq "after-$stage" })
+    if ($stopMatches.Count -ne 1) { throw "Expected one normal-stop observation for legacy SQL stage $stage." }
+    $stop = $stopMatches[0]
+    $script:legacySqlStages.Add([ordered]@{
+        stage=$stage
+        pluginVersion=$pluginVersion
+        artifactName=[string]$startup.artifactName
+        artifactSha256=[string]$startup.artifactSha256
+        enabled=[bool]$startup.enabled
+        apiConsumerMarker=[string]$startup.apiConsumerMarker
+        processId=[int]$startup.processId
+        runtimeIdentity=$startup.runtimeIdentity
+        acceptanceMarker=$acceptanceMarker
+        normalStop=[ordered]@{
+            stage=[string]$stop.stage
+            commandExitCode=[int]$stop.commandExitCode
+            processId=[int]$stop.processId
+            processExitCode=[int]$stop.processExitCode
+            processExitCodeObserved=[bool]$stop.processExitCodeObserved
+            processExited=[bool]$stop.processExited
+            disabledMarker=[bool]$stop.disabledMarker
+            forced=[bool]$stop.forced
+        }
+        snapshot=$snapshot
+    })
 }
 
 function Stop-RunOwnedServerAfterFailure {
@@ -858,7 +1007,7 @@ function Stop-RedisBackend {
         $script:cleanupFailures.Add("Redis shutdown was not clean (command=$commandExitCode process=$exitCode forced=$forced).")
     }
     $script:backendShutdowns.Add([ordered]@{
-        backend='redis'; command='SHUTDOWN SAVE'; commandExitCode=$commandExitCode
+        backend='redis'; command='SHUTDOWN SAVE'; commandExitCode=$commandExitCode; processId=[int]$process.Id
         processExitCode=$exitCode; processExitCodeObserved=$exited; processExited=$exited; forced=$forced
     })
 }
@@ -922,21 +1071,27 @@ $script:environmentNames = @(
     'JAVA_HOME', 'Path', 'PLUGDEV_ROOT', 'PLUGDEV_HOME', 'GRADLE_USER_HOME', 'SYNCMONEY_TEST_SERVER_JAR',
     'SYNCMONEY_CANDIDATE_VERSION', 'SYNCMONEY_TEST_GAME_PORT', 'SYNCMONEY_TEST_DB_TYPE',
     'SYNCMONEY_TEST_DB_PORT', 'SYNCMONEY_TEST_DB_USER', 'SYNCMONEY_TEST_DB_PASSWORD',
-    'SYNCMONEY_TEST_DB_NAME', 'SYNCMONEY_TEST_REDIS_PORT', 'T21_RUN_MARKER', 'MYSQL_PWD', 'PGPASSWORD'
+    'SYNCMONEY_TEST_DB_NAME', 'SYNCMONEY_TEST_REDIS_PORT', 'T21_RUN_MARKER', 'T21_PLUGIN_VERSION',
+    'T21_PLUGIN_JAR_PATTERN', 'MYSQL_PWD', 'PGPASSWORD'
 )
 $script:originalEnvironment = [ordered]@{}
 foreach ($name in $script:environmentNames) { $script:originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 $serverSha256 = (Get-FileHash -LiteralPath $script:serverPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $script:candidateSha256 = (Get-FileHash -LiteralPath $script:candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$script:apiConsumerSha256 = $null
 $acceptanceSha256 = (Get-FileHash -LiteralPath $script:acceptancePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $apiConsumerSha256 = (Get-FileHash -LiteralPath $script:apiConsumerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$script:apiConsumerSha256 = $apiConsumerSha256
 if ($serverSha256 -cne $script:platformTarget.sha256 -or $serverSha256 -cne $ExpectedServerSha256.ToLowerInvariant()) { throw "Server JAR does not match the pinned $($script:platformTarget.taskSuffix) build." }
 if ($script:candidateSha256 -cne $ExpectedCandidateSha256.ToLowerInvariant()) { throw 'Candidate JAR SHA-256 does not match the required pin.' }
 if (-not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js') -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'package.json') -PathType Leaf)) { throw 'The local PlugDev source checkout or built CLI is unavailable.' }
 foreach ($path in @($script:candidatePath, $script:acceptancePath, $script:apiConsumerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required acceptance artifact is missing: $path" }
+}
+if ($script:legacySqlDataUpgrade -and -not (Test-Path -LiteralPath $script:baselinePath -PathType Leaf)) {
+    throw 'The pinned 1.3.2 baseline artifact is missing.'
 }
 
 $java = Join-Path $script:javaHomePath 'bin\java.exe'
@@ -1142,7 +1297,7 @@ try {
         $prepareOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $script:logsRoot 'prepare-profile.txt') -Encoding utf8
         if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:platformTarget.taskSuffix) $script:databaseProduct SYNC profile." }
     } finally { Pop-Location }
-    Set-T21RunMarkerInProfile
+    Set-T21PluginInProfile $CandidateVersion
     $configObservation = Assert-IsolatedSyncConfig
     $script:report.configuration += [ordered]@{
         configSchema=[int]$configObservation.schema
@@ -1151,29 +1306,61 @@ try {
         configCredentialsConfigured=[bool]$configObservation.credentialsConfigured
     }
 
-    Start-T21Server 'candidate-write'
-    $versionLineStart = Get-ServerLogLineCount
-    $null = Invoke-PlugDev @('server', 'command', 'smaccept version') 'candidate-version-command'
-    $null = Wait-ServerLogMarker 'T21_VERSION_PASS expected=1\.4\.0-alpha\.1 actual=1\.4\.0-alpha\.1' 'T21_VERSION_FAIL|ACCEPTANCE VERSION FAIL' $versionLineStart
+    if ($script:legacySqlDataUpgrade) {
+        $baselineStartup = Start-T21Server 'legacy-seed' '1.3.2'
+        $seedLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept write 1000.00 520.00') 'legacy-seed-write-command'
+        $seedMarker = Wait-ServerLogMarker 'T21_WRITE_PASS expected-a=1000\.00 expected-b=520\.00 receipt-a=SUCCESS:DEPOSIT:1000\.00:1000\.00 receipt-b=SUCCESS:DEPOSIT:520\.00:520\.00' 'T21_WRITE_FAIL|ACCEPTANCE FAIL' $seedLineStart
+        Stop-T21Server 'after-legacy-seed'
+        $baselineSnapshot = Get-BackendSnapshot 'after-legacy-seed-stop' '1000.00' '520.00' -IncludeSchemaVersionRows
+        $null = Assert-IsolatedSyncConfig
+        $script:snapshots.Add($baselineSnapshot)
+        Add-T21LegacySqlStage 'legacy-seed' '1.3.2' $seedMarker $baselineStartup $baselineSnapshot
 
-    $writeLineStart = Get-ServerLogLineCount
-    $null = Invoke-PlugDev @('server', 'command', 'smaccept write 1337.25 765.50') 'candidate-vault-write-command'
-    $writeLine = Wait-ServerLogMarker 'T21_WRITE_PASS expected-a=1337\.25 expected-b=765\.50 receipt-a=SUCCESS:DEPOSIT:1337\.25:1337\.25 receipt-b=SUCCESS:DEPOSIT:765\.50:765\.50' 'T21_WRITE_FAIL|ACCEPTANCE FAIL' $writeLineStart
-    $script:report.writeReceipts = @('SUCCESS:DEPOSIT:1337.25:1337.25', 'SUCCESS:DEPOSIT:765.50:765.50')
-    $script:report.writeMarker = $writeLine
+        $candidateStartup = Start-T21Server 'candidate-existing-read' $CandidateVersion
+        $candidateLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept read 1000.00 520.00') 'candidate-existing-read-command'
+        $candidateMarker = Wait-ServerLogMarker 'T21_READ_PASS expected-a=1000\.00 expected-b=520\.00' 'T21_READ_FAIL|ACCEPTANCE FAIL' $candidateLineStart
+        Stop-T21Server 'after-candidate-existing-read'
+        $candidateSnapshot = Get-BackendSnapshot 'after-candidate-existing-read-stop' '1000.00' '520.00' -IncludeSchemaVersionRows
+        $null = Assert-IsolatedSyncConfig
+        $script:snapshots.Add($candidateSnapshot)
+        Add-T21LegacySqlStage 'candidate-existing-read' $CandidateVersion $candidateMarker $candidateStartup $candidateSnapshot
 
-    Stop-T21Server 'after-write'
-    $script:snapshots.Add((Get-BackendSnapshot 'after-write-stop'))
+        $rollbackStartup = Start-T21Server 'legacy-rollback-read' '1.3.2'
+        $rollbackLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept rollback-read 1000.00 520.00') 'legacy-rollback-read-command'
+        $rollbackMarker = Wait-ServerLogMarker 'T21_ROLLBACK_READ_PASS expected-a=1000\.00 expected-b=520\.00 actual-a=1000\.00 actual-b=520\.00' 'T21_READ_FAIL|ACCEPTANCE FAIL' $rollbackLineStart
+        Stop-T21Server 'after-legacy-rollback-read'
+        $rollbackSnapshot = Get-BackendSnapshot 'after-legacy-rollback-read-stop' '1000.00' '520.00' -IncludeSchemaVersionRows
+        $null = Assert-IsolatedSyncConfig
+        $script:snapshots.Add($rollbackSnapshot)
+        Add-T21LegacySqlStage 'legacy-rollback-read' '1.3.2' $rollbackMarker $rollbackStartup $rollbackSnapshot
+    } else {
+        Start-T21Server 'candidate-write'
+        $versionLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept version') 'candidate-version-command'
+        $null = Wait-ServerLogMarker 'T21_VERSION_PASS expected=1\.4\.0-alpha\.1 actual=1\.4\.0-alpha\.1' 'T21_VERSION_FAIL|ACCEPTANCE VERSION FAIL' $versionLineStart
 
-    Start-T21Server 'candidate-restart-read'
-    $readLineStart = Get-ServerLogLineCount
-    $null = Invoke-PlugDev @('server', 'command', 'smaccept read 1337.25 765.50') 'candidate-restart-read-command'
-    $readObservation = Wait-ServerLogMarker 'ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1337\.25 b=765\.50 vault-unlocked-b=765\.50' 'T21_READ_FAIL|ACCEPTANCE FAIL' $readLineStart
-    $readLine = Wait-ServerLogMarker 'T21_READ_PASS expected-a=1337\.25 expected-b=765\.50' 'T21_READ_FAIL|ACCEPTANCE FAIL' $readLineStart
-    $script:report.restartReadMarker = $readLine
-    $script:report.restartReadObservation = $readObservation
-    Stop-T21Server 'after-restart-read'
-    $script:snapshots.Add((Get-BackendSnapshot 'after-restart-read-stop'))
+        $writeLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept write 1337.25 765.50') 'candidate-vault-write-command'
+        $writeLine = Wait-ServerLogMarker 'T21_WRITE_PASS expected-a=1337\.25 expected-b=765\.50 receipt-a=SUCCESS:DEPOSIT:1337\.25:1337\.25 receipt-b=SUCCESS:DEPOSIT:765\.50:765\.50' 'T21_WRITE_FAIL|ACCEPTANCE FAIL' $writeLineStart
+        $script:report.writeReceipts = @('SUCCESS:DEPOSIT:1337.25:1337.25', 'SUCCESS:DEPOSIT:765.50:765.50')
+        $script:report.writeMarker = $writeLine
+
+        Stop-T21Server 'after-write'
+        $script:snapshots.Add((Get-BackendSnapshot 'after-write-stop'))
+
+        Start-T21Server 'candidate-restart-read'
+        $readLineStart = Get-ServerLogLineCount
+        $null = Invoke-PlugDev @('server', 'command', 'smaccept read 1337.25 765.50') 'candidate-restart-read-command'
+        $readObservation = Wait-ServerLogMarker 'ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1337\.25 b=765\.50 vault-unlocked-b=765\.50' 'T21_READ_FAIL|ACCEPTANCE FAIL' $readLineStart
+        $readLine = Wait-ServerLogMarker 'T21_READ_PASS expected-a=1337\.25 expected-b=765\.50' 'T21_READ_FAIL|ACCEPTANCE FAIL' $readLineStart
+        $script:report.restartReadMarker = $readLine
+        $script:report.restartReadObservation = $readObservation
+        Stop-T21Server 'after-restart-read'
+        $script:snapshots.Add((Get-BackendSnapshot 'after-restart-read-stop'))
+    }
 
 } catch {
     $script:failure = $_.Exception.ToString()
@@ -1208,6 +1395,8 @@ try {
             sha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\run-mysql-sync-runtime.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             validatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             testSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            legacyValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            legacyTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
         }
     } catch {
         $script:failure = "Could not finalize runtime evidence hashes: $($_.Exception.Message)"
@@ -1224,30 +1413,107 @@ try {
     $script:report.failure = $script:failure
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
-        $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
-            Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint
+        if ($script:legacySqlDataUpgrade) {
+            $backendProcesses = $script:report.backendProcesses
+            $mysqlProcess = $backendProcesses.mysql
+            $redisProcess = $backendProcesses.redis
+            $script:finalReport = [ordered]@{
+                schemaVersion=2
+                task='T21-M05-LEGACY-SQL-DATA-MySQL-minimum-Paper'
+                status='PASS_BOUNDED_SUBCASE'
+                runDirectory=$script:runRoot
+                server=[ordered]@{
+                    software=$script:platformTarget.software
+                    minecraftVersion=$script:platformTarget.minecraftVersion
+                    build=$script:platformTarget.build
+                    sha256=$serverSha256
+                }
+                baseline=[ordered]@{ version='1.3.2'; sha256=$script:baselineSha256; sourceCommit=$script:baselineSourceCommit }
+                candidate=[ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256 }
+                artifacts=[ordered]@{ acceptanceSha256=$acceptanceSha256; apiConsumerSha256=$apiConsumerSha256 }
+                java=[ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
+                mysql=[ordered]@{ product='MySQL'; version=[string]$script:report.mysql.serverVersion }
+                redis=[ordered]@{ version='8.10.1' }
+                configuration=[ordered]@{
+                    schema=[int]$configObservation.schema
+                    mode=[string]$configObservation.mode
+                    databaseEnabled=$true
+                    databaseType='mysql'
+                    databaseIsolated=$true
+                    redisEnabled=$true
+                    redisDatabase=15
+                    redisIsolated=$true
+                }
+                stages=@($script:legacySqlStages)
+                platformLogs=@($script:platformServerLogs)
+                logs=$script:report.logs
+                backendProcesses=[ordered]@{
+                    mysql=[ordered]@{
+                        product=[string]$mysqlProcess.product
+                        version=[string]$mysqlProcess.version
+                        processId=[int]$mysqlProcess.processId
+                        runOwned=[bool]$mysqlProcess.runOwned
+                        listenerOwnerVerified=[bool]$mysqlProcess.listenerOwnerVerified
+                    }
+                    redis=[ordered]@{
+                        version=[string]$redisProcess.version
+                        processId=[int]$redisProcess.processId
+                        runOwned=[bool]$redisProcess.runOwned
+                        listenerOwnerVerified=[bool]$redisProcess.listenerOwnerVerified
+                    }
+                }
+                backendShutdowns=@($script:backendShutdowns)
+                gradleDaemonCleanup=$script:report.gradleDaemonCleanup
+                cleanupFailures=@($script:cleanupFailures)
+                failure=$script:failure
+                sourcePins=[ordered]@{
+                    runnerSha256=$script:report.runner.sha256
+                    validatorSha256=$script:report.runner.legacyValidatorSha256
+                    validatorTestSha256=$script:report.runner.legacyTestSha256
+                    sharedValidatorSha256=$script:report.runner.validatorSha256
+                    sharedValidatorTestSha256=$script:report.runner.testSha256
+                    plugDevCommit=$script:report.plugDev.sourceCommit
+                    plugDevCliSha256=$script:report.plugDev.cliSha256
+                    paperJarSha256=$serverSha256
+                    baselineJarSha256=$script:baselineSha256
+                    candidateJarSha256=$script:candidateSha256
+                    acceptanceJarSha256=$acceptanceSha256
+                    apiConsumerJarSha256=$apiConsumerSha256
+                }
+            }
+            $reportAccepted = Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256
         } else {
-            Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
+            $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
+                Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint
+            } else {
+                Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
+            $script:finalReport = $script:report
         }
         if (-not $reportAccepted) {
-            $script:report.status = 'FAIL'
-            $script:failure = 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
+            $script:finalReport.status = 'FAIL'
+            $script:failure = if ($script:legacySqlDataUpgrade) {
+                'The completed report did not satisfy Test-T21MySqlLegacyDataUpgradeReport.'
+            } else {
+                'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
+            }
         }
     } else {
-        $script:report.status = 'FAIL'
+        $script:finalReport = $script:report
+        $script:finalReport.status = 'FAIL'
     }
-    $script:report.failure = $script:failure
+    $script:finalReport.failure = $script:failure
     try {
-        $script:report | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath $script:reportPath -Encoding utf8
+        $script:finalReport | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath $script:reportPath -Encoding utf8
     } catch {
         $script:failure = "Could not persist the machine report: $($_.Exception.Message)"
         [Console]::Error.WriteLine($script:failure)
     }
 }
 
-if ($null -ne $script:failure -or $script:report.status -cne 'PASS_BOUNDED_SUBCASE') {
+if ($null -ne $script:failure -or $script:finalReport.status -cne 'PASS_BOUNDED_SUBCASE') {
     throw "T21 $script:databaseProduct SYNC runtime did not pass. Report: $script:reportPath"
 }
-$databaseRuntimeLabel = switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } }
+$databaseRuntimeLabel = if ($script:legacySqlDataUpgrade) { 'MySQL 8.0.42 legacy-data upgrade' } else { switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } } }
 $platformRuntimeLabel = switch ($script:platformTarget.software) { 'folia' { 'Folia' } 'canvas' { 'Canvas' } default { 'Paper' } }
 Write-Output "PASS_BOUNDED_SUBCASE: $platformRuntimeLabel $($script:platformTarget.minecraftVersion)#$($script:platformTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"
