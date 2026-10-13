@@ -95,6 +95,15 @@ try {
     $empty = Read-RecoveryJournal $emptyPath
     Assert-ThrowsContaining 'refuse rollback when the existing recovery journal has no frames' { Assert-RecoveryJournalForRollback $empty } 'at least one validated frame'
 
+    $pendingPath = Join-Path $testRoot 'pending.jsonl'
+    $pendingFrames = @((New-TestFrame 1 'RECORD' 'operation-pending' 'YXR0ZW1wdGluZw'))
+    Write-TestJournal $pendingPath $pendingFrames
+    $pending = Read-RecoveryJournal $pendingPath
+    if ($pending.pendingCount -ne 1) { throw 'The unacknowledged recovery operation was not counted as pending.' }
+    Assert-ThrowsContaining 'refuse rollback while valid recovery work remains pending or ambiguous' {
+        Assert-RecoveryJournalForRollback $pending
+    } 'pending or ambiguous work'
+
     $invalidAlphabetPath = Join-Path $testRoot 'invalid-base64-alphabet.jsonl'
     $invalidAlphabetFrames = @(
         (New-TestFrame 1 'RECORD' 'operation-invalid' 'w7/Dvw'),
@@ -138,7 +147,7 @@ try {
 
     Write-Output 'Recovery spool validator tests PASS'
 } finally {
-    foreach ($name in @('valid.jsonl', 'bad-checksum.jsonl', 'missing.jsonl', 'empty.jsonl', 'invalid-base64-alphabet.jsonl', 'case-sensitive-kind.jsonl', 'mixed-case-kind.jsonl', 'oversize-crlf-frame.jsonl', 'oversize-journal.jsonl')) {
+    foreach ($name in @('valid.jsonl', 'bad-checksum.jsonl', 'missing.jsonl', 'empty.jsonl', 'absent-at-checkpoint.jsonl', 'pending.jsonl', 'invalid-base64-alphabet.jsonl', 'case-sensitive-kind.jsonl', 'mixed-case-kind.jsonl', 'oversize-crlf-frame.jsonl', 'oversize-journal.jsonl')) {
         $file = Join-Path $testRoot $name
         if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force }
     }
