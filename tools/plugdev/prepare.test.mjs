@@ -191,3 +191,35 @@ test("local mode produces an isolated config with the schema default and no netw
   assert.equal(settings.database.enabled, false);
   assert.equal(settings.economy.mode, "local");
 });
+
+test("guard-only profile enables per-player protection without enabling optional modules", () => {
+  const options = validateOptions([
+    "canvas", "26.3", "local_redis", "off", "1.4.0-alpha.1", "guard-on",
+  ]);
+  const defaults = {
+    "config-version": 12,
+    redis: { enabled: false },
+    database: { enabled: false },
+    "circuit-breaker": {
+      enabled: true,
+      "player-protection": { enabled: true, "global-lock": { enabled: true } },
+    },
+    "shadow-sync": { enabled: true },
+    audit: { enabled: true, cleanup: { enabled: true }, export: { enabled: true }, redis: { enabled: true } },
+    "transfer-guard": { enabled: true },
+    "web-admin": { enabled: true, server: {}, security: {}, web: {} },
+    "discord-webhook": { enabled: true },
+  };
+
+  const settings = createEconomySettings(defaults, options);
+
+  assert.equal(options.playerProtection, true);
+  assert.equal(settings["circuit-breaker"].enabled, false);
+  assert.equal(settings["circuit-breaker"]["player-protection"].enabled, true);
+  assert.equal(settings["circuit-breaker"]["player-protection"]["global-lock"].enabled, false);
+  assert.equal(settings["shadow-sync"].enabled, false);
+  assert.equal(settings.audit.enabled, false);
+  assert.equal(settings["transfer-guard"].enabled, false);
+  assert.equal(settings["web-admin"].enabled, false);
+  assert.equal(settings["discord-webhook"].enabled, false);
+});

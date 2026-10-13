@@ -201,6 +201,74 @@ test("cross-owner runner rejects non-Folia endpoints before creating a run or st
   assert.match(runner, /-CrossOwner is only supported for Folia endpoints\./);
 });
 
+test("guard runtime proof requires the entity owner, exact quota outcome, player notice, and persisted balance", () => {
+  const hasGuardRuntimeProof = lifecycleAssertions.hasGuardRuntimeProof;
+  assert.equal(typeof hasGuardRuntimeProof, "function");
+
+  const evidence = {
+    serverLines: [
+      "[INFO]: T21_GUARD_OWNER player=AcceptanceGuard uuid=35c93f74-c540-3b38-8093-b5cb3c2263be selfOwned=true scheduler=entity",
+      "[INFO]: T21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=35c93f74-c540-3b38-8093-b5cb3c2263be accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00",
+      "[WARNING]: Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for 35c93f74-c540-3b38-8093-b5cb3c2263be",
+    ],
+    clientLines: ["BOT_GUARD_RATE_LIMIT_NOTICE_PASS uuid=35c93f74-c540-3b38-8093-b5cb3c2263be message=Transaction too fast, please wait a moment"],
+    redisBalance: "5.00",
+    redisVersion: "5",
+  };
+  assert.equal(hasGuardRuntimeProof(evidence), true);
+  assert.equal(hasGuardRuntimeProof({ ...evidence, redisBalance: "6.00" }), false);
+  assert.equal(hasGuardRuntimeProof({ ...evidence, redisVersion: "6" }), false);
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replace("selfOwned=true", "selfOwned=false")),
+  }), false);
+  assert.equal(hasGuardRuntimeProof({ ...evidence, serverLines: [...evidence.serverLines, evidence.serverLines[0]] }), false);
+  assert.equal(hasGuardRuntimeProof({ ...evidence, serverLines: [...evidence.serverLines, "T21_GUARD_FAIL reason=owner"] }), false);
+  assert.equal(hasGuardRuntimeProof({ ...evidence, clientLines: [] }), false);
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.filter((line) => !line.includes("PlayerTransactionGuard")),
+  }), false);
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replace("accepted=5 rejected=1 outcomes=SSSSSF", "accepted=6 rejected=0 outcomes=SSSSSS")),
+  }), false);
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replace("outcomes=SSSSSF", "outcomes=SSSFSS")),
+  }), false, "the sixth transaction must be the rejected transaction");
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    clientLines: evidence.clientLines.map((line) => line.replace("35c93f74-c540-3b38-8093-b5cb3c2263be", "00000000-0000-0000-0000-000000000001")),
+  }), false, "the client notification UUID must match the server owner UUID");
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    clientLines: evidence.clientLines.map((line) => line.replace(" uuid=35c93f74-c540-3b38-8093-b5cb3c2263be", "")),
+  }), false, "the client notification must contain a UUID");
+});
+
+test("guard acceptance is an isolated Canvas-only profile and records runtime evidence", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
+  const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
+  const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
+  const prepare = readFileSync(new URL("./prepare.mjs", import.meta.url), "utf8");
+
+  assert.match(runner, /\[switch\]\$Guard/);
+  assert.match(runner, /\$Guard\.IsPresent -and \$pin\.software -ne 'canvas'/);
+  assert.match(runner, /\$guardClient = Invoke-Client 'guard'/);
+  assert.match(runner, /--has-guard-runtime-proof-json/);
+  assert.match(runner, /guard-on/);
+  assert.match(prepare, /player-protection/);
+  assert.match(client, /AcceptanceGuard/);
+  assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS/);
+  assert.match(client, /uuid=\$\{bot\.player\?\.uuid \?\? bot\.entity\?\.uuid\}/);
+  assert.match(probe, /Bukkit\.isOwnedByCurrentRegion\(player\)/);
+  assert.match(probe, /T21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=/);
+  assert.match(probe, /outcomes=/);
+  assert.match(probe, /accepted=" \+ accepted \+ " rejected=" \+ rejected/);
+  assert.match(runner, /candidateSha -cne '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd'/);
+});
+
 test("selects test ports only after the operating system accepts a local bind", () => {
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
   assert.match(runner, /\$gamePort\s*=\s*Get-AvailableLocalPort\s+25000\s+39000\s+@\(0,\s*10000\)/);

@@ -130,6 +130,58 @@ export function observeCrossOwnerClientPass(passedPlayers, playerName, messageTe
   return passedPlayers.has("AcceptanceA") && passedPlayers.has("AcceptanceB");
 }
 
+export function hasGuardRuntimeProof(evidence) {
+  if (!evidence || !Array.isArray(evidence.serverLines) || !Array.isArray(evidence.clientLines)) return false;
+  if (evidence.redisBalance !== "5.00" || evidence.redisVersion !== "5") return false;
+
+  let ownerMarkers = 0;
+  let transactionMarkers = 0;
+  let guardRejectionWarnings = 0;
+  let ownerUuid = null;
+  let transactionUuid = null;
+  let warningUuid = null;
+  let transactionOutcomes = null;
+  for (const rawLine of evidence.serverLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("T21_GUARD_FAIL")) return false;
+    if (line.includes("Deposit rejected by PlayerTransactionGuard:")) {
+      guardRejectionWarnings += 1;
+      const warning = line.match(/Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ([0-9a-f-]{36})\s*$/i);
+      if (!warning) return false;
+      warningUuid = warning[1].toLowerCase();
+    }
+    if (line.includes("T21_GUARD_OWNER")) {
+      ownerMarkers += 1;
+      const owner = line.match(/\bT21_GUARD_OWNER player=AcceptanceGuard uuid=([0-9a-f-]{36}) selfOwned=true scheduler=entity\s*$/i);
+      if ((line.match(/T21_GUARD_OWNER/g) ?? []).length !== 1 || !owner) return false;
+      ownerUuid = owner[1].toLowerCase();
+    }
+    if (line.includes("T21_GUARD_TRANSACTIONS")) {
+      transactionMarkers += 1;
+      const transaction = line.match(/\bT21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=([0-9a-f-]{36}) accepted=5 rejected=1 outcomes=([SF]{6}) before=0\.00 after=5\.00\s*$/i);
+      if ((line.match(/T21_GUARD_TRANSACTIONS/g) ?? []).length !== 1 || !transaction) return false;
+      transactionUuid = transaction[1].toLowerCase();
+      transactionOutcomes = transaction[2];
+    }
+  }
+  if (ownerMarkers !== 1 || transactionMarkers !== 1 || guardRejectionWarnings !== 1 ||
+      !ownerUuid || ownerUuid !== transactionUuid || ownerUuid !== warningUuid || transactionOutcomes !== "SSSSSF") return false;
+
+  let noticeMarkers = 0;
+  let noticeUuid = null;
+  for (const rawLine of evidence.clientLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("BOT_GUARD_FAIL")) return false;
+    if (line.includes("BOT_GUARD_RATE_LIMIT_NOTICE_PASS")) {
+      noticeMarkers += 1;
+      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+uuid=([0-9a-f-]{36})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
+      if ((line.match(/BOT_GUARD_RATE_LIMIT_NOTICE_PASS/g) ?? []).length !== 1 || !notice) return false;
+      noticeUuid = notice[1].toLowerCase();
+    }
+  }
+  return noticeMarkers === 1 && noticeUuid === ownerUuid;
+}
+
 export function normalizedDimension(value) {
   return String(value ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
 }
@@ -179,6 +231,16 @@ if (process.argv[2] === "--has-two-region-ownership-proof-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasTwoRegionOwnershipProof(evidence.logLines) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-guard-runtime-proof-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasGuardRuntimeProof(evidence) ? "true" : "false");
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;

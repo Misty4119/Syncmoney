@@ -12,8 +12,8 @@ import {
 } from "./player-scheduler-lifecycle-assertions.mjs";
 
 const [scenario, protocolVersion, gamePortText, redisPortText, pauseMsText, redisCliPath, mineflayerRoot] = process.argv.slice(2);
-if (!["teleport", "logout", "cross-owner"].includes(scenario)) {
-  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
+if (!["teleport", "logout", "cross-owner", "guard"].includes(scenario)) {
+  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
 }
 
 function readPort(value, name) {
@@ -43,7 +43,8 @@ function createAcceptanceBot(username) {
   });
 }
 
-const bot = createAcceptanceBot("AcceptanceA");
+const guardScenario = scenario === "guard";
+const bot = createAcceptanceBot(guardScenario ? "AcceptanceGuard" : "AcceptanceA");
 const otherBot = scenario === "cross-owner" ? createAcceptanceBot("AcceptanceB") : null;
 const spawnedPlayers = new Set();
 
@@ -110,6 +111,10 @@ bot.on("message", (message) => {
   const text = message.toString();
   console.log(`BOT_CHAT ${text}`);
   observeCrossOwnerPass(bot, text);
+  if (guardScenario && text.includes("Transaction too fast, please wait a moment")) {
+    console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS uuid=${bot.player?.uuid ?? bot.entity?.uuid} message=${text}`);
+    finish(0, "client received the player-owner rate-limit notification");
+  }
   if (scenario === "teleport" && text.includes("T15_TELEPORT_REACHED world=world_nether")) {
     serverReportedNetherArrival = true;
     console.log("BOT_SERVER_TELEPORT_REACHED world=world_nether");
@@ -153,13 +158,18 @@ if (otherBot) {
 function onSpawn(activeBot) {
   spawnedPlayers.add(activeBot.username);
   const dimension = normalizedDimension(activeBot.game?.dimension) || "unknown";
-  console.log(`BOT_JOINED name=${activeBot.username} uuid=${activeBot.uuid} dimension=${dimension}`);
+  console.log(`BOT_JOINED name=${activeBot.username} uuid=${activeBot.player?.uuid ?? activeBot.entity?.uuid} dimension=${dimension}`);
   if (scenario === "cross-owner") {
     if (spawnedPlayers.has("AcceptanceA") && spawnedPlayers.has("AcceptanceB")) {
       console.log("BOT_CROSS_OWNER_CLIENTS_READY players=AcceptanceA,AcceptanceB");
       bot.chat("/smaccept lifecycle cross-owner AcceptanceB");
       console.log("BOT_COMMAND_SENT /smaccept lifecycle cross-owner AcceptanceB");
     }
+    return;
+  }
+  if (guardScenario) {
+    bot.chat("/smaccept lifecycle guard");
+    console.log("BOT_COMMAND_SENT /smaccept lifecycle guard");
     return;
   }
   initialDimension = dimension;
