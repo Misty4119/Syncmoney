@@ -465,7 +465,7 @@ $mysqlRuntimeReport = [ordered]@{
     server = [ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$paperMinimumSha }
     candidate = [ordered]@{ version='1.4.0-alpha.1'; sha256=$candidateSha }
     java = [ordered]@{ feature=25 }
-    mysql = [ordered]@{ version='8.0.42' }
+    mysql = [ordered]@{ version='8.0.42'; serverVersion='8.0.42' }
     redis = [ordered]@{ version='8.10.1' }
     backendProcesses = [ordered]@{
         mysql = [ordered]@{ version='8.0.42'; processId=1111; launchProcessId=1110; listenerAddresses=@('127.0.0.1'); runOwned=$true; listenerOwnerVerified=$true }
@@ -522,6 +522,45 @@ if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportJsonRoundtrip $paperMini
     throw 'The complete MySQL SYNC report was rejected after JSON serialization and deserialization.'
 }
 Write-Output 'PASS: accept the serialized report with rehashed Paper server logs'
+
+$mysqlRuntimeReportV2 = $mysqlRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mysqlRuntimeReportV2.schemaVersion = 2
+$mysqlRuntimeReportV2.mysql.product = 'MySQL'
+$mysqlRuntimeReportV2.mysql.executableVersion = 'mysqld.exe  Ver 8.0.42 for Win64 on x86_64'
+$mysqlRuntimeReportV2.backendProcesses.mysql.product = 'MySQL'
+if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV2 $paperMinimumSha $candidateSha)) {
+    throw 'A complete isolated minimum-Paper MySQL schema-2 report was rejected.'
+}
+Write-Output 'PASS: accept the current MySQL runtime report schema'
+
+$mariadbRuntimeReport = $mysqlRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mariadbRuntimeReport.schemaVersion = 2
+$mariadbRuntimeReport.task = 'T21-M05-SYNC-MariaDB-minimum-Paper'
+$mariadbRuntimeReport.mysql.product = 'MariaDB'
+$mariadbRuntimeReport.mysql.version = '12.3.3-MariaDB'
+$mariadbRuntimeReport.mysql.serverVersion = '12.3.3-MariaDB'
+$mariadbRuntimeReport.mysql.executableVersion = 'mariadbd.exe  Ver 12.3.3-MariaDB for Win64 on AMD64 (MariaDB Server)'
+$mariadbRuntimeReport.backendProcesses.mysql.product = 'MariaDB'
+$mariadbRuntimeReport.backendProcesses.mysql.version = '12.3.3-MariaDB'
+if (-not (Test-T21MySqlRuntimeReport $mariadbRuntimeReport $paperMinimumSha $candidateSha -DatabaseProduct MariaDB)) {
+    throw 'A complete isolated minimum-Paper MariaDB SYNC runtime report was rejected.'
+}
+Write-Output 'PASS: accept MariaDB runtime evidence through the MySQL protocol'
+
+$mariadbRuntimeReportWrongProduct = $mariadbRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mariadbRuntimeReportWrongProduct.mysql.product = 'MySQL'
+if (Test-T21MySqlRuntimeReport $mariadbRuntimeReportWrongProduct $paperMinimumSha $candidateSha -DatabaseProduct MariaDB) {
+    throw 'A MariaDB runtime report with MySQL product identity was accepted.'
+}
+Write-Output 'PASS: reject a MariaDB report with a different server product'
+
+$mariadbRuntimeReportWrongVersion = $mariadbRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mariadbRuntimeReportWrongVersion.mysql.serverVersion = '12.3.2-MariaDB for Win64 on AMD64 (MariaDB Server)'
+if (Test-T21MySqlRuntimeReport $mariadbRuntimeReportWrongVersion $paperMinimumSha $candidateSha -DatabaseProduct MariaDB) {
+    throw 'A MariaDB runtime report with the wrong pinned server version was accepted.'
+}
+Write-Output 'PASS: reject a MariaDB report with the wrong exact server version'
+
 if (Test-T21PathContainsReparsePoint $mysqlWriteLogPath) {
     throw 'A normal temporary Paper report fixture unexpectedly traverses a reparse point.'
 }
@@ -773,7 +812,7 @@ Write-Output 'PASS: reject disagreement between configured and observed SQL sche
 
 $mysqlReportWrongBackendVersion = [ordered]@{}
 foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongBackendVersion[$key] = $mysqlRuntimeReport[$key] }
-$mysqlReportWrongBackendVersion.mysql = [ordered]@{ version='8.0.41' }
+$mysqlReportWrongBackendVersion.mysql = [ordered]@{ version='8.0.41'; serverVersion='8.0.41' }
 if (Test-T21MySqlRuntimeReport $mysqlReportWrongBackendVersion $paperMinimumSha $candidateSha) {
     throw 'A report with conflicting top-level MySQL version evidence was accepted.'
 }
@@ -798,6 +837,32 @@ if ($mysqlPortAssignments.Count -ne 1) {
     throw "The isolated MySQL SYNC runtime runner must allocate its database port once before publishing it to services and PlugDev; observed $($mysqlPortAssignments.Count) allocations."
 }
 Write-Output 'PASS: keep one reserved MySQL port across backend and PlugDev configuration'
+if ($runnerSource -notmatch "'mariadb-install-db\.exe'" -or
+    $runnerSource -notmatch "'--allow-remote-root-access'" -or
+    $runnerSource -match "'--service(?:=|')") {
+    throw 'MariaDB initialization must use the pinned isolated data directory and must not install a Windows service.'
+}
+Write-Output 'PASS: initialize MariaDB without registering a Windows service'
+$mysqlAdminStart = $runnerSource.IndexOf('function Invoke-MySqlAdmin', [StringComparison]::Ordinal)
+$mysqlListenerStart = $runnerSource.IndexOf('function Assert-BackendListenerOwner', [StringComparison]::Ordinal)
+if ($mysqlAdminStart -lt 0 -or $mysqlListenerStart -le $mysqlAdminStart) {
+    throw 'Could not isolate the MySQL-protocol admin helper for credential-mode validation.'
+}
+$mysqlAdminSource = $runnerSource.Substring($mysqlAdminStart, $mysqlListenerStart - $mysqlAdminStart)
+if (-not $mysqlAdminSource.Contains('MYSQL_PWD') -or
+    -not $mysqlAdminSource.Contains('MariaDB') -or
+    -not $mysqlAdminSource.Contains('$script:databasePassword') -or
+    -not $mysqlAdminSource.Contains("else { '' }")) {
+    throw 'The MariaDB mysqladmin helper must authenticate with the isolated root password while MySQL retains passwordless root.'
+}
+Write-Output 'PASS: authenticate MariaDB admin calls with the isolated root password'
+
+$mysqlSecurityHelperPattern = '(?s)function Get-MySqlLoopbackClientArgs(?:\(\))?\s*\{(?:(?!function ).)*''MariaDB''(?:(?!function ).)*''--skip-ssl-verify-server-cert''(?:(?!function ).)*return @\(\)(?:(?!function ).)*\}'
+if ($runnerSource -notmatch $mysqlSecurityHelperPattern -or
+    [regex]::Matches($runnerSource, '\(Get-MySqlLoopbackClientArgs\)').Count -ne 2) {
+    throw 'MariaDB client calls must explicitly skip certificate verification for isolated loopback connections, without changing MySQL client options.'
+}
+Write-Output 'PASS: keep MariaDB loopback client output free of default TLS verification warnings'
 
 if ($runnerSource -notmatch "Invoke-PlugDev @\('server', 'command', 'stop'\)" -or
     $runnerSource -match "Invoke-PlugDev @\('server', 'stop'\)") {

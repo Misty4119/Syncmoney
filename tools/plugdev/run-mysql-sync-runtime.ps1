@@ -6,6 +6,8 @@ param(
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Parameter(Mandatory = $true)][string]$JavaHome,
     [string]$MySqlBin = 'C:\Program Files\MySQL\MySQL Server 8.0\bin',
+    [string]$MariaDbBin = 'C:\Program Files\MariaDB 12.3\bin',
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
     [string]$CandidateVersion = '1.4.0-alpha.1'
 )
 
@@ -14,6 +16,11 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 MySQL runtime validation requires PowerShell 7 or newer.' }
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 
+$script:databaseProduct = if ($DatabaseProduct -ieq 'MariaDB') { 'MariaDB' } else { 'MySQL' }
+$script:databaseServerVersion = if ($script:databaseProduct -ceq 'MariaDB') { '12.3.3-MariaDB' } else { '8.0.42' }
+$script:databaseServerVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '^12\.3\.3-MariaDB(?:\b|$)' } else { '^8\.0\.42(?:\b|$)' }
+$script:databaseExecutableVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } else { '\bVer\s+8\.0\.42(?:\b|$)' }
+$script:databaseBin = if ($script:databaseProduct -ceq 'MariaDB') { $MariaDbBin } else { $MySqlBin }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
 $script:candidatePath = Join-Path $script:root "build\libs\Syncmoney-$CandidateVersion.jar"
@@ -21,15 +28,15 @@ $script:acceptancePath = Join-Path $script:root 'build\acceptance\SyncmoneyAccep
 $script:apiConsumerPath = Join-Path $script:root 'build\acceptance\SyncmoneyApiConsumer.jar'
 $script:plugDevRoot = (Resolve-Path -LiteralPath $PlugDevRoot).Path
 $script:javaHomePath = (Resolve-Path -LiteralPath $JavaHome).Path
-$script:mysqlBinPath = (Resolve-Path -LiteralPath $MySqlBin).Path
+$script:mysqlBinPath = (Resolve-Path -LiteralPath $script:databaseBin).Path
 $script:node = (Get-Command node.exe, node -ErrorAction Stop | Select-Object -First 1).Source
 $script:reportsRoot = [IO.Path]::GetFullPath((Join-Path $script:root 'build\reports\foundation\T21-sql-runtime'))
 $script:runId = [guid]::NewGuid().ToString('N')
-$script:runMarker = 'mysql-sync-' + $script:runId
+$script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:runId
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)
 $script:databaseUser = 'sm_t21_' + $script:runId.Substring(0, 8)
 $script:databasePassword = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ('mysql-sync-minimum-paper-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
+$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-minimum-paper-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
 $script:workspace = Join-Path $script:runRoot 'workspace'
 $script:mysqlRoot = Join-Path $script:runRoot 'mysql'
 $script:mysqlData = Join-Path $script:mysqlRoot 'data'
@@ -37,9 +44,11 @@ $script:redisRoot = Join-Path $script:runRoot 'redis'
 $script:redisData = Join-Path $script:redisRoot 'data'
 $script:logsRoot = Join-Path $script:runRoot 'logs'
 $script:reportPath = Join-Path $script:runRoot 'result.json'
-$script:mysqlServer = Join-Path $script:mysqlBinPath 'mysqld.exe'
+$script:mysqlServerName = if ($script:databaseProduct -ceq 'MariaDB') { 'mariadbd.exe' } else { 'mysqld.exe' }
+$script:mysqlServer = Join-Path $script:mysqlBinPath $script:mysqlServerName
 $script:mysqlClient = Join-Path $script:mysqlBinPath 'mysql.exe'
 $script:mysqlAdmin = Join-Path $script:mysqlBinPath 'mysqladmin.exe'
+$script:mysqlInstallDb = if ($script:databaseProduct -ceq 'MariaDB') { Join-Path $script:mysqlBinPath 'mariadb-install-db.exe' } else { $null }
 $script:redisServer = $null
 $script:redisCli = $null
 $script:redisProcess = $null
@@ -156,12 +165,24 @@ function Invoke-LoggedCommand([string]$executable, [string[]]$arguments, [string
     return [pscustomobject]@{ exitCode = [int]$exitCode; output = ($output -join "`n").Trim(); logPath = $logPath }
 }
 
+function Get-MySqlLoopbackClientArgs {
+    if ($script:databaseProduct -ceq 'MariaDB') {
+        # This runner binds the disposable database to loopback and needs clean, parseable client result rows.
+        return @('--skip-ssl-verify-server-cert')
+    }
+    return @()
+}
+
 function Invoke-MySqlQuery([string]$sql, [string]$label, [switch]$asRoot) {
     $previousPassword = [Environment]::GetEnvironmentVariable('MYSQL_PWD', 'Process')
     $logPath = Join-Path $script:logsRoot ($label + '.txt')
     try {
-        if ($asRoot) { $env:MYSQL_PWD = '' } else { $env:MYSQL_PWD = $script:databasePassword }
-        $arguments = @('--no-defaults', '--protocol=TCP', '--host=127.0.0.1', "--port=$script:mysqlPort", "--user=$(if ($asRoot) { 'root' } else { $script:databaseUser })")
+        if ($asRoot) {
+            $env:MYSQL_PWD = if ($script:databaseProduct -ceq 'MariaDB') { $script:databasePassword } else { '' }
+        } else {
+            $env:MYSQL_PWD = $script:databasePassword
+        }
+        $arguments = @('--no-defaults') + (Get-MySqlLoopbackClientArgs) + @('--protocol=TCP', '--host=127.0.0.1', "--port=$script:mysqlPort", "--user=$(if ($asRoot) { 'root' } else { $script:databaseUser })")
         if (-not $asRoot) { $arguments += "--database=$script:databaseName" }
         $arguments += @('--batch', '--skip-column-names', '--raw', "--execute=$sql")
         $result = Invoke-LoggedCommand $script:mysqlClient $arguments $label $logPath
@@ -175,8 +196,8 @@ function Invoke-MySqlAdmin([string[]]$arguments, [string]$label, [switch]$allowE
     $previousPassword = [Environment]::GetEnvironmentVariable('MYSQL_PWD', 'Process')
     $logPath = Join-Path $script:logsRoot ($label + '.txt')
     try {
-        $env:MYSQL_PWD = ''
-        return Invoke-LoggedCommand $script:mysqlAdmin (@('--no-defaults', '--protocol=TCP', '--host=127.0.0.1', "--port=$script:mysqlPort", '--user=root') + $arguments) $label $logPath -allowExitOne:$allowExitOne
+        $env:MYSQL_PWD = if ($script:databaseProduct -ceq 'MariaDB') { $script:databasePassword } else { '' }
+        return Invoke-LoggedCommand $script:mysqlAdmin (@('--no-defaults') + (Get-MySqlLoopbackClientArgs) + @('--protocol=TCP', '--host=127.0.0.1', "--port=$script:mysqlPort", '--user=root') + $arguments) $label $logPath -allowExitOne:$allowExitOne
     } finally {
         [Environment]::SetEnvironmentVariable('MYSQL_PWD', $previousPassword, 'Process')
     }
@@ -203,19 +224,19 @@ function Get-MySqlListenerProcess {
     if ($owners.Count -ne 1 -or @($addresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0) {
         $observedOwners = if ($owners.Count -eq 0) { '<none>' } else { $owners -join ',' }
         $observedAddresses = if ($addresses.Count -eq 0) { '<none>' } else { $addresses -join ',' }
-        throw "MySQL port $script:mysqlPort has ambiguous or non-loopback listeners (owners $observedOwners; addresses $observedAddresses)."
+        throw "$script:databaseProduct port $script:mysqlPort has ambiguous or non-loopback listeners (owners $observedOwners; addresses $observedAddresses)."
     }
 
     $ownerId = [int]$owners[0]
     $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerId" -ErrorAction Stop
-    if ($null -eq $processInfo) { throw "MySQL listener PID $ownerId could not be inspected." }
+    if ($null -eq $processInfo) { throw "$script:databaseProduct listener PID $ownerId could not be inspected." }
     $expectedExecutable = [IO.Path]::GetFullPath($script:mysqlServer)
     $actualExecutable = if ([string]::IsNullOrWhiteSpace([string]$processInfo.ExecutablePath)) { '' } else { [IO.Path]::GetFullPath([string]$processInfo.ExecutablePath) }
     $commandLine = [string]$processInfo.CommandLine
     $hasRunDataDirectory = $commandLine.IndexOf($script:mysqlData, [StringComparison]::OrdinalIgnoreCase) -ge 0
     $hasRunPort = $commandLine.IndexOf("--port=$script:mysqlPort", [StringComparison]::OrdinalIgnoreCase) -ge 0
     if ($actualExecutable -ine $expectedExecutable -or -not $hasRunDataDirectory -or -not $hasRunPort) {
-        throw "MySQL listener PID $ownerId on port $script:mysqlPort does not match the run-owned executable, data directory, and port."
+        throw "$script:databaseProduct listener PID $ownerId on port $script:mysqlPort does not match the run-owned executable, data directory, and port."
     }
     $process = Get-Process -Id $ownerId -ErrorAction Stop
     return [ordered]@{ process=$process; processInfo=$processInfo; addresses=@($addresses | Sort-Object) }
@@ -224,13 +245,13 @@ function Get-MySqlListenerProcess {
 function Wait-MySqlReady([int]$timeoutSeconds = 45) {
     $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
     do {
-        if ($null -eq $script:mysqlLauncherProcess) { throw 'The isolated MySQL launcher process was not created.' }
+    if ($null -eq $script:mysqlLauncherProcess) { throw "The isolated $script:databaseProduct launcher process was not created." }
         $listenerProcess = Get-MySqlListenerProcess
         if ($null -ne $listenerProcess) {
             $script:mysqlProcess = $listenerProcess.process
             $script:report.mysql.processId = [int]$script:mysqlProcess.Id
             $script:report.mysql.listenerAddresses = @($listenerProcess.addresses)
-            $null = Assert-BackendListenerOwner 'MySQL' $script:mysqlPort $script:mysqlProcess.Id
+            $null = Assert-BackendListenerOwner $script:databaseProduct $script:mysqlPort $script:mysqlProcess.Id
             try {
                 $ping = Invoke-MySqlAdmin @('ping') 'mysql-ping' -allowExitOne
                 if ($ping.output -match 'mysqld is alive') { return }
@@ -239,11 +260,11 @@ function Wait-MySqlReady([int]$timeoutSeconds = 45) {
             }
         } elseif ($script:mysqlLauncherProcess.HasExited) {
             $script:mysqlLauncherProcess.Refresh()
-            throw "Isolated MySQL launcher exited before a run-owned listener appeared (code $($script:mysqlLauncherProcess.ExitCode))."
+            throw "Isolated $script:databaseProduct launcher exited before a run-owned listener appeared (code $($script:mysqlLauncherProcess.ExitCode))."
         }
         Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Timed out waiting for isolated MySQL readiness.'
+    throw "Timed out waiting for isolated $script:databaseProduct readiness."
 }
 
 function Wait-RedisReady([int]$timeoutSeconds = 30) {
@@ -512,9 +533,9 @@ function Stop-MySqlBackend {
         try {
             $listenerProcess = Get-MySqlListenerProcess
             if ($null -eq $listenerProcess -or [int]$listenerProcess.process.Id -ne [int]$process.Id) {
-                throw 'The listener no longer resolves to the captured MySQL server process.'
+                throw "The listener no longer resolves to the captured $script:databaseProduct server process."
             }
-            $null = Assert-BackendListenerOwner 'MySQL' $script:mysqlPort $process.Id
+            $null = Assert-BackendListenerOwner $script:databaseProduct $script:mysqlPort $process.Id
             $shutdownTargetVerified = $true
         } catch {
             $script:cleanupFailures.Add("Refused mysqladmin shutdown because the run-owned listener could not be verified: $($_.Exception.Message)")
@@ -534,7 +555,7 @@ function Stop-MySqlBackend {
         if (-not $process.HasExited -and $shutdownTargetVerified) {
             $forced = $true
             try { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
-            catch { $script:cleanupFailures.Add("Could not stop verified run-owned MySQL PID $($process.Id): $($_.Exception.Message)") }
+            catch { $script:cleanupFailures.Add("Could not stop verified run-owned $script:databaseProduct PID $($process.Id): $($_.Exception.Message)") }
         }
     }
 
@@ -544,7 +565,7 @@ function Stop-MySqlBackend {
         if (-not $launcher.HasExited) {
             $forced = $true
             try { $launcher.Kill(); $launcher.WaitForExit(10000) | Out-Null }
-            catch { $script:cleanupFailures.Add("Could not stop run-created MySQL launcher PID $($launcher.Id): $($_.Exception.Message)") }
+            catch { $script:cleanupFailures.Add("Could not stop run-created $script:databaseProduct launcher PID $($launcher.Id): $($_.Exception.Message)") }
         }
     }
 
@@ -556,7 +577,7 @@ function Stop-MySqlBackend {
     $launcherExitCode = if ($launcherExited) { [int]$launcher.ExitCode } else { -1 }
     if ($forced -or -not $shutdownTargetVerified -or -not $processExited -or -not $launcherExited -or
         $commandExitCode -ne 0 -or $processExitCode -ne 0 -or $launcherExitCode -ne 0) {
-        $script:cleanupFailures.Add("MySQL shutdown was not clean (command=$commandExitCode process=$processExitCode launcher=$launcherExitCode targetVerified=$shutdownTargetVerified forced=$forced).")
+        $script:cleanupFailures.Add("$script:databaseProduct shutdown was not clean (command=$commandExitCode process=$processExitCode launcher=$launcherExitCode targetVerified=$shutdownTargetVerified forced=$forced).")
     }
     $script:backendShutdowns.Add([ordered]@{
         backend='mysql'; command='mysqladmin shutdown'; commandExitCode=$commandExitCode
@@ -633,9 +654,14 @@ $javaBanner = (& $java -version 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0 -or $javaBanner -notmatch 'version "25(?:\.|"|\+)') { throw 'The runtime cell requires Java 25.' }
 $javaFeature = 25
 $mysqlVersionOutput = (& $script:mysqlServer --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $mysqlVersionOutput -notmatch 'Ver 8\.0\.42') { throw 'The runtime cell requires MySQL Server 8.0.42.' }
+if ($LASTEXITCODE -ne 0 -or $mysqlVersionOutput -notmatch $script:databaseExecutableVersionPattern) {
+    throw "The runtime cell requires $script:databaseProduct $script:databaseServerVersion."
+}
 foreach ($path in @($script:mysqlServer, $script:mysqlClient, $script:mysqlAdmin)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "MySQL Server 8.0.42 tool is missing: $path" }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$script:databaseProduct $script:databaseServerVersion tool is missing: $path" }
+}
+if ($null -ne $script:mysqlInstallDb -and -not (Test-Path -LiteralPath $script:mysqlInstallDb -PathType Leaf)) {
+    throw "MariaDB $script:databaseServerVersion initializer is missing: $script:mysqlInstallDb"
 }
 $redisServerCommand = Get-Command redis-server.exe, redis-server -ErrorAction SilentlyContinue | Select-Object -First 1
 $redisCliCommand = Get-Command redis-cli.exe, redis-cli -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -663,8 +689,8 @@ $script:redisPort = Get-FreeLoopbackPort 15000 25000 @($script:gamePort, ($scrip
 $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; AcceptanceB = Get-OfflineUuid 'AcceptanceB' }
 
 $script:report = [ordered]@{
-    schemaVersion = 1
-    task = 'T21-M05-SYNC-MySQL-minimum-Paper'
+    schemaVersion = 2
+    task = "T21-M05-SYNC-$script:databaseProduct-minimum-Paper"
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
     runId = $script:runId
@@ -680,7 +706,7 @@ $script:report = [ordered]@{
         databaseHost='127.0.0.1'; databasePort=$script:mysqlPort; databaseName=$script:databaseName
         redisEnabled=$true; redisDatabase=15; redisIsolated=$true; redisHost='127.0.0.1'; redisPort=$script:redisPort
     }
-    mysql = [ordered]@{ version='8.0.42'; serverVersion=$mysqlVersionOutput; bin=$script:mysqlBinPath; dataDirectory=$script:mysqlData; processId=$null; launchProcessId=$null; listenerAddresses=@() }
+    mysql = [ordered]@{ product=$script:databaseProduct; version=$script:databaseServerVersion; serverVersion=$null; executableVersion=$mysqlVersionOutput; bin=$script:mysqlBinPath; dataDirectory=$script:mysqlData; processId=$null; launchProcessId=$null; listenerAddresses=@() }
     redis = [ordered]@{ version='8.10.1'; serverVersion=$redisVersionOutput; executable=$script:redisServer; dataDirectory=$script:redisData; processId=$null }
     backendProcesses = $null
     startupObservations = @()
@@ -715,26 +741,38 @@ try {
     Initialize-T21ProjectWorkspace $script:workspace
     New-Item -ItemType Directory -Force -Path (Join-Path $script:runRoot '.plugdev-home'), (Join-Path $script:runRoot '.gradle-user-home') | Out-Null
 
-    $mysqlInitLog = Join-Path $script:logsRoot 'mysql-initialize.stdout.txt'
-    $mysqlInitError = Join-Path $script:logsRoot 'mysql-initialize.stderr.txt'
+    $mysqlInitLog = Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-initialize.stdout.txt')
     $mysqlHome = Split-Path -Parent $script:mysqlBinPath
-    $mysqlInitArgs = @('--no-defaults', '--initialize-insecure', "--basedir=$mysqlHome", "--datadir=$script:mysqlData")
-    $initOutput = @(& $script:mysqlServer @mysqlInitArgs 2>&1)
-    $initExitCode = $LASTEXITCODE
-    $initOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $mysqlInitLog -Encoding utf8
-    if ($initExitCode -ne 0) { throw "MySQL isolated data-directory initialization failed with exit code $initExitCode; see $mysqlInitLog." }
+    if ($script:databaseProduct -ceq 'MariaDB') {
+        $mysqlInitArgs = @("--datadir=$script:mysqlData", "--password=$script:databasePassword", '--allow-remote-root-access', '--silent')
+        $initOutput = @(& $script:mysqlInstallDb @mysqlInitArgs 2>&1)
+        $initExitCode = $LASTEXITCODE
+        $initOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $mysqlInitLog -Encoding utf8
+        if ($initExitCode -ne 0) { throw "MariaDB isolated data-directory initialization failed with exit code $initExitCode; see $mysqlInitLog." }
+    } else {
+        $mysqlInitArgs = @('--no-defaults', '--initialize-insecure', "--basedir=$mysqlHome", "--datadir=$script:mysqlData")
+        $initOutput = @(& $script:mysqlServer @mysqlInitArgs 2>&1)
+        $initExitCode = $LASTEXITCODE
+        $initOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $mysqlInitLog -Encoding utf8
+        if ($initExitCode -ne 0) { throw "MySQL isolated data-directory initialization failed with exit code $initExitCode; see $mysqlInitLog." }
+    }
 
-    $mysqlErrorLog = Join-Path $script:logsRoot 'mysqld-error.log'
-    $mysqlPidFile = Join-Path $script:mysqlRoot 'mysqld.pid'
-    $mysqlArgs = @('--no-defaults', "--basedir=$mysqlHome", "--datadir=$script:mysqlData", "--port=$script:mysqlPort", '--bind-address=127.0.0.1', '--mysqlx=OFF', "--log-error=$mysqlErrorLog", "--pid-file=$mysqlPidFile", '--console')
+    $mysqlErrorLog = Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-error.log')
+    $mysqlPidFile = Join-Path $script:mysqlRoot ($script:databaseProduct.ToLowerInvariant() + '.pid')
+    $mysqlArgs = @('--no-defaults', "--basedir=$mysqlHome", "--datadir=$script:mysqlData", "--port=$script:mysqlPort", '--bind-address=127.0.0.1', "--log-error=$mysqlErrorLog", "--pid-file=$mysqlPidFile", '--console')
+    if ($script:databaseProduct -ceq 'MySQL') { $mysqlArgs += '--mysqlx=OFF' }
     $mysqlArgumentLine = ($mysqlArgs | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' }) -join ' '
-    $script:mysqlLauncherProcess = Start-Process -FilePath $script:mysqlServer -ArgumentList $mysqlArgumentLine -WorkingDirectory $mysqlHome -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $script:logsRoot 'mysqld-stdout.log') -RedirectStandardError (Join-Path $script:logsRoot 'mysqld-stderr.log')
+    $script:mysqlLauncherProcess = Start-Process -FilePath $script:mysqlServer -ArgumentList $mysqlArgumentLine -WorkingDirectory $mysqlHome -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-stdout.log')) -RedirectStandardError (Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-stderr.log'))
     $script:report.mysql.launchProcessId = [int]$script:mysqlLauncherProcess.Id
     Wait-MySqlReady
     $mysqlVersion = @(Invoke-MySqlQuery 'SELECT VERSION();' 'mysql-server-version' -asRoot)
-    if ($mysqlVersion.Count -ne 1 -or $mysqlVersion[0] -notmatch '^8\.0\.42') { throw "Isolated MySQL server returned unexpected version '$($mysqlVersion -join ',')'." }
+    if ($mysqlVersion.Count -ne 1 -or $mysqlVersion[0] -notmatch $script:databaseServerVersionPattern) {
+        throw "Isolated $script:databaseProduct server returned unexpected version '$($mysqlVersion -join ',')'."
+    }
+    $script:report.mysql.serverVersion = $mysqlVersion[0]
 
-    $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; CREATE USER '$($script:databaseUser)'@'localhost' IDENTIFIED BY '$($script:databasePassword)'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
+    $collation = if ($script:databaseProduct -ceq 'MariaDB') { 'utf8mb4_general_ci' } else { 'utf8mb4_0900_ai_ci' }
+    $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE $collation; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; CREATE USER '$($script:databaseUser)'@'localhost' IDENTIFIED BY '$($script:databasePassword)'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
     $null = Invoke-MySqlQuery $sql 'mysql-create-isolated-schema' -asRoot
 
     $redisConfig = Join-Path $script:redisRoot 'redis.conf'
@@ -752,7 +790,7 @@ try {
     if (((Invoke-Redis @('-n', '15', 'DBSIZE') 'redis-initial-dbsize').output.Trim()) -ne '0') { throw 'Isolated Redis DB 15 was not empty before the runtime cycle.' }
 
     $script:report.backendProcesses = [ordered]@{
-        mysql = [ordered]@{ version=$mysqlVersion[0]; processId=[int]$script:mysqlProcess.Id; launchProcessId=[int]$script:mysqlLauncherProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner 'MySQL' $script:mysqlPort $script:mysqlProcess.Id) }
+        mysql = [ordered]@{ product=$script:databaseProduct; version=$mysqlVersion[0]; processId=[int]$script:mysqlProcess.Id; launchProcessId=[int]$script:mysqlLauncherProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner $script:databaseProduct $script:mysqlPort $script:mysqlProcess.Id) }
         redis = [ordered]@{ version='8.10.1'; processId=[int]$script:redisProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner 'Redis' $script:redisPort $script:redisProcess.Id) }
     }
     $script:report.backendProcesses.mysql.listenerAddresses = @($script:report.mysql.listenerAddresses)
@@ -835,7 +873,7 @@ try {
     $script:report.failure = $script:failure
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
-        if (-not (Test-T21MySqlRuntimeReport $script:report $expectedPaperMinimumSha256 $ExpectedCandidateSha256)) {
+        if (-not (Test-T21MySqlRuntimeReport $script:report $expectedPaperMinimumSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct)) {
             $script:report.status = 'FAIL'
             $script:failure = 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
         }
@@ -854,4 +892,5 @@ try {
 if ($null -ne $script:failure -or $script:report.status -cne 'PASS_BOUNDED_SUBCASE') {
     throw "T21 MySQL SYNC runtime did not pass. Report: $script:reportPath"
 }
-Write-Output "PASS_BOUNDED_SUBCASE: Paper 1.21.6#48 SYNC / MySQL 8.0.42 / Redis 8.10.1; report=$script:reportPath"
+$databaseRuntimeLabel = if ($script:databaseProduct -ceq 'MariaDB') { 'MariaDB 12.3.3 using the MySQL protocol' } else { 'MySQL 8.0.42' }
+Write-Output "PASS_BOUNDED_SUBCASE: Paper 1.21.6#48 SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"

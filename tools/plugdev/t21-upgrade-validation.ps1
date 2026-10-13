@@ -425,12 +425,17 @@ function Test-T21MySqlRuntimeAccountParity([object[]]$sqlAccounts, [object[]]$re
 function Test-T21MySqlRuntimeReport(
     [object]$report,
     [string]$expectedServerSha256,
-    [string]$expectedCandidateSha256
+    [string]$expectedCandidateSha256,
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL'
 ) {
     try {
-        if ($null -eq $report -or
-            (Get-T21ObservedValue $report 'schemaVersion') -ne 1 -or
-            (Get-T21ObservedValue $report 'task') -cne 'T21-M05-SYNC-MySQL-minimum-Paper' -or
+        if ($null -eq $report) { return $false }
+        $schemaVersion = Get-T21ObservedValue $report 'schemaVersion'
+        $expectedTask = "T21-M05-SYNC-$DatabaseProduct-minimum-Paper"
+        $legacyMySqlReport = $schemaVersion -eq 1 -and $DatabaseProduct -ceq 'MySQL'
+        if ($schemaVersion -notin @(1, 2) -or
+            (-not $legacyMySqlReport -and $schemaVersion -ne 2) -or
+            (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
 
         $hasFailureField = if ($report -is [Collections.IDictionary]) {
@@ -479,15 +484,28 @@ function Test-T21MySqlRuntimeReport(
             [int](Get-T21ObservedValue $configuration 'redisPort') -gt 65535 -or
             [int](Get-T21ObservedValue $configuration 'databasePort') -eq [int](Get-T21ObservedValue $configuration 'redisPort')) { return $false }
 
+        $expectedBackendVersion = if ($DatabaseProduct -ceq 'MariaDB') { '12.3.3-MariaDB' } else { '8.0.42' }
         $backendProcesses = Get-T21ObservedValue $report 'backendProcesses'
         $mysql = Get-T21ObservedValue $report 'mysql'
         $redis = Get-T21ObservedValue $report 'redis'
         $mysqlProcess = Get-T21ObservedValue $backendProcesses 'mysql'
         $redisProcess = Get-T21ObservedValue $backendProcesses 'redis'
         $mysqlListenerAddresses = @(Get-T21ObservedValue $mysqlProcess 'listenerAddresses')
-        if ((Get-T21ObservedValue $mysql 'version') -cne '8.0.42' -or
+        $reportedProduct = Get-T21ObservedValue $mysql 'product'
+        $reportedServerVersion = [string](Get-T21ObservedValue $mysql 'serverVersion')
+        $serverVersionValid = if ($legacyMySqlReport) {
+            [regex]::IsMatch($reportedServerVersion, '(?i)(?<![0-9A-Za-z.])8\.0\.42(?![0-9A-Za-z.])')
+        } else {
+            $reportedExecutableVersion = [string](Get-T21ObservedValue $mysql 'executableVersion')
+            $reportedServerVersion -ceq $expectedBackendVersion -and
+                $reportedExecutableVersion -match ('(?i)\bVer\s+' + [regex]::Escape($expectedBackendVersion) + '(?:\b|$)')
+        }
+        if ((Get-T21ObservedValue $mysql 'version') -cne $expectedBackendVersion -or
+            -not $serverVersionValid -or
+            ($schemaVersion -eq 2 -and $reportedProduct -cne $DatabaseProduct) -or
             (Get-T21ObservedValue $redis 'version') -cne '8.10.1' -or
-            (Get-T21ObservedValue $mysqlProcess 'version') -cne '8.0.42' -or
+            (Get-T21ObservedValue $mysqlProcess 'version') -cne $expectedBackendVersion -or
+            ($schemaVersion -eq 2 -and (Get-T21ObservedValue $mysqlProcess 'product') -cne $DatabaseProduct) -or
             (Get-T21ObservedValue $mysqlProcess 'runOwned') -ne $true -or
             (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') -ne $true -or
             [int](Get-T21ObservedValue $mysqlProcess 'processId') -le 0 -or

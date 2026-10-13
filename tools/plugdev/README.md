@@ -151,3 +151,25 @@ After selecting the six endpoint reports, run `node tools/plugdev/audit-player-s
 For the Folia two-region scheduler gate, add `-CrossOwner` when running `run-player-scheduler-lifecycle.ps1`. The runner rejects this switch for Paper and Canvas before creating a run directory or starting services. It keeps offline `AcceptanceA` and `AcceptanceB` connected, moves B 16,384 blocks in the Overworld, and waits for acceptance-side entity-scheduler checks from both players. Each check must observe ownership of its own player and no ownership of the other player's chunk; each player's entity scheduler then sends that player a targeted completion marker, and the client run passes only after both clients receive their own marker. The offline verifier also checks that both location snapshots match, are at least 4,096 blocks apart, and belong to distinct chunks. It rejects duplicate or suffixed proof markers and any `T21_CROSS_OWNER_FAIL` line. Run this gate on the user-pinned minimum and maximum Folia builds. An absent owner result, retired player, canceled teleport, shared region, or malformed log remains a failure.
 
 The T21/M12 observation runner validates the candidate's existing `recovery-v1.jsonl` during normal shutdown with `recovery-spool-validator.ps1`. The validator is read-only and does not replay, repair, compact, or alter the recovery journal. T21 upgrade-cycle reports pin the validator and test SHA-256 values alongside the ignored run-specific harness hash and include pre-/post-rollback per-node journal observations. Run the dedicated AOF acceptance-marker contract check with `pwsh -NoProfile -File tools/plugdev/run-redis-aof-restart.test.ps1`; it requires the current Vault receipt fields and rejects the old write marker.
+
+## T21 M05 minimum-Paper MariaDB SYNC runtime cell
+
+The MariaDB sibling cell exercises Paper `1.21.6#48`, Java 25, MariaDB `12.3.3-MariaDB` through the MySQL protocol, and isolated Redis `8.10.1`/DB 15. It accepts two Vault deposits, stops normally, checks SQL/Redis balance and version parity, restarts for persisted reads, then stops normally again. This is one bounded runtime observation; it does not establish MariaDB coverage on other Paper/Folia/Canvas endpoints or close the wider T21 matrix.
+
+Use the verified local PlugDev source and exact minimum Paper artifact:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$paperJar = (Resolve-Path 'build\reports\foundation\T21-inputs\paper-1.21.6-48.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -DatabaseProduct MariaDB `
+  -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin'
+```
+
+The runner limits the database to loopback and explicitly disables MariaDB's default server-certificate verification option so its warning cannot contaminate machine-parsed query output. This option is used only for MariaDB client calls in this isolated local runtime; it does not provide remote TLS coverage. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` for the report-predicate and runner regression checks. The final minimum-Paper report and offline audit are recorded in the T21 M05 MariaDB section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Other untested combinations remain `NOT RUN`.
