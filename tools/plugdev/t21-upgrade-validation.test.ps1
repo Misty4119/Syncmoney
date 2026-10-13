@@ -17,12 +17,134 @@ function Assert-ThrowsContaining([string]$name, [scriptblock]$action, [string]$m
     throw ($name + ' was accepted')
 }
 
+function Test-T21CommandLineRunsScript {
+    param(
+        [Parameter(Mandatory)][string]$CommandLine,
+        [Parameter(Mandatory)][string]$ExpectedScriptPath
+    )
+
+    try {
+        if ($null -eq ('T21WindowsCommandLineParser' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class T21WindowsCommandLineParser
+{
+    [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll", SetLastError = false)]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static string[] Parse(string commandLine)
+    {
+        int argumentCount;
+        IntPtr arguments = CommandLineToArgvW(commandLine, out argumentCount);
+        if (arguments == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            string[] parsed = new string[argumentCount];
+            for (int index = 0; index < argumentCount; index++)
+            {
+                IntPtr argument = Marshal.ReadIntPtr(arguments, index * IntPtr.Size);
+                parsed[index] = Marshal.PtrToStringUni(argument) ?? String.Empty;
+            }
+            return parsed;
+        }
+        finally
+        {
+            LocalFree(arguments);
+        }
+    }
+}
+'@ -ErrorAction Stop
+        }
+
+        $arguments = [T21WindowsCommandLineParser]::Parse($CommandLine)
+        # This harness launches children with exactly these switches and no script arguments.
+        # Accepting only that shape rejects PowerShell command-mode aliases and trailing options.
+        $expectedArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File')
+        if ($arguments.Length -ne ($expectedArguments.Length + 2)) { return $false }
+        for ($index = 0; $index -lt $expectedArguments.Length; $index++) {
+            if (-not [string]::Equals([string]$arguments[$index + 1], $expectedArguments[$index], [StringComparison]::OrdinalIgnoreCase)) {
+                return $false
+            }
+        }
+
+        $observedScript = [IO.Path]::GetFullPath([string]$arguments[$expectedArguments.Length + 1])
+        $expectedScript = [IO.Path]::GetFullPath($ExpectedScriptPath)
+        return [string]::Compare($observedScript, $expectedScript, [StringComparison]::OrdinalIgnoreCase) -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Stop-T21VerifiedTestChild {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [Parameter(Mandatory)][string]$ExpectedExecutablePath,
+        [Parameter(Mandatory)][string]$ExpectedScriptPath
+    )
+
+    if ($ProcessId -le 0) { return $false }
+    $ownedProcess = $null
+    try {
+        $ownedProcess = [Diagnostics.Process]::GetProcessById($ProcessId)
+        # Open and retain this process handle before querying command-line identity so a later PID reuse
+        # cannot redirect Kill() to a different process.
+        $ownedHandle = $ownedProcess.Handle
+        $ownedProcess.Refresh()
+        if ($ownedProcess.HasExited) { return $true }
+
+        $expectedExecutable = [IO.Path]::GetFullPath($ExpectedExecutablePath)
+        $expectedScript = [IO.Path]::GetFullPath($ExpectedScriptPath)
+        $processInfo = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId = ' + $ProcessId) -ErrorAction Stop
+        if ($null -eq $processInfo -or [string]::IsNullOrWhiteSpace([string]$processInfo.ExecutablePath) -or
+            [string]::IsNullOrWhiteSpace([string]$processInfo.CommandLine)) {
+            return $false
+        }
+        $observedExecutable = [IO.Path]::GetFullPath([string]$processInfo.ExecutablePath)
+        if ([string]::Compare($observedExecutable, $expectedExecutable, [StringComparison]::OrdinalIgnoreCase) -ne 0 -or
+            -not (Test-T21CommandLineRunsScript -CommandLine ([string]$processInfo.CommandLine) -ExpectedScriptPath $expectedScript)) {
+            return $false
+        }
+
+        $ownedProcess.Kill()
+        return $ownedProcess.WaitForExit(5000) -and $ownedProcess.HasExited
+    } catch {
+        if ($null -ne $ownedProcess) {
+            try {
+                $ownedProcess.Refresh()
+                if ($ownedProcess.HasExited) { return $true }
+            } catch { }
+        }
+        return $false
+    } finally {
+        if ($null -ne $ownedProcess) { $ownedProcess.Dispose() }
+    }
+}
+
 $paper = Get-T21PlatformIdentity '[ServerMain/INFO]: [bootstrap] Loading Paper 1.21.6-48-main@abc (2025-06-30T09:48:37Z) for Minecraft 1.21.6'
 Assert-T21PlatformIdentity $paper 'paper' '1.21.6' 48
 Write-Output 'PASS: parse minimum Paper startup identity'
 $paperMaximum = Get-T21PlatformIdentity '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-166-main@abc (2026-10-09T00:54:07Z) for Minecraft 26.3'
 Assert-T21PlatformIdentity $paperMaximum 'paper' '26.3' 166
 Write-Output 'PASS: parse maximum user-supplied Paper startup identity'
+$currentStablePaper = Get-T21PaperEndpoint -PaperEndpoint CurrentStable
+if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
+    $currentStablePaper.software -cne 'paper' -or
+    $currentStablePaper.minecraftVersion -cne '26.3' -or
+    $currentStablePaper.build -ne 178 -or
+    $currentStablePaper.sha256 -cne '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757') {
+    throw 'The T21 current-stable Paper endpoint must remain pinned independently from the user-supplied maximum endpoint.'
+}
+Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
 $foliaMinimum = Get-T21PlatformIdentity '[ServerMain/INFO]: [bootstrap] Loading Folia 1.21.6-6-main@abc (2025-06-30T09:48:37Z) for Minecraft 1.21.6'
 Assert-T21PlatformIdentity $foliaMinimum 'folia' '1.21.6' 6
@@ -433,6 +555,149 @@ Write-Output 'PASS: reject Redis process exit code without explicit observation'
 if ($null -eq (Get-Command Test-T21MySqlRuntimeReport -ErrorAction SilentlyContinue)) {
     throw 'Missing MySQL SYNC runtime report validator for the T21 minimum-Paper dialect cell.'
 }
+if ($null -eq (Get-Command Test-T21PostgresRuntimeReport -ErrorAction SilentlyContinue)) {
+    throw 'Missing PostgreSQL SYNC runtime report validator for the T21 minimum-Paper dialect cell.'
+}
+if ($null -eq (Get-Command Resolve-T21SqlRuntimeProduct -ErrorAction SilentlyContinue)) {
+    throw 'Missing deterministic SQL runtime product resolver.'
+}
+if ((Resolve-T21SqlRuntimeProduct 'MySQL') -cne 'MySQL' -or
+    (Resolve-T21SqlRuntimeProduct 'MariaDB') -cne 'MariaDB' -or
+    (Resolve-T21SqlRuntimeProduct 'PostgreSQL') -cne 'PostgreSQL') {
+    throw 'The SQL runtime product resolver changed an accepted product identity.'
+}
+Write-Output 'PASS: resolve MySQL, MariaDB, and PostgreSQL runtime product identities'
+
+$postgresFixtureDataDirectory = [IO.Path]::GetFullPath((Join-Path $env:TEMP 'syncmoney-t21-postgres-data'))
+$postgresFixtureExecutable = [IO.Path]::GetFullPath((Join-Path $env:TEMP 'postgres.exe'))
+$postgresFixturePidLines = @('4242', $postgresFixtureDataDirectory, '1781298897', '15432')
+$postgresFixtureStartTimeUtc = [DateTimeOffset]::FromUnixTimeSeconds(1781298897).UtcDateTime
+$postgresFixtureCommandLine = '"' + $postgresFixtureExecutable + '" -D "' + $postgresFixtureDataDirectory.Replace('\', '/') + '" -p 15432'
+if (-not (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc)) {
+    throw 'A run-owned PostgreSQL process with a verified postmaster.pid identity was rejected before listener creation.'
+}
+Write-Output 'PASS: verify PostgreSQL process identity independently of listener readiness for startup-timeout cleanup'
+
+$postgresEmbeddedPortArgument = '"' + $postgresFixtureExecutable + '" -D "' + $postgresFixtureDataDirectory + '" -c "application_name=x -p 15432'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresEmbeddedPortArgument `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL -p token embedded in a -c argument was accepted as a standalone port option.'
+}
+Write-Output 'PASS: reject a PostgreSQL port option embedded in a different argument'
+
+$postgresEmbeddedDataDirectoryArgument = '"' + $postgresFixtureExecutable + '" -p 15432 -c "application_name=x -D ' + $postgresFixtureDataDirectory
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresEmbeddedDataDirectoryArgument `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL -D token embedded in a -c argument was accepted as a standalone data-directory option.'
+}
+Write-Output 'PASS: reject a PostgreSQL data-directory option embedded in a different argument'
+
+$postgresDataDirectoryAsConfigValue = '"' + $postgresFixtureExecutable + '" -c -D "' + $postgresFixtureDataDirectory + '" -p 15432'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresDataDirectoryAsConfigValue `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL -D token consumed as the operand to -c was accepted as a standalone data-directory option.'
+}
+Write-Output 'PASS: reject a data-directory flag consumed as another PostgreSQL option operand'
+
+$postgresPortAsConfigValue = '"' + $postgresFixtureExecutable + '" -D "' + $postgresFixtureDataDirectory + '" -c -p 15432'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresPortAsConfigValue `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL -p token consumed as the operand to -c was accepted as a standalone port option.'
+}
+Write-Output 'PASS: reject a port flag consumed as another PostgreSQL option operand'
+
+$postgresDanglingDataDirectoryArgument = $postgresFixtureCommandLine + ' -D'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresDanglingDataDirectoryArgument `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A trailing duplicate PostgreSQL -D option without an operand was accepted.'
+}
+Write-Output 'PASS: reject a trailing duplicate PostgreSQL data-directory option without an operand'
+
+$postgresDanglingPortArgument = $postgresFixtureCommandLine + ' -p'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresDanglingPortArgument `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A trailing duplicate PostgreSQL -p option without an operand was accepted.'
+}
+Write-Output 'PASS: reject a trailing duplicate PostgreSQL port option without an operand'
+
+if (-not (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc)) {
+    throw 'A PostgreSQL PID file with PID, data directory, start time, and port in their documented positions was rejected.'
+}
+Write-Output 'PASS: parse PostgreSQL postmaster.pid port from line four and verify the run-owned process with Windows slash normalization'
+
+$postgresWrongPortPidLines = @('4242', $postgresFixtureDataDirectory, '15432', '15433')
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresWrongPortPidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL PID file whose fourth line names a different port was accepted.'
+}
+Write-Output 'PASS: reject a PostgreSQL PID file with a mismatched fourth-line port even when its start time matches the expected port'
+
+$postgresInvalidStartTimePidLines = @('4242', $postgresFixtureDataDirectory, 'not-a-unix-timestamp', '15432')
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresInvalidStartTimePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL PID file with a nonnumeric third-line start timestamp was accepted.'
+}
+Write-Output 'PASS: reject a PostgreSQL PID file with a malformed third-line start timestamp'
+
+$postgresStaleStartTimePidLines = @('4242', $postgresFixtureDataDirectory, '1781298837', '15432')
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresStaleStartTimePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL PID file whose start time belongs to a different process incarnation was accepted.'
+}
+Write-Output 'PASS: reject a stale PostgreSQL postmaster.pid start time that does not match the listener process creation time'
+
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4243) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL listener owned by another process was accepted.'
+}
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('0.0.0.0') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A non-loopback PostgreSQL listener was accepted.'
+}
+if (Test-T21PostgresListenerIdentity -ListenerOwners @(4242) -ListenerAddresses @('127.0.0.1') -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath (Join-Path $env:TEMP 'other-postgres.exe') -CommandLine $postgresFixtureCommandLine `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL listener from another executable was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL listener owner, bind address, and executable mismatches'
+
+$postgresPathOutsideDataArgument = '"' + $postgresFixtureExecutable + '" --label="' + $postgresFixtureDataDirectory + '" -p 15432'
+if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
+    -ExpectedExecutablePath $postgresFixtureExecutable -ActualExecutablePath $postgresFixtureExecutable -CommandLine $postgresPathOutsideDataArgument `
+    -PostmasterPidLines $postgresFixturePidLines -ExpectedDataDirectory $postgresFixtureDataDirectory -ExpectedPort 15432 `
+    -ProcessStartTimeUtc $postgresFixtureStartTimeUtc) {
+    throw 'A PostgreSQL command line containing the data directory outside its -D argument was accepted.'
+}
+Write-Output 'PASS: require PostgreSQL process command line to bind the verified data directory through -D'
 
 $paperMinimumSha = 'a' * 64
 $candidateSha = 'b' * 64
@@ -542,10 +807,198 @@ $mysqlRuntimeReportV3.gradleDaemonCleanup = [ordered]@{
     processIdsAfterStop = @()
     processExitVerified = $true
 }
+$mysqlBackendLogPath = Join-Path $mysqlRuntimeTestLogs 'mysql-server.log'
+$mysqlBackendLogContent = "MySQL 8.0.42 ready for connections.`n"
+$null = [IO.File]::WriteAllText($mysqlBackendLogPath, $mysqlBackendLogContent, [Text.UTF8Encoding]::new($false))
+$mysqlBackendLogItem = Get-Item -LiteralPath $mysqlBackendLogPath
+$mysqlBackendLogSha = (Get-FileHash -LiteralPath $mysqlBackendLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$mysqlRuntimeReport.logs['logs\mysql-server.log'] = [ordered]@{ bytes=[long]$mysqlBackendLogItem.Length; sha256=$mysqlBackendLogSha }
+$mysqlRuntimeReportV3.logs['logs\mysql-server.log'] = [ordered]@{ bytes=[long]$mysqlBackendLogItem.Length; sha256=$mysqlBackendLogSha }
 if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV3 $paperMinimumSha $candidateSha)) {
     throw 'A clean schema-3 runtime report with verified isolated Gradle daemon cleanup was rejected.'
 }
 Write-Output 'PASS: accept a schema-3 runtime report with verified isolated Gradle daemon cleanup'
+
+$mysqlReportMissingBackendLog = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mysqlReportMissingBackendLog.logs.Remove('logs\mysql-server.log')
+if (Test-T21MySqlRuntimeReport $mysqlReportMissingBackendLog $paperMinimumSha $candidateSha) {
+    throw 'A schema-3 report omitting a retained backend log from its manifest was accepted.'
+}
+Write-Output 'PASS: reject a schema-3 report that omits a retained backend log'
+
+$null = [IO.File]::WriteAllText($mysqlBackendLogPath, "tampered MySQL runtime log`n", [Text.UTF8Encoding]::new($false))
+if (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV3 $paperMinimumSha $candidateSha) {
+    throw 'A schema-3 report with a tampered retained backend log was accepted.'
+}
+$null = [IO.File]::WriteAllText($mysqlBackendLogPath, $mysqlBackendLogContent, [Text.UTF8Encoding]::new($false))
+Write-Output 'PASS: rehash every retained schema-3 backend log'
+
+$postgresRuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeReport.task = 'T21-M05-SYNC-PostgreSQL-minimum-Paper'
+$postgresRuntimeReport.configuration.databaseType = 'postgresql'
+$postgresRuntimeReport.configuration.databasePort = 15432
+$postgresRuntimeReport.postgresql = [ordered]@{
+    product='PostgreSQL'; version='18.1'; serverVersion='18.1'; executableVersion='postgres (PostgreSQL) 18.1'
+    bin='C:\Program Files\PostgreSQL\18\bin'; dataDirectory=(Join-Path $mysqlRuntimeTestRoot 'postgresql\data')
+    processId=1111; listenerAddresses=@('127.0.0.1')
+    startCommand='pg_ctl start -w'; startCommandExitCode=0; startCommandProcessExited=$true
+}
+$postgresRuntimeReport.Remove('mysql')
+$postgresRuntimeReport.backendProcesses.Remove('mysql')
+$postgresRuntimeReport.backendProcesses.postgresql = [ordered]@{
+    product='PostgreSQL'; version='18.1'; processId=1111; runOwned=$true; listenerOwnerVerified=$true
+    listenerAddresses=@('127.0.0.1')
+}
+$postgresRuntimeReport.backendShutdowns = @(
+    [ordered]@{ backend='postgresql'; command='pg_ctl stop -m fast -w'; commandExitCode=0; processId=1111; shutdownTargetVerified=$true; processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$false },
+    $postgresRuntimeReport.backendShutdowns[1]
+)
+if (-not (Test-T21PostgresRuntimeReport $postgresRuntimeReport $paperMinimumSha $candidateSha)) {
+    throw 'The complete isolated minimum-Paper PostgreSQL SYNC runtime report was rejected.'
+}
+Write-Output 'PASS: accept PostgreSQL SYNC write, normal-restart, SQL/Redis parity, and process-exit evidence'
+
+$postgresRuntimeStringConfigBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeStringConfigBoolean.configuration.databaseEnabled = 'True'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeStringConfigBoolean $paperMinimumSha $candidateSha) {
+    throw 'A string-valued PostgreSQL databaseEnabled field was accepted as Boolean evidence.'
+}
+Write-Output 'PASS: reject string-valued PostgreSQL configuration Boolean evidence'
+
+$postgresRuntimeNumericConfigBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeNumericConfigBoolean.configuration.redisIsolated = 1
+if (Test-T21PostgresRuntimeReport $postgresRuntimeNumericConfigBoolean $paperMinimumSha $candidateSha) {
+    throw 'A numeric PostgreSQL redisIsolated field was accepted as Boolean evidence.'
+}
+Write-Output 'PASS: reject numeric PostgreSQL configuration Boolean evidence'
+
+$postgresRuntimeStringOwnershipBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeStringOwnershipBoolean.backendProcesses.postgresql.runOwned = 'True'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeStringOwnershipBoolean $paperMinimumSha $candidateSha) {
+    throw 'A string-valued PostgreSQL runOwned field was accepted as ownership evidence.'
+}
+Write-Output 'PASS: reject string-valued PostgreSQL process ownership evidence'
+
+$postgresRuntimeNumericListenerBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeNumericListenerBoolean.backendProcesses.postgresql.listenerOwnerVerified = 1
+if (Test-T21PostgresRuntimeReport $postgresRuntimeNumericListenerBoolean $paperMinimumSha $candidateSha) {
+    throw 'A numeric PostgreSQL listenerOwnerVerified field was accepted as ownership evidence.'
+}
+Write-Output 'PASS: reject numeric PostgreSQL listener ownership evidence'
+
+$postgresRuntimeStringRedisOwnershipBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeStringRedisOwnershipBoolean.backendProcesses.redis.runOwned = 'True'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeStringRedisOwnershipBoolean $paperMinimumSha $candidateSha) {
+    throw 'A string-valued Redis runOwned field was accepted as ownership evidence.'
+}
+Write-Output 'PASS: reject string-valued Redis process ownership evidence'
+
+$postgresRuntimeMissingStartExit = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeMissingStartExit.postgresql.Remove('startCommandExitCode')
+if (Test-T21PostgresRuntimeReport $postgresRuntimeMissingStartExit $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL runtime report without an observed pg_ctl start exit code was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence missing the pg_ctl start exit code'
+
+$postgresRuntimeMissingStartCommand = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeMissingStartCommand.postgresql.Remove('startCommand')
+if (Test-T21PostgresRuntimeReport $postgresRuntimeMissingStartCommand $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL runtime report without the observed pg_ctl start command was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence missing the pg_ctl start command'
+
+$postgresRuntimeFailedStart = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeFailedStart.postgresql.startCommandExitCode = 1
+if (Test-T21PostgresRuntimeReport $postgresRuntimeFailedStart $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL runtime report with a failed pg_ctl start exit code was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence with a failed pg_ctl start command'
+
+$postgresRuntimeUnobservedStart = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeUnobservedStart.postgresql.startCommandProcessExited = $false
+if (Test-T21PostgresRuntimeReport $postgresRuntimeUnobservedStart $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL runtime report without observed pg_ctl start process exit was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence without observed pg_ctl start process exit'
+
+$postgresRuntimeNumericStartExited = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeNumericStartExited.postgresql.startCommandProcessExited = 1
+if (Test-T21PostgresRuntimeReport $postgresRuntimeNumericStartExited $paperMinimumSha $candidateSha) {
+    throw 'A numeric 1 was accepted as the PostgreSQL pg_ctl process exit observation.'
+}
+Write-Output 'PASS: reject numeric coercion for the PostgreSQL startup process exit observation'
+
+$postgresRuntimeFractionalPids = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeFractionalPids.postgresql.processId = 1111.4
+$postgresRuntimeFractionalPids.backendProcesses.postgresql.processId = 1111.4
+$postgresRuntimeFractionalPids.backendShutdowns[0].processId = 1111.4
+if (Test-T21PostgresRuntimeReport $postgresRuntimeFractionalPids $paperMinimumSha $candidateSha) {
+    throw 'Fractional PostgreSQL PID evidence was accepted after PowerShell integer coercion.'
+}
+Write-Output 'PASS: reject fractional PostgreSQL PIDs in report, backend process, and shutdown evidence'
+
+$postgresRuntimeBooleanPid = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeBooleanPid.postgresql.processId = $true
+if (Test-T21PostgresRuntimeReport $postgresRuntimeBooleanPid $paperMinimumSha $candidateSha) {
+    throw 'A Boolean PostgreSQL PID was accepted as an integer process ID.'
+}
+Write-Output 'PASS: reject Boolean PostgreSQL process IDs'
+
+$postgresRuntimeFractionalExitCode = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeFractionalExitCode.postgresql.startCommandExitCode = 0.4
+if (Test-T21PostgresRuntimeReport $postgresRuntimeFractionalExitCode $paperMinimumSha $candidateSha) {
+    throw 'A fractional PostgreSQL pg_ctl exit code was accepted after PowerShell integer coercion.'
+}
+Write-Output 'PASS: reject fractional PostgreSQL exit codes'
+
+$postgresRuntimeWrongStartCommand = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeWrongStartCommand.postgresql.startCommand = 'pg_ctl stop -m fast -w'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeWrongStartCommand $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL runtime report with the wrong startup command was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence with the wrong startup command'
+
+$postgresRuntimeWrongConfig = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeWrongConfig.configuration.databaseType = 'mysql'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeWrongConfig $paperMinimumSha $candidateSha) {
+    throw 'A MySQL configuration was accepted as PostgreSQL runtime evidence.'
+}
+Write-Output 'PASS: reject a PostgreSQL report with the wrong configured SQL dialect'
+
+$postgresRuntimeWrongProduct = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeWrongProduct.postgresql.product = 'MySQL'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeWrongProduct $paperMinimumSha $candidateSha) {
+    throw 'A report with the wrong PostgreSQL runtime product was accepted.'
+}
+Write-Output 'PASS: reject a PostgreSQL report with a mismatched server product identity'
+
+$postgresRuntimeWrongProcessProduct = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeWrongProcessProduct.backendProcesses.postgresql.product = 'MySQL'
+if (Test-T21PostgresRuntimeReport $postgresRuntimeWrongProcessProduct $paperMinimumSha $candidateSha) {
+    throw 'A report with the wrong PostgreSQL process product was accepted.'
+}
+Write-Output 'PASS: reject a PostgreSQL report with a mismatched backend-process product identity'
+
+$postgresRuntimeMismatchedProcessId = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeMismatchedProcessId.postgresql.processId = 2222
+if (Test-T21PostgresRuntimeReport $postgresRuntimeMismatchedProcessId $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL report whose backend process PID differs from the report-level listener PID was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL report and backend-process PID disagreement'
+
+$postgresRuntimeMismatchedAddresses = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeMismatchedAddresses.postgresql.listenerAddresses = @('::1')
+if (Test-T21PostgresRuntimeReport $postgresRuntimeMismatchedAddresses $paperMinimumSha $candidateSha) {
+    throw 'A PostgreSQL report whose backend listener addresses differ from the report-level addresses was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL report and backend-process listener address disagreement'
+
+$postgresRuntimeWrongShutdown = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$postgresRuntimeWrongShutdown.backendShutdowns[0].processId = 3333
+if (Test-T21PostgresRuntimeReport $postgresRuntimeWrongShutdown $paperMinimumSha $candidateSha) {
+    throw 'PostgreSQL shutdown evidence for a different listener PID was accepted.'
+}
+Write-Output 'PASS: reject PostgreSQL shutdown evidence for a different listener process'
 
 $mysqlRuntimeReportLeakedGradleDaemon = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $mysqlRuntimeReportLeakedGradleDaemon.gradleDaemonCleanup = [ordered]@{
@@ -668,6 +1121,43 @@ finally {
             throw 'Refusing to restore the original T21 log fixture over an existing path.'
         }
         Move-Item -LiteralPath $mysqlRuntimeReparseTarget -Destination $mysqlRuntimeTestLogs
+    }
+}
+
+$mysqlRuntimeNestedReparseTarget = Join-Path $tempRoot ('syncmoney-t21-mysql-nested-reparse-target-' + [guid]::NewGuid().ToString('N'))
+$mysqlRuntimeNestedReparseTarget = [IO.Path]::GetFullPath($mysqlRuntimeNestedReparseTarget)
+$mysqlRuntimeNestedJunction = Join-Path $mysqlRuntimeTestLogs 'nested-log-junction'
+if (-not $mysqlRuntimeNestedReparseTarget.StartsWith($tempRootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    (Test-Path -LiteralPath $mysqlRuntimeNestedReparseTarget) -or
+    (Test-Path -LiteralPath $mysqlRuntimeNestedJunction)) {
+    throw 'Refusing to create the nested T21 junction fixture over an existing or out-of-temp path.'
+}
+New-Item -ItemType Directory -Path $mysqlRuntimeNestedReparseTarget -ErrorAction Stop | Out-Null
+[IO.File]::WriteAllText((Join-Path $mysqlRuntimeNestedReparseTarget 'unmanifested.log'), "hidden retained log`n", [Text.UTF8Encoding]::new($false))
+try {
+    New-Item -ItemType Junction -Path $mysqlRuntimeNestedJunction -Target $mysqlRuntimeNestedReparseTarget -ErrorAction Stop | Out-Null
+    if (-not (Test-T21PathContainsReparsePoint $mysqlRuntimeNestedJunction)) {
+        throw 'The validator did not detect a junction nested under the retained log root.'
+    }
+    if (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV3 $paperMinimumSha $candidateSha) {
+        throw 'A schema-3 report with an unmanifested log behind a nested junction was accepted.'
+    }
+    Write-Output 'PASS: reject an unmanifested log behind a nested log-directory junction'
+}
+finally {
+    if (Test-Path -LiteralPath $mysqlRuntimeNestedJunction) {
+        $nestedJunctionItem = Get-Item -LiteralPath $mysqlRuntimeNestedJunction -Force
+        if (($nestedJunctionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+            throw 'Refusing to remove a nested T21 fixture path that is not a junction.'
+        }
+        Remove-Item -LiteralPath $mysqlRuntimeNestedJunction -Force
+    }
+    if (Test-Path -LiteralPath $mysqlRuntimeNestedReparseTarget -PathType Container) {
+        $nestedTargetItem = Get-Item -LiteralPath $mysqlRuntimeNestedReparseTarget -Force
+        if (($nestedTargetItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Refusing recursive cleanup of a reparse-point nested T21 target.'
+        }
+        Remove-Item -LiteralPath $mysqlRuntimeNestedReparseTarget -Recurse -Force
     }
 }
 
@@ -870,6 +1360,14 @@ if (Test-T21MySqlRuntimeReport $mysqlReportWithCleanupFailure $paperMinimumSha $
 }
 Write-Output 'PASS: reject a passing status with a cleanup failure'
 
+$mysqlReportNullCleanupFailures = [ordered]@{}
+foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportNullCleanupFailures[$key] = $mysqlRuntimeReport[$key] }
+$mysqlReportNullCleanupFailures.cleanupFailures = $null
+if (Test-T21MySqlRuntimeReport $mysqlReportNullCleanupFailures $paperMinimumSha $candidateSha) {
+    throw 'A passing runtime report with null cleanupFailures was accepted.'
+}
+Write-Output 'PASS: reject a passing status with null cleanupFailures'
+
 $mysqlReportConfigAuditMismatch = [ordered]@{}
 foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportConfigAuditMismatch[$key] = $mysqlRuntimeReport[$key] }
 $mysqlReportConfigAuditMismatch.configuration = [ordered]@{}
@@ -902,6 +1400,295 @@ if (@($runnerParseErrors).Count -gt 0) {
 Write-Output 'PASS: parse the isolated MySQL SYNC runtime runner'
 
 $runnerSource = Get-Content -LiteralPath $mysqlRunnerPath -Raw
+if ($runnerSource -notmatch '\$requestedDatabaseProduct\s*=\s*\$DatabaseProduct' -or
+    $runnerSource -notmatch '\$script:databaseProduct\s*=\s*Resolve-T21SqlRuntimeProduct\s+\$requestedDatabaseProduct') {
+    throw 'The SQL runtime runner does not preserve its requested product before script-scope mapping.'
+}
+if ($runnerSource -notmatch "ValidateSet\('MySQL', 'MariaDB', 'PostgreSQL'\)" -or
+    $runnerSource -notmatch "'postgres\.exe'" -or
+    $runnerSource -notmatch "'pg_ctl\.exe'" -or
+    $runnerSource -notmatch "'psql\.exe'" -or
+    $runnerSource -notmatch "'initdb\.exe'") {
+    throw 'The isolated SQL SYNC runtime runner does not expose the pinned PostgreSQL runtime path.'
+}
+Write-Output 'PASS: declare PostgreSQL binaries in the isolated SQL SYNC runtime runner'
+if ($runnerSource -notmatch 'function Invoke-PostgresStart' -or
+    $runnerSource -notmatch '\$process\.WaitForExit\(' -or
+    $runnerSource -notmatch 'Invoke-PostgresStart \$script:mysqlAdmin' -or
+    $runnerSource -match 'Invoke-LoggedCommand \$script:mysqlAdmin @\(''start''') {
+    throw 'PostgreSQL startup must wait for the direct pg_ctl process without piping output from its long-lived server child.'
+}
+Write-Output 'PASS: wait for the pg_ctl startup process directly with file-backed output redirection'
+
+$runnerAst = [System.Management.Automation.Language.Parser]::ParseFile($mysqlRunnerPath, [ref]$runnerTokens, [ref]$runnerParseErrors)
+$postgresStartFunction = @($runnerAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-PostgresStart' }, $true))
+if ($postgresStartFunction.Count -ne 1) { throw 'Expected exactly one PostgreSQL startup helper to exercise.' }
+. ([scriptblock]::Create($postgresStartFunction[0].Extent.Text))
+$postgresLauncherTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney t21 postgres launcher-' + [guid]::NewGuid().ToString('N'))
+$postgresLauncherTestStarted = Join-Path $postgresLauncherTestRoot 'child-started.txt'
+$postgresLauncherTestFinished = Join-Path $postgresLauncherTestRoot 'child-finished.txt'
+$postgresLauncherTestPid = Join-Path $postgresLauncherTestRoot 'child-pid.txt'
+$postgresLauncherChildScript = Join-Path $postgresLauncherTestRoot 'fake-postgres-child.ps1'
+$postgresLauncherScript = Join-Path $postgresLauncherTestRoot 'fake-pg-ctl.ps1'
+$postgresTimeoutScript = Join-Path $postgresLauncherTestRoot 'fake-pg-ctl-timeout.ps1'
+$postgresLauncherTestVariables = @{
+    T21_POSTGRES_START_TEST_PWSH = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_PWSH', 'Process')
+    T21_POSTGRES_START_TEST_STARTED = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_STARTED', 'Process')
+    T21_POSTGRES_START_TEST_FINISHED = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_FINISHED', 'Process')
+    T21_POSTGRES_START_TEST_PID = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_PID', 'Process')
+    T21_POSTGRES_START_TEST_CHILD = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_CHILD', 'Process')
+    T21_POSTGRES_START_TEST_CLEANUP_STARTED = [Environment]::GetEnvironmentVariable('T21_POSTGRES_START_TEST_CLEANUP_STARTED', 'Process')
+}
+New-Item -ItemType Directory -Path $postgresLauncherTestRoot -Force | Out-Null
+try {
+    $env:T21_POSTGRES_START_TEST_PWSH = Join-Path $PSHOME 'pwsh.exe'
+    $env:T21_POSTGRES_START_TEST_STARTED = $postgresLauncherTestStarted
+    $env:T21_POSTGRES_START_TEST_FINISHED = $postgresLauncherTestFinished
+    $env:T21_POSTGRES_START_TEST_PID = $postgresLauncherTestPid
+    $env:T21_POSTGRES_START_TEST_CHILD = $postgresLauncherChildScript
+    @'
+[IO.File]::WriteAllText($env:T21_POSTGRES_START_TEST_STARTED, [string]$PID)
+Write-Output 'fake postgres child started'
+Start-Sleep -Seconds 8
+Write-Output 'fake postgres child finished'
+[IO.File]::WriteAllText($env:T21_POSTGRES_START_TEST_FINISHED, 'finished')
+'@ | Set-Content -LiteralPath $postgresLauncherChildScript -Encoding utf8
+    $verifiedChildCleanup = Get-Command -Name 'Stop-T21VerifiedTestChild' -CommandType Function -ErrorAction SilentlyContinue
+    if ($null -eq $verifiedChildCleanup) {
+        throw 'The PostgreSQL launcher test requires identity-verified child cleanup before starting any child process.'
+    }
+    $postgresCleanupTestScript = Join-Path $postgresLauncherTestRoot 'fake-postgres-cleanup-child.ps1'
+    $postgresCleanupTestStarted = Join-Path $postgresLauncherTestRoot 'cleanup-child-started.txt'
+    $env:T21_POSTGRES_START_TEST_CLEANUP_STARTED = $postgresCleanupTestStarted
+    @'
+[IO.File]::WriteAllText($env:T21_POSTGRES_START_TEST_CLEANUP_STARTED, [string]$PID)
+Start-Sleep -Seconds 30
+'@ | Set-Content -LiteralPath $postgresCleanupTestScript -Encoding utf8
+    $scriptPathWithSpaces = Join-Path $postgresLauncherTestRoot 'script with spaces.ps1'
+    $quotedScriptCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $scriptPathWithSpaces + '"'
+    if (-not (Test-T21CommandLineRunsScript -CommandLine $quotedScriptCommandLine -ExpectedScriptPath $scriptPathWithSpaces)) {
+        throw 'Windows argv parsing rejected an exact quoted -File target containing spaces.'
+    }
+    $embeddedScriptCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -Command "Write-Output ' + $scriptPathWithSpaces + '"'
+    if (Test-T21CommandLineRunsScript -CommandLine $embeddedScriptCommandLine -ExpectedScriptPath $scriptPathWithSpaces) {
+        throw 'Windows argv parsing accepted a script path embedded in a non--File argument.'
+    }
+    $commandThenFileCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -Command "Start-Sleep -Seconds 30" -File "' + $scriptPathWithSpaces + '"'
+    if (Test-T21CommandLineRunsScript -CommandLine $commandThenFileCommandLine -ExpectedScriptPath $scriptPathWithSpaces) {
+        throw 'Windows argv parsing accepted a trailing -File token after a PowerShell command mode.'
+    }
+    $commandAliasThenFileCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -c "Start-Sleep -Seconds 30" -File "' + $scriptPathWithSpaces + '"'
+    $encodedCommandAliasThenFileCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -ec ZQBjAGgAbwAgACcAdABlAHMAdAAn -File "' + $scriptPathWithSpaces + '"'
+    $commandWithArgsAliasThenFileCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -cwa "Start-Sleep -Seconds 30" -File "' + $scriptPathWithSpaces + '"'
+    if ((Test-T21CommandLineRunsScript -CommandLine $commandAliasThenFileCommandLine -ExpectedScriptPath $scriptPathWithSpaces) -or
+        (Test-T21CommandLineRunsScript -CommandLine $encodedCommandAliasThenFileCommandLine -ExpectedScriptPath $scriptPathWithSpaces) -or
+        (Test-T21CommandLineRunsScript -CommandLine $commandWithArgsAliasThenFileCommandLine -ExpectedScriptPath $scriptPathWithSpaces)) {
+        throw 'Windows argv parsing accepted an abbreviated PowerShell command mode followed by a trailing -File token.'
+    }
+    $longerScriptCommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -NoProfile -File "' + $scriptPathWithSpaces + '.backup"'
+    if (Test-T21CommandLineRunsScript -CommandLine $longerScriptCommandLine -ExpectedScriptPath $scriptPathWithSpaces) {
+        throw 'Windows argv parsing accepted a longer path that only contains the expected script path as a prefix.'
+    }
+    Write-Output 'PASS: identify only the exact quoted Windows -File target, including paths with spaces'
+
+    $postgresCleanupChild = $null
+    try {
+        $postgresCleanupChild = Start-Process -FilePath $env:T21_POSTGRES_START_TEST_PWSH `
+            -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $postgresCleanupTestScript + '"')) `
+            -NoNewWindow -PassThru
+        $postgresCleanupDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not (Test-Path -LiteralPath $postgresCleanupTestStarted -PathType Leaf) -and [DateTime]::UtcNow -lt $postgresCleanupDeadline) {
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not (Test-Path -LiteralPath $postgresCleanupTestStarted -PathType Leaf)) {
+            throw 'The cleanup fixture child did not start.'
+        }
+        $script:cleanupMockProcessInfo = [pscustomobject]@{
+            ExecutablePath = $env:T21_POSTGRES_START_TEST_PWSH
+            CommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -Command "Write-Output ' + $postgresCleanupTestScript + '"'
+        }
+        $embeddedScriptCleanupResult = & {
+            function Get-CimInstance { return $script:cleanupMockProcessInfo }
+            Stop-T21VerifiedTestChild -ProcessId $postgresCleanupChild.Id `
+                -ExpectedExecutablePath $env:T21_POSTGRES_START_TEST_PWSH -ExpectedScriptPath $postgresCleanupTestScript
+        }
+        if ($embeddedScriptCleanupResult -or $null -eq (Get-Process -Id $postgresCleanupChild.Id -ErrorAction SilentlyContinue)) {
+            throw 'The child cleanup helper accepted a script path embedded in a non--File argument and terminated the fixture process.'
+        }
+        $script:cleanupMockProcessInfo.CommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -Command "Start-Sleep -Seconds 30" -File "' + $postgresCleanupTestScript + '"'
+        $commandThenFileCleanupResult = & {
+            function Get-CimInstance { return $script:cleanupMockProcessInfo }
+            Stop-T21VerifiedTestChild -ProcessId $postgresCleanupChild.Id `
+                -ExpectedExecutablePath $env:T21_POSTGRES_START_TEST_PWSH -ExpectedScriptPath $postgresCleanupTestScript
+        }
+        if ($commandThenFileCleanupResult -or $null -eq (Get-Process -Id $postgresCleanupChild.Id -ErrorAction SilentlyContinue)) {
+            throw 'The child cleanup helper accepted a trailing -File token after -Command or terminated the fixture process.'
+        }
+        $script:cleanupMockProcessInfo.CommandLine = '"' + $env:T21_POSTGRES_START_TEST_PWSH + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $postgresCleanupTestScript + '"'
+        $wrongExecutableCleanupResult = & {
+            function Get-CimInstance { return $script:cleanupMockProcessInfo }
+            Stop-T21VerifiedTestChild -ProcessId $postgresCleanupChild.Id `
+                -ExpectedExecutablePath (Join-Path $env:TEMP 'syncmoney-t21-wrong-pwsh.exe') -ExpectedScriptPath $postgresCleanupTestScript
+        }
+        if ($wrongExecutableCleanupResult -or $null -eq (Get-Process -Id $postgresCleanupChild.Id -ErrorAction SilentlyContinue)) {
+            throw 'The child cleanup helper accepted an executable mismatch or terminated the fixture process.'
+        }
+        $selfCleanupResult = Stop-T21VerifiedTestChild -ProcessId $PID `
+            -ExpectedExecutablePath $env:T21_POSTGRES_START_TEST_PWSH -ExpectedScriptPath $postgresLauncherChildScript
+        if ($selfCleanupResult -or $null -eq (Get-Process -Id $PID -ErrorAction SilentlyContinue)) {
+            throw 'The child cleanup helper did not refuse the test runner process when its command line did not match the unique child script.'
+        }
+        $verifiedCleanupResult = Stop-T21VerifiedTestChild -ProcessId $postgresCleanupChild.Id `
+            -ExpectedExecutablePath $env:T21_POSTGRES_START_TEST_PWSH -ExpectedScriptPath $postgresCleanupTestScript
+        if (-not $verifiedCleanupResult -or -not $postgresCleanupChild.WaitForExit(3000)) {
+            throw 'The child cleanup helper did not terminate the process whose executable and command line matched the unique child script.'
+        }
+        Write-Output 'PASS: verify child executable and unique script before terminating through its process handle'
+    } finally {
+        if ($null -ne $postgresCleanupChild) {
+            $postgresCleanupChild.Refresh()
+            if (-not $postgresCleanupChild.HasExited) {
+                try {
+                    $postgresCleanupChild.Kill()
+                    $null = $postgresCleanupChild.WaitForExit(3000)
+                } catch { }
+            }
+        }
+    }
+    @'
+$child = Start-Process -FilePath $env:T21_POSTGRES_START_TEST_PWSH `
+    -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $env:T21_POSTGRES_START_TEST_CHILD + '"')) `
+    -NoNewWindow -PassThru
+[IO.File]::WriteAllText($env:T21_POSTGRES_START_TEST_PID, [string]$child.Id)
+'@ | Set-Content -LiteralPath $postgresLauncherScript -Encoding utf8
+    'Start-Sleep -Seconds 30' | Set-Content -LiteralPath $postgresTimeoutScript -Encoding utf8
+
+    $postgresLauncherTimer = [Diagnostics.Stopwatch]::StartNew()
+    $postgresLauncherResult = Invoke-PostgresStart $env:T21_POSTGRES_START_TEST_PWSH `
+        @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $postgresLauncherScript) `
+        'fake-postgres-start' (Join-Path $postgresLauncherTestRoot 'fake-start.log') 5
+    $postgresLauncherTimer.Stop()
+    if ($postgresLauncherResult.exitCode -ne 0 -or -not $postgresLauncherResult.processExited -or
+        $postgresLauncherTimer.Elapsed.TotalSeconds -ge 5 -or -not (Test-Path -LiteralPath $postgresLauncherTestPid -PathType Leaf)) {
+        throw 'The PostgreSQL startup helper did not return after its direct launcher exited while a child process retained inherited output handles.'
+    }
+    $postgresChildPid = [int](Get-Content -LiteralPath $postgresLauncherTestPid -Raw)
+    if ($null -eq (Get-Process -Id $postgresChildPid -ErrorAction SilentlyContinue) -or
+        (Test-Path -LiteralPath $postgresLauncherTestFinished -PathType Leaf)) {
+        throw 'The fake PostgreSQL child did not remain alive after its direct launcher exited.'
+    }
+    $postgresChildDeadline = [DateTime]::UtcNow.AddSeconds(12)
+    while (-not (Test-Path -LiteralPath $postgresLauncherTestFinished -PathType Leaf) -and [DateTime]::UtcNow -lt $postgresChildDeadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not (Test-Path -LiteralPath $postgresLauncherTestFinished -PathType Leaf)) {
+        throw 'The fake PostgreSQL child did not finish its delayed output after the launcher returned.'
+    }
+    Write-Output 'PASS: execute PostgreSQL startup helper with a launcher whose child keeps inherited output handles open'
+
+    $postgresTimeoutLog = Join-Path $postgresLauncherTestRoot 'fake-timeout.log'
+    $postgresTimeoutError = $null
+    try {
+        $null = Invoke-PostgresStart $env:T21_POSTGRES_START_TEST_PWSH `
+            @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $postgresTimeoutScript) `
+            'fake-postgres-timeout' $postgresTimeoutLog 2
+    } catch {
+        $postgresTimeoutError = $_.Exception.Message
+    }
+    if ($null -eq $postgresTimeoutError -or $postgresTimeoutError -notlike '*did not exit within 2 seconds*' -or
+        -not (Test-Path -LiteralPath $postgresTimeoutLog -PathType Leaf)) {
+        throw 'The PostgreSQL startup helper did not report and clean up its timed-out direct launcher.'
+    }
+    $postgresTimeoutEvidence = Get-Content -LiteralPath $postgresTimeoutLog -Raw
+    if ($postgresTimeoutEvidence -notmatch '(?m)^processExitedAfterCleanup=True\r?$' -or
+        $postgresTimeoutEvidence -notmatch '(?m)^cleanupAttempted=True\r?$') {
+        throw "The PostgreSQL startup timeout log did not confirm bounded cleanup of its direct launcher. Observed log: $postgresTimeoutEvidence"
+    }
+    Write-Output 'PASS: terminate and record a timed-out direct PostgreSQL launcher'
+} finally {
+    $childPidText = if (Test-Path -LiteralPath $postgresLauncherTestPid -PathType Leaf) { (Get-Content -LiteralPath $postgresLauncherTestPid -Raw).Trim() } else { '' }
+    $testChildPid = 0
+    if ([int]::TryParse($childPidText, [ref]$testChildPid) -and $testChildPid -gt 0) {
+        $childCleanupComplete = Stop-T21VerifiedTestChild -ProcessId $testChildPid `
+            -ExpectedExecutablePath $env:T21_POSTGRES_START_TEST_PWSH -ExpectedScriptPath $postgresLauncherChildScript
+        $savedChildProcessStillExists = Get-Process -Id $testChildPid -ErrorAction SilentlyContinue
+        if (-not $childCleanupComplete -and $null -ne $savedChildProcessStillExists) {
+            Write-Warning 'Did not stop the saved PostgreSQL test child PID because its executable and unique script identity could not be verified.'
+        }
+    }
+    foreach ($name in $postgresLauncherTestVariables.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $postgresLauncherTestVariables[$name], 'Process')
+    }
+    if (Test-Path -LiteralPath $postgresLauncherTestRoot -PathType Container) {
+        Remove-Item -LiteralPath $postgresLauncherTestRoot -Recurse -Force
+    }
+}
+
+$postgresStopFunction = @($runnerAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Stop-PostgresBackend' }, $true))
+if ($postgresStopFunction.Count -ne 1) { throw 'Expected exactly one PostgreSQL shutdown helper to exercise.' }
+. ([scriptblock]::Create($postgresStopFunction[0].Extent.Text))
+$postgresStopTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney-t21-postgres-stop-' + [guid]::NewGuid().ToString('N'))
+$script:mysqlData = Join-Path $postgresStopTestRoot 'postgresql-data'
+$script:logsRoot = Join-Path $postgresStopTestRoot 'logs'
+$script:mysqlPort = 15432
+$script:mysqlAdmin = 'pg_ctl.exe'
+$script:postgresStopTestIdentityValid = $true
+$script:postgresStopTestCommandCount = 0
+$script:postgresStopTestProcess = [pscustomobject]@{ Id=4242; HasExited=$false; ExitCode=0 }
+$script:postgresStopTestProcess | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
+$script:postgresStopTestProcess | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
+    param([int]$timeoutMilliseconds)
+    $this.HasExited = $true
+    return $true
+}
+$script:postgresStopTestProcess | Add-Member -MemberType ScriptMethod -Name Kill -Value { $this.HasExited = $true }
+$script:cleanupFailures = [Collections.Generic.List[string]]::new()
+$script:backendShutdowns = [Collections.Generic.List[object]]::new()
+$script:mysqlProcess = $null
+New-Item -ItemType Directory -Path $script:mysqlData -Force | Out-Null
+New-Item -ItemType Directory -Path $script:logsRoot -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $script:mysqlData 'postmaster.pid'), "4242`n$script:mysqlData`n1781298897`n15432`n")
+function Get-PostgresListenerProcess { return $null }
+function Get-PostgresPidFileProcess {
+    if (-not $script:postgresStopTestIdentityValid) { throw 'fixture process identity rejected' }
+    return [ordered]@{ process=$script:postgresStopTestProcess; processInfo=$null; pidLines=@() }
+}
+function Invoke-LoggedCommand {
+    param([string]$executable, [string[]]$arguments, [string]$label, [string]$logPath)
+    $script:postgresStopTestCommandCount++
+    $script:postgresStopTestProcess.HasExited = $true
+    return [pscustomobject]@{ exitCode=0; output=''; logPath=$logPath }
+}
+function Get-NetTCPConnection {
+    [CmdletBinding()]
+    param([string]$State, [int]$LocalPort)
+    return @()
+}
+try {
+    Stop-PostgresBackend
+    if ($script:postgresStopTestCommandCount -ne 1 -or $script:backendShutdowns.Count -ne 1 -or
+        -not $script:backendShutdowns[0].shutdownTargetVerified -or -not $script:backendShutdowns[0].processExited -or
+        $script:backendShutdowns[0].forced -or $script:cleanupFailures.Count -ne 0) {
+        throw 'A verified postmaster.pid process without a listener did not receive clean graceful shutdown evidence.'
+    }
+    Write-Output 'PASS: gracefully stop the verified PostgreSQL postmaster from postmaster.pid when no listener exists'
+
+    $script:mysqlProcess = $null
+    $script:postgresStopTestCommandCount = 0
+    $script:postgresStopTestIdentityValid = $false
+    $script:cleanupFailures.Clear()
+    $script:backendShutdowns.Clear()
+    Stop-PostgresBackend
+    if ($script:postgresStopTestCommandCount -ne 0 -or $script:backendShutdowns.Count -ne 0 -or $script:cleanupFailures.Count -eq 0) {
+        throw 'PostgreSQL shutdown was attempted without a verified process identity.'
+    }
+    Write-Output 'PASS: refuse PostgreSQL shutdown when postmaster.pid process identity cannot be verified'
+} finally {
+    if (Test-Path -LiteralPath $postgresStopTestRoot -PathType Container) {
+        Remove-Item -LiteralPath $postgresStopTestRoot -Recurse -Force
+    }
+}
+
 $mysqlPortAssignments = [regex]::Matches($runnerSource, '(?m)^\s*\$script:mysqlPort\s*=\s*Get-FreeLoopbackPort')
 if ($mysqlPortAssignments.Count -ne 1) {
     throw "The isolated MySQL SYNC runtime runner must allocate its database port once before publishing it to services and PlugDev; observed $($mysqlPortAssignments.Count) allocations."

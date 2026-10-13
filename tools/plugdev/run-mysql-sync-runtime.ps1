@@ -7,22 +7,24 @@ param(
     [Parameter(Mandatory = $true)][string]$JavaHome,
     [string]$MySqlBin = 'C:\Program Files\MySQL\MySQL Server 8.0\bin',
     [string]$MariaDbBin = 'C:\Program Files\MariaDB 12.3\bin',
-    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
-    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum',
+    [string]$PostgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin',
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum',
     [string]$CandidateVersion = '1.4.0-alpha.1'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 MySQL runtime validation requires PowerShell 7 or newer.' }
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 SQL runtime validation requires PowerShell 7 or newer.' }
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 
-$script:databaseProduct = if ($DatabaseProduct -ieq 'MariaDB') { 'MariaDB' } else { 'MySQL' }
-$script:databaseServerVersion = if ($script:databaseProduct -ceq 'MariaDB') { '12.3.3-MariaDB' } else { '8.0.42' }
-$script:databaseServerVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '^12\.3\.3-MariaDB(?:\b|$)' } else { '^8\.0\.42(?:\b|$)' }
-$script:databaseExecutableVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } else { '\bVer\s+8\.0\.42(?:\b|$)' }
+$requestedDatabaseProduct = $DatabaseProduct
+$script:databaseProduct = Resolve-T21SqlRuntimeProduct $requestedDatabaseProduct
+$script:databaseServerVersion = switch ($script:databaseProduct) { 'MariaDB' { '12.3.3-MariaDB' } 'PostgreSQL' { '18.1' } default { '8.0.42' } }
+$script:databaseServerVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '^12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^18\.1(?:\b|$)' } default { '^8\.0\.42(?:\b|$)' } }
+$script:databaseExecutableVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^postgres \(PostgreSQL\) 18\.1$' } default { '\bVer\s+8\.0\.42(?:\b|$)' } }
 $script:paperTarget = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
-$script:databaseBin = if ($script:databaseProduct -ceq 'MariaDB') { $MariaDbBin } else { $MySqlBin }
+$script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
 $script:candidatePath = Join-Path $script:root "build\libs\Syncmoney-$CandidateVersion.jar"
@@ -41,22 +43,25 @@ $script:databasePassword = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().T
 $script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:paperTarget.taskSuffix.ToLowerInvariant() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
 $script:workspace = Join-Path $script:runRoot 'workspace'
 $script:gradleUserHome = Join-Path $script:runRoot '.gradle-user-home'
-$script:mysqlRoot = Join-Path $script:runRoot 'mysql'
+$script:mysqlRoot = Join-Path $script:runRoot $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
 $script:mysqlData = Join-Path $script:mysqlRoot 'data'
 $script:redisRoot = Join-Path $script:runRoot 'redis'
 $script:redisData = Join-Path $script:redisRoot 'data'
 $script:logsRoot = Join-Path $script:runRoot 'logs'
 $script:reportPath = Join-Path $script:runRoot 'result.json'
-$script:mysqlServerName = if ($script:databaseProduct -ceq 'MariaDB') { 'mariadbd.exe' } else { 'mysqld.exe' }
+$script:mysqlServerName = switch ($script:databaseProduct) { 'MariaDB' { 'mariadbd.exe' } 'PostgreSQL' { 'postgres.exe' } default { 'mysqld.exe' } }
 $script:mysqlServer = Join-Path $script:mysqlBinPath $script:mysqlServerName
-$script:mysqlClient = Join-Path $script:mysqlBinPath 'mysql.exe'
-$script:mysqlAdmin = Join-Path $script:mysqlBinPath 'mysqladmin.exe'
+$script:mysqlClient = Join-Path $script:mysqlBinPath $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'psql.exe' } else { 'mysql.exe' })
+$script:mysqlAdmin = Join-Path $script:mysqlBinPath $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'pg_ctl.exe' } else { 'mysqladmin.exe' })
 $script:mysqlInstallDb = if ($script:databaseProduct -ceq 'MariaDB') { Join-Path $script:mysqlBinPath 'mariadb-install-db.exe' } else { $null }
+$script:postgresInitDb = if ($script:databaseProduct -ceq 'PostgreSQL') { Join-Path $script:mysqlBinPath 'initdb.exe' } else { $null }
+$script:sqlReportKey = if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
 $script:redisServer = $null
 $script:redisCli = $null
 $script:redisProcess = $null
 $script:mysqlProcess = $null
 $script:mysqlLauncherProcess = $null
+$script:postgresStartCommandExitCode = $null
 $script:serverLogPath = Join-Path $script:workspace '.plugdev\run\logs\latest.log'
 $script:gamePort = 0
 $script:mysqlPort = 0
@@ -118,7 +123,7 @@ function Get-OfflineUuid([string]$name) {
 
 function Get-T21ServerProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" -ErrorAction Stop | Where-Object {
-        $_.CommandLine -and $_.CommandLine.Contains("-Dsyncmoney.t21.mysql.run=$script:runMarker")
+        $_.CommandLine -and $_.CommandLine.Contains("-Dsyncmoney.t21.database.run=$script:runMarker")
     })
 }
 
@@ -167,6 +172,58 @@ function Invoke-LoggedCommand([string]$executable, [string[]]$arguments, [string
     return [pscustomobject]@{ exitCode = [int]$exitCode; output = ($output -join "`n").Trim(); logPath = $logPath }
 }
 
+function Invoke-PostgresStart([string]$executable, [string[]]$arguments, [string]$label, [string]$logPath, [int]$timeoutSeconds = 60) {
+    $stdoutPath = $logPath + '.stdout.txt'
+    $stderrPath = $logPath + '.stderr.txt'
+    $argumentLine = ($arguments | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' }) -join ' '
+    $process = $null
+    $processExited = $false
+    $cleanupAttempted = $false
+    $processExitedAfterCleanup = $false
+    $exitCode = $null
+    $startupError = $null
+    $cleanupError = $null
+    try {
+        $process = Start-Process -FilePath $executable -ArgumentList $argumentLine -WorkingDirectory (Split-Path -Parent $executable) `
+            -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $processExited = $process.WaitForExit($timeoutSeconds * 1000)
+        $process.Refresh()
+        if (-not $processExited) {
+            $cleanupAttempted = $true
+            try {
+                if (-not $process.HasExited) { $process.Kill() }
+            } catch {
+                $cleanupError = $_.Exception.Message
+            }
+            try {
+                $processExitedAfterCleanup = $process.WaitForExit(10000)
+                $process.Refresh()
+                $processExitedAfterCleanup = $processExitedAfterCleanup -or $process.HasExited
+            } catch {
+                if ([string]::IsNullOrWhiteSpace($cleanupError)) { $cleanupError = $_.Exception.Message }
+            }
+        }
+        if ($processExited -or $processExitedAfterCleanup) { $exitCode = [int]$process.ExitCode }
+    } catch {
+        $startupError = $_.Exception.Message
+    }
+    @(
+        "processId=$(if ($null -ne $process) { $process.Id } else { '' })",
+        "processExited=$([bool]$processExited)",
+        "exitCode=$exitCode",
+        "cleanupAttempted=$([bool]$cleanupAttempted)",
+        "processExitedAfterCleanup=$([bool]$processExitedAfterCleanup)",
+        "startupError=$startupError",
+        "cleanupError=$cleanupError",
+        "stdoutPath=$stdoutPath",
+        "stderrPath=$stderrPath"
+    ) | Set-Content -LiteralPath $logPath -Encoding utf8
+    if ($null -ne $startupError) { throw "$label could not be launched: $startupError; see $logPath and its redirected output files." }
+    if (-not $processExited) { throw "$label did not exit within $timeoutSeconds seconds; see $logPath and its redirected output files." }
+    if ($exitCode -ne 0) { throw "$label exited $exitCode; see $logPath and its redirected output files." }
+    return [pscustomobject]@{ exitCode = $exitCode; output = ''; logPath = $logPath; processId = [int]$process.Id; processExited = $true }
+}
+
 function Get-MySqlLoopbackClientArgs {
     if ($script:databaseProduct -ceq 'MariaDB') {
         # This runner binds the disposable database to loopback and needs clean, parseable client result rows.
@@ -179,6 +236,9 @@ function Invoke-MySqlQuery([string]$sql, [string]$label, [switch]$asRoot) {
     $previousPassword = [Environment]::GetEnvironmentVariable('MYSQL_PWD', 'Process')
     $logPath = Join-Path $script:logsRoot ($label + '.txt')
     try {
+        if ($script:databaseProduct -ceq 'PostgreSQL') {
+            return @(Invoke-PostgresQuery $sql $label -asRoot:$asRoot)
+        }
         if ($asRoot) {
             $env:MYSQL_PWD = if ($script:databaseProduct -ceq 'MariaDB') { $script:databasePassword } else { '' }
         } else {
@@ -205,6 +265,24 @@ function Invoke-MySqlAdmin([string[]]$arguments, [string]$label, [switch]$allowE
     }
 }
 
+function Invoke-PostgresQuery([string]$sql, [string]$label, [switch]$asRoot) {
+    $previousPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+    $logPath = Join-Path $script:logsRoot ($label + '.txt')
+    try {
+        $env:PGPASSWORD = $script:databasePassword
+        $user = if ($asRoot) { 'postgres' } else { $script:databaseUser }
+        $database = if ($asRoot) { 'postgres' } else { $script:databaseName }
+        $arguments = @('-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', [string]$script:mysqlPort, '-U', $user, '-d', $database)
+        $output = @($sql | & $script:mysqlClient @arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $logPath -Encoding utf8
+        if ($exitCode -ne 0) { throw "PostgreSQL query $label exited $exitCode; see $logPath." }
+        return @(($output | ForEach-Object { $_.ToString() } | Out-String) -split "`r?`n" | Where-Object { $_.Length -gt 0 })
+    } finally {
+        [Environment]::SetEnvironmentVariable('PGPASSWORD', $previousPassword, 'Process')
+    }
+}
+
 function Assert-BackendListenerOwner([string]$name, [int]$port, [int]$processId) {
     $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
     $owners = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
@@ -219,6 +297,7 @@ function Assert-BackendListenerOwner([string]$name, [int]$port, [int]$processId)
 }
 
 function Get-MySqlListenerProcess {
+    if ($script:databaseProduct -ceq 'PostgreSQL') { return Get-PostgresListenerProcess }
     $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue)
     if ($listeners.Count -eq 0) { return $null }
     $owners = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
@@ -244,7 +323,56 @@ function Get-MySqlListenerProcess {
     return [ordered]@{ process=$process; processInfo=$processInfo; addresses=@($addresses | Sort-Object) }
 }
 
+function Get-PostgresListenerProcess {
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) { return $null }
+    $owners = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    $addresses = @($listeners | Select-Object -ExpandProperty LocalAddress -Unique)
+    if ($owners.Count -ne 1 -or @($addresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0) {
+        throw "PostgreSQL port $script:mysqlPort has ambiguous or non-loopback listeners."
+    }
+
+    $ownerId = [int]$owners[0]
+    $ownedProcess = Get-PostgresPidFileProcess
+    if ($null -eq $ownedProcess -or [int]$ownedProcess.process.Id -ne $ownerId -or
+        -not (Test-T21PostgresListenerIdentity -ListenerOwners $owners -ListenerAddresses $addresses -ProcessId $ownerId `
+            -ExpectedExecutablePath ([IO.Path]::GetFullPath($script:mysqlServer)) `
+            -ActualExecutablePath ([IO.Path]::GetFullPath([string]$ownedProcess.processInfo.ExecutablePath)) `
+            -CommandLine ([string]$ownedProcess.processInfo.CommandLine) -PostmasterPidLines $ownedProcess.pidLines `
+            -ExpectedDataDirectory $script:mysqlData -ExpectedPort $script:mysqlPort `
+            -ProcessStartTimeUtc $ownedProcess.process.StartTime.ToUniversalTime())) {
+        throw "PostgreSQL listener PID $ownerId does not match the run-owned executable, data directory, and port."
+    }
+    return [ordered]@{ process=$ownedProcess.process; processInfo=$ownedProcess.processInfo; addresses=@($addresses | Sort-Object) }
+}
+
+function Get-PostgresPidFileProcess {
+    $pidFile = Join-Path $script:mysqlData 'postmaster.pid'
+    if (-not (Test-Path -LiteralPath $pidFile -PathType Leaf)) { return $null }
+    $pidLines = @(Get-Content -LiteralPath $pidFile -TotalCount 4 -ErrorAction Stop)
+    $pidFileProcessId = 0
+    if ($pidLines.Count -lt 4 -or -not [int]::TryParse(([string]$pidLines[0]).Trim(), [ref]$pidFileProcessId) -or $pidFileProcessId -le 0) {
+        throw 'PostgreSQL postmaster.pid does not contain a valid process ID and identity fields.'
+    }
+
+    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $pidFileProcessId" -ErrorAction Stop
+    if ($null -eq $processInfo) { return $null }
+    $process = Get-Process -Id $pidFileProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $process) { return $null }
+    $expectedExecutable = [IO.Path]::GetFullPath($script:mysqlServer)
+    $actualExecutable = if ([string]::IsNullOrWhiteSpace([string]$processInfo.ExecutablePath)) { '' } else { [IO.Path]::GetFullPath([string]$processInfo.ExecutablePath) }
+    if (-not (Test-T21PostgresProcessIdentity -ProcessId $pidFileProcessId `
+        -ExpectedExecutablePath $expectedExecutable -ActualExecutablePath $actualExecutable `
+        -CommandLine ([string]$processInfo.CommandLine) -PostmasterPidLines $pidLines `
+        -ExpectedDataDirectory $script:mysqlData -ExpectedPort $script:mysqlPort `
+        -ProcessStartTimeUtc $process.StartTime.ToUniversalTime())) {
+        throw "PostgreSQL PID $pidFileProcessId does not match the run-owned executable, data directory, process start time, and port."
+    }
+    return [ordered]@{ process=$process; processInfo=$processInfo; pidLines=$pidLines }
+}
+
 function Wait-MySqlReady([int]$timeoutSeconds = 45) {
+    if ($script:databaseProduct -ceq 'PostgreSQL') { return Wait-PostgresReady -timeoutSeconds $timeoutSeconds }
     $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
     do {
     if ($null -eq $script:mysqlLauncherProcess) { throw "The isolated $script:databaseProduct launcher process was not created." }
@@ -267,6 +395,28 @@ function Wait-MySqlReady([int]$timeoutSeconds = 45) {
         Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Timed out waiting for isolated $script:databaseProduct readiness."
+}
+
+function Wait-PostgresReady([int]$timeoutSeconds = 45) {
+    if ($script:postgresStartCommandExitCode -ne 0) { throw 'The isolated PostgreSQL start command did not exit successfully.' }
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    do {
+        $listenerProcess = Get-PostgresListenerProcess
+        if ($null -ne $listenerProcess) {
+            $script:mysqlProcess = $listenerProcess.process
+            $script:report.postgresql.processId = [int]$script:mysqlProcess.Id
+            $script:report.postgresql.listenerAddresses = @($listenerProcess.addresses)
+            $null = Assert-BackendListenerOwner 'PostgreSQL' $script:mysqlPort $script:mysqlProcess.Id
+            try {
+                $version = @(Invoke-PostgresQuery "SELECT current_setting('server_version');" 'postgresql-readiness' -asRoot)
+                if ($version.Count -eq 1 -and $version[0].Trim() -ceq '18.1') { return }
+            } catch {
+                # The owned listener can exist before PostgreSQL accepts client sessions.
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Timed out waiting for isolated PostgreSQL readiness.'
 }
 
 function Wait-RedisReady([int]$timeoutSeconds = 30) {
@@ -338,7 +488,7 @@ const file = path.resolve(".plugdev/profile.yml");
 const profile = yaml.parse(fs.readFileSync(file, "utf8"));
 profile.jvm.args = [
   `-Dsyncmoney.acceptance.version=${process.env.SYNCMONEY_CANDIDATE_VERSION}`,
-  `-Dsyncmoney.t21.mysql.run=${process.env.T21_RUN_MARKER}`,
+  `-Dsyncmoney.t21.database.run=${process.env.T21_RUN_MARKER}`,
 ];
 fs.writeFileSync(file, yaml.stringify(profile), "utf8");
 '@
@@ -357,12 +507,12 @@ function Assert-IsolatedSyncConfig {
 const fs=require("node:fs"); const path=require("node:path"); const {createRequire}=require("node:module");
 const yaml=createRequire(path.join(process.env.PLUGDEV_ROOT,"package.json"))("yaml");
 const p=process.argv[2], c=yaml.parse(fs.readFileSync(p,"utf8"));
-const expected={dbPort:Number(process.env.SYNCMONEY_TEST_DB_PORT),redisPort:Number(process.env.SYNCMONEY_TEST_REDIS_PORT),dbName:process.env.SYNCMONEY_TEST_DB_NAME,dbUser:process.env.SYNCMONEY_TEST_DB_USER,dbPassword:process.env.SYNCMONEY_TEST_DB_PASSWORD};
+const expected={dbType:process.env.SYNCMONEY_TEST_DB_TYPE,dbPort:Number(process.env.SYNCMONEY_TEST_DB_PORT),redisPort:Number(process.env.SYNCMONEY_TEST_REDIS_PORT),dbName:process.env.SYNCMONEY_TEST_DB_NAME,dbUser:process.env.SYNCMONEY_TEST_DB_USER,dbPassword:process.env.SYNCMONEY_TEST_DB_PASSWORD};
 const ok=c["config-version"]===12&&c["db-enabled"]===true&&c["pubsub-enabled"]===true&&c.economy.mode==="sync"&&
-  c.database.enabled===true&&c.database.type==="mysql"&&c.database.host==="127.0.0.1"&&Number(c.database.port)===expected.dbPort&&
+  c.database.enabled===true&&c.database.type===expected.dbType&&c.database.host==="127.0.0.1"&&Number(c.database.port)===expected.dbPort&&
   c.database.database===expected.dbName&&c.database.username===expected.dbUser&&c.database.password===expected.dbPassword&&
   c.redis.enabled===true&&c.redis.host==="127.0.0.1"&&Number(c.redis.port)===expected.redisPort&&c.redis.database===15;
-if(!ok) throw new Error("The isolated Paper profile does not match the required MySQL/Redis SYNC configuration.");
+if(!ok) throw new Error("The isolated Paper profile does not match the required SQL/Redis SYNC configuration.");
 console.log(JSON.stringify({schema:c["config-version"],mode:c.economy.mode,databaseType:c.database.type,databaseHost:c.database.host,databasePort:c.database.port,databaseName:c.database.database,redisHost:c.redis.host,redisPort:c.redis.port,redisDatabase:c.redis.database,credentialsConfigured:Boolean(c.database.username&&c.database.password)}));
 '@
     Set-Content -LiteralPath $scriptPath -Value $content -Encoding utf8
@@ -370,7 +520,7 @@ console.log(JSON.stringify({schema:c["config-version"],mode:c.economy.mode,datab
     try {
         $result = Invoke-LoggedCommand $script:node @($scriptPath, (Join-Path $script:workspace '.plugdev\run\plugins\Syncmoney\config.yml')) 'config-audit' (Join-Path $script:logsRoot 'config-audit.json')
     } finally { Pop-Location }
-    if ($result.exitCode -ne 0) { throw 'Isolated Syncmoney config did not match the MySQL and Redis runtime pins.' }
+    if ($result.exitCode -ne 0) { throw 'Isolated Syncmoney config did not match the SQL and Redis runtime pins.' }
     return ($result.output | ConvertFrom-Json)
 }
 
@@ -477,9 +627,13 @@ function Invoke-Redis([string[]]$arguments, [string]$label, [switch]$allowExitOn
 function Get-BackendSnapshot([string]$stage) {
     $uuidA = Get-OfflineUuid 'AcceptanceA'
     $uuidB = Get-OfflineUuid 'AcceptanceB'
-    $sql = "SELECT CONCAT_WS('|', player_name, player_uuid, CAST(balance AS CHAR), CAST(version AS CHAR)) FROM players WHERE player_uuid IN ('$uuidA','$uuidB') ORDER BY player_name;"
-    $rows = @(Invoke-MySqlQuery $sql ($stage + '-mysql-snapshot'))
-    if ($rows.Count -ne 2) { throw "Expected exactly two synthetic MySQL player rows after $stage; observed $($rows.Count)." }
+    $sql = if ($script:databaseProduct -ceq 'PostgreSQL') {
+        "SELECT player_name || '|' || player_uuid::text || '|' || balance::text || '|' || version::text FROM players WHERE player_uuid IN ('$uuidA','$uuidB') ORDER BY player_name;"
+    } else {
+        "SELECT CONCAT_WS('|', player_name, player_uuid, CAST(balance AS CHAR), CAST(version AS CHAR)) FROM players WHERE player_uuid IN ('$uuidA','$uuidB') ORDER BY player_name;"
+    }
+    $rows = @(Invoke-MySqlQuery $sql ($stage + '-' + $script:databaseProduct.ToLowerInvariant() + '-snapshot'))
+    if ($rows.Count -ne 2) { throw "Expected exactly two synthetic $script:databaseProduct player rows after $stage; observed $($rows.Count)." }
     $sqlAccounts = [Collections.Generic.List[object]]::new()
     foreach ($row in $rows) {
         $parts = $row.Split('|')
@@ -488,7 +642,7 @@ function Get-BackendSnapshot([string]$stage) {
         if ($parts[1].ToLowerInvariant() -cne $expectedUuid) { throw "MySQL UUID mismatch for $($parts[0]) after $stage." }
         $balance = ([decimal]::Parse($parts[2], [Globalization.CultureInfo]::InvariantCulture)).ToString('0.00', [Globalization.CultureInfo]::InvariantCulture)
         $version = [long]::Parse($parts[3], [Globalization.CultureInfo]::InvariantCulture)
-        if ($version -lt 1) { throw "MySQL returned a non-positive version for $($parts[0]) after $stage." }
+        if ($version -lt 1) { throw "$script:databaseProduct returned a non-positive version for $($parts[0]) after $stage." }
         $sqlAccounts.Add([ordered]@{ name=$parts[0]; uuid=$expectedUuid; balance=$balance; version=$version })
     }
     $redisAccounts = [Collections.Generic.List[object]]::new()
@@ -504,7 +658,7 @@ function Get-BackendSnapshot([string]$stage) {
         $redisAccounts.Add([ordered]@{ name=$account.name; uuid=$account.uuid; balance=$balance; version=[long]$versionRaw })
     }
     if (-not (Test-T21MySqlRuntimeAccountParity @($sqlAccounts) @($redisAccounts))) {
-        throw "MySQL and Redis disagree for the synthetic accounts after $stage."
+        throw "$script:databaseProduct and Redis disagree for the synthetic accounts after $stage."
     }
     return [ordered]@{ stage=$stage; sqlAccounts=@($sqlAccounts); redisAccounts=@($redisAccounts) }
 }
@@ -525,6 +679,7 @@ function Stop-RunOwnedServerAfterFailure {
 }
 
 function Stop-MySqlBackend {
+    if ($script:databaseProduct -ceq 'PostgreSQL') { return Stop-PostgresBackend }
     if ($null -eq $script:mysqlLauncherProcess) { return }
     $process = $script:mysqlProcess
     $launcher = $script:mysqlLauncherProcess
@@ -588,6 +743,89 @@ function Stop-MySqlBackend {
         processExitCode=$processExitCode; processExitCodeObserved=$processExited; processExited=$processExited
         launchProcessId=[int]$launcher.Id; launchProcessExitCode=$launcherExitCode
         launchProcessExitCodeObserved=$launcherExited; launchProcessExited=$launcherExited; forced=$forced
+    })
+}
+
+function Stop-PostgresBackend {
+    $process = $script:mysqlProcess
+    $commandExitCode = $null
+    $forced = $false
+    $shutdownTargetVerified = $false
+    if ($null -eq $process) {
+        try {
+            $listener = Get-PostgresListenerProcess
+            if ($null -ne $listener) {
+                $process = $listener.process
+            } else {
+                # pg_ctl start can time out after the postmaster has written its PID file
+                # but before it has opened the configured listener.
+                $pidFileProcess = Get-PostgresPidFileProcess
+                if ($null -ne $pidFileProcess) { $process = $pidFileProcess.process }
+            }
+            if ($null -ne $process) { $script:mysqlProcess = $process }
+        } catch {
+            $script:cleanupFailures.Add("Could not identify the run-owned PostgreSQL process: $($_.Exception.Message)")
+        }
+    }
+    if ($null -eq $process) {
+        if (Test-Path -LiteralPath (Join-Path $script:mysqlData 'postmaster.pid') -PathType Leaf) {
+            $script:cleanupFailures.Add('PostgreSQL postmaster.pid remains but the listener process could not be verified.')
+        }
+        return
+    }
+    $process.Refresh()
+    if (-not $process.HasExited) {
+        $listenerVerificationError = $null
+        try {
+            $listener = Get-PostgresListenerProcess
+            if ($null -eq $listener -or [int]$listener.process.Id -ne [int]$process.Id) {
+                throw 'The listener no longer resolves to the captured PostgreSQL process.'
+            }
+            $null = Assert-BackendListenerOwner 'PostgreSQL' $script:mysqlPort $process.Id
+            $shutdownTargetVerified = $true
+        } catch {
+            $listenerVerificationError = $_.Exception.Message
+        }
+        if (-not $shutdownTargetVerified) {
+            try {
+                $pidFileProcess = Get-PostgresPidFileProcess
+                if ($null -eq $pidFileProcess -or [int]$pidFileProcess.process.Id -ne [int]$process.Id) {
+                    throw 'The run-owned postmaster.pid no longer resolves to the captured PostgreSQL process.'
+                }
+                $shutdownTargetVerified = $true
+            } catch {
+                $script:cleanupFailures.Add("Refused pg_ctl stop because neither the listener nor postmaster.pid identity could be verified: listener=$listenerVerificationError; pidFile=$($_.Exception.Message)")
+            }
+        }
+    } else {
+        $shutdownTargetVerified = $true
+    }
+    if ($shutdownTargetVerified -and -not $process.HasExited) {
+        try {
+            $result = Invoke-LoggedCommand $script:mysqlAdmin @('stop', '-D', $script:mysqlData, '-m', 'fast', '-w', '-t', '30') 'postgresql-shutdown' (Join-Path $script:logsRoot 'postgresql-shutdown.txt')
+            $commandExitCode = [int]$result.exitCode
+        } catch {
+            $script:cleanupFailures.Add("PostgreSQL pg_ctl stop failed: $($_.Exception.Message)")
+        }
+        try { $process.WaitForExit(30000) | Out-Null } catch { }
+        $process.Refresh()
+        if (-not $process.HasExited -and $shutdownTargetVerified) {
+            $forced = $true
+            try { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
+            catch { $script:cleanupFailures.Add("Could not stop verified run-owned PostgreSQL PID $($process.Id): $($_.Exception.Message)") }
+        }
+    }
+    $process.Refresh()
+    $processExited = $process.HasExited
+    $processExitCode = if ($processExited) { [int]$process.ExitCode } else { -1 }
+    $listenerAfter = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue)
+    if ($forced -or -not $shutdownTargetVerified -or $commandExitCode -ne 0 -or -not $processExited -or $processExitCode -ne 0 -or $listenerAfter.Count -ne 0) {
+        $script:cleanupFailures.Add("PostgreSQL shutdown was not clean (command=$commandExitCode process=$processExitCode listenerCount=$($listenerAfter.Count) targetVerified=$shutdownTargetVerified forced=$forced).")
+    }
+    $script:backendShutdowns.Add([ordered]@{
+        backend='postgresql'; command='pg_ctl stop -m fast -w'; commandExitCode=$commandExitCode
+        processId=[int]$process.Id; shutdownTargetVerified=$shutdownTargetVerified
+        processExitCode=$processExitCode; processExitCodeObserved=$processExited; processExited=$processExited; forced=$forced
     })
 }
 
@@ -682,7 +920,7 @@ $script:environmentNames = @(
     'JAVA_HOME', 'Path', 'PLUGDEV_ROOT', 'PLUGDEV_HOME', 'GRADLE_USER_HOME', 'SYNCMONEY_TEST_SERVER_JAR',
     'SYNCMONEY_CANDIDATE_VERSION', 'SYNCMONEY_TEST_GAME_PORT', 'SYNCMONEY_TEST_DB_TYPE',
     'SYNCMONEY_TEST_DB_PORT', 'SYNCMONEY_TEST_DB_USER', 'SYNCMONEY_TEST_DB_PASSWORD',
-    'SYNCMONEY_TEST_DB_NAME', 'SYNCMONEY_TEST_REDIS_PORT', 'T21_RUN_MARKER', 'MYSQL_PWD'
+    'SYNCMONEY_TEST_DB_NAME', 'SYNCMONEY_TEST_REDIS_PORT', 'T21_RUN_MARKER', 'MYSQL_PWD', 'PGPASSWORD'
 )
 $script:originalEnvironment = [ordered]@{}
 foreach ($name in $script:environmentNames) { $script:originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -753,7 +991,7 @@ $script:report = [ordered]@{
     java = [ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
     plugDev = [ordered]@{ root=$script:plugDevRoot; sourceCommit=(& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim(); cliSha256=(Get-FileHash -LiteralPath (Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js') -Algorithm SHA256).Hash.ToLowerInvariant() }
     configuration = [ordered]@{
-        schema=12; mode='sync'; databaseEnabled=$true; databaseType='mysql'; databaseIsolated=$true
+        schema=12; mode='sync'; databaseEnabled=$true; databaseType=$(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }); databaseIsolated=$true
         databaseHost='127.0.0.1'; databasePort=$script:mysqlPort; databaseName=$script:databaseName
         redisEnabled=$true; redisDatabase=15; redisIsolated=$true; redisHost='127.0.0.1'; redisPort=$script:redisPort
     }
@@ -772,6 +1010,14 @@ $script:report = [ordered]@{
     failure = $null
     logs = [ordered]@{}
 }
+if ($script:databaseProduct -ceq 'PostgreSQL') {
+    $script:report.Remove('mysql')
+    $script:report.postgresql = [ordered]@{
+        product='PostgreSQL'; version=$script:databaseServerVersion; serverVersion=$null; executableVersion=$mysqlVersionOutput
+        bin=$script:mysqlBinPath; dataDirectory=$script:mysqlData; processId=$null; listenerAddresses=@()
+        startCommand='pg_ctl start -w'; startCommandExitCode=$null; startCommandProcessExited=$false
+    }
+}
 
 try {
     $env:JAVA_HOME = $script:javaHomePath
@@ -782,7 +1028,7 @@ try {
     $env:SYNCMONEY_TEST_SERVER_JAR = $script:serverPath
     $env:SYNCMONEY_CANDIDATE_VERSION = $CandidateVersion
     $env:SYNCMONEY_TEST_GAME_PORT = [string]$script:gamePort
-    $env:SYNCMONEY_TEST_DB_TYPE = 'mysql'
+    $env:SYNCMONEY_TEST_DB_TYPE = if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
     $env:SYNCMONEY_TEST_DB_PORT = [string]$script:mysqlPort
     $env:SYNCMONEY_TEST_DB_USER = $script:databaseUser
     $env:SYNCMONEY_TEST_DB_PASSWORD = $script:databasePassword
@@ -793,6 +1039,34 @@ try {
     Initialize-T21ProjectWorkspace $script:workspace
     New-Item -ItemType Directory -Force -Path (Join-Path $script:runRoot '.plugdev-home'), (Join-Path $script:runRoot '.gradle-user-home') | Out-Null
 
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $postgresInitLog = Join-Path $script:logsRoot 'postgresql-initialize.stdout.txt'
+        $postgresPasswordFile = Join-Path $script:mysqlRoot 'postgres-superuser-password.txt'
+        [IO.File]::WriteAllText($postgresPasswordFile, $script:databasePassword + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        try {
+            $initResult = Invoke-LoggedCommand $script:postgresInitDb @('-D', $script:mysqlData, '-U', 'postgres', '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--pwfile', $postgresPasswordFile, '--encoding=UTF8') 'postgresql-initialize' $postgresInitLog
+        } finally {
+            if (Test-Path -LiteralPath $postgresPasswordFile -PathType Leaf) { Remove-Item -LiteralPath $postgresPasswordFile -Force }
+        }
+        if ($initResult.exitCode -ne 0) { throw "PostgreSQL 18.1 isolated data-directory initialization failed with exit code $($initResult.exitCode); see $postgresInitLog." }
+
+        $postgresServerLog = Join-Path $script:logsRoot 'postgresql-server.log'
+        $postgresOptions = "-h 127.0.0.1 -p $script:mysqlPort -c listen_addresses=127.0.0.1"
+        $postgresStart = Invoke-PostgresStart $script:mysqlAdmin @('start', '-D', $script:mysqlData, '-l', $postgresServerLog, '-o', $postgresOptions, '-w', '-t', '45') 'postgresql-start' (Join-Path $script:logsRoot 'postgresql-start.txt')
+        $script:postgresStartCommandExitCode = [int]$postgresStart.exitCode
+        $script:report.postgresql.startCommandExitCode = [int]$postgresStart.exitCode
+        $script:report.postgresql.startCommandProcessExited = [bool]$postgresStart.processExited
+        if ($postgresStart.exitCode -ne 0) { throw "PostgreSQL pg_ctl start exited $($postgresStart.exitCode); see $postgresStart.logPath." }
+        Wait-PostgresReady
+
+        $mysqlVersion = @(Invoke-PostgresQuery "SELECT current_setting('server_version');" 'postgresql-server-version' -asRoot)
+        if ($mysqlVersion.Count -ne 1 -or $mysqlVersion[0].Trim() -cne $script:databaseServerVersion) {
+            throw "Isolated PostgreSQL server returned unexpected version '$($mysqlVersion -join ',')'."
+        }
+        $script:report.postgresql.serverVersion = $mysqlVersion[0].Trim()
+        $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser LOGIN PASSWORD '$script:databasePassword';" 'postgresql-create-isolated-role' -asRoot
+        $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER $script:databaseUser;" 'postgresql-create-isolated-database' -asRoot
+    } else {
     $mysqlInitLog = Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-initialize.stdout.txt')
     $mysqlHome = Split-Path -Parent $script:mysqlBinPath
     if ($script:databaseProduct -ceq 'MariaDB') {
@@ -826,6 +1100,7 @@ try {
     $collation = if ($script:databaseProduct -ceq 'MariaDB') { 'utf8mb4_general_ci' } else { 'utf8mb4_0900_ai_ci' }
     $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE $collation; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; CREATE USER '$($script:databaseUser)'@'localhost' IDENTIFIED BY '$($script:databasePassword)'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
     $null = Invoke-MySqlQuery $sql 'mysql-create-isolated-schema' -asRoot
+    }
 
     $redisConfig = Join-Path $script:redisRoot 'redis.conf'
     $redisLines = @(
@@ -841,11 +1116,22 @@ try {
     if ($redisInfo.output -notmatch '(?m)^redis_version:8\.10\.1$') { throw 'Isolated Redis server did not report version 8.10.1.' }
     if (((Invoke-Redis @('-n', '15', 'DBSIZE') 'redis-initial-dbsize').output.Trim()) -ne '0') { throw 'Isolated Redis DB 15 was not empty before the runtime cycle.' }
 
-    $script:report.backendProcesses = [ordered]@{
-        mysql = [ordered]@{ product=$script:databaseProduct; version=$mysqlVersion[0]; processId=[int]$script:mysqlProcess.Id; launchProcessId=[int]$script:mysqlLauncherProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner $script:databaseProduct $script:mysqlPort $script:mysqlProcess.Id) }
-        redis = [ordered]@{ version='8.10.1'; processId=[int]$script:redisProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner 'Redis' $script:redisPort $script:redisProcess.Id) }
+    $script:report.backendProcesses = [ordered]@{}
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $script:report.backendProcesses.postgresql = [ordered]@{
+            product='PostgreSQL'; version=$mysqlVersion[0].Trim(); processId=[int]$script:mysqlProcess.Id; runOwned=$true
+            listenerOwnerVerified=(Assert-BackendListenerOwner 'PostgreSQL' $script:mysqlPort $script:mysqlProcess.Id)
+            listenerAddresses=@($script:report.postgresql.listenerAddresses)
+        }
+    } else {
+        $script:report.backendProcesses.mysql = [ordered]@{
+            product=$script:databaseProduct; version=$mysqlVersion[0]; processId=[int]$script:mysqlProcess.Id
+            launchProcessId=[int]$script:mysqlLauncherProcess.Id; runOwned=$true
+            listenerOwnerVerified=(Assert-BackendListenerOwner $script:databaseProduct $script:mysqlPort $script:mysqlProcess.Id)
+            listenerAddresses=@($script:report.mysql.listenerAddresses)
+        }
     }
-    $script:report.backendProcesses.mysql.listenerAddresses = @($script:report.mysql.listenerAddresses)
+    $script:report.backendProcesses.redis = [ordered]@{ version='8.10.1'; processId=[int]$script:redisProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner 'Redis' $script:redisPort $script:redisProcess.Id) }
 
     Push-Location $script:workspace
     try {
@@ -936,7 +1222,12 @@ try {
     $script:report.failure = $script:failure
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
-        if (-not (Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PaperEndpoint $PaperEndpoint)) {
+        $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
+            Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PaperEndpoint $PaperEndpoint
+        } else {
+            Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PaperEndpoint $PaperEndpoint
+        }
+        if (-not $reportAccepted) {
             $script:report.status = 'FAIL'
             $script:failure = 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
         }
@@ -953,7 +1244,7 @@ try {
 }
 
 if ($null -ne $script:failure -or $script:report.status -cne 'PASS_BOUNDED_SUBCASE') {
-    throw "T21 MySQL SYNC runtime did not pass. Report: $script:reportPath"
+    throw "T21 $script:databaseProduct SYNC runtime did not pass. Report: $script:reportPath"
 }
-$databaseRuntimeLabel = if ($script:databaseProduct -ceq 'MariaDB') { 'MariaDB 12.3.3 using the MySQL protocol' } else { 'MySQL 8.0.42' }
+$databaseRuntimeLabel = switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } }
 Write-Output "PASS_BOUNDED_SUBCASE: Paper $($script:paperTarget.minecraftVersion)#$($script:paperTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"

@@ -41,23 +41,37 @@ function Assert-T21PlatformIdentity(
     }
 }
 
-function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum') {
-    if ($PaperEndpoint -ceq 'Minimum') {
-        return [ordered]@{
-            taskSuffix = 'minimum-Paper'
-            software = 'paper'
-            minecraftVersion = '1.21.6'
-            build = 48
-            sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
+    switch -CaseSensitive ($PaperEndpoint) {
+        'Minimum' {
+            return [ordered]@{
+                taskSuffix = 'minimum-Paper'
+                software = 'paper'
+                minecraftVersion = '1.21.6'
+                build = 48
+                sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+            }
+        }
+        'Maximum' {
+            return [ordered]@{
+                taskSuffix = 'maximum-Paper'
+                software = 'paper'
+                minecraftVersion = '26.3'
+                build = 166
+                sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+            }
+        }
+        'CurrentStable' {
+            return [ordered]@{
+                taskSuffix = 'current-stable-Paper'
+                software = 'paper'
+                minecraftVersion = '26.3'
+                build = 178
+                sha256 = '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757'
+            }
         }
     }
-    return [ordered]@{
-        taskSuffix = 'maximum-Paper'
-        software = 'paper'
-        minecraftVersion = '26.3'
-        build = 166
-        sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
-    }
+    throw "Unsupported T21 Paper endpoint: $PaperEndpoint"
 }
 
 function Get-T21ShutdownFailureMarkers([string]$serverLogText) {
@@ -127,7 +141,7 @@ function Test-T21RuntimeArtifactPinCoverage([object[]]$runtimePluginArtifacts, [
             if ($null -eq $pinProperty) { return $false }
             $matchesExpectedPin = $pinProperty.Value
         }
-        if ($matchesExpectedPin -ne $true) { return $false }
+        if (-not (Test-T21ObservedBoolean $matchesExpectedPin $true)) { return $false }
     }
 
     return $true
@@ -250,7 +264,7 @@ function Test-T21ServerJarProvenanceObservation(
     $launchCommand = Get-T21ObservedValue $bootstrap 'launchCommand'
     $launchPid = 0
     if ($null -eq $launchCommand -or
-        (Get-T21ObservedValue $launchCommand 'observed') -ne $true -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $launchCommand 'observed') $true) -or
         -not [int]::TryParse([string](Get-T21ObservedValue $launchCommand 'processId'), [ref]$launchPid) -or
         $launchPid -le 0 -or
         -not (Test-T21PathsEqual ([string](Get-T21ObservedValue $launchCommand 'argumentPath')) $expectedBootstrapPath)) {
@@ -313,6 +327,33 @@ function Test-T21ExpectedExitCode([object]$actual, [int]$expected) {
     return $parsed -eq $expected
 }
 
+function Test-T21IntegralNumber([object]$value, [long]$minimum, [long]$maximum) {
+    if ($null -eq $value -or $value -is [bool]) { return $false }
+    $integralTypes = @(
+        [byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64]
+    )
+    $valueType = $value.GetType()
+    if ($valueType -notin $integralTypes) { return $false }
+    try {
+        $decimalValue = [decimal]$value
+        return $decimalValue -ge [decimal]$minimum -and $decimalValue -le [decimal]$maximum
+    } catch {
+        return $false
+    }
+}
+
+function Test-T21ObservedBoolean([object]$value, [bool]$expected) {
+    return $value -is [bool] -and $value -eq $expected
+}
+
+function Test-T21PostgresProcessId([object]$value) {
+    return Test-T21IntegralNumber $value 1 ([int]::MaxValue)
+}
+
+function Test-T21PostgresExitCode([object]$value, [int]$expected) {
+    return (Test-T21IntegralNumber $value ([int]::MinValue) ([int]::MaxValue)) -and ([int]$value -eq $expected)
+}
+
 function Test-T21BackendShutdownCoverage([object[]]$observations) {
     if ($observations.Count -ne 4) { return $false }
 
@@ -324,8 +365,8 @@ function Test-T21BackendShutdownCoverage([object[]]$observations) {
         if ($redis[0].result -cne 'VERIFIED' -or $redis[0].shutdownCommand -cne 'SHUTDOWN SAVE' -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $redis[0] 'shutdownExitCode') 0) -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $redis[0] 'processExitCode') 0) -or
-            (Get-T21ObservedValue $redis[0] 'processExitCodeObserved') -ne $true -or
-            $redis[0].processExitVerified -ne $true) { return $false }
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redis[0] 'processExitCodeObserved') $true) -or
+            -not (Test-T21ObservedBoolean $redis[0].processExitVerified $true)) { return $false }
         if ($postgres[0].result -cne 'VERIFIED' -or $postgres[0].statusBefore -cne 'RUNNING' -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $postgres[0] 'statusBeforeExitCode') 0) -or $postgres[0].shutdownCommand -cne 'pg_ctl stop' -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $postgres[0] 'shutdownExitCode') 0) -or $postgres[0].statusAfter -cne 'STOPPED' -or
@@ -363,13 +404,13 @@ function Assert-T21NodeConfigObservation(
         $observation.serverName -ceq $expectedServerName -and
         [int]$observation.configVersion -eq 12 -and
         $observation.mode -ceq 'sync' -and
-        $observation.dbEnabled -eq $true -and
-        $observation.pubsubEnabled -eq $true -and
-        $observation.redisEnabled -eq $true -and
+        (Test-T21ObservedBoolean $observation.dbEnabled $true) -and
+        (Test-T21ObservedBoolean $observation.pubsubEnabled $true) -and
+        (Test-T21ObservedBoolean $observation.redisEnabled $true) -and
         $observation.redisHost -ceq '127.0.0.1' -and
         [int]$observation.redisPort -eq $expectedRedisPort -and
         [int]$observation.redisDatabase -eq 15 -and
-        $observation.databaseEnabled -eq $true -and
+        (Test-T21ObservedBoolean $observation.databaseEnabled $true) -and
         $observation.databaseType -ceq 'postgresql' -and
         $observation.databaseHost -ceq '127.0.0.1' -and
         [int]$observation.databasePort -eq $expectedSqlPort -and
@@ -441,21 +482,179 @@ function Test-T21MySqlRuntimeAccountParity([object[]]$sqlAccounts, [object[]]$re
     }
 }
 
-function Test-T21MySqlRuntimeReport(
+function ConvertFrom-T21WindowsCommandLine([string]$CommandLine) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine) -or [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'A nonempty Windows process command line is required.'
+    }
+
+    if ($null -eq ('T21WindowsCommandLineParser' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class T21WindowsCommandLineParser
+{
+    [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll", SetLastError = false)]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static string[] Parse(string commandLine)
+    {
+        int argumentCount;
+        IntPtr arguments = CommandLineToArgvW(commandLine, out argumentCount);
+        if (arguments == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            string[] parsed = new string[argumentCount];
+            for (int index = 0; index < argumentCount; index++)
+            {
+                IntPtr argument = Marshal.ReadIntPtr(arguments, index * IntPtr.Size);
+                parsed[index] = Marshal.PtrToStringUni(argument) ?? String.Empty;
+            }
+            return parsed;
+        }
+        finally
+        {
+            LocalFree(arguments);
+        }
+    }
+}
+'@ -ErrorAction Stop
+    }
+
+    return [T21WindowsCommandLineParser]::Parse($CommandLine)
+}
+
+function Test-T21PostgresProcessIdentity(
+    [int]$ProcessId,
+    [string]$ExpectedExecutablePath,
+    [string]$ActualExecutablePath,
+    [string]$CommandLine,
+    [string[]]$PostmasterPidLines,
+    [string]$ExpectedDataDirectory,
+    [int]$ExpectedPort,
+    [DateTime]$ProcessStartTimeUtc
+) {
+    try {
+        if ($null -eq $PostmasterPidLines -or $PostmasterPidLines.Count -lt 4) { return $false }
+
+        # PostgreSQL postmaster.pid stores PID, data directory, start time, then port.
+        $pidFileProcessId = 0
+        $pidFileStartTime = [long]0
+        $pidFilePort = 0
+        if (-not [int]::TryParse(([string]$PostmasterPidLines[0]).Trim(), [ref]$pidFileProcessId) -or
+            -not [long]::TryParse(([string]$PostmasterPidLines[2]).Trim(), [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$pidFileStartTime) -or
+            -not [int]::TryParse(([string]$PostmasterPidLines[3]).Trim(), [ref]$pidFilePort) -or
+            $pidFileProcessId -ne $ProcessId -or $pidFileStartTime -le 0 -or $pidFilePort -ne $ExpectedPort -or
+            $ProcessStartTimeUtc -eq [DateTime]::MinValue) { return $false }
+        $processStartUnixTime = [DateTimeOffset]::new($ProcessStartTimeUtc.ToUniversalTime()).ToUnixTimeSeconds()
+        if ([Math]::Abs([double]$pidFileStartTime - [double]$processStartUnixTime) -gt 10) { return $false }
+
+        $pidFileDataDirectory = [IO.Path]::GetFullPath(([string]$PostmasterPidLines[1]).Trim())
+        $expectedDataDirectoryPath = [IO.Path]::GetFullPath($ExpectedDataDirectory)
+        $expectedExecutable = [IO.Path]::GetFullPath($ExpectedExecutablePath)
+        $actualExecutable = [IO.Path]::GetFullPath($ActualExecutablePath)
+        $commandLineArguments = @(ConvertFrom-T21WindowsCommandLine $CommandLine)
+        $postgresOptionsWithSeparateValues = @('-B', '-c', '-C', '-d', '-D', '-h', '-k', '-N', '-p', '-S', '-f', '-t', '-W', '-r')
+        $dataDirectoryArgumentCount = 0
+        $portArgumentCount = 0
+        $hasExpectedDataDirectory = $false
+        $hasExpectedPort = $false
+        for ($argumentIndex = 0; $argumentIndex -lt $commandLineArguments.Count; $argumentIndex++) {
+            $argument = [string]$commandLineArguments[$argumentIndex]
+            if ([string]::Equals($argument, '-D', [StringComparison]::Ordinal)) {
+                $dataDirectoryArgumentCount++
+                if ($argumentIndex + 1 -ge $commandLineArguments.Count) { return $false }
+                $value = [string]$commandLineArguments[$argumentIndex + 1]
+                if ([IO.Path]::IsPathFullyQualified($value)) {
+                    $observedDataDirectoryPath = [IO.Path]::GetFullPath($value.Replace('/', [IO.Path]::DirectorySeparatorChar))
+                    if ($observedDataDirectoryPath -ieq $expectedDataDirectoryPath) { $hasExpectedDataDirectory = $true }
+                }
+                $argumentIndex++
+            } elseif ([string]::Equals($argument, '-p', [StringComparison]::Ordinal)) {
+                $portArgumentCount++
+                if ($argumentIndex + 1 -ge $commandLineArguments.Count) { return $false }
+                $value = [string]$commandLineArguments[$argumentIndex + 1]
+                $observedPort = 0
+                if ([int]::TryParse($value, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$observedPort) -and
+                    $observedPort -eq $ExpectedPort) { $hasExpectedPort = $true }
+                $argumentIndex++
+            } elseif ([Array]::IndexOf($postgresOptionsWithSeparateValues, $argument) -ge 0) {
+                if ($argumentIndex + 1 -ge $commandLineArguments.Count) { return $false }
+                $argumentIndex++
+            }
+        }
+        if ($pidFileDataDirectory -ine $expectedDataDirectoryPath -or
+            $actualExecutable -ine $expectedExecutable -or
+            $commandLineArguments.Count -lt 1 -or
+            $dataDirectoryArgumentCount -ne 1 -or -not $hasExpectedDataDirectory -or
+            $portArgumentCount -ne 1 -or -not $hasExpectedPort) { return $false }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-T21PostgresListenerIdentity(
+    [object[]]$ListenerOwners,
+    [string[]]$ListenerAddresses,
+    [int]$ProcessId,
+    [string]$ExpectedExecutablePath,
+    [string]$ActualExecutablePath,
+    [string]$CommandLine,
+    [string[]]$PostmasterPidLines,
+    [string]$ExpectedDataDirectory,
+    [int]$ExpectedPort,
+    [DateTime]$ProcessStartTimeUtc
+) {
+    try {
+        if ($null -eq $ListenerOwners -or $null -eq $ListenerAddresses -or
+            $ListenerOwners.Count -ne 1 -or $ListenerAddresses.Count -eq 0 -or
+            @($ListenerAddresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0 -or
+            [int]$ListenerOwners[0] -ne $ProcessId) { return $false }
+
+        return Test-T21PostgresProcessIdentity -ProcessId $ProcessId `
+            -ExpectedExecutablePath $ExpectedExecutablePath -ActualExecutablePath $ActualExecutablePath `
+            -CommandLine $CommandLine -PostmasterPidLines $PostmasterPidLines `
+            -ExpectedDataDirectory $ExpectedDataDirectory -ExpectedPort $ExpectedPort `
+            -ProcessStartTimeUtc $ProcessStartTimeUtc
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-T21SqlRuntimeProduct([string]$requestedProduct) {
+    if ($requestedProduct -ieq 'MySQL') { return 'MySQL' }
+    if ($requestedProduct -ieq 'MariaDB') { return 'MariaDB' }
+    if ($requestedProduct -ieq 'PostgreSQL') { return 'PostgreSQL' }
+    throw "Unsupported T21 SQL runtime product: $requestedProduct"
+}
+
+function Test-T21SqlRuntimeReport(
     [object]$report,
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
-    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
-    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
 ) {
     try {
         if ($null -eq $report) { return $false }
         $expectedPaper = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
         $schemaVersion = Get-T21ObservedValue $report 'schemaVersion'
+        $isPostgreSql = $DatabaseProduct -ceq 'PostgreSQL'
+        $sqlReportKey = if ($isPostgreSql) { 'postgresql' } else { 'mysql' }
         $expectedTask = "T21-M05-SYNC-$DatabaseProduct-$($expectedPaper.taskSuffix)"
         $legacyMySqlReport = $schemaVersion -eq 1 -and $DatabaseProduct -ceq 'MySQL'
         if ($schemaVersion -notin @(1, 2, 3) -or
             (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3)) -or
+            ($isPostgreSql -and $schemaVersion -ne 3) -or
             (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
 
@@ -469,9 +668,18 @@ function Test-T21MySqlRuntimeReport(
         } else {
             $null -ne $report.PSObject.Properties['cleanupFailures']
         }
+        $cleanupFailures = $null
+        if ($report -is [Collections.IDictionary]) {
+            if ($report.Contains('cleanupFailures')) { $cleanupFailures = $report['cleanupFailures'] }
+        } else {
+            $cleanupFailuresProperty = $report.PSObject.Properties['cleanupFailures']
+            if ($null -ne $cleanupFailuresProperty) { $cleanupFailures = $cleanupFailuresProperty.Value }
+        }
         if (-not $hasFailureField -or -not $hasCleanupFailuresField -or
             $null -ne (Get-T21ObservedValue $report 'failure') -or
-            @(Get-T21ObservedValue $report 'cleanupFailures').Count -ne 0) { return $false }
+            $null -eq $cleanupFailures -or
+            $cleanupFailures -isnot [Collections.IList] -or
+            $cleanupFailures.Count -ne 0) { return $false }
 
         $server = Get-T21ObservedValue $report 'server'
         $candidate = Get-T21ObservedValue $report 'candidate'
@@ -489,78 +697,123 @@ function Test-T21MySqlRuntimeReport(
             (Get-T21ObservedValue $configuration 'configSchema') -ne 12 -or
             (Get-T21ObservedValue $configuration 'mode') -cne 'sync' -or
             (Get-T21ObservedValue $configuration 'observedMode') -cne 'sync' -or
-            (Get-T21ObservedValue $configuration 'databaseEnabled') -ne $true -or
-            (Get-T21ObservedValue $configuration 'databaseType') -cne 'mysql' -or
-            (Get-T21ObservedValue $configuration 'databaseIsolated') -ne $true -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'databaseEnabled') $true) -or
+            (Get-T21ObservedValue $configuration 'databaseType') -cne $(if ($isPostgreSql) { 'postgresql' } else { 'mysql' }) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'databaseIsolated') $true) -or
             (Get-T21ObservedValue $configuration 'databaseHost') -cne '127.0.0.1' -or
             [int](Get-T21ObservedValue $configuration 'databasePort') -lt 1 -or
             [int](Get-T21ObservedValue $configuration 'databasePort') -gt 65535 -or
             [string](Get-T21ObservedValue $configuration 'databaseName') -notmatch '^syncmoney_t21(?:_[a-f0-9]{8})?$' -or
             (Get-T21ObservedValue $configuration 'databaseNameObserved') -cne (Get-T21ObservedValue $configuration 'databaseName') -or
-            (Get-T21ObservedValue $configuration 'redisEnabled') -ne $true -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'redisEnabled') $true) -or
             (Get-T21ObservedValue $configuration 'redisDatabase') -ne 15 -or
-            (Get-T21ObservedValue $configuration 'redisIsolated') -ne $true -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'redisIsolated') $true) -or
             (Get-T21ObservedValue $configuration 'redisHost') -cne '127.0.0.1' -or
             [int](Get-T21ObservedValue $configuration 'redisPort') -lt 1 -or
             [int](Get-T21ObservedValue $configuration 'redisPort') -gt 65535 -or
             [int](Get-T21ObservedValue $configuration 'databasePort') -eq [int](Get-T21ObservedValue $configuration 'redisPort')) { return $false }
 
-        $expectedBackendVersion = if ($DatabaseProduct -ceq 'MariaDB') { '12.3.3-MariaDB' } else { '8.0.42' }
+        $expectedBackendVersion = switch ($DatabaseProduct) {
+            'MariaDB' { '12.3.3-MariaDB' }
+            'PostgreSQL' { '18.1' }
+            default { '8.0.42' }
+        }
         $backendProcesses = Get-T21ObservedValue $report 'backendProcesses'
-        $mysql = Get-T21ObservedValue $report 'mysql'
+        $sqlBackend = Get-T21ObservedValue $report $sqlReportKey
         $redis = Get-T21ObservedValue $report 'redis'
-        $mysqlProcess = Get-T21ObservedValue $backendProcesses 'mysql'
+        $sqlProcess = Get-T21ObservedValue $backendProcesses $sqlReportKey
         $redisProcess = Get-T21ObservedValue $backendProcesses 'redis'
-        $mysqlListenerAddresses = @(Get-T21ObservedValue $mysqlProcess 'listenerAddresses')
-        $reportedProduct = Get-T21ObservedValue $mysql 'product'
-        $reportedServerVersion = [string](Get-T21ObservedValue $mysql 'serverVersion')
-        $serverVersionValid = if ($legacyMySqlReport) {
+        $sqlListenerAddresses = @(Get-T21ObservedValue $sqlProcess 'listenerAddresses')
+        $reportedProduct = Get-T21ObservedValue $sqlBackend 'product'
+        $reportedServerVersion = [string](Get-T21ObservedValue $sqlBackend 'serverVersion')
+        $reportedExecutableVersion = [string](Get-T21ObservedValue $sqlBackend 'executableVersion')
+        $serverVersionValid = if ($isPostgreSql) {
+            $reportedServerVersion -ceq '18.1' -and $reportedExecutableVersion -match '(?i)^postgres \(PostgreSQL\) 18\.1$'
+        } elseif ($legacyMySqlReport) {
             [regex]::IsMatch($reportedServerVersion, '(?i)(?<![0-9A-Za-z.])8\.0\.42(?![0-9A-Za-z.])')
         } else {
-            $reportedExecutableVersion = [string](Get-T21ObservedValue $mysql 'executableVersion')
             $reportedServerVersion -ceq $expectedBackendVersion -and
                 $reportedExecutableVersion -match ('(?i)\bVer\s+' + [regex]::Escape($expectedBackendVersion) + '(?:\b|$)')
         }
-        if ((Get-T21ObservedValue $mysql 'version') -cne $expectedBackendVersion -or
+        $launchProcessInvalid = -not $isPostgreSql -and [int](Get-T21ObservedValue $sqlProcess 'launchProcessId') -le 0
+        if ((Get-T21ObservedValue $sqlBackend 'version') -cne $expectedBackendVersion -or
             -not $serverVersionValid -or
             ($schemaVersion -ge 2 -and $reportedProduct -cne $DatabaseProduct) -or
             (Get-T21ObservedValue $redis 'version') -cne '8.10.1' -or
-            (Get-T21ObservedValue $mysqlProcess 'version') -cne $expectedBackendVersion -or
-            ($schemaVersion -ge 2 -and (Get-T21ObservedValue $mysqlProcess 'product') -cne $DatabaseProduct) -or
-            (Get-T21ObservedValue $mysqlProcess 'runOwned') -ne $true -or
-            (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') -ne $true -or
-            [int](Get-T21ObservedValue $mysqlProcess 'processId') -le 0 -or
-            [int](Get-T21ObservedValue $mysqlProcess 'launchProcessId') -le 0 -or
-            $mysqlListenerAddresses.Count -eq 0 -or
-            @($mysqlListenerAddresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0 -or
+            (Get-T21ObservedValue $sqlProcess 'version') -cne $expectedBackendVersion -or
+            ($schemaVersion -ge 2 -and (Get-T21ObservedValue $sqlProcess 'product') -cne $DatabaseProduct) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlProcess 'runOwned') $true) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlProcess 'listenerOwnerVerified') $true) -or
+            [int](Get-T21ObservedValue $sqlProcess 'processId') -le 0 -or
+            $launchProcessInvalid -or
+            $sqlListenerAddresses.Count -eq 0 -or
+            @($sqlListenerAddresses | Where-Object { $_ -notin @('127.0.0.1', '::1') }).Count -gt 0 -or
             (Get-T21ObservedValue $redisProcess 'version') -cne '8.10.1' -or
-            (Get-T21ObservedValue $redisProcess 'runOwned') -ne $true -or
-            (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') -ne $true -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'runOwned') $true) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') $true) -or
             [int](Get-T21ObservedValue $redisProcess 'processId') -le 0) { return $false }
+
+        if ($isPostgreSql) {
+            $runDirectoryForSql = [string](Get-T21ObservedValue $report 'runDirectory')
+            $reportedDataDirectory = [string](Get-T21ObservedValue $sqlBackend 'dataDirectory')
+            if ([string]::IsNullOrWhiteSpace($runDirectoryForSql) -or [string]::IsNullOrWhiteSpace($reportedDataDirectory) -or
+                [IO.Path]::GetFullPath($reportedDataDirectory) -cne [IO.Path]::GetFullPath((Join-Path $runDirectoryForSql 'postgresql\data')) -or
+                (Test-T21PathContainsReparsePoint $reportedDataDirectory)) { return $false }
+
+            $reportedPostgresPid = [int](Get-T21ObservedValue $sqlBackend 'processId')
+            $backendPostgresPid = [int](Get-T21ObservedValue $sqlProcess 'processId')
+            $reportedPostgresAddresses = @((Get-T21ObservedValue $sqlBackend 'listenerAddresses') | ForEach-Object { [string]$_ } | Sort-Object -CaseSensitive)
+            $backendPostgresAddresses = @((Get-T21ObservedValue $sqlProcess 'listenerAddresses') | ForEach-Object { [string]$_ } | Sort-Object -CaseSensitive)
+            if ((Get-T21ObservedValue $sqlBackend 'startCommand') -cne 'pg_ctl start -w' -or
+                -not (Test-T21PostgresExitCode (Get-T21ObservedValue $sqlBackend 'startCommandExitCode') 0) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlBackend 'startCommandProcessExited') $true) -or
+                -not (Test-T21PostgresProcessId (Get-T21ObservedValue $sqlBackend 'processId')) -or
+                -not (Test-T21PostgresProcessId (Get-T21ObservedValue $sqlProcess 'processId')) -or
+                $reportedPostgresPid -ne $backendPostgresPid -or
+                $reportedPostgresAddresses.Count -eq 0 -or $reportedPostgresAddresses.Count -ne $backendPostgresAddresses.Count) { return $false }
+            foreach ($addressIndex in 0..($reportedPostgresAddresses.Count - 1)) {
+                if ($reportedPostgresAddresses[$addressIndex] -cne $backendPostgresAddresses[$addressIndex]) { return $false }
+            }
+        }
 
         $backendShutdowns = @(Get-T21ObservedValue $report 'backendShutdowns')
         if ($backendShutdowns.Count -ne 2) { return $false }
-        $mysqlShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq 'mysql' })
+        $sqlShutdownBackend = if ($isPostgreSql) { 'postgresql' } else { 'mysql' }
+        $sqlShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq $sqlShutdownBackend })
         $redisShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq 'redis' })
-        if ($mysqlShutdown.Count -ne 1 -or $redisShutdown.Count -ne 1 -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'command') -cne 'mysqladmin shutdown' -or
-            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'commandExitCode') 0) -or
-            [int](Get-T21ObservedValue $mysqlShutdown[0] 'processId') -ne [int](Get-T21ObservedValue $mysqlProcess 'processId') -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'shutdownTargetVerified') -ne $true -or
-            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'processExitCode') 0) -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'processExitCodeObserved') -ne $true -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'processExited') -ne $true -or
-            [int](Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessId') -ne [int](Get-T21ObservedValue $mysqlProcess 'launchProcessId') -or
-            -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExitCode') 0) -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExitCodeObserved') -ne $true -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'launchProcessExited') -ne $true -or
-            (Get-T21ObservedValue $mysqlShutdown[0] 'forced') -ne $false -or
+        $sqlShutdownValid = if ($isPostgreSql) {
+            $sqlShutdown.Count -eq 1 -and
+                (Get-T21ObservedValue $sqlShutdown[0] 'command') -ceq 'pg_ctl stop -m fast -w' -and
+                (Test-T21PostgresExitCode (Get-T21ObservedValue $sqlShutdown[0] 'commandExitCode') 0) -and
+                (Test-T21PostgresProcessId (Get-T21ObservedValue $sqlShutdown[0] 'processId')) -and
+                [int](Get-T21ObservedValue $sqlShutdown[0] 'processId') -eq [int](Get-T21ObservedValue $sqlProcess 'processId') -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'shutdownTargetVerified') $true) -and
+                (Test-T21PostgresExitCode (Get-T21ObservedValue $sqlShutdown[0] 'processExitCode') 0) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'processExitCodeObserved') $true) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'processExited') $true) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'forced') $false)
+        } else {
+            $sqlShutdown.Count -eq 1 -and
+                (Get-T21ObservedValue $sqlShutdown[0] 'command') -ceq 'mysqladmin shutdown' -and
+                (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'commandExitCode') 0) -and
+                [int](Get-T21ObservedValue $sqlShutdown[0] 'processId') -eq [int](Get-T21ObservedValue $sqlProcess 'processId') -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'shutdownTargetVerified') $true) -and
+                (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'processExitCode') 0) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'processExitCodeObserved') $true) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'processExited') $true) -and
+                [int](Get-T21ObservedValue $sqlShutdown[0] 'launchProcessId') -eq [int](Get-T21ObservedValue $sqlProcess 'launchProcessId') -and
+                (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExitCode') 0) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExitCodeObserved') $true) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExited') $true) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'forced') $false)
+        }
+        if (-not $sqlShutdownValid -or $redisShutdown.Count -ne 1 -or
             (Get-T21ObservedValue $redisShutdown[0] 'command') -cne 'SHUTDOWN SAVE' -or
             (Get-T21ObservedValue $redisShutdown[0] 'commandExitCode') -notin @(0, 1) -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $redisShutdown[0] 'processExitCode') 0) -or
-            (Get-T21ObservedValue $redisShutdown[0] 'processExitCodeObserved') -ne $true -or
-            (Get-T21ObservedValue $redisShutdown[0] 'processExited') -ne $true -or
-            (Get-T21ObservedValue $redisShutdown[0] 'forced') -ne $false) { return $false }
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'processExitCodeObserved') $true) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'processExited') $true) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'forced') $false)) { return $false }
 
         $expectedStages = @('candidate-write', 'candidate-restart-read')
         $startupObservations = @(Get-T21ObservedValue $report 'startupObservations')
@@ -569,7 +822,7 @@ function Test-T21MySqlRuntimeReport(
             $startup = $startupObservations[$index]
             $runtimeIdentity = Get-T21ObservedValue $startup 'runtimeIdentity'
             if ((Get-T21ObservedValue $startup 'stage') -cne $expectedStages[$index] -or
-                (Get-T21ObservedValue $startup 'enabled') -ne $true -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'enabled') $true) -or
                 (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
                 [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
                 ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
@@ -597,6 +850,58 @@ function Test-T21MySqlRuntimeReport(
         if ([string]::IsNullOrWhiteSpace($runDirectory)) { return $false }
         $runRoot = [IO.Path]::GetFullPath($runDirectory).TrimEnd([char[]]@('\', '/'))
         $runRootPrefix = $runRoot + [IO.Path]::DirectorySeparatorChar
+        if ($schemaVersion -ge 3) {
+            $logEntries = if ($logMap -is [Collections.IDictionary]) {
+                @($logMap.GetEnumerator())
+            } else {
+                @($logMap.PSObject.Properties | Where-Object { $_.MemberType -in @('NoteProperty', 'Property') })
+            }
+            $logsRoot = [IO.Path]::GetFullPath((Join-Path $runRoot 'logs')).TrimEnd([char[]]@('\', '/'))
+            $logsRootPrefix = $logsRoot + [IO.Path]::DirectorySeparatorChar
+            if ($logEntries.Count -eq 0 -or
+                (Test-T21PathContainsReparsePoint $logsRoot) -or
+                -not (Test-Path -LiteralPath $logsRoot -PathType Container)) { return $false }
+
+            $logComparison = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+                [StringComparison]::OrdinalIgnoreCase
+            } else {
+                [StringComparison]::Ordinal
+            }
+            $declaredLogPaths = [Collections.Generic.HashSet[string]]::new(
+                $(if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal })
+            )
+            foreach ($logEntry in $logEntries) {
+                $logPath = if ($logEntry -is [Collections.DictionaryEntry]) { [string]$logEntry.Key } else { [string]$logEntry.Name }
+                $logEvidence = if ($logEntry -is [Collections.DictionaryEntry]) { $logEntry.Value } else { $logEntry.Value }
+                if ([string]::IsNullOrWhiteSpace($logPath) -or [IO.Path]::IsPathRooted($logPath)) { return $false }
+                $fullLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $logPath))
+                if (-not $fullLogPath.StartsWith($logsRootPrefix, $logComparison) -or
+                    (Test-T21PathContainsReparsePoint $fullLogPath) -or
+                    -not (Test-Path -LiteralPath $fullLogPath -PathType Leaf)) { return $false }
+                $relativeLogPath = $fullLogPath.Substring($runRootPrefix.Length)
+                if (-not $declaredLogPaths.Add($relativeLogPath)) { return $false }
+
+                $recordedBytes = Get-T21ObservedValue $logEvidence 'bytes'
+                $recordedSha256 = [string](Get-T21ObservedValue $logEvidence 'sha256')
+                if (-not (Test-T21IntegralNumber $recordedBytes 0 ([long]::MaxValue)) -or
+                    $recordedSha256 -notmatch '^[0-9a-fA-F]{64}$') { return $false }
+                $actualLog = Get-Item -LiteralPath $fullLogPath -Force -ErrorAction Stop
+                $actualLogSha256 = (Get-FileHash -LiteralPath $fullLogPath -Algorithm SHA256 -ErrorAction Stop).Hash
+                if ([long]$recordedBytes -ne [long]$actualLog.Length -or
+                    $recordedSha256.ToLowerInvariant() -cne $actualLogSha256.ToLowerInvariant()) { return $false }
+            }
+
+            $logTreeItems = @(Get-ChildItem -LiteralPath $logsRoot -Recurse -Force -ErrorAction Stop)
+            foreach ($treeItem in $logTreeItems) {
+                if (($treeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            }
+            $actualLogs = @($logTreeItems | Where-Object { -not $_.PSIsContainer })
+            if ($actualLogs.Count -ne $declaredLogPaths.Count) { return $false }
+            foreach ($actualLog in $actualLogs) {
+                $relativeLogPath = $actualLog.FullName.Substring($runRootPrefix.Length)
+                if (-not $declaredLogPaths.Contains($relativeLogPath)) { return $false }
+            }
+        }
         $hasGradleCleanup = if ($report -is [Collections.IDictionary]) {
             $report.Contains('gradleDaemonCleanup')
         } else {
@@ -615,7 +920,7 @@ function Test-T21MySqlRuntimeReport(
             if ([string]::IsNullOrWhiteSpace($reportedGradleHome) -or
                 [IO.Path]::GetFullPath($reportedGradleHome) -cne $expectedGradleHome -or
                 (Test-T21PathContainsReparsePoint $expectedGradleHome) -or
-                $processExitVerified -ne $true -or $processIdsAfterStop.Count -ne 0 -or
+                -not (Test-T21ObservedBoolean $processExitVerified $true) -or $processIdsAfterStop.Count -ne 0 -or
                 @($processIdsBeforeStop | Where-Object { [int]$_ -le 0 }).Count -gt 0 -or
                 @($processIdsBeforeStop | Select-Object -Unique).Count -ne $processIdsBeforeStop.Count -or
                 ($processIdsBeforeStop.Count -gt 0 -and $stopExitCode -ne 0) -or
@@ -688,9 +993,9 @@ function Test-T21MySqlRuntimeReport(
                 [int](Get-T21ObservedValue $stop 'processId') -ne [int](Get-T21ObservedValue $startupObservations[$index] 'processId') -or
                 -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $stop 'commandExitCode') 0) -or
                 -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $stop 'processExitCode') 0) -or
-                (Get-T21ObservedValue $stop 'processExitCodeObserved') -ne $true -or
-                (Get-T21ObservedValue $stop 'processExited') -ne $true -or
-                (Get-T21ObservedValue $stop 'disabledMarker') -ne $true) { return $false }
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $stop 'processExitCodeObserved') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $stop 'processExited') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $stop 'disabledMarker') $true)) { return $false }
         }
 
         $snapshots = @(Get-T21ObservedValue $report 'snapshots')
@@ -714,4 +1019,23 @@ function Test-T21MySqlRuntimeReport(
     } catch {
         return $false
     }
+}
+
+function Test-T21MySqlRuntimeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedCandidateSha256,
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
+) {
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PaperEndpoint $PaperEndpoint
+}
+
+function Test-T21PostgresRuntimeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedCandidateSha256,
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
+) {
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PaperEndpoint $PaperEndpoint
 }
