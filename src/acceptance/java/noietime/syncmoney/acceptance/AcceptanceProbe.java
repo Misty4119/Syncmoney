@@ -2,6 +2,7 @@ package noietime.syncmoney.acceptance;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyEvent;
+import noietime.syncmoney.economy.EconomyWriteQueue;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.event.EventHandler;
@@ -99,11 +100,16 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             getLogger().info("T15_WORLD_CHANGE uuid=" + player.getUniqueId() + " from="
                     + event.getFrom().getName() + " to=" + player.getWorld().getName());
             String expectedWorld = expectedTeleportWorlds.get(player.getUniqueId());
-            if (expectedWorld != null && expectedWorld.equals(player.getWorld().getName())
-                    && expectedTeleportWorlds.remove(player.getUniqueId(), expectedWorld)) {
-                getLogger().info("T15_TELEPORT_REACHED uuid=" + player.getUniqueId()
-                        + " world=" + player.getWorld().getName());
-            }
+            recordTeleportReached(player, expectedWorld, "world-change-event");
+        }
+    }
+
+    private void recordTeleportReached(org.bukkit.entity.Player player, String expectedWorld, String source) {
+        if (expectedWorld != null && expectedWorld.equals(player.getWorld().getName())
+                && expectedTeleportWorlds.remove(player.getUniqueId(), expectedWorld)) {
+            getLogger().info("T15_TELEPORT_REACHED uuid=" + player.getUniqueId()
+                    + " world=" + player.getWorld().getName() + " verifiedBy=" + source);
+            player.sendMessage("T15_TELEPORT_REACHED world=" + player.getWorld().getName());
         }
     }
 
@@ -127,7 +133,8 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
     public void onAcceptancePlayerQuit(PlayerQuitEvent event) {
         var player = event.getPlayer();
         if (player.getName().startsWith("Acceptance")) {
-            getLogger().info("T15_PLAYER_QUIT uuid=" + player.getUniqueId());
+            getLogger().info("T15_PLAYER_QUIT uuid=" + player.getUniqueId()
+                    + " world=" + player.getWorld().getName());
         }
     }
 
@@ -151,7 +158,7 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                         teleportWorldName = nether.getName();
                     }
                     LifecycleContext context = new LifecycleContext(registration.getProvider(),
-                            teleportDestination, teleportWorldName);
+                            readEconomyWriteQueue(plugin), teleportDestination, teleportWorldName);
                     getServer().getAsyncScheduler().runNow(this, asyncTask -> {
                         try {
                             BigDecimal balance = awaitAccountReady(plugin.getEconomyFacade(), uuid);
@@ -192,28 +199,85 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 getLogger().info("T15_ACCEPTED_WRITE scenario=" + scenario + " index=" + index
                         + " uuid=" + player.getUniqueId() + " amount=1.00 response=" + response.type);
             }
-
+            UUID uuid = player.getUniqueId();
+            int acceptedPending = readAcceptedWriteCount(context.writeQueue(), uuid);
+            require(acceptedPending >= 2,
+                    "two accepted writes remain incomplete at lifecycle action; observed=" + acceptedPending);
+            getLogger().info("T15_PENDING_AT_BOUNDARY scenario=" + scenario + " uuid=" + uuid
+                    + " pending=" + acceptedPending + " pending-state=accepted-not-completed");
+            getLogger().info("T15_BOUNDARY_ACTION scenario=" + scenario
+                    + " thread=" + Thread.currentThread().getName());
             switch (scenario.toLowerCase(java.util.Locale.ROOT)) {
                 case "logout" -> {
-                    getLogger().info("T15_LOGOUT_REQUEST uuid=" + player.getUniqueId());
+                    getLogger().info("T15_LOGOUT_REQUEST uuid=" + uuid);
                     player.kickPlayer("T15 accepted-write logout scenario");
                 }
                 case "teleport" -> {
                     var destination = context.teleportDestination();
-                    expectedTeleportWorlds.put(player.getUniqueId(), context.teleportWorldName());
-                    player.teleportAsync(destination, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
-                    getLogger().info("T15_TELEPORT_REQUEST uuid=" + player.getUniqueId()
-                            + " cause=PLUGIN destination=" + context.teleportWorldName() + ":0.5,80,0.5");
+                    String sourceWorldName = player.getWorld().getName();
+                    expectedTeleportWorlds.put(uuid, context.teleportWorldName());
+                    var teleport = player.teleportAsync(destination,
+                            org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
+                    teleport.whenComplete((success, failure) -> {
+                        if (failure != null) {
+                            getLogger().log(java.util.logging.Level.SEVERE,
+                                    "T15_TELEPORT_FUTURE_FAILURE uuid=" + uuid, failure);
+                        } else {
+                            getLogger().info("T15_TELEPORT_FUTURE_RESULT uuid=" + uuid
+                                    + " success=" + success);
+                            if (Boolean.TRUE.equals(success)) {
+                                player.getScheduler().run(this,
+                                        entityTask -> recordTeleportReached(player,
+                                                context.teleportWorldName(), "entity-scheduler-future"),
+                                        () -> getLogger().severe("T15_TELEPORT_ENTITY_RETIRED uuid=" + uuid));
+                            }
+                        }
+                    });
+                    getLogger().info("T15_TELEPORT_REQUEST uuid=" + uuid
+                            + " cause=PLUGIN destination=" + context.teleportWorldName() + ":0.5,80,0.5"
+                            + " source=" + sourceWorldName
+                            + " thread=" + Thread.currentThread().getName());
                 }
-                default -> throw new IllegalArgumentException("Expected lifecycle scenario logout or teleport");
+                default -> throw new IllegalArgumentException(
+                        "Expected lifecycle scenario logout or teleport");
             }
         } catch (Throwable e) {
             getLogger().log(java.util.logging.Level.SEVERE, "T15_LIFECYCLE_FAIL scenario=" + scenario, e);
         }
     }
 
+    private EconomyWriteQueue readEconomyWriteQueue(Syncmoney plugin) throws ReflectiveOperationException {
+        // Keep queue inspection in this test-only fixture; do not widen the plugin API for acceptance metrics.
+        var managerField = Syncmoney.class.getDeclaredField("economyServiceManager");
+        managerField.setAccessible(true);
+        Object manager = managerField.get(plugin);
+        require(manager != null, "economy service manager available for queue observation");
+        Method queueAccessor = manager.getClass().getMethod("getEconomyWriteQueue");
+        Object queue = queueAccessor.invoke(manager);
+        require(queue instanceof EconomyWriteQueue, "economy write queue available for pending observation");
+        return (EconomyWriteQueue) queue;
+    }
+
+    private int readAcceptedWriteCount(EconomyWriteQueue queue, UUID uuid) throws ReflectiveOperationException {
+        // Queue size drops on dequeue, so it omits in-flight writes. Accepted-write ownership is
+        // retained until the writer completes the persistence/reconciliation callback.
+        var countsField = EconomyWriteQueue.class.getDeclaredField("acceptedWriteCounts");
+        countsField.setAccessible(true);
+        Object counts = countsField.get(queue);
+        require(counts instanceof java.util.concurrent.ConcurrentMap,
+                "accepted-write ownership map available for lifecycle observation");
+        Object count = ((java.util.concurrent.ConcurrentMap<?, ?>) counts).get(uuid);
+        if (count == null) return 0;
+        require(count instanceof java.util.concurrent.atomic.AtomicInteger,
+                "accepted-write ownership count available for lifecycle observation");
+        return ((java.util.concurrent.atomic.AtomicInteger) count).get();
+    }
+
     private record LifecycleContext(
-            Economy economy, org.bukkit.Location teleportDestination, String teleportWorldName) {
+            Economy economy,
+            EconomyWriteQueue writeQueue,
+            org.bukkit.Location teleportDestination,
+            String teleportWorldName) {
     }
 
     private void runVersionChecks(String command) {

@@ -143,6 +143,11 @@ tools/plugdev/*
 !tools/plugdev/t21-upgrade-validation.test.ps1
 !tools/plugdev/run-quiesced-network-upgrade.ps1
 !tools/plugdev/run-quiesced-network-upgrade.test.ps1
+!tools/plugdev/run-player-scheduler-lifecycle.ps1
+!tools/plugdev/player-scheduler-lifecycle.mjs
+!tools/plugdev/player-scheduler-lifecycle-assertions.mjs
+!tools/plugdev/player-scheduler-lifecycle-assertions.test.mjs
+!tools/plugdev/audit-player-scheduler-lifecycle.mjs
 plugdev.yml
 
 # Accidental archive/JAR extraction and scratch output
