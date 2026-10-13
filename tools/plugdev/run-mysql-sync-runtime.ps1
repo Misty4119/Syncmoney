@@ -95,8 +95,8 @@ if ($script:legacySqlDataUpgrade) {
     if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
         throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
     }
-    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -notin @('Minimum', 'Maximum', 'CurrentStable')) {
-        throw 'The legacy SQL data upgrade subcase supports only MySQL 8.0.42 on minimum Paper, user-pinned maximum Paper, or supplemental current-stable Paper.'
+    if ($script:databaseProduct -notin @('MySQL', 'PostgreSQL') -or $PlatformEndpoint -notin @('Minimum', 'Maximum', 'CurrentStable')) {
+        throw 'The legacy SQL data upgrade subcase supports only MySQL 8.0.42 or PostgreSQL 18.1 on minimum Paper, user-pinned maximum Paper, or supplemental current-stable Paper.'
     }
     $script:baselinePath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
     $script:baselineSha256 = (Get-FileHash -LiteralPath $script:baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -701,9 +701,33 @@ function Invoke-Redis([string[]]$arguments, [string]$label, [switch]$allowExitOn
     return Invoke-LoggedCommand $script:redisCli (@('-h', '127.0.0.1', '-p', [string]$script:redisPort) + $arguments) $label $logPath -allowExitOne:$allowExitOne
 }
 
-function Get-T21MySqlAuditSchemaMetadata([string]$stage) {
-    if ($script:databaseProduct -cne 'MySQL') { throw 'Audit schema metadata capture is limited to the pinned MySQL legacy-data case.' }
-    $columnsSql = @"
+function Get-T21LegacyAuditSchemaMetadata([string]$stage) {
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $columnsSql = @"
+SELECT json_build_array(TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, DATA_TYPE, IS_NULLABLE,
+    COLUMN_DEFAULT, '', '', '', '')::text
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = current_schema() AND TABLE_NAME = 'syncmoney_audit_log'
+ORDER BY ORDINAL_POSITION, COLUMN_NAME;
+"@
+        $indexesSql = @"
+SELECT json_build_array(index_relation.relname, index_info.indisprimary, CASE WHEN index_info.indisunique THEN 0 ELSE 1 END,
+    key_column.ordinality, COALESCE(table_column.attname, '<EXPRESSION>'),
+    CASE WHEN (index_info.indoption[key_column.ordinality - 1] & 1) <> 0 THEN 'D' ELSE 'A' END,
+    upper(access_method.amname), NULL)::text
+FROM pg_class table_relation
+JOIN pg_namespace table_namespace ON table_namespace.oid = table_relation.relnamespace
+JOIN pg_index index_info ON index_info.indrelid = table_relation.oid
+JOIN pg_class index_relation ON index_relation.oid = index_info.indexrelid
+JOIN pg_am access_method ON access_method.oid = index_relation.relam
+CROSS JOIN LATERAL unnest(index_info.indkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+LEFT JOIN pg_attribute table_column ON table_column.attrelid = table_relation.oid AND table_column.attnum = key_column.attnum
+WHERE table_namespace.nspname = current_schema() AND table_relation.relname = 'syncmoney_audit_log'
+    AND key_column.ordinality <= index_info.indnkeyatts
+ORDER BY index_relation.relname, key_column.ordinality;
+"@
+    } else {
+        $columnsSql = @"
 SELECT JSON_ARRAY(TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE,
     COLUMN_DEFAULT, EXTRA, CHARACTER_SET_NAME, COLLATION_NAME, GENERATION_EXPRESSION)
 FROM information_schema.COLUMNS
@@ -716,6 +740,7 @@ FROM information_schema.STATISTICS
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'syncmoney_audit_log'
 ORDER BY INDEX_NAME, SEQ_IN_INDEX;
 "@
+    }
     $columns = @(Invoke-MySqlQuery $columnsSql ($stage + '-audit-columns-snapshot'))
     $indexes = @(Invoke-MySqlQuery $indexesSql ($stage + '-audit-indexes-snapshot'))
     return [ordered]@{ columns=$columns; indexes=$indexes }
@@ -768,7 +793,7 @@ function Get-BackendSnapshot(
         }
         $snapshot.schemaVersionRows = @(Invoke-MySqlQuery $schemaSql ($stage + '-schema-version-snapshot'))
         if ($script:legacySqlDataUpgrade) {
-            $snapshot.auditSchema = Get-T21MySqlAuditSchemaMetadata $stage
+            $snapshot.auditSchema = Get-T21LegacyAuditSchemaMetadata $stage
         }
     }
     $validState = if ($script:legacySqlDataUpgrade) {
@@ -1364,7 +1389,7 @@ try {
 
 } catch {
     $script:failure = $_.Exception.ToString()
-    [Console]::Error.WriteLine("T21 MySQL runtime case failed: $($script:failure)")
+    [Console]::Error.WriteLine("T21 $script:databaseProduct runtime case failed: $($script:failure)")
 } finally {
     try {
         if (@(Get-T21ServerProcesses).Count -gt 0) { Stop-RunOwnedServerAfterFailure }
@@ -1415,11 +1440,30 @@ try {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
         if ($script:legacySqlDataUpgrade) {
             $backendProcesses = $script:report.backendProcesses
-            $mysqlProcess = $backendProcesses.mysql
+            $databaseProcess = $backendProcesses[$script:sqlReportKey]
             $redisProcess = $backendProcesses.redis
+            $databaseEvidence = [ordered]@{
+                product=$script:databaseProduct
+                version=$script:databaseServerVersion
+            }
+            $databaseProcessEvidence = [ordered]@{
+                product=$script:databaseProduct
+                version=$script:databaseServerVersion
+                processId=[int]$databaseProcess.processId
+                runOwned=[bool]$databaseProcess.runOwned
+                listenerOwnerVerified=[bool]$databaseProcess.listenerOwnerVerified
+            }
+            $backendProcessEvidence = [ordered]@{}
+            $backendProcessEvidence[$script:sqlReportKey] = $databaseProcessEvidence
+            $backendProcessEvidence.redis = [ordered]@{
+                version=[string]$redisProcess.version
+                processId=[int]$redisProcess.processId
+                runOwned=[bool]$redisProcess.runOwned
+                listenerOwnerVerified=[bool]$redisProcess.listenerOwnerVerified
+            }
             $script:finalReport = [ordered]@{
                 schemaVersion=2
-                task="T21-M05-LEGACY-SQL-DATA-MySQL-$($script:platformTarget.taskSuffix)"
+                task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"
                 status='PASS_BOUNDED_SUBCASE'
                 runDirectory=$script:runRoot
                 server=[ordered]@{
@@ -1432,13 +1476,12 @@ try {
                 candidate=[ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256 }
                 artifacts=[ordered]@{ acceptanceSha256=$acceptanceSha256; apiConsumerSha256=$apiConsumerSha256 }
                 java=[ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
-                mysql=[ordered]@{ product='MySQL'; version=[string]$script:report.mysql.serverVersion }
                 redis=[ordered]@{ version='8.10.1' }
                 configuration=[ordered]@{
                     schema=[int]$configObservation.schema
                     mode=[string]$configObservation.mode
                     databaseEnabled=$true
-                    databaseType='mysql'
+                    databaseType=$script:databaseProduct.ToLowerInvariant()
                     databaseIsolated=$true
                     redisEnabled=$true
                     redisDatabase=15
@@ -1447,21 +1490,7 @@ try {
                 stages=@($script:legacySqlStages)
                 platformLogs=@($script:platformServerLogs)
                 logs=$script:report.logs
-                backendProcesses=[ordered]@{
-                    mysql=[ordered]@{
-                        product=[string]$mysqlProcess.product
-                        version=[string]$mysqlProcess.version
-                        processId=[int]$mysqlProcess.processId
-                        runOwned=[bool]$mysqlProcess.runOwned
-                        listenerOwnerVerified=[bool]$mysqlProcess.listenerOwnerVerified
-                    }
-                    redis=[ordered]@{
-                        version=[string]$redisProcess.version
-                        processId=[int]$redisProcess.processId
-                        runOwned=[bool]$redisProcess.runOwned
-                        listenerOwnerVerified=[bool]$redisProcess.listenerOwnerVerified
-                    }
-                }
+                backendProcesses=$backendProcessEvidence
                 backendShutdowns=@($script:backendShutdowns)
                 gradleDaemonCleanup=$script:report.gradleDaemonCleanup
                 cleanupFailures=@($script:cleanupFailures)
@@ -1481,7 +1510,12 @@ try {
                     apiConsumerJarSha256=$apiConsumerSha256
                 }
             }
-            $reportAccepted = Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
+            $script:finalReport[$script:sqlReportKey] = $databaseEvidence
+            $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
+                Test-T21PostgresLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
+            } else {
+                Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint
+            }
         } else {
             $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
                 Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint
@@ -1493,7 +1527,7 @@ try {
         if (-not $reportAccepted) {
             $script:finalReport.status = 'FAIL'
             $script:failure = if ($script:legacySqlDataUpgrade) {
-                'The completed report did not satisfy Test-T21MySqlLegacyDataUpgradeReport.'
+                'The completed report did not satisfy the product-specific T21 legacy SQL data upgrade predicate.'
             } else {
                 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
             }
@@ -1514,6 +1548,6 @@ try {
 if ($null -ne $script:failure -or $script:finalReport.status -cne 'PASS_BOUNDED_SUBCASE') {
     throw "T21 $script:databaseProduct SYNC runtime did not pass. Report: $script:reportPath"
 }
-$databaseRuntimeLabel = if ($script:legacySqlDataUpgrade) { 'MySQL 8.0.42 legacy-data upgrade' } else { switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } } }
+$databaseRuntimeLabel = if ($script:legacySqlDataUpgrade) { "$script:databaseProduct $script:databaseServerVersion legacy-data upgrade" } else { switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } } }
 $platformRuntimeLabel = switch ($script:platformTarget.software) { 'folia' { 'Folia' } 'canvas' { 'Canvas' } default { 'Paper' } }
 Write-Output "PASS_BOUNDED_SUBCASE: $platformRuntimeLabel $($script:platformTarget.minecraftVersion)#$($script:platformTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"

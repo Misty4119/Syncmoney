@@ -233,6 +233,64 @@ function Set-T21FixturePlatform([object]$report, [object]$platform) {
     return $report
 }
 
+function Convert-T21FixtureToPostgreSql([object]$report) {
+    $report.task = 'T21-M05-LEGACY-SQL-DATA-PostgreSQL-minimum-Paper'
+    $report.postgresql = [ordered]@{ product='PostgreSQL'; version='18.1'; serverVersion='18.1' }
+    $report.Remove('mysql')
+    $report.configuration.databaseType = 'postgresql'
+    $report.backendProcesses.postgresql = [ordered]@{
+        product='PostgreSQL'; version='18.1'; processId=1111; runOwned=$true; listenerOwnerVerified=$true
+    }
+    $report.backendProcesses.Remove('mysql')
+    $report.backendShutdowns[0] = [ordered]@{
+        backend='postgresql'; processId=1111; commandExitCode=0; shutdownTargetVerified=$true
+        processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$false
+    }
+    $postgresIndexes = @($report.stages[1].snapshot.auditSchema.indexes | ForEach-Object {
+        $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+        if ($row[0] -ceq 'PRIMARY') { $row[0] = 'syncmoney_audit_log_pkey' }
+        $postgresRow = @(
+            $row[0],
+            ([string]$row[0] -ceq 'syncmoney_audit_log_pkey'),
+            $row[1],
+            $row[2],
+            $row[3],
+            $row[4],
+            'BTREE',
+            $row[6]
+        )
+        ConvertTo-Json -InputObject $postgresRow -Compress
+    })
+    foreach ($stage in $report.stages) {
+        $schema = $stage.snapshot.auditSchema
+        for ($index = 0; $index -lt $schema.columns.Count; $index++) {
+            $row = ConvertFrom-Json -InputObject ([string]$schema.columns[$index]) -AsHashtable
+            $row[3] = 'character varying'
+            $row[7] = $null
+            $row[8] = $null
+            $schema.columns[$index] = ConvertTo-Json -InputObject $row -Compress
+        }
+        $schema.indexes = @($postgresIndexes)
+        $snapshotStage = [string]$stage.snapshot.stage
+        foreach ($logBinding in @(
+                [ordered]@{ suffix='audit-columns-snapshot'; rows=@($schema.columns) },
+                [ordered]@{ suffix='audit-indexes-snapshot'; rows=@($schema.indexes) })) {
+            $log = New-T21FixtureSnapshotLog $snapshotStage $logBinding.suffix $logBinding.rows
+            $report.logs[$log.path] = $log.manifest
+        }
+        $oldPath = "logs\$snapshotStage-mysql-snapshot.txt"
+        $newRows = @($stage.snapshot.sqlAccounts | Sort-Object -Property name | ForEach-Object {
+            '{0}|{1}|{2}|{3}' -f $_.name, $_.uuid, $_.balance, $_.version
+        })
+        $newLog = New-T21FixtureSnapshotLog $snapshotStage 'postgresql-snapshot' $newRows
+        $report.logs.Remove($oldPath)
+        $report.logs[$newLog.path] = $newLog.manifest
+        $oldFile = Join-Path $root $oldPath
+        if (Test-Path -LiteralPath $oldFile) { Remove-Item -LiteralPath $oldFile -Force }
+    }
+    return $report
+}
+
 try {
     $valid = New-T21ValidFixtureReport
     if (-not (Test-T21MySqlLegacyDataUpgradeReport $valid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
@@ -268,11 +326,76 @@ try {
 
     $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
     if (-not (
-        $runnerSource.Contains('$script:databaseProduct -cne ''MySQL'' -or $PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
-        $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-MySQL-$($script:platformTarget.taskSuffix)"') -and
-        $runnerSource.Contains('Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint')
-    )) { throw 'The runner does not expose the exact minimum, maximum, and current-stable Paper legacy-data endpoints in its report predicate.' }
-    Write-Output 'PASS: expose each supported Paper endpoint in the MySQL legacy-data runner and report'
+        $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
+        $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"') -and
+        $runnerSource.Contains('Get-T21LegacyAuditSchemaMetadata $stage') -and
+        $runnerSource.Contains('Test-T21PostgresLegacyDataUpgradeReport') -and
+        $runnerSource.Contains('LEFT JOIN pg_attribute table_column') -and
+        $runnerSource.Contains("COALESCE(table_column.attname, '<EXPRESSION>')") -and
+        $runnerSource.Contains('index_info.indisprimary')
+    )) { throw 'The runner does not expose the exact minimum, maximum, and current-stable Paper legacy-data endpoints for both SQL products.' }
+    Write-Output 'PASS: expose both SQL products on the supported Paper legacy-data endpoints'
+
+    $legacyPostgresIndexOrderQuery = "position(' DESC' in upper(pg_get_indexdef(index_relation.oid, key_column.ordinality::integer, true)))"
+    if (-not $runnerSource.Contains('index_info.indoption[key_column.ordinality - 1] & 1') -or
+        $runnerSource.Contains($legacyPostgresIndexOrderQuery)) {
+        throw 'PostgreSQL audit index direction must be derived from pg_index.indoption, not a rendered index definition.'
+    }
+    Write-Output 'PASS: derive PostgreSQL audit index direction from pg_index.indoption'
+
+    $postgresql = New-T21ValidFixtureReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $postgresql = Convert-T21FixtureToPostgreSql $postgresql
+    if (-not (Test-T21PostgresLegacyDataUpgradeReport $postgresql $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
+        throw 'A complete minimum-Paper PostgreSQL legacy-data read/rollback report with its initialized audit indexes preserved was rejected.'
+    }
+    Write-Output 'PASS: accept existing 1.3.2 PostgreSQL data while preserving initialized audit indexes through candidate read and rollback'
+
+    $postgresqlExpressionIndex = $postgresql | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $expressionIndexRow = ConvertTo-Json -InputObject @('unexpected_expression_idx', $false, 1, 1, '<EXPRESSION>', 'A', 'BTREE', $null) -Compress
+    foreach ($stage in $postgresqlExpressionIndex.stages) {
+        $stage.snapshot.auditSchema.indexes = @($stage.snapshot.auditSchema.indexes) + $expressionIndexRow
+        $snapshotStage = [string]$stage.snapshot.stage
+        $expressionIndexLog = New-T21FixtureSnapshotLog $snapshotStage 'audit-indexes-snapshot' @($stage.snapshot.auditSchema.indexes)
+        $postgresqlExpressionIndex.logs[$expressionIndexLog.path] = $expressionIndexLog.manifest
+    }
+    if (Test-T21PostgresLegacyDataUpgradeReport $postgresqlExpressionIndex $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A PostgreSQL report containing an extra expression index in every lifecycle stage was accepted.'
+    }
+    Write-Output 'PASS: reject extra PostgreSQL expression indexes from the full catalog inventory'
+
+    $postgresqlMissingPrimary = $postgresql | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $candidateIndexes = @($postgresqlMissingPrimary.stages[1].snapshot.auditSchema.indexes)
+    for ($index = 0; $index -lt $candidateIndexes.Count; $index++) {
+        $row = ConvertFrom-Json -InputObject ([string]$candidateIndexes[$index]) -AsHashtable
+        if ([string]$row[0] -ceq 'syncmoney_audit_log_pkey') {
+            $row[1] = $false
+            $candidateIndexes[$index] = ConvertTo-Json -InputObject $row -Compress
+        }
+    }
+    $postgresqlMissingPrimary.stages[1].snapshot.auditSchema.indexes = $candidateIndexes
+    $candidateSnapshotStage = [string]$postgresqlMissingPrimary.stages[1].snapshot.stage
+    $candidateIndexLog = New-T21FixtureSnapshotLog $candidateSnapshotStage 'audit-indexes-snapshot' @($candidateIndexes)
+    $postgresqlMissingPrimary.logs[$candidateIndexLog.path] = $candidateIndexLog.manifest
+    if (Test-T21PostgresLegacyDataUpgradeReport $postgresqlMissingPrimary $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A same-named PostgreSQL unique id index without a primary-key constraint was accepted.'
+    }
+    Write-Output 'PASS: require the PostgreSQL primary-key catalog flag for the audit id index'
+
+    $postgresqlDrift = $postgresql | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $candidateIndexes = $postgresqlDrift.stages[1].snapshot.auditSchema.indexes
+    $removedIndex = $candidateIndexes | Where-Object { (ConvertFrom-Json -InputObject ([string]$_) -AsHashtable)[0] -ceq 'idx_audit_timestamp' } | Select-Object -First 1
+    $postgresqlDrift.stages[1].snapshot.auditSchema.indexes = @($candidateIndexes | Where-Object { $_ -cne $removedIndex })
+    $candidateSnapshotStage = [string]$postgresqlDrift.stages[1].snapshot.stage
+    $candidateIndexLog = New-T21FixtureSnapshotLog $candidateSnapshotStage 'audit-indexes-snapshot' @($postgresqlDrift.stages[1].snapshot.auditSchema.indexes)
+    $postgresqlDrift.logs[$candidateIndexLog.path] = $candidateIndexLog.manifest
+    if (Test-T21PostgresLegacyDataUpgradeReport $postgresqlDrift $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A PostgreSQL candidate report with an audit index removed after baseline was accepted.'
+    }
+    Write-Output 'PASS: reject PostgreSQL candidate audit-index drift after the 1.3.2 baseline'
+    if (Test-T21MySqlLegacyDataUpgradeReport $postgresql $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+        throw 'A PostgreSQL legacy-data report was accepted as MySQL evidence.'
+    }
+    Write-Output 'PASS: reject PostgreSQL legacy-data evidence under the MySQL report contract'
 
     # Restore the minimum fixture logs because the endpoint mutation reuses the same isolated fixture paths.
     $valid = New-T21ValidFixtureReport

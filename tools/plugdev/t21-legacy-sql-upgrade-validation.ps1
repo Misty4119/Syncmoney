@@ -78,7 +78,7 @@ function Test-T21LegacySqlAccountsEqual([object]$leftSnapshot, [object]$rightSna
     }
 }
 
-function Get-T21LegacyMySqlAuditSchema([object]$snapshot) {
+function Get-T21LegacySqlAuditSchema([object]$snapshot, [string]$databaseProduct) {
     try {
         $metadata = Get-T21ObservedValue $snapshot 'auditSchema'
         $columnRows = @(Get-T21ObservedValue $metadata 'columns')
@@ -107,19 +107,36 @@ function Get-T21LegacyMySqlAuditSchema([object]$snapshot) {
         $uniqueIndexes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($rawRow in $indexRows) {
             $row = ConvertFrom-Json -InputObject ([string]$rawRow)
-            if ($row -isnot [Array] -or $row.Count -ne 7 -or
-                [string]::IsNullOrWhiteSpace([string]$row[0]) -or
-                -not (Test-T21IntegralNumber $row[1] 0 1) -or
-                -not (Test-T21IntegralNumber $row[2] 1 ([int]::MaxValue)) -or
-                [string]::IsNullOrWhiteSpace([string]$row[3]) -or
-                ([string]$row[4] -cnotin @('A', 'D')) -or
-                [string]$row[5] -cne 'BTREE') { Write-Verbose "Invalid audit index metadata row: $rawRow"; return $null }
-            $subPart = if ($null -eq $row[6]) { '<NULL>' } elseif (Test-T21IntegralNumber $row[6] 1 ([int]::MaxValue)) { [string]$row[6] } else { return $null }
-            $canonical = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f [string]$row[0], [int]$row[1], [int]$row[2], [string]$row[3], [string]$row[4], [string]$row[5], $subPart
+            if ($row -isnot [Array]) { Write-Verbose "Invalid audit index metadata row: $rawRow"; return $null }
+            if ($databaseProduct -ceq 'PostgreSQL') {
+                if ($row.Count -ne 8 -or
+                    [string]::IsNullOrWhiteSpace([string]$row[0]) -or
+                    $row[1] -isnot [bool] -or
+                    -not (Test-T21IntegralNumber $row[2] 0 1) -or
+                    -not (Test-T21IntegralNumber $row[3] 1 ([int]::MaxValue)) -or
+                    [string]::IsNullOrWhiteSpace([string]$row[4]) -or
+                    ([string]$row[5] -cnotin @('A', 'D')) -or
+                    [string]$row[6] -cne 'BTREE') { Write-Verbose "Invalid PostgreSQL audit index metadata row: $rawRow"; return $null }
+                $subPart = if ($null -eq $row[7]) { '<NULL>' } elseif (Test-T21IntegralNumber $row[7] 1 ([int]::MaxValue)) { [string]$row[7] } else { return $null }
+                $primary = if ([bool]$row[1]) { 1 } else { 0 }
+                $canonical = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}' -f [string]$row[0], $primary, [int]$row[2], [int]$row[3], [string]$row[4], [string]$row[5], [string]$row[6], $subPart
+            } else {
+                if ($row.Count -ne 7 -or
+                    [string]::IsNullOrWhiteSpace([string]$row[0]) -or
+                    -not (Test-T21IntegralNumber $row[1] 0 1) -or
+                    -not (Test-T21IntegralNumber $row[2] 1 ([int]::MaxValue)) -or
+                    [string]::IsNullOrWhiteSpace([string]$row[3]) -or
+                    ([string]$row[4] -cnotin @('A', 'D')) -or
+                    [string]$row[5] -cne 'BTREE') { Write-Verbose "Invalid audit index metadata row: $rawRow"; return $null }
+                $subPart = if ($null -eq $row[6]) { '<NULL>' } elseif (Test-T21IntegralNumber $row[6] 1 ([int]::MaxValue)) { [string]$row[6] } else { return $null }
+                $canonical = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f [string]$row[0], [int]$row[1], [int]$row[2], [string]$row[3], [string]$row[4], [string]$row[5], $subPart
+            }
             if (-not $uniqueIndexes.Add($canonical)) { Write-Verbose "Duplicate audit index metadata row: $canonical"; return $null }
             $canonicalIndexes.Add($canonical)
         }
-        if (-not $uniqueIndexes.Contains('PRIMARY|0|1|id|A|BTREE|<NULL>')) { Write-Verbose 'Audit schema metadata is missing the primary id index.'; return $null }
+        $primaryIndexName = if ($databaseProduct -ceq 'PostgreSQL') { 'syncmoney_audit_log_pkey' } else { 'PRIMARY' }
+        $primaryIndex = if ($databaseProduct -ceq 'PostgreSQL') { "$primaryIndexName|1|0|1|id|A|BTREE|<NULL>" } else { "$primaryIndexName|0|1|id|A|BTREE|<NULL>" }
+        if (-not $uniqueIndexes.Contains($primaryIndex)) { Write-Verbose 'Audit schema metadata is missing the primary id index.'; return $null }
 
         return [ordered]@{
             columns=@($columnRows | Sort-Object -CaseSensitive)
@@ -136,7 +153,7 @@ function Test-T21LegacyStringSetEqual([object[]]$left, [object[]]$right) {
     return @(Compare-Object -ReferenceObject $left -DifferenceObject $right -CaseSensitive).Count -eq 0
 }
 
-function Test-T21LegacyMySqlSnapshotLogRows(
+function Test-T21LegacySqlSnapshotLogRows(
     [object]$report,
     [string]$snapshotStage,
     [string]$suffix,
@@ -145,7 +162,7 @@ function Test-T21LegacyMySqlSnapshotLogRows(
     try {
         if ([string]::IsNullOrWhiteSpace($snapshotStage) -or
             $snapshotStage -notmatch '^after-(legacy-seed|candidate-existing-read|legacy-rollback-read)-stop$' -or
-            $suffix -cnotin @('mysql-snapshot', 'schema-version-snapshot', 'audit-columns-snapshot', 'audit-indexes-snapshot')) {
+            $suffix -cnotin @('mysql-snapshot', 'postgresql-snapshot', 'schema-version-snapshot', 'audit-columns-snapshot', 'audit-indexes-snapshot')) {
             return $false
         }
         $relativePath = 'logs\' + $snapshotStage + '-' + $suffix + '.txt'
@@ -177,12 +194,12 @@ function Test-T21LegacyMySqlSnapshotLogRows(
     }
 }
 
-function Test-T21LegacyMySqlSnapshotLogBinding([object]$report, [object]$snapshot) {
+function Test-T21LegacySqlSnapshotLogBinding([object]$report, [object]$snapshot, [string]$databaseKey) {
     try {
         $snapshotStage = [string](Get-T21ObservedValue $snapshot 'stage')
         $sqlAccounts = @(Get-T21ObservedValue $snapshot 'sqlAccounts' | Sort-Object -Property name)
         if ($sqlAccounts.Count -ne 2) { return $false }
-        $mysqlRows = @($sqlAccounts | ForEach-Object {
+        $sqlRows = @($sqlAccounts | ForEach-Object {
             '{0}|{1}|{2}|{3}' -f [string](Get-T21ObservedValue $_ 'name'),
                 [string](Get-T21ObservedValue $_ 'uuid'), [string](Get-T21ObservedValue $_ 'balance'),
                 [string](Get-T21ObservedValue $_ 'version')
@@ -191,30 +208,37 @@ function Test-T21LegacyMySqlSnapshotLogBinding([object]$report, [object]$snapsho
         $auditSchema = Get-T21ObservedValue $snapshot 'auditSchema'
         $columnRows = @(Get-T21ObservedValue $auditSchema 'columns' | ForEach-Object { [string]$_ })
         $indexRows = @(Get-T21ObservedValue $auditSchema 'indexes' | ForEach-Object { [string]$_ })
-        return (Test-T21LegacyMySqlSnapshotLogRows $report $snapshotStage 'mysql-snapshot' $mysqlRows) -and
-            (Test-T21LegacyMySqlSnapshotLogRows $report $snapshotStage 'schema-version-snapshot' $schemaRows) -and
-            (Test-T21LegacyMySqlSnapshotLogRows $report $snapshotStage 'audit-columns-snapshot' $columnRows) -and
-            (Test-T21LegacyMySqlSnapshotLogRows $report $snapshotStage 'audit-indexes-snapshot' $indexRows)
+        $sqlBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage ($databaseKey + '-snapshot') $sqlRows
+        $schemaBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'schema-version-snapshot' $schemaRows
+        $columnsBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'audit-columns-snapshot' $columnRows
+        $indexesBound = Test-T21LegacySqlSnapshotLogRows $report $snapshotStage 'audit-indexes-snapshot' $indexRows
+        Write-Verbose "T21 $databaseKey snapshot log binding stage=$snapshotStage sql=$sqlBound schema=$schemaBound columns=$columnsBound indexes=$indexesBound"
+        return $sqlBound -and $schemaBound -and $columnsBound -and $indexesBound
     } catch {
         return $false
     }
 }
 
-function Test-T21MySqlLegacyDataUpgradeReport(
+function Test-T21LegacySqlDataUpgradeReport(
     [object]$report,
     [string]$expectedServerSha256,
     [string]$expectedBaselineSha256,
     [string]$expectedCandidateSha256,
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
+    [ValidateSet('MySQL', 'PostgreSQL')]
+    [string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     try {
         if ($null -eq $report) { return $false }
+        $databaseKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
+        $expectedDatabaseVersion = if ($DatabaseProduct -ceq 'PostgreSQL') { '18.1' } else { '8.0.42' }
+        $expectedDatabaseType = $DatabaseProduct.ToLowerInvariant()
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
-        $expectedTask = "T21-M05-LEGACY-SQL-DATA-MySQL-$($expectedPlatform.taskSuffix)"
+        $expectedTask = "T21-M05-LEGACY-SQL-DATA-$DatabaseProduct-$($expectedPlatform.taskSuffix)"
         if ((Get-T21ObservedValue $report 'schemaVersion') -ne 2 -or
             (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE' -or
@@ -242,8 +266,8 @@ function Test-T21MySqlLegacyDataUpgradeReport(
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant()) { return $false }
 
         if ((Get-T21ObservedValue (Get-T21ObservedValue $report 'java') 'feature') -ne 25 -or
-            (Get-T21ObservedValue (Get-T21ObservedValue $report 'mysql') 'product') -cne 'MySQL' -or
-            (Get-T21ObservedValue (Get-T21ObservedValue $report 'mysql') 'version') -cne '8.0.42' -or
+            (Get-T21ObservedValue (Get-T21ObservedValue $report $databaseKey) 'product') -cne $DatabaseProduct -or
+            (Get-T21ObservedValue (Get-T21ObservedValue $report $databaseKey) 'version') -cne $expectedDatabaseVersion -or
             (Get-T21ObservedValue (Get-T21ObservedValue $report 'redis') 'version') -cne '8.10.1') { return $false }
         $artifacts = Get-T21ObservedValue $report 'artifacts'
         if (([string](Get-T21ObservedValue $artifacts 'acceptanceSha256')).ToLowerInvariant() -cne $expectedAcceptanceSha256.ToLowerInvariant() -or
@@ -252,7 +276,7 @@ function Test-T21MySqlLegacyDataUpgradeReport(
         if ((Get-T21ObservedValue $configuration 'schema') -ne 12 -or
             (Get-T21ObservedValue $configuration 'mode') -cne 'sync' -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'databaseEnabled') $true) -or
-            (Get-T21ObservedValue $configuration 'databaseType') -cne 'mysql' -or
+            (Get-T21ObservedValue $configuration 'databaseType') -cne $expectedDatabaseType -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'databaseIsolated') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $configuration 'redisEnabled') $true) -or
             (Get-T21ObservedValue $configuration 'redisDatabase') -ne 15 -or
@@ -331,9 +355,9 @@ function Test-T21MySqlLegacyDataUpgradeReport(
             $snapshot = Get-T21ObservedValue $stage 'snapshot'
             if ((Get-T21ObservedValue $snapshot 'stage') -cne "after-$($expected.name)-stop" -or
                 -not (Test-T21LegacySqlAccountState $snapshot $expected.expectedVersion $expected.expectedVersionB) -or
-                -not (Test-T21LegacyMySqlSnapshotLogBinding $report $snapshot)) { return $false }
+                -not (Test-T21LegacySqlSnapshotLogBinding $report $snapshot $databaseKey)) { return $false }
             Write-Verbose "T21 legacy SQL report accepted SQL/Redis snapshot for $($expected.name)."
-            $auditSchema = Get-T21LegacyMySqlAuditSchema $snapshot
+            $auditSchema = Get-T21LegacySqlAuditSchema $snapshot $DatabaseProduct
             if ($null -eq $auditSchema) { return $false }
             $schemaRows = @(Get-T21ObservedValue $snapshot 'schemaVersionRows')
             if ($index -eq 0) {
@@ -344,22 +368,39 @@ function Test-T21MySqlLegacyDataUpgradeReport(
             } elseif ($index -eq 1) {
                 $candidateAuditSchema = $auditSchema
                 if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.columns) @($candidateAuditSchema.columns))) { return $false }
-                $removedIndexes = @($baselineAuditSchema.indexes | Where-Object { $_ -notin $candidateAuditSchema.indexes })
-                $addedIndexes = @($candidateAuditSchema.indexes | Where-Object { $_ -notin $baselineAuditSchema.indexes })
-                $expectedAddedIndexes = @(
-                    'idx_audit_timestamp|1|1|timestamp|D|BTREE|<NULL>',
-                    'idx_audit_timestamp|1|2|sequence|D|BTREE|<NULL>',
-                    'idx_audit_player|1|1|player_uuid|A|BTREE|<NULL>',
-                    'idx_audit_player|1|2|timestamp|D|BTREE|<NULL>',
-                    'idx_audit_player|1|3|sequence|D|BTREE|<NULL>',
-                    'idx_audit_type|1|1|type|A|BTREE|<NULL>',
-                    'idx_audit_type|1|2|timestamp|D|BTREE|<NULL>',
-                    'idx_audit_type|1|3|sequence|D|BTREE|<NULL>'
-                )
-                if ($removedIndexes.Count -ne 0 -or -not (Test-T21LegacyStringSetEqual $addedIndexes $expectedAddedIndexes)) { return $false }
+                if ($DatabaseProduct -ceq 'PostgreSQL') {
+                    $expectedPostgresIndexes = @(
+                        'idx_audit_player|0|1|1|player_uuid|A|BTREE|<NULL>',
+                        'idx_audit_player|0|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_player|0|1|3|sequence|D|BTREE|<NULL>',
+                        'idx_audit_timestamp|0|1|1|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_timestamp|0|1|2|sequence|D|BTREE|<NULL>',
+                        'idx_audit_type|0|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type|0|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type|0|1|3|sequence|D|BTREE|<NULL>',
+                        'syncmoney_audit_log_pkey|1|0|1|id|A|BTREE|<NULL>'
+                    )
+                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedPostgresIndexes) -or
+                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedPostgresIndexes)) { return $false }
+                } else {
+                    $removedIndexes = @($baselineAuditSchema.indexes | Where-Object { $_ -notin $candidateAuditSchema.indexes })
+                    $addedIndexes = @($candidateAuditSchema.indexes | Where-Object { $_ -notin $baselineAuditSchema.indexes })
+                    $expectedAddedIndexes = @(
+                        'idx_audit_timestamp|1|1|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_timestamp|1|2|sequence|D|BTREE|<NULL>',
+                        'idx_audit_player|1|1|player_uuid|A|BTREE|<NULL>',
+                        'idx_audit_player|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_player|1|3|sequence|D|BTREE|<NULL>',
+                        'idx_audit_type|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type|1|3|sequence|D|BTREE|<NULL>'
+                    )
+                    if ($removedIndexes.Count -ne 0 -or -not (Test-T21LegacyStringSetEqual $addedIndexes $expectedAddedIndexes)) { return $false }
+                }
             } else {
+                $expectedRollbackIndexes = if ($DatabaseProduct -ceq 'PostgreSQL') { $baselineAuditSchema.indexes } else { $candidateAuditSchema.indexes }
                 if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.columns) @($auditSchema.columns)) -or
-                    -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) @($auditSchema.indexes))) { return $false }
+                    -not (Test-T21LegacyStringSetEqual @($expectedRollbackIndexes) @($auditSchema.indexes))) { return $false }
             }
             if ($index -gt 0) {
                 try { $null = Assert-T21SchemaVersionRows @(Get-T21ObservedValue $baselineSnapshot 'schemaVersionRows') $schemaRows $expected.name }
@@ -398,40 +439,40 @@ function Test-T21MySqlLegacyDataUpgradeReport(
         }
 
         $backendProcesses = Get-T21ObservedValue $report 'backendProcesses'
-        $mysqlProcess = Get-T21ObservedValue $backendProcesses 'mysql'
+        $databaseProcess = Get-T21ObservedValue $backendProcesses $databaseKey
         $redisProcess = Get-T21ObservedValue $backendProcesses 'redis'
-        Write-Verbose ("T21 backend evidence mysql={0}/{1}/{2}/{3}/{4}; redis={5}/{6}/{7}/{8}" -f
-            (Get-T21ObservedValue $mysqlProcess 'product'), (Get-T21ObservedValue $mysqlProcess 'version'),
-            (Get-T21ObservedValue $mysqlProcess 'runOwned'), (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified'),
-            (Get-T21ObservedValue $mysqlProcess 'processId'), (Get-T21ObservedValue $redisProcess 'version'),
+        Write-Verbose ("T21 backend evidence {0}={1}/{2}/{3}/{4}/{5}; redis={6}/{7}/{8}/{9}" -f
+            $databaseKey, (Get-T21ObservedValue $databaseProcess 'product'), (Get-T21ObservedValue $databaseProcess 'version'),
+            (Get-T21ObservedValue $databaseProcess 'runOwned'), (Get-T21ObservedValue $databaseProcess 'listenerOwnerVerified'),
+            (Get-T21ObservedValue $databaseProcess 'processId'), (Get-T21ObservedValue $redisProcess 'version'),
             (Get-T21ObservedValue $redisProcess 'runOwned'), (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified'),
             (Get-T21ObservedValue $redisProcess 'processId'))
-        Write-Verbose ("T21 backend predicates mysqlProduct={0} mysqlVersion={1} mysqlOwned={2} mysqlListener={3} mysqlPid={4}; redisVersion={5} redisOwned={6} redisListener={7} redisPid={8}" -f
-            ((Get-T21ObservedValue $mysqlProcess 'product') -ceq 'MySQL'),
-            ((Get-T21ObservedValue $mysqlProcess 'version') -ceq '8.0.42'),
-            (Test-T21ObservedBoolean (Get-T21ObservedValue $mysqlProcess 'runOwned') $true),
-            (Test-T21ObservedBoolean (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') $true),
-            (Test-T21IntegralNumber (Get-T21ObservedValue $mysqlProcess 'processId') 1 ([int]::MaxValue)),
+        Write-Verbose ("T21 backend predicates databaseProduct={0} databaseVersion={1} databaseOwned={2} databaseListener={3} databasePid={4}; redisVersion={5} redisOwned={6} redisListener={7} redisPid={8}" -f
+            ((Get-T21ObservedValue $databaseProcess 'product') -ceq $DatabaseProduct),
+            ((Get-T21ObservedValue $databaseProcess 'version') -ceq $expectedDatabaseVersion),
+            (Test-T21ObservedBoolean (Get-T21ObservedValue $databaseProcess 'runOwned') $true),
+            (Test-T21ObservedBoolean (Get-T21ObservedValue $databaseProcess 'listenerOwnerVerified') $true),
+            (Test-T21IntegralNumber (Get-T21ObservedValue $databaseProcess 'processId') 1 ([int]::MaxValue)),
             ((Get-T21ObservedValue $redisProcess 'version') -ceq '8.10.1'),
             (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'runOwned') $true),
             (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') $true),
             (Test-T21IntegralNumber (Get-T21ObservedValue $redisProcess 'processId') 1 ([int]::MaxValue)))
-        if ((Get-T21ObservedValue $mysqlProcess 'product') -cne 'MySQL' -or
-            (Get-T21ObservedValue $mysqlProcess 'version') -cne '8.0.42' -or
-            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $mysqlProcess 'runOwned') $true) -or
-            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') $true) -or
-            -not (Test-T21IntegralNumber (Get-T21ObservedValue $mysqlProcess 'processId') 1 ([int]::MaxValue)) -or
+        if ((Get-T21ObservedValue $databaseProcess 'product') -cne $DatabaseProduct -or
+            (Get-T21ObservedValue $databaseProcess 'version') -cne $expectedDatabaseVersion -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $databaseProcess 'runOwned') $true) -or
+            -not (Test-T21ObservedBoolean (Get-T21ObservedValue $databaseProcess 'listenerOwnerVerified') $true) -or
+            -not (Test-T21IntegralNumber (Get-T21ObservedValue $databaseProcess 'processId') 1 ([int]::MaxValue)) -or
             (Get-T21ObservedValue $redisProcess 'version') -cne '8.10.1' -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'runOwned') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisProcess 'listenerOwnerVerified') $true) -or
             -not (Test-T21IntegralNumber (Get-T21ObservedValue $redisProcess 'processId') 1 ([int]::MaxValue))) { return $false }
-        Write-Verbose 'T21 legacy SQL report accepted MySQL and Redis process ownership.'
+        Write-Verbose "T21 legacy SQL report accepted $DatabaseProduct and Redis process ownership."
         $backendStops = @(Get-T21ObservedValue $report 'backendShutdowns')
         Write-Verbose ("T21 backend shutdown count={0}" -f $backendStops.Count)
         if ($backendStops.Count -ne 2) { return $false }
-        foreach ($backend in @('mysql', 'redis')) {
+        foreach ($backend in @($databaseKey, 'redis')) {
             $matches = @($backendStops | Where-Object { [string](Get-T21ObservedValue $_ 'backend') -ceq $backend })
-            $expectedPid = if ($backend -ceq 'mysql') { Get-T21ObservedValue $mysqlProcess 'processId' } else { Get-T21ObservedValue $redisProcess 'processId' }
+            $expectedPid = if ($backend -ceq $databaseKey) { Get-T21ObservedValue $databaseProcess 'processId' } else { Get-T21ObservedValue $redisProcess 'processId' }
             Write-Verbose ("T21 backend shutdown {0}: matches={1} observedPid={2} expectedPid={3} exit={4}/{5}/{6} forced={7}" -f
                 $backend, $matches.Count,
                 $(if ($matches.Count -gt 0) { Get-T21ObservedValue $matches[0] 'processId' } else { '<missing>' }),
@@ -441,7 +482,7 @@ function Test-T21MySqlLegacyDataUpgradeReport(
                 $(if ($matches.Count -gt 0) { Get-T21ObservedValue $matches[0] 'processExited' } else { '<missing>' }),
                 $(if ($matches.Count -gt 0) { Get-T21ObservedValue $matches[0] 'forced' } else { '<missing>' }))
             $commandExitCode = if ($matches.Count -eq 1) { Get-T21ObservedValue $matches[0] 'commandExitCode' } else { $null }
-            $commandExitValid = if ($backend -ceq 'mysql') {
+            $commandExitValid = if ($backend -ceq $databaseKey) {
                 Test-T21ExpectedExitCode $commandExitCode 0
             } else {
                 (Test-T21ExpectedExitCode $commandExitCode 0) -or (Test-T21ExpectedExitCode $commandExitCode 1)
@@ -452,14 +493,15 @@ function Test-T21MySqlLegacyDataUpgradeReport(
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'processExitCodeObserved') $true) -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'processExited') $true) -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'forced') $false)) { return $false }
-            if ($backend -ceq 'mysql' -and
+            if ($backend -ceq $databaseKey -and
                 (-not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'shutdownTargetVerified') $true) -or
-                 -not (Test-T21IntegralNumber (Get-T21ObservedValue $matches[0] 'launchProcessId') 1 ([int]::MaxValue)) -or
-                 -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $matches[0] 'launchProcessExitCode') 0) -or
-                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExitCodeObserved') $true) -or
-                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExited') $true))) { return $false }
+                 ($DatabaseProduct -ceq 'MySQL' -and
+                  (-not (Test-T21IntegralNumber (Get-T21ObservedValue $matches[0] 'launchProcessId') 1 ([int]::MaxValue)) -or
+                   -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $matches[0] 'launchProcessExitCode') 0) -or
+                   -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExitCodeObserved') $true) -or
+                   -not (Test-T21ObservedBoolean (Get-T21ObservedValue $matches[0] 'launchProcessExited') $true))))) { return $false }
         }
-        Write-Verbose 'T21 legacy SQL report accepted graceful MySQL and Redis shutdown.'
+        Write-Verbose "T21 legacy SQL report accepted graceful $DatabaseProduct and Redis shutdown."
 
         $gradleCleanup = Get-T21ObservedValue $report 'gradleDaemonCleanup'
         $expectedGradleHome = [IO.Path]::GetFullPath((Join-Path $runRoot '.gradle-user-home'))
@@ -475,6 +517,39 @@ function Test-T21MySqlLegacyDataUpgradeReport(
         Write-Verbose 'T21 legacy SQL report accepted isolated Gradle daemon cleanup.'
         return $true
     } catch {
+        Write-Verbose "T21 legacy SQL report rejected during validation: $($_.Exception.Message)"
         return $false
     }
+}
+
+function Test-T21MySqlLegacyDataUpgradeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedBaselineSha256,
+    [string]$expectedCandidateSha256,
+    [string]$expectedAcceptanceSha256,
+    [string]$expectedApiConsumerSha256,
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
+) {
+    return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
+        $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
+        -DatabaseProduct MySQL -PlatformEndpoint $PlatformEndpoint
+}
+
+function Test-T21PostgresLegacyDataUpgradeReport(
+    [object]$report,
+    [string]$expectedServerSha256,
+    [string]$expectedBaselineSha256,
+    [string]$expectedCandidateSha256,
+    [string]$expectedAcceptanceSha256,
+    [string]$expectedApiConsumerSha256,
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
+) {
+    return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
+        $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
+        -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint
 }
