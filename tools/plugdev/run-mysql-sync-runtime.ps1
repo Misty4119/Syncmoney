@@ -8,6 +8,7 @@ param(
     [string]$MySqlBin = 'C:\Program Files\MySQL\MySQL Server 8.0\bin',
     [string]$MariaDbBin = 'C:\Program Files\MariaDB 12.3\bin',
     [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
+    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum',
     [string]$CandidateVersion = '1.4.0-alpha.1'
 )
 
@@ -20,6 +21,7 @@ $script:databaseProduct = if ($DatabaseProduct -ieq 'MariaDB') { 'MariaDB' } els
 $script:databaseServerVersion = if ($script:databaseProduct -ceq 'MariaDB') { '12.3.3-MariaDB' } else { '8.0.42' }
 $script:databaseServerVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '^12\.3\.3-MariaDB(?:\b|$)' } else { '^8\.0\.42(?:\b|$)' }
 $script:databaseExecutableVersionPattern = if ($script:databaseProduct -ceq 'MariaDB') { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } else { '\bVer\s+8\.0\.42(?:\b|$)' }
+$script:paperTarget = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
 $script:databaseBin = if ($script:databaseProduct -ceq 'MariaDB') { $MariaDbBin } else { $MySqlBin }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -36,8 +38,9 @@ $script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $scr
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)
 $script:databaseUser = 'sm_t21_' + $script:runId.Substring(0, 8)
 $script:databasePassword = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-minimum-paper-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
+$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:paperTarget.taskSuffix.ToLowerInvariant() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
 $script:workspace = Join-Path $script:runRoot 'workspace'
+$script:gradleUserHome = Join-Path $script:runRoot '.gradle-user-home'
 $script:mysqlRoot = Join-Path $script:runRoot 'mysql'
 $script:mysqlData = Join-Path $script:mysqlRoot 'data'
 $script:redisRoot = Join-Path $script:runRoot 'redis'
@@ -68,9 +71,8 @@ $script:snapshots = [Collections.Generic.List[object]]::new()
 $script:backendShutdowns = [Collections.Generic.List[object]]::new()
 $script:startedAtUtc = [DateTime]::UtcNow.ToString('o')
 
-$expectedPaperMinimumSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
-if ($ExpectedServerSha256.ToLowerInvariant() -cne $expectedPaperMinimumSha256) {
-    throw 'This bounded dialect runner accepts only the pinned Paper 1.21.6#48 minimum endpoint.'
+if ($ExpectedServerSha256.ToLowerInvariant() -cne $script:paperTarget.sha256) {
+    throw "The $($script:paperTarget.taskSuffix) Paper runtime requires its exact user-pinned server SHA-256."
 }
 if ($CandidateVersion -cne '1.4.0-alpha.1') { throw 'This T21 runtime cell is pinned to candidate 1.4.0-alpha.1.' }
 
@@ -391,7 +393,7 @@ function Start-T21Server([string]$stage) {
     $null = Wait-ServerLogMarker 'API CLASSLOADER PASS provider=Syncmoney' 'API CLASSLOADER FAIL|Error occurred while enabling Syncmoney|T21_\w+_FAIL' $before
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw
     $identity = Get-T21PlatformIdentity $fullLog
-    Assert-T21PlatformIdentity $identity 'paper' '1.21.6' 48
+    Assert-T21PlatformIdentity $identity $script:paperTarget.software $script:paperTarget.minecraftVersion $script:paperTarget.build
     if ($fullLog -notmatch '(?m)\[Syncmoney\] Loading server plugin Syncmoney v1\.4\.0-alpha\.1') {
         throw 'The minimum Paper server did not load the expected candidate version.'
     }
@@ -621,6 +623,55 @@ function Stop-RedisBackend {
     })
 }
 
+function Get-RunOwnedGradleDaemons {
+    $isolatedGradleHome = [IO.Path]::GetFullPath($script:gradleUserHome)
+    @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+        $_.Name -in @('java.exe', 'javaw.exe') -and $_.CommandLine -and
+        $_.CommandLine.IndexOf($isolatedGradleHome, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.CommandLine -match 'org\.gradle\.launcher\.daemon\.bootstrap\.GradleDaemon'
+    })
+}
+
+function Stop-T21RunOwnedGradleDaemons {
+    $before = @(Get-RunOwnedGradleDaemons)
+    $beforeIds = @($before | ForEach-Object { [int]$_.ProcessId })
+    $stopCommandExitCode = $null
+    $stopLogPath = $null
+    if ($before.Count -gt 0) {
+        $wrapper = Join-Path $script:workspace 'gradlew.bat'
+        if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { throw 'The run-owned Gradle wrapper is unavailable for isolated daemon shutdown.' }
+        if ([IO.Path]::GetFullPath($env:GRADLE_USER_HOME) -cne [IO.Path]::GetFullPath($script:gradleUserHome)) {
+            throw 'Refusing Gradle --stop because GRADLE_USER_HOME does not match this run-owned daemon home.'
+        }
+        $stopLogPath = 'logs\gradle-daemon-stop.txt'
+        $stopLog = Join-Path $script:runRoot $stopLogPath
+        Push-Location $script:workspace
+        try {
+            $null = & $wrapper --stop *> $stopLog
+            $stopCommandExitCode = $LASTEXITCODE
+        } finally { Pop-Location }
+        if ($stopCommandExitCode -ne 0) { $script:cleanupFailures.Add("Isolated Gradle --stop exited $stopCommandExitCode.") }
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            $after = @(Get-RunOwnedGradleDaemons)
+            if ($after.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $deadline)
+    }
+    $after = @(Get-RunOwnedGradleDaemons)
+    $afterIds = @($after | ForEach-Object { [int]$_.ProcessId })
+    $processExitVerified = $after.Count -eq 0
+    if (-not $processExitVerified) { $script:cleanupFailures.Add('A run-owned isolated Gradle daemon remained after --stop.') }
+    return [ordered]@{
+        isolatedUserHome=[IO.Path]::GetFullPath($script:gradleUserHome)
+        processIdsBeforeStop=$beforeIds
+        stopCommandExitCode=$stopCommandExitCode
+        stopLogPath=$stopLogPath
+        processIdsAfterStop=$afterIds
+        processExitVerified=$processExitVerified
+    }
+}
+
 function Restore-TestEnvironment {
     foreach ($name in $script:environmentNames) {
         [Environment]::SetEnvironmentVariable($name, $script:originalEnvironment[$name], 'Process')
@@ -640,7 +691,7 @@ $serverSha256 = (Get-FileHash -LiteralPath $script:serverPath -Algorithm SHA256)
 $script:candidateSha256 = (Get-FileHash -LiteralPath $script:candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $acceptanceSha256 = (Get-FileHash -LiteralPath $script:acceptancePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $apiConsumerSha256 = (Get-FileHash -LiteralPath $script:apiConsumerPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($serverSha256 -cne $expectedPaperMinimumSha256 -or $serverSha256 -cne $ExpectedServerSha256.ToLowerInvariant()) { throw 'Paper server JAR does not match the pinned minimum build.' }
+if ($serverSha256 -cne $script:paperTarget.sha256 -or $serverSha256 -cne $ExpectedServerSha256.ToLowerInvariant()) { throw "Paper server JAR does not match the pinned $($script:paperTarget.taskSuffix) build." }
 if ($script:candidateSha256 -cne $ExpectedCandidateSha256.ToLowerInvariant()) { throw 'Candidate JAR SHA-256 does not match the required pin.' }
 if (-not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js') -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'package.json') -PathType Leaf)) { throw 'The local PlugDev source checkout or built CLI is unavailable.' }
@@ -689,13 +740,13 @@ $script:redisPort = Get-FreeLoopbackPort 15000 25000 @($script:gamePort, ($scrip
 $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; AcceptanceB = Get-OfflineUuid 'AcceptanceB' }
 
 $script:report = [ordered]@{
-    schemaVersion = 2
-    task = "T21-M05-SYNC-$script:databaseProduct-minimum-Paper"
+    schemaVersion = 3
+    task = "T21-M05-SYNC-$script:databaseProduct-$($script:paperTarget.taskSuffix)"
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
     runId = $script:runId
     runDirectory = $script:runRoot
-    server = [ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$serverSha256; bytes=[long](Get-Item -LiteralPath $script:serverPath).Length; path=$script:serverPath }
+    server = [ordered]@{ software=$script:paperTarget.software; minecraftVersion=$script:paperTarget.minecraftVersion; build=$script:paperTarget.build; sha256=$serverSha256; bytes=[long](Get-Item -LiteralPath $script:serverPath).Length; path=$script:serverPath }
     candidate = [ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256; path=$script:candidatePath }
     acceptance = [ordered]@{ sha256=$acceptanceSha256 }
     apiConsumer = [ordered]@{ sha256=$apiConsumerSha256 }
@@ -716,6 +767,7 @@ $script:report = [ordered]@{
     normalStops = @()
     snapshots = @()
     backendShutdowns = @()
+    gradleDaemonCleanup = $null
     cleanupFailures = @()
     failure = $null
     logs = [ordered]@{}
@@ -726,7 +778,7 @@ try {
     $env:Path = "$($script:javaHomePath)\bin;$($script:mysqlBinPath);$env:Path"
     $env:PLUGDEV_ROOT = $script:plugDevRoot
     $env:PLUGDEV_HOME = Join-Path $script:runRoot '.plugdev-home'
-    $env:GRADLE_USER_HOME = Join-Path $script:runRoot '.gradle-user-home'
+    $env:GRADLE_USER_HOME = $script:gradleUserHome
     $env:SYNCMONEY_TEST_SERVER_JAR = $script:serverPath
     $env:SYNCMONEY_CANDIDATE_VERSION = $CandidateVersion
     $env:SYNCMONEY_TEST_GAME_PORT = [string]$script:gamePort
@@ -797,10 +849,10 @@ try {
 
     Push-Location $script:workspace
     try {
-        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') 'paper' '1.21.6' 'sync' 'off' $CandidateVersion 2>&1)
+        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') $script:paperTarget.software $script:paperTarget.minecraftVersion 'sync' 'off' $CandidateVersion 2>&1)
         $prepareExit = $LASTEXITCODE
         $prepareOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $script:logsRoot 'prepare-profile.txt') -Encoding utf8
-        if ($prepareExit -ne 0) { throw 'Could not prepare the isolated minimum-Paper MySQL SYNC profile.' }
+        if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:paperTarget.taskSuffix) $script:databaseProduct SYNC profile." }
     } finally { Pop-Location }
     Set-T21RunMarkerInProfile
     $configObservation = Assert-IsolatedSyncConfig
@@ -844,6 +896,17 @@ try {
     } catch { $script:cleanupFailures.Add("Paper cleanup check failed: $($_.Exception.Message)") }
     try { Stop-MySqlBackend } catch { $script:cleanupFailures.Add("MySQL cleanup failed: $($_.Exception.Message)") }
     try { Stop-RedisBackend } catch { $script:cleanupFailures.Add("Redis cleanup failed: $($_.Exception.Message)") }
+    try { $script:report.gradleDaemonCleanup = Stop-T21RunOwnedGradleDaemons } catch {
+        $script:cleanupFailures.Add("Isolated Gradle daemon cleanup failed: $($_.Exception.Message)")
+        $script:report.gradleDaemonCleanup = [ordered]@{
+            isolatedUserHome=[IO.Path]::GetFullPath($script:gradleUserHome)
+            processIdsBeforeStop=@()
+            stopCommandExitCode=$null
+            stopLogPath=$null
+            processIdsAfterStop=@()
+            processExitVerified=$false
+        }
+    }
     try { Restore-TestEnvironment } catch { $script:cleanupFailures.Add("Process environment restore failed: $($_.Exception.Message)") }
     try {
         $script:report.logs = [ordered]@{}
@@ -873,7 +936,7 @@ try {
     $script:report.failure = $script:failure
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
-        if (-not (Test-T21MySqlRuntimeReport $script:report $expectedPaperMinimumSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct)) {
+        if (-not (Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PaperEndpoint $PaperEndpoint)) {
             $script:report.status = 'FAIL'
             $script:failure = 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
         }
@@ -893,4 +956,4 @@ if ($null -ne $script:failure -or $script:report.status -cne 'PASS_BOUNDED_SUBCA
     throw "T21 MySQL SYNC runtime did not pass. Report: $script:reportPath"
 }
 $databaseRuntimeLabel = if ($script:databaseProduct -ceq 'MariaDB') { 'MariaDB 12.3.3 using the MySQL protocol' } else { 'MySQL 8.0.42' }
-Write-Output "PASS_BOUNDED_SUBCASE: Paper 1.21.6#48 SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"
+Write-Output "PASS_BOUNDED_SUBCASE: Paper $($script:paperTarget.minecraftVersion)#$($script:paperTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"

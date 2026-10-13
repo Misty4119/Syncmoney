@@ -41,6 +41,25 @@ function Assert-T21PlatformIdentity(
     }
 }
 
+function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum') {
+    if ($PaperEndpoint -ceq 'Minimum') {
+        return [ordered]@{
+            taskSuffix = 'minimum-Paper'
+            software = 'paper'
+            minecraftVersion = '1.21.6'
+            build = 48
+            sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+        }
+    }
+    return [ordered]@{
+        taskSuffix = 'maximum-Paper'
+        software = 'paper'
+        minecraftVersion = '26.3'
+        build = 166
+        sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+    }
+}
+
 function Get-T21ShutdownFailureMarkers([string]$serverLogText) {
     $pattern = '(?im)(?:CRITICAL HEALTH:|Shutdown step failed:|DB writer stopped with \d+ stale transfer|DB writer drain timed out|DB writer is still using storage after shutdown deadline|Failed while draining database writer|Failed to process batch to DB|Failed to flush \d+ audit records)'
     return @([regex]::Matches($serverLogText, $pattern) |
@@ -426,15 +445,17 @@ function Test-T21MySqlRuntimeReport(
     [object]$report,
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
-    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL'
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
+    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
 ) {
     try {
         if ($null -eq $report) { return $false }
+        $expectedPaper = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
         $schemaVersion = Get-T21ObservedValue $report 'schemaVersion'
-        $expectedTask = "T21-M05-SYNC-$DatabaseProduct-minimum-Paper"
+        $expectedTask = "T21-M05-SYNC-$DatabaseProduct-$($expectedPaper.taskSuffix)"
         $legacyMySqlReport = $schemaVersion -eq 1 -and $DatabaseProduct -ceq 'MySQL'
-        if ($schemaVersion -notin @(1, 2) -or
-            (-not $legacyMySqlReport -and $schemaVersion -ne 2) -or
+        if ($schemaVersion -notin @(1, 2, 3) -or
+            (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3)) -or
             (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
 
@@ -456,9 +477,9 @@ function Test-T21MySqlRuntimeReport(
         $candidate = Get-T21ObservedValue $report 'candidate'
         $java = Get-T21ObservedValue $report 'java'
         $configuration = Get-T21ObservedValue $report 'configuration'
-        if ((Get-T21ObservedValue $server 'software') -cne 'paper' -or
-            (Get-T21ObservedValue $server 'minecraftVersion') -cne '1.21.6' -or
-            (Get-T21ObservedValue $server 'build') -ne 48 -or
+        if ((Get-T21ObservedValue $server 'software') -cne $expectedPaper.software -or
+            (Get-T21ObservedValue $server 'minecraftVersion') -cne $expectedPaper.minecraftVersion -or
+            (Get-T21ObservedValue $server 'build') -ne $expectedPaper.build -or
             ([string](Get-T21ObservedValue $server 'sha256')).ToLowerInvariant() -cne $expectedServerSha256.ToLowerInvariant() -or
             (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
@@ -502,10 +523,10 @@ function Test-T21MySqlRuntimeReport(
         }
         if ((Get-T21ObservedValue $mysql 'version') -cne $expectedBackendVersion -or
             -not $serverVersionValid -or
-            ($schemaVersion -eq 2 -and $reportedProduct -cne $DatabaseProduct) -or
+            ($schemaVersion -ge 2 -and $reportedProduct -cne $DatabaseProduct) -or
             (Get-T21ObservedValue $redis 'version') -cne '8.10.1' -or
             (Get-T21ObservedValue $mysqlProcess 'version') -cne $expectedBackendVersion -or
-            ($schemaVersion -eq 2 -and (Get-T21ObservedValue $mysqlProcess 'product') -cne $DatabaseProduct) -or
+            ($schemaVersion -ge 2 -and (Get-T21ObservedValue $mysqlProcess 'product') -cne $DatabaseProduct) -or
             (Get-T21ObservedValue $mysqlProcess 'runOwned') -ne $true -or
             (Get-T21ObservedValue $mysqlProcess 'listenerOwnerVerified') -ne $true -or
             [int](Get-T21ObservedValue $mysqlProcess 'processId') -le 0 -or
@@ -552,10 +573,10 @@ function Test-T21MySqlRuntimeReport(
                 (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
                 [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
                 ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
-                (Get-T21ObservedValue $runtimeIdentity 'software') -cne 'paper' -or
-                (Get-T21ObservedValue $runtimeIdentity 'runtimeVersion') -cne '1.21.6' -or
-                (Get-T21ObservedValue $runtimeIdentity 'minecraftVersion') -cne '1.21.6' -or
-                (Get-T21ObservedValue $runtimeIdentity 'build') -ne 48) {
+                (Get-T21ObservedValue $runtimeIdentity 'software') -cne $expectedPaper.software -or
+                (Get-T21ObservedValue $runtimeIdentity 'runtimeVersion') -cne $expectedPaper.minecraftVersion -or
+                (Get-T21ObservedValue $runtimeIdentity 'minecraftVersion') -cne $expectedPaper.minecraftVersion -or
+                (Get-T21ObservedValue $runtimeIdentity 'build') -ne $expectedPaper.build) {
                 return $false
             }
         }
@@ -576,6 +597,47 @@ function Test-T21MySqlRuntimeReport(
         if ([string]::IsNullOrWhiteSpace($runDirectory)) { return $false }
         $runRoot = [IO.Path]::GetFullPath($runDirectory).TrimEnd([char[]]@('\', '/'))
         $runRootPrefix = $runRoot + [IO.Path]::DirectorySeparatorChar
+        $hasGradleCleanup = if ($report -is [Collections.IDictionary]) {
+            $report.Contains('gradleDaemonCleanup')
+        } else {
+            $null -ne $report.PSObject.Properties['gradleDaemonCleanup']
+        }
+        if ($schemaVersion -ge 3 -and -not $hasGradleCleanup) { return $false }
+        if ($hasGradleCleanup) {
+            $gradleCleanup = Get-T21ObservedValue $report 'gradleDaemonCleanup'
+            $expectedGradleHome = [IO.Path]::GetFullPath((Join-Path $runRoot '.gradle-user-home'))
+            $reportedGradleHome = [string](Get-T21ObservedValue $gradleCleanup 'isolatedUserHome')
+            $processIdsBeforeStop = @(Get-T21ObservedValue $gradleCleanup 'processIdsBeforeStop')
+            $processIdsAfterStop = @(Get-T21ObservedValue $gradleCleanup 'processIdsAfterStop')
+            $stopExitCode = Get-T21ObservedValue $gradleCleanup 'stopCommandExitCode'
+            $processExitVerified = Get-T21ObservedValue $gradleCleanup 'processExitVerified'
+            $stopLogPath = [string](Get-T21ObservedValue $gradleCleanup 'stopLogPath')
+            if ([string]::IsNullOrWhiteSpace($reportedGradleHome) -or
+                [IO.Path]::GetFullPath($reportedGradleHome) -cne $expectedGradleHome -or
+                (Test-T21PathContainsReparsePoint $expectedGradleHome) -or
+                $processExitVerified -ne $true -or $processIdsAfterStop.Count -ne 0 -or
+                @($processIdsBeforeStop | Where-Object { [int]$_ -le 0 }).Count -gt 0 -or
+                @($processIdsBeforeStop | Select-Object -Unique).Count -ne $processIdsBeforeStop.Count -or
+                ($processIdsBeforeStop.Count -gt 0 -and $stopExitCode -ne 0) -or
+                ($processIdsBeforeStop.Count -eq 0 -and $stopExitCode -notin @($null, 0))) { return $false }
+            if ($processIdsBeforeStop.Count -gt 0) {
+                $hasStopLog = if ($logMap -is [Collections.IDictionary]) {
+                    $logMap.Contains('logs\gradle-daemon-stop.txt')
+                } else {
+                    $null -ne $logMap.PSObject.Properties['logs\gradle-daemon-stop.txt']
+                }
+                if ($stopLogPath -cne 'logs\gradle-daemon-stop.txt' -or -not $hasStopLog) { return $false }
+                $stopLogEvidence = Get-T21ObservedValue $logMap $stopLogPath
+                $fullStopLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $stopLogPath))
+                if (-not $fullStopLogPath.StartsWith($runRootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                    (Test-T21PathContainsReparsePoint $fullStopLogPath) -or
+                    -not (Test-Path -LiteralPath $fullStopLogPath -PathType Leaf)) { return $false }
+                $actualStopLog = Get-Item -LiteralPath $fullStopLogPath -ErrorAction Stop
+                $actualStopLogSha256 = (Get-FileHash -LiteralPath $fullStopLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if ([long](Get-T21ObservedValue $stopLogEvidence 'bytes') -ne [long]$actualStopLog.Length -or
+                    ([string](Get-T21ObservedValue $stopLogEvidence 'sha256')).ToLowerInvariant() -cne $actualStopLogSha256) { return $false }
+            } elseif (-not [string]::IsNullOrEmpty($stopLogPath)) { return $false }
+        }
         $writeMarkerLines = @($writeMarker)
         $restartReadMarkerLines = @(
             [string](Get-T21ObservedValue $report 'restartReadMarker'),

@@ -533,6 +533,33 @@ if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV2 $paperMinimumSha $can
 }
 Write-Output 'PASS: accept the current MySQL runtime report schema'
 
+$mysqlRuntimeReportV3 = $mysqlRuntimeReportV2 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mysqlRuntimeReportV3.schemaVersion = 3
+$mysqlRuntimeReportV3.gradleDaemonCleanup = [ordered]@{
+    isolatedUserHome = Join-Path $mysqlRuntimeTestRoot '.gradle-user-home'
+    processIdsBeforeStop = @()
+    stopCommandExitCode = $null
+    processIdsAfterStop = @()
+    processExitVerified = $true
+}
+if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV3 $paperMinimumSha $candidateSha)) {
+    throw 'A clean schema-3 runtime report with verified isolated Gradle daemon cleanup was rejected.'
+}
+Write-Output 'PASS: accept a schema-3 runtime report with verified isolated Gradle daemon cleanup'
+
+$mysqlRuntimeReportLeakedGradleDaemon = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$mysqlRuntimeReportLeakedGradleDaemon.gradleDaemonCleanup = [ordered]@{
+    isolatedUserHome = Join-Path $mysqlRuntimeTestRoot '.gradle-user-home'
+    processIdsBeforeStop = @(5555)
+    stopCommandExitCode = 0
+    processIdsAfterStop = @(5555)
+    processExitVerified = $false
+}
+if (Test-T21MySqlRuntimeReport $mysqlRuntimeReportLeakedGradleDaemon $paperMinimumSha $candidateSha) {
+    throw 'A runtime report with a run-owned isolated Gradle daemon left alive after cleanup was accepted.'
+}
+Write-Output 'PASS: reject a runtime report with a surviving isolated Gradle daemon'
+
 $mariadbRuntimeReport = $mysqlRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $mariadbRuntimeReport.schemaVersion = 2
 $mariadbRuntimeReport.task = 'T21-M05-SYNC-MariaDB-minimum-Paper'
@@ -560,6 +587,49 @@ if (Test-T21MySqlRuntimeReport $mariadbRuntimeReportWrongVersion $paperMinimumSh
     throw 'A MariaDB runtime report with the wrong pinned server version was accepted.'
 }
 Write-Output 'PASS: reject a MariaDB report with the wrong exact server version'
+
+$paperMaximumSha = 'b' * 64
+$maximumPaperRuntimeReport = $mariadbRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$maximumPaperRuntimeReport.schemaVersion = 3
+$maximumPaperRuntimeReport.task = 'T21-M05-SYNC-MariaDB-maximum-Paper'
+$maximumPaperRuntimeReport.server.minecraftVersion = '26.3'
+$maximumPaperRuntimeReport.server.build = 166
+$maximumPaperRuntimeReport.server.sha256 = $paperMaximumSha
+$maximumPaperRuntimeReport.gradleDaemonCleanup = [ordered]@{
+    isolatedUserHome = Join-Path $maximumPaperRuntimeReport.runDirectory '.gradle-user-home'
+    processIdsBeforeStop = @()
+    stopCommandExitCode = $null
+    stopLogPath = $null
+    processIdsAfterStop = @()
+    processExitVerified = $true
+}
+foreach ($startup in $maximumPaperRuntimeReport.startupObservations) {
+    $startup.runtimeIdentity.runtimeVersion = '26.3'
+    $startup.runtimeIdentity.minecraftVersion = '26.3'
+    $startup.runtimeIdentity.build = 166
+}
+if (-not (Test-T21MySqlRuntimeReport $maximumPaperRuntimeReport $paperMaximumSha $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum)) {
+    throw 'The complete MariaDB SYNC runtime report for user-pinned maximum Paper 26.3#166 was rejected.'
+}
+Write-Output 'PASS: accept MariaDB runtime evidence for user-pinned maximum Paper 26.3#166'
+if (Test-T21MySqlRuntimeReport $maximumPaperRuntimeReport $paperMaximumSha $candidateSha -DatabaseProduct MariaDB) {
+    throw 'A maximum-Paper runtime report was accepted under the default minimum-Paper expectation.'
+}
+Write-Output 'PASS: reject maximum-Paper evidence under the minimum-Paper expectation'
+
+$maximumPaperWrongReportedProduct = $maximumPaperRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$maximumPaperWrongReportedProduct.mysql.product = 'MySQL'
+if (Test-T21MySqlRuntimeReport $maximumPaperWrongReportedProduct $paperMaximumSha $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum) {
+    throw 'A schema-3 MariaDB report with a MySQL server product identity was accepted.'
+}
+Write-Output 'PASS: reject a schema-3 MariaDB report with a mismatched server product identity'
+
+$maximumPaperWrongProcessProduct = $maximumPaperRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$maximumPaperWrongProcessProduct.backendProcesses.mysql.product = 'MySQL'
+if (Test-T21MySqlRuntimeReport $maximumPaperWrongProcessProduct $paperMaximumSha $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum) {
+    throw 'A schema-3 MariaDB report with a mismatched backend-process product identity was accepted.'
+}
+Write-Output 'PASS: reject a schema-3 MariaDB report with a mismatched process product identity'
 
 if (Test-T21PathContainsReparsePoint $mysqlWriteLogPath) {
     throw 'A normal temporary Paper report fixture unexpectedly traverses a reparse point.'
