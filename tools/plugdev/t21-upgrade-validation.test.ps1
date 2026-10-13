@@ -146,6 +146,77 @@ if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
+$runtimePlatformEndpoints = @(
+    [ordered]@{ endpoint='MinimumFolia'; taskSuffix='minimum-Folia'; software='folia'; minecraftVersion='1.21.6'; build=6; sha256='917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' },
+    [ordered]@{ endpoint='MaximumFolia'; taskSuffix='maximum-Folia'; software='folia'; minecraftVersion='26.2'; build=7; sha256='128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' },
+    [ordered]@{ endpoint='MinimumCanvas'; taskSuffix='minimum-Canvas'; software='canvas'; minecraftVersion='1.21.8'; build=603; sha256='6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' },
+    [ordered]@{ endpoint='MaximumCanvas'; taskSuffix='maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=972; sha256='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
+)
+foreach ($endpointCase in $runtimePlatformEndpoints) {
+    $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointCase.endpoint
+    if ($endpoint.taskSuffix -cne $endpointCase.taskSuffix -or
+        $endpoint.software -cne $endpointCase.software -or
+        $endpoint.minecraftVersion -cne $endpointCase.minecraftVersion -or
+        $endpoint.build -ne $endpointCase.build -or
+        $endpoint.sha256 -cne $endpointCase.sha256) {
+        throw "The T21 SQL platform endpoint is not pinned exactly: $($endpointCase.endpoint)."
+    }
+    Write-Output "PASS: pin exact T21 SQL platform endpoint $($endpointCase.endpoint)"
+}
+
+function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [Collections.IDictionary]$endpointCase, [string]$databaseProduct) {
+    $report.schemaVersion = 4
+    $report.task = "T21-M05-SYNC-$databaseProduct-$($endpointCase.taskSuffix)"
+    $report.server.software = $endpointCase.software
+    $report.server.minecraftVersion = $endpointCase.minecraftVersion
+    $report.server.build = $endpointCase.build
+    $report.server.sha256 = $endpointCase.sha256
+    foreach ($startup in $report.startupObservations) {
+        $startup.runtimeIdentity.software = $endpointCase.software
+        $startup.runtimeIdentity.runtimeVersion = $endpointCase.minecraftVersion
+        $startup.runtimeIdentity.minecraftVersion = $endpointCase.minecraftVersion
+        $startup.runtimeIdentity.build = $endpointCase.build
+    }
+
+    $platformLogs = [Collections.Generic.List[object]]::new()
+    $softwareLabel = switch ($endpointCase.software) { 'folia' { 'Folia' } 'canvas' { 'Canvas' } default { 'Paper' } }
+    $identityLine = "[ServerMain/INFO]: [bootstrap] Loading $softwareLabel $($endpointCase.minecraftVersion)-$($endpointCase.build)-main@fixture (2026-10-13T00:00:00Z) for Minecraft $($endpointCase.minecraftVersion)"
+    foreach ($stage in @('candidate-write', 'candidate-restart-read')) {
+        $sourceRelativePath = "logs\paper-$stage.txt"
+        $targetRelativePath = "logs\platform-$stage.txt"
+        $sourcePath = Join-Path $report.runDirectory $sourceRelativePath
+        $targetPath = Join-Path $report.runDirectory $targetRelativePath
+        $sourceContent = [IO.File]::ReadAllText($sourcePath)
+        [IO.File]::WriteAllText($targetPath, $identityLine + [Environment]::NewLine + $sourceContent.TrimStart([char[]]@("`r", "`n")), [Text.UTF8Encoding]::new($false))
+        $targetFile = Get-Item -LiteralPath $targetPath
+        $targetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $platformLogs.Add([ordered]@{ stage=$stage; path=$targetRelativePath; bytes=[long]$targetFile.Length; sha256=$targetHash })
+        $report.logs[$targetRelativePath] = [ordered]@{ bytes=[long]$targetFile.Length; sha256=$targetHash }
+    }
+    $null = $report.Remove('paperLogs')
+    $report.platformLogs = @($platformLogs)
+    return $report
+}
+
+function Update-T21PlatformRuntimeReportLogHashes([Collections.IDictionary]$report) {
+    foreach ($runtimeLog in $report.platformLogs) {
+        $logPath = [string]$runtimeLog.path
+        $fullLogPath = Join-Path $report.runDirectory $logPath
+        $logFile = Get-Item -LiteralPath $fullLogPath
+        $logSha256 = (Get-FileHash -LiteralPath $fullLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $runtimeLog.bytes = [long]$logFile.Length
+        $runtimeLog.sha256 = $logSha256
+        $report.logs[$logPath] = [ordered]@{ bytes=[long]$logFile.Length; sha256=$logSha256 }
+    }
+    return $report
+}
+
+function Remove-T21PlatformRuntimeReportFixtureLogs {
+    foreach ($stage in @('candidate-write', 'candidate-restart-read')) {
+        Remove-Item -LiteralPath (Join-Path $mysqlRuntimeTestRoot "logs\platform-$stage.txt") -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $foliaMinimum = Get-T21PlatformIdentity '[ServerMain/INFO]: [bootstrap] Loading Folia 1.21.6-6-main@abc (2025-06-30T09:48:37Z) for Minecraft 1.21.6'
 Assert-T21PlatformIdentity $foliaMinimum 'folia' '1.21.6' 6
 Write-Output 'PASS: parse minimum Folia startup identity'
@@ -699,7 +770,7 @@ if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
 }
 Write-Output 'PASS: require PostgreSQL process command line to bind the verified data directory through -D'
 
-$paperMinimumSha = 'a' * 64
+$paperMinimumSha = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
 $candidateSha = 'b' * 64
 $accountA = '35c93f74-c540-3b38-8093-b5cb3c2263be'
 $accountB = 'b748781d-824c-36d9-9de4-59cee731f37f'
@@ -819,6 +890,47 @@ if (-not (Test-T21MySqlRuntimeReport $mysqlRuntimeReportV3 $paperMinimumSha $can
 }
 Write-Output 'PASS: accept a schema-3 runtime report with verified isolated Gradle daemon cleanup'
 
+foreach ($endpointCase in $runtimePlatformEndpoints) {
+    $platformRuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $platformRuntimeReport = New-T21PlatformRuntimeReportFixture $platformRuntimeReport $endpointCase 'MySQL'
+    if (-not (Test-T21MySqlRuntimeReport $platformRuntimeReport $endpointCase.sha256 $candidateSha -PlatformEndpoint $endpointCase.endpoint)) {
+        throw "A complete schema-4 SQL report for $($endpointCase.endpoint) was rejected."
+    }
+    Write-Output "PASS: accept schema-4 platform SQL runtime report for $($endpointCase.endpoint)"
+    Remove-T21PlatformRuntimeReportFixtureLogs
+}
+
+foreach ($endpointCase in $runtimePlatformEndpoints) {
+    $legacyNonPaperReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+    $legacyNonPaperReport.task = "T21-M05-SYNC-MySQL-$($endpointCase.taskSuffix)"
+    $legacyNonPaperReport.server.software = $endpointCase.software
+    $legacyNonPaperReport.server.minecraftVersion = $endpointCase.minecraftVersion
+    $legacyNonPaperReport.server.build = $endpointCase.build
+    $legacyNonPaperReport.server.sha256 = $endpointCase.sha256
+    foreach ($startup in $legacyNonPaperReport.startupObservations) {
+        $startup.runtimeIdentity.software = $endpointCase.software
+        $startup.runtimeIdentity.runtimeVersion = $endpointCase.minecraftVersion
+        $startup.runtimeIdentity.minecraftVersion = $endpointCase.minecraftVersion
+        $startup.runtimeIdentity.build = $endpointCase.build
+    }
+    if (Test-T21MySqlRuntimeReport $legacyNonPaperReport $endpointCase.sha256 $candidateSha -PlatformEndpoint $endpointCase.endpoint) {
+        throw "A legacy Paper-log schema-3 report was accepted for non-Paper endpoint $($endpointCase.endpoint)."
+    }
+    Write-Output "PASS: reject schema-3 Paper-log report for non-Paper endpoint $($endpointCase.endpoint)"
+}
+
+$wrongFoliaRuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$wrongFoliaRuntimeReport = New-T21PlatformRuntimeReportFixture $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0] 'MySQL'
+$wrongFoliaRuntimeReport.server.build = 7
+foreach ($startup in $wrongFoliaRuntimeReport.startupObservations) {
+    $startup.runtimeIdentity.build = 7
+}
+if (Test-T21MySqlRuntimeReport $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+    throw 'A runtime report whose Folia build disagrees with its pinned endpoint was accepted.'
+}
+Write-Output 'PASS: reject SQL runtime report with a mismatched Folia build'
+Remove-T21PlatformRuntimeReportFixtureLogs
+
 $mysqlReportMissingBackendLog = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $mysqlReportMissingBackendLog.logs.Remove('logs\mysql-server.log')
 if (Test-T21MySqlRuntimeReport $mysqlReportMissingBackendLog $paperMinimumSha $candidateSha) {
@@ -857,6 +969,60 @@ if (-not (Test-T21PostgresRuntimeReport $postgresRuntimeReport $paperMinimumSha 
     throw 'The complete isolated minimum-Paper PostgreSQL SYNC runtime report was rejected.'
 }
 Write-Output 'PASS: accept PostgreSQL SYNC write, normal-restart, SQL/Redis parity, and process-exit evidence'
+
+$foliaPostgresRuntimeReport = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$foliaPostgresRuntimeReport = New-T21PlatformRuntimeReportFixture $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0] 'PostgreSQL'
+$foliaPostgresRuntimeReport.configuration.databaseType = 'postgresql'
+if (-not (Test-T21PostgresRuntimeReport $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia)) {
+    throw 'The PostgreSQL report validator rejected a complete schema-4 Folia SQL runtime report.'
+}
+Write-Output 'PASS: accept schema-4 PostgreSQL SYNC runtime evidence for minimum Folia'
+
+$wrongPinnedHashReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$wrongPinnedHashReport.server.sha256 = $paperMinimumSha
+if (Test-T21PostgresRuntimeReport $wrongPinnedHashReport $paperMinimumSha $candidateSha -PlatformEndpoint MinimumFolia) {
+    throw 'A Folia report and caller that agreed on the wrong server hash were accepted.'
+}
+Write-Output 'PASS: reject runtime report whose caller/server hash disagrees with the selected platform pin'
+
+$maximumCanvasEndpoint = $runtimePlatformEndpoints[3]
+$relabeledPlatformLogReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$relabeledPlatformLogReport.task = "T21-M05-SYNC-PostgreSQL-$($maximumCanvasEndpoint.taskSuffix)"
+$relabeledPlatformLogReport.server.software = $maximumCanvasEndpoint.software
+$relabeledPlatformLogReport.server.minecraftVersion = $maximumCanvasEndpoint.minecraftVersion
+$relabeledPlatformLogReport.server.build = $maximumCanvasEndpoint.build
+$relabeledPlatformLogReport.server.sha256 = $maximumCanvasEndpoint.sha256
+foreach ($startup in $relabeledPlatformLogReport.startupObservations) {
+    $startup.runtimeIdentity.software = $maximumCanvasEndpoint.software
+    $startup.runtimeIdentity.runtimeVersion = $maximumCanvasEndpoint.minecraftVersion
+    $startup.runtimeIdentity.minecraftVersion = $maximumCanvasEndpoint.minecraftVersion
+    $startup.runtimeIdentity.build = $maximumCanvasEndpoint.build
+}
+if (Test-T21PostgresRuntimeReport $relabeledPlatformLogReport $maximumCanvasEndpoint.sha256 $candidateSha -PlatformEndpoint MaximumCanvas) {
+    throw 'A schema-4 Canvas report with retained Folia startup logs was accepted.'
+}
+Write-Output 'PASS: reject schema-4 report when retained logs identify a different platform'
+
+$foliaWritePlatformLogPath = Join-Path $foliaPostgresRuntimeReport.runDirectory $foliaPostgresRuntimeReport.platformLogs[0].path
+$foliaWritePlatformLogContent = [IO.File]::ReadAllText($foliaWritePlatformLogPath)
+$missingPlatformIdentityReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$missingPlatformIdentityContent = [regex]::Replace($foliaWritePlatformLogContent, '(?im)^.*Loading\s+(?:Paper|Folia|Canvas)\s+\d+(?:\.\d+){1,2}-\d+\b.*(?:\r?\n|$)', '')
+[IO.File]::WriteAllText($foliaWritePlatformLogPath, $missingPlatformIdentityContent, [Text.UTF8Encoding]::new($false))
+$missingPlatformIdentityReport = Update-T21PlatformRuntimeReportLogHashes $missingPlatformIdentityReport
+if (Test-T21PostgresRuntimeReport $missingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+    throw 'A schema-4 report without platform identity in a retained server log was accepted.'
+}
+Write-Output 'PASS: reject schema-4 report when a retained server log has no platform identity'
+
+$conflictingPlatformIdentityReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$conflictingIdentityLine = '[ServerMain/INFO]: [bootstrap] Loading Canvas 26.3-972-main@fixture (2026-10-13T00:00:00Z) for Minecraft 26.3'
+[IO.File]::WriteAllText($foliaWritePlatformLogPath, $foliaWritePlatformLogContent + $conflictingIdentityLine + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+$conflictingPlatformIdentityReport = Update-T21PlatformRuntimeReportLogHashes $conflictingPlatformIdentityReport
+if (Test-T21PostgresRuntimeReport $conflictingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+    throw 'A schema-4 report with conflicting platform identities in a retained server log was accepted.'
+}
+Write-Output 'PASS: reject schema-4 report when a retained server log has conflicting platform identities'
+Remove-T21PlatformRuntimeReportFixtureLogs
 
 $postgresRuntimeStringConfigBoolean = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $postgresRuntimeStringConfigBoolean.configuration.databaseEnabled = 'True'
@@ -1041,7 +1207,7 @@ if (Test-T21MySqlRuntimeReport $mariadbRuntimeReportWrongVersion $paperMinimumSh
 }
 Write-Output 'PASS: reject a MariaDB report with the wrong exact server version'
 
-$paperMaximumSha = 'b' * 64
+$paperMaximumSha = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
 $maximumPaperRuntimeReport = $mariadbRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $maximumPaperRuntimeReport.schemaVersion = 3
 $maximumPaperRuntimeReport.task = 'T21-M05-SYNC-MariaDB-maximum-Paper'
@@ -1747,11 +1913,13 @@ if ($mysqlShutdownCallIndex -lt 0 -or $redisShutdownCallIndex -lt 0 -or $logHash
 }
 Write-Output 'PASS: hash runtime logs after isolated backends exit'
 
-if ($runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$paperLogPath' -or
-    $runnerSource -notmatch '\$script:report\.paperLogs = @\(\$script:paperServerLogs\)') {
-    throw 'The runner must preserve each stopped Paper session log and bind its metadata into the report.'
+if ($runnerSource -notmatch 'Get-T21PlatformEndpoint -PlatformEndpoint \$PlatformEndpoint' -or
+    $runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$platformLogPath' -or
+    $runnerSource -notmatch '\$script:report\.platformLogs = @\(\$script:platformServerLogs\)' -or
+    $runnerSource -notmatch 'schemaVersion = 4') {
+    throw 'The runner must select an exact user-pinned platform endpoint and report schema-4 platform-owned stage logs.'
 }
-Write-Output 'PASS: preserve and report each stage-specific Paper server log'
+Write-Output 'PASS: preserve and report stage-specific platform logs under schema 4'
 
 Write-Output 'T21 runner validation tests PASS'
 }

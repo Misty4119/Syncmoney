@@ -41,8 +41,11 @@ function Assert-T21PlatformIdentity(
     }
 }
 
-function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
-    switch -CaseSensitive ($PaperEndpoint) {
+function Get-T21PlatformEndpoint(
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
+) {
+    switch -CaseSensitive ($PlatformEndpoint) {
         'Minimum' {
             return [ordered]@{
                 taskSuffix = 'minimum-Paper'
@@ -70,8 +73,48 @@ function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable'
                 sha256 = '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757'
             }
         }
+        'MinimumFolia' {
+            return [ordered]@{
+                taskSuffix = 'minimum-Folia'
+                software = 'folia'
+                minecraftVersion = '1.21.6'
+                build = 6
+                sha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234'
+            }
+        }
+        'MaximumFolia' {
+            return [ordered]@{
+                taskSuffix = 'maximum-Folia'
+                software = 'folia'
+                minecraftVersion = '26.2'
+                build = 7
+                sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
+            }
+        }
+        'MinimumCanvas' {
+            return [ordered]@{
+                taskSuffix = 'minimum-Canvas'
+                software = 'canvas'
+                minecraftVersion = '1.21.8'
+                build = 603
+                sha256 = '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b'
+            }
+        }
+        'MaximumCanvas' {
+            return [ordered]@{
+                taskSuffix = 'maximum-Canvas'
+                software = 'canvas'
+                minecraftVersion = '26.3'
+                build = 972
+                sha256 = 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5'
+            }
+        }
     }
-    throw "Unsupported T21 Paper endpoint: $PaperEndpoint"
+    throw "Unsupported T21 platform endpoint: $PlatformEndpoint"
+}
+
+function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
+    return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
 function Get-T21ShutdownFailureMarkers([string]$serverLogText) {
@@ -642,19 +685,23 @@ function Test-T21SqlRuntimeReport(
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
 ) {
     try {
         if ($null -eq $report) { return $false }
-        $expectedPaper = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
+        $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
         $schemaVersion = Get-T21ObservedValue $report 'schemaVersion'
         $isPostgreSql = $DatabaseProduct -ceq 'PostgreSQL'
         $sqlReportKey = if ($isPostgreSql) { 'postgresql' } else { 'mysql' }
-        $expectedTask = "T21-M05-SYNC-$DatabaseProduct-$($expectedPaper.taskSuffix)"
+        $expectedTask = "T21-M05-SYNC-$DatabaseProduct-$($expectedPlatform.taskSuffix)"
         $legacyMySqlReport = $schemaVersion -eq 1 -and $DatabaseProduct -ceq 'MySQL'
-        if ($schemaVersion -notin @(1, 2, 3) -or
-            (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3)) -or
-            ($isPostgreSql -and $schemaVersion -ne 3) -or
+        if ($schemaVersion -notin @(1, 2, 3, 4) -or
+            (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3, 4)) -or
+            ($isPostgreSql -and $schemaVersion -notin @(3, 4)) -or
+            ($expectedPlatform.software -cne 'paper' -and $schemaVersion -ne 4) -or
+            ([string]$expectedServerSha256).ToLowerInvariant() -cne $expectedPlatform.sha256 -or
             (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
 
@@ -685,9 +732,9 @@ function Test-T21SqlRuntimeReport(
         $candidate = Get-T21ObservedValue $report 'candidate'
         $java = Get-T21ObservedValue $report 'java'
         $configuration = Get-T21ObservedValue $report 'configuration'
-        if ((Get-T21ObservedValue $server 'software') -cne $expectedPaper.software -or
-            (Get-T21ObservedValue $server 'minecraftVersion') -cne $expectedPaper.minecraftVersion -or
-            (Get-T21ObservedValue $server 'build') -ne $expectedPaper.build -or
+        if ((Get-T21ObservedValue $server 'software') -cne $expectedPlatform.software -or
+            (Get-T21ObservedValue $server 'minecraftVersion') -cne $expectedPlatform.minecraftVersion -or
+            (Get-T21ObservedValue $server 'build') -ne $expectedPlatform.build -or
             ([string](Get-T21ObservedValue $server 'sha256')).ToLowerInvariant() -cne $expectedServerSha256.ToLowerInvariant() -or
             (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
@@ -826,10 +873,10 @@ function Test-T21SqlRuntimeReport(
                 (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
                 [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
                 ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
-                (Get-T21ObservedValue $runtimeIdentity 'software') -cne $expectedPaper.software -or
-                (Get-T21ObservedValue $runtimeIdentity 'runtimeVersion') -cne $expectedPaper.minecraftVersion -or
-                (Get-T21ObservedValue $runtimeIdentity 'minecraftVersion') -cne $expectedPaper.minecraftVersion -or
-                (Get-T21ObservedValue $runtimeIdentity 'build') -ne $expectedPaper.build) {
+                (Get-T21ObservedValue $runtimeIdentity 'software') -cne $expectedPlatform.software -or
+                (Get-T21ObservedValue $runtimeIdentity 'runtimeVersion') -cne $expectedPlatform.minecraftVersion -or
+                (Get-T21ObservedValue $runtimeIdentity 'minecraftVersion') -cne $expectedPlatform.minecraftVersion -or
+                (Get-T21ObservedValue $runtimeIdentity 'build') -ne $expectedPlatform.build) {
                 return $false
             }
         }
@@ -840,11 +887,13 @@ function Test-T21SqlRuntimeReport(
             [string]$writeReceipts[1] -cne 'SUCCESS:DEPOSIT:765.50:765.50') { return $false }
         $writeMarker = [string](Get-T21ObservedValue $report 'writeMarker')
         if ($writeMarker -cnotmatch '^\[\d{2}:\d{2}:\d{2}\] \[[^\]]+/INFO\]: \[SyncmoneyAcceptance\] T21_WRITE_PASS expected-a=1337\.25 expected-b=765\.50 receipt-a=SUCCESS:DEPOSIT:1337\.25:1337\.25 receipt-b=SUCCESS:DEPOSIT:765\.50:765\.50$') { return $false }
-        $paperLogs = @(Get-T21ObservedValue $report 'paperLogs')
+        $runtimeLogField = if ($schemaVersion -ge 4) { 'platformLogs' } else { 'paperLogs' }
+        $runtimeLogs = @(Get-T21ObservedValue $report $runtimeLogField)
         $logMap = Get-T21ObservedValue $report 'logs'
-        $expectedPaperLogStages = @('candidate-write', 'candidate-restart-read')
-        $expectedPaperLogPaths = @('logs\paper-candidate-write.txt', 'logs\paper-candidate-restart-read.txt')
-        if ($paperLogs.Count -ne $expectedPaperLogStages.Count -or
+        $expectedRuntimeLogStages = @('candidate-write', 'candidate-restart-read')
+        $runtimeLogPrefix = if ($schemaVersion -ge 4) { 'platform' } else { 'paper' }
+        $expectedRuntimeLogPaths = @("logs\$runtimeLogPrefix-candidate-write.txt", "logs\$runtimeLogPrefix-candidate-restart-read.txt")
+        if ($runtimeLogs.Count -ne $expectedRuntimeLogStages.Count -or
             $null -eq $logMap) { return $false }
         $runDirectory = [string](Get-T21ObservedValue $report 'runDirectory')
         if ([string]::IsNullOrWhiteSpace($runDirectory)) { return $false }
@@ -948,18 +997,18 @@ function Test-T21SqlRuntimeReport(
             [string](Get-T21ObservedValue $report 'restartReadMarker'),
             [string](Get-T21ObservedValue $report 'restartReadObservation')
         )
-        foreach ($index in 0..($expectedPaperLogStages.Count - 1)) {
-            $paperLog = $paperLogs[$index]
-            $logPath = [string](Get-T21ObservedValue $paperLog 'path')
-            $logBytes = [long](Get-T21ObservedValue $paperLog 'bytes')
-            $logSha256 = [string](Get-T21ObservedValue $paperLog 'sha256')
+        foreach ($index in 0..($expectedRuntimeLogStages.Count - 1)) {
+            $runtimeLog = $runtimeLogs[$index]
+            $logPath = [string](Get-T21ObservedValue $runtimeLog 'path')
+            $logBytes = [long](Get-T21ObservedValue $runtimeLog 'bytes')
+            $logSha256 = [string](Get-T21ObservedValue $runtimeLog 'sha256')
             $hasLogEntry = if ($logMap -is [Collections.IDictionary]) {
                 $logMap.Contains($logPath)
             } else {
                 $null -ne $logMap.PSObject.Properties[$logPath]
             }
-            if ((Get-T21ObservedValue $paperLog 'stage') -cne $expectedPaperLogStages[$index] -or
-                $logPath -cne $expectedPaperLogPaths[$index] -or
+            if ((Get-T21ObservedValue $runtimeLog 'stage') -cne $expectedRuntimeLogStages[$index] -or
+                $logPath -cne $expectedRuntimeLogPaths[$index] -or
                 $logBytes -le 0 -or $logSha256 -notmatch '^[0-9a-f]{64}$' -or
                 -not $hasLogEntry) { return $false }
             $hashedLog = Get-T21ObservedValue $logMap $logPath
@@ -974,7 +1023,11 @@ function Test-T21SqlRuntimeReport(
             $actualLogSha256 = (Get-FileHash -LiteralPath $fullLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
             if ([long]$actualLog.Length -ne $logBytes -or $actualLogSha256 -cne $logSha256) { return $false }
             $actualLogLines = @(Get-Content -LiteralPath $fullLogPath -ErrorAction Stop)
-            $requiredMarkers = if ($expectedPaperLogStages[$index] -ceq 'candidate-write') { $writeMarkerLines } else { $restartReadMarkerLines }
+            if ($schemaVersion -ge 4) {
+                $loggedRuntimeIdentity = Get-T21PlatformIdentity ($actualLogLines -join "`n")
+                Assert-T21PlatformIdentity $loggedRuntimeIdentity $expectedPlatform.software $expectedPlatform.minecraftVersion $expectedPlatform.build
+            }
+            $requiredMarkers = if ($expectedRuntimeLogStages[$index] -ceq 'candidate-write') { $writeMarkerLines } else { $restartReadMarkerLines }
             foreach ($requiredMarker in $requiredMarkers) {
                 if (-not ($actualLogLines -ccontains $requiredMarker)) { return $false }
             }
@@ -1026,16 +1079,20 @@ function Test-T21MySqlRuntimeReport(
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
     [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PaperEndpoint $PaperEndpoint
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
 }
 
 function Test-T21PostgresRuntimeReport(
     [object]$report,
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum'
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PaperEndpoint $PaperEndpoint
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint
 }

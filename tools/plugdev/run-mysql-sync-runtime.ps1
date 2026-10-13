@@ -9,7 +9,9 @@ param(
     [string]$MariaDbBin = 'C:\Program Files\MariaDB 12.3\bin',
     [string]$PostgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin',
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum',
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum',
     [string]$CandidateVersion = '1.4.0-alpha.1'
 )
 
@@ -23,7 +25,7 @@ $script:databaseProduct = Resolve-T21SqlRuntimeProduct $requestedDatabaseProduct
 $script:databaseServerVersion = switch ($script:databaseProduct) { 'MariaDB' { '12.3.3-MariaDB' } 'PostgreSQL' { '18.1' } default { '8.0.42' } }
 $script:databaseServerVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '^12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^18\.1(?:\b|$)' } default { '^8\.0\.42(?:\b|$)' } }
 $script:databaseExecutableVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^postgres \(PostgreSQL\) 18\.1$' } default { '\bVer\s+8\.0\.42(?:\b|$)' } }
-$script:paperTarget = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
+$script:platformTarget = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -40,7 +42,7 @@ $script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $scr
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)
 $script:databaseUser = 'sm_t21_' + $script:runId.Substring(0, 8)
 $script:databasePassword = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:paperTarget.taskSuffix.ToLowerInvariant() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
+$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:platformTarget.taskSuffix.ToLowerInvariant() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
 $script:workspace = Join-Path $script:runRoot 'workspace'
 $script:gradleUserHome = Join-Path $script:runRoot '.gradle-user-home'
 $script:mysqlRoot = Join-Path $script:runRoot $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
@@ -70,14 +72,14 @@ $script:report = $null
 $script:failure = $null
 $script:cleanupFailures = [Collections.Generic.List[string]]::new()
 $script:startups = [Collections.Generic.List[object]]::new()
-$script:paperServerLogs = [Collections.Generic.List[object]]::new()
+$script:platformServerLogs = [Collections.Generic.List[object]]::new()
 $script:normalStops = [Collections.Generic.List[object]]::new()
 $script:snapshots = [Collections.Generic.List[object]]::new()
 $script:backendShutdowns = [Collections.Generic.List[object]]::new()
 $script:startedAtUtc = [DateTime]::UtcNow.ToString('o')
 
-if ($ExpectedServerSha256.ToLowerInvariant() -cne $script:paperTarget.sha256) {
-    throw "The $($script:paperTarget.taskSuffix) Paper runtime requires its exact user-pinned server SHA-256."
+if ($ExpectedServerSha256.ToLowerInvariant() -cne $script:platformTarget.sha256) {
+    throw "The $($script:platformTarget.taskSuffix) runtime requires its exact pinned server SHA-256."
 }
 if ($CandidateVersion -cne '1.4.0-alpha.1') { throw 'This T21 runtime cell is pinned to candidate 1.4.0-alpha.1.' }
 
@@ -512,7 +514,7 @@ const ok=c["config-version"]===12&&c["db-enabled"]===true&&c["pubsub-enabled"]==
   c.database.enabled===true&&c.database.type===expected.dbType&&c.database.host==="127.0.0.1"&&Number(c.database.port)===expected.dbPort&&
   c.database.database===expected.dbName&&c.database.username===expected.dbUser&&c.database.password===expected.dbPassword&&
   c.redis.enabled===true&&c.redis.host==="127.0.0.1"&&Number(c.redis.port)===expected.redisPort&&c.redis.database===15;
-if(!ok) throw new Error("The isolated Paper profile does not match the required SQL/Redis SYNC configuration.");
+if(!ok) throw new Error("The isolated platform profile does not match the required SQL/Redis SYNC configuration.");
 console.log(JSON.stringify({schema:c["config-version"],mode:c.economy.mode,databaseType:c.database.type,databaseHost:c.database.host,databasePort:c.database.port,databaseName:c.database.database,redisHost:c.redis.host,redisPort:c.redis.port,redisDatabase:c.redis.database,credentialsConfigured:Boolean(c.database.username&&c.database.password)}));
 '@
     Set-Content -LiteralPath $scriptPath -Value $content -Encoding utf8
@@ -543,9 +545,9 @@ function Start-T21Server([string]$stage) {
     $null = Wait-ServerLogMarker 'API CLASSLOADER PASS provider=Syncmoney' 'API CLASSLOADER FAIL|Error occurred while enabling Syncmoney|T21_\w+_FAIL' $before
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw
     $identity = Get-T21PlatformIdentity $fullLog
-    Assert-T21PlatformIdentity $identity $script:paperTarget.software $script:paperTarget.minecraftVersion $script:paperTarget.build
+    Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
     if ($fullLog -notmatch '(?m)\[Syncmoney\] Loading server plugin Syncmoney v1\.4\.0-alpha\.1') {
-        throw 'The minimum Paper server did not load the expected candidate version.'
+        throw 'The selected platform server did not load the expected candidate version.'
     }
     $pluginPin = Get-PinnedCandidatePlugin
     $processes = @(Get-T21ServerProcesses)
@@ -568,7 +570,7 @@ function Start-T21Server([string]$stage) {
 function Stop-T21Server([string]$stage) {
     $before = Get-ServerLogLineCount
     $owned = @(Get-T21ServerProcesses)
-    if ($owned.Count -ne 1) { throw "Refusing graceful RCON stop at $stage; expected one run-owned Paper process, observed $($owned.Count)." }
+    if ($owned.Count -ne 1) { throw "Refusing graceful RCON stop at $stage; expected one run-owned platform process, observed $($owned.Count)." }
     $sessionPath = Join-Path $script:workspace '.plugdev\session.json'
     if (-not (Test-Path -LiteralPath $sessionPath -PathType Leaf)) { throw "PlugDev session is absent before normal stop at $stage." }
     $session = Get-Content -LiteralPath $sessionPath -Raw | ConvertFrom-Json
@@ -581,9 +583,9 @@ function Stop-T21Server([string]$stage) {
     $processExited = Wait-T21ServerStopped
     if (-not $processExited) { throw "Run-owned server did not exit after $stage." }
     $serverProcess.Refresh()
-    if (-not $serverProcess.HasExited) { throw "Captured run-owned Paper PID $($serverProcess.Id) remained active after $stage." }
+    if (-not $serverProcess.HasExited) { throw "Captured run-owned platform PID $($serverProcess.Id) remained active after $stage." }
     $processExitCode = [int]$serverProcess.ExitCode
-    if ($processExitCode -ne 0) { throw "Run-owned Paper exited with code $processExitCode after $stage." }
+    if ($processExitCode -ne 0) { throw "Run-owned platform exited with code $processExitCode after $stage." }
     $allLines = @(Get-Content -LiteralPath $script:serverLogPath -ErrorAction Stop)
     $skip = if ($allLines.Count -ge $before) { $before } else { 0 }
     $stopLines = @($allLines | Select-Object -Skip $skip)
@@ -591,20 +593,20 @@ function Stop-T21Server([string]$stage) {
     if ($disabled.Count -eq 0) { throw "Syncmoney did not log its normal disable marker for $stage." }
     $failureMarkers = @(Get-T21ShutdownFailureMarkers ($stopLines -join "`n"))
     if ($failureMarkers.Count -gt 0) { throw "Server shutdown failure marker observed at ${stage}: $($failureMarkers -join '; ')." }
-    $paperLogStage = switch ($stage) {
+    $platformLogStage = switch ($stage) {
         'after-write' { 'candidate-write' }
         'after-restart-read' { 'candidate-restart-read' }
-        default { throw "Unexpected Paper log snapshot stage: $stage" }
+        default { throw "Unexpected platform log snapshot stage: $stage" }
     }
-    $paperLogRelativePath = 'logs\paper-' + $paperLogStage + '.txt'
-    $paperLogPath = Join-Path $script:runRoot $paperLogRelativePath
-    Copy-Item -LiteralPath $script:serverLogPath -Destination $paperLogPath -Force -ErrorAction Stop
-    $paperLogFile = Get-Item -LiteralPath $paperLogPath -ErrorAction Stop
-    $script:paperServerLogs.Add([ordered]@{
-        stage = $paperLogStage
-        path = $paperLogRelativePath
-        bytes = [long]$paperLogFile.Length
-        sha256 = (Get-FileHash -LiteralPath $paperLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $platformLogRelativePath = 'logs\platform-' + $platformLogStage + '.txt'
+    $platformLogPath = Join-Path $script:runRoot $platformLogRelativePath
+    Copy-Item -LiteralPath $script:serverLogPath -Destination $platformLogPath -Force -ErrorAction Stop
+    $platformLogFile = Get-Item -LiteralPath $platformLogPath -ErrorAction Stop
+    $script:platformServerLogs.Add([ordered]@{
+        stage = $platformLogStage
+        path = $platformLogRelativePath
+        bytes = [long]$platformLogFile.Length
+        sha256 = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
     })
     Remove-Item -LiteralPath $sessionPath -Force -ErrorAction Stop
     $script:normalStops.Add([ordered]@{
@@ -668,14 +670,14 @@ function Stop-RunOwnedServerAfterFailure {
     foreach ($process in $owned) {
         try {
             Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
-            $script:cleanupFailures.Add("Forced cleanup of run-owned Paper PID $($process.ProcessId) after failure.")
+            $script:cleanupFailures.Add("Forced cleanup of run-owned platform PID $($process.ProcessId) after failure.")
         } catch {
             if (Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue) {
-                $script:cleanupFailures.Add("Could not stop run-owned Paper PID $($process.ProcessId): $($_.Exception.Message)")
+                $script:cleanupFailures.Add("Could not stop run-owned platform PID $($process.ProcessId): $($_.Exception.Message)")
             }
         }
     }
-    if (@(Get-T21ServerProcesses).Count -gt 0) { $script:cleanupFailures.Add('A run-owned Paper process remained after failure cleanup.') }
+    if (@(Get-T21ServerProcesses).Count -gt 0) { $script:cleanupFailures.Add('A run-owned platform process remained after failure cleanup.') }
 }
 
 function Stop-MySqlBackend {
@@ -929,7 +931,7 @@ $serverSha256 = (Get-FileHash -LiteralPath $script:serverPath -Algorithm SHA256)
 $script:candidateSha256 = (Get-FileHash -LiteralPath $script:candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $acceptanceSha256 = (Get-FileHash -LiteralPath $script:acceptancePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $apiConsumerSha256 = (Get-FileHash -LiteralPath $script:apiConsumerPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($serverSha256 -cne $script:paperTarget.sha256 -or $serverSha256 -cne $ExpectedServerSha256.ToLowerInvariant()) { throw "Paper server JAR does not match the pinned $($script:paperTarget.taskSuffix) build." }
+if ($serverSha256 -cne $script:platformTarget.sha256 -or $serverSha256 -cne $ExpectedServerSha256.ToLowerInvariant()) { throw "Server JAR does not match the pinned $($script:platformTarget.taskSuffix) build." }
 if ($script:candidateSha256 -cne $ExpectedCandidateSha256.ToLowerInvariant()) { throw 'Candidate JAR SHA-256 does not match the required pin.' }
 if (-not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js') -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $script:plugDevRoot 'package.json') -PathType Leaf)) { throw 'The local PlugDev source checkout or built CLI is unavailable.' }
@@ -978,13 +980,13 @@ $script:redisPort = Get-FreeLoopbackPort 15000 25000 @($script:gamePort, ($scrip
 $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; AcceptanceB = Get-OfflineUuid 'AcceptanceB' }
 
 $script:report = [ordered]@{
-    schemaVersion = 3
-    task = "T21-M05-SYNC-$script:databaseProduct-$($script:paperTarget.taskSuffix)"
+    schemaVersion = 4
+    task = "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
     runId = $script:runId
     runDirectory = $script:runRoot
-    server = [ordered]@{ software=$script:paperTarget.software; minecraftVersion=$script:paperTarget.minecraftVersion; build=$script:paperTarget.build; sha256=$serverSha256; bytes=[long](Get-Item -LiteralPath $script:serverPath).Length; path=$script:serverPath }
+    server = [ordered]@{ software=$script:platformTarget.software; minecraftVersion=$script:platformTarget.minecraftVersion; build=$script:platformTarget.build; sha256=$serverSha256; bytes=[long](Get-Item -LiteralPath $script:serverPath).Length; path=$script:serverPath }
     candidate = [ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256; path=$script:candidatePath }
     acceptance = [ordered]@{ sha256=$acceptanceSha256 }
     apiConsumer = [ordered]@{ sha256=$apiConsumerSha256 }
@@ -1135,10 +1137,10 @@ try {
 
     Push-Location $script:workspace
     try {
-        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') $script:paperTarget.software $script:paperTarget.minecraftVersion 'sync' 'off' $CandidateVersion 2>&1)
+        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') $script:platformTarget.software $script:platformTarget.minecraftVersion 'sync' 'off' $CandidateVersion 2>&1)
         $prepareExit = $LASTEXITCODE
         $prepareOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $script:logsRoot 'prepare-profile.txt') -Encoding utf8
-        if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:paperTarget.taskSuffix) $script:databaseProduct SYNC profile." }
+        if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:platformTarget.taskSuffix) $script:databaseProduct SYNC profile." }
     } finally { Pop-Location }
     Set-T21RunMarkerInProfile
     $configObservation = Assert-IsolatedSyncConfig
@@ -1179,7 +1181,7 @@ try {
 } finally {
     try {
         if (@(Get-T21ServerProcesses).Count -gt 0) { Stop-RunOwnedServerAfterFailure }
-    } catch { $script:cleanupFailures.Add("Paper cleanup check failed: $($_.Exception.Message)") }
+    } catch { $script:cleanupFailures.Add("Platform cleanup check failed: $($_.Exception.Message)") }
     try { Stop-MySqlBackend } catch { $script:cleanupFailures.Add("MySQL cleanup failed: $($_.Exception.Message)") }
     try { Stop-RedisBackend } catch { $script:cleanupFailures.Add("Redis cleanup failed: $($_.Exception.Message)") }
     try { $script:report.gradleDaemonCleanup = Stop-T21RunOwnedGradleDaemons } catch {
@@ -1214,7 +1216,7 @@ try {
 
     $script:report.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
     $script:report.startupObservations = @($script:startups)
-    $script:report.paperLogs = @($script:paperServerLogs)
+    $script:report.platformLogs = @($script:platformServerLogs)
     $script:report.normalStops = @($script:normalStops)
     $script:report.snapshots = @($script:snapshots)
     $script:report.backendShutdowns = @($script:backendShutdowns)
@@ -1223,9 +1225,9 @@ try {
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
         $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
-            Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PaperEndpoint $PaperEndpoint
+            Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint
         } else {
-            Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PaperEndpoint $PaperEndpoint
+            Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
         }
         if (-not $reportAccepted) {
             $script:report.status = 'FAIL'
@@ -1247,4 +1249,5 @@ if ($null -ne $script:failure -or $script:report.status -cne 'PASS_BOUNDED_SUBCA
     throw "T21 $script:databaseProduct SYNC runtime did not pass. Report: $script:reportPath"
 }
 $databaseRuntimeLabel = switch ($script:databaseProduct) { 'MariaDB' { 'MariaDB 12.3.3 using the MySQL protocol' } 'PostgreSQL' { 'PostgreSQL 18.1' } default { 'MySQL 8.0.42' } }
-Write-Output "PASS_BOUNDED_SUBCASE: Paper $($script:paperTarget.minecraftVersion)#$($script:paperTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"
+$platformRuntimeLabel = switch ($script:platformTarget.software) { 'folia' { 'Folia' } 'canvas' { 'Canvas' } default { 'Paper' } }
+Write-Output "PASS_BOUNDED_SUBCASE: $platformRuntimeLabel $($script:platformTarget.minecraftVersion)#$($script:platformTarget.build) SYNC / $databaseRuntimeLabel / Redis 8.10.1; report=$script:reportPath"
