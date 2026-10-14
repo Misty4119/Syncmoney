@@ -342,7 +342,7 @@ try {
             $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
                 $true
             } elseif ($endpointName -ceq 'MinimumCanvas') {
-                $databaseProduct -in @('MySQL', 'MariaDB')
+                $true
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -352,9 +352,9 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia across all SQL dialects plus minimum Canvas/MySQL and Canvas/MariaDB, and reject the remaining endpoint/dialect combinations'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia plus minimum Canvas across all SQL dialects, and reject the remaining endpoint/dialect combinations'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia, plus MySQL or MariaDB on minimum Canvas; maximum Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper, minimum/maximum Folia, and minimum Canvas; maximum Canvas, current-stable Paper, and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
