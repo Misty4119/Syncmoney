@@ -342,7 +342,7 @@ try {
             $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
                 $true
             } elseif ($endpointName -ceq 'MinimumCanvas') {
-                $databaseProduct -ceq 'MySQL'
+                $databaseProduct -in @('MySQL', 'MariaDB')
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -352,9 +352,9 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia across all SQL dialects plus minimum Canvas/MySQL, and reject the remaining endpoint/dialect combinations'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia across all SQL dialects plus minimum Canvas/MySQL and Canvas/MariaDB, and reject the remaining endpoint/dialect combinations'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia, plus MySQL on minimum Canvas; maximum Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia, plus MySQL or MariaDB on minimum Canvas; maximum Canvas, current-stable Paper, and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
@@ -646,6 +646,19 @@ try {
         throw 'The minimum-Canvas MySQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
     }
     Write-Output 'PASS: reject minimum-Canvas MySQL incomplete-v10 evidence with a mismatched runtime build'
+
+    $minimumCanvasMariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB' 'MinimumCanvas'
+    if (-not (Test-T21StartupFailureReportFixture $minimumCanvasMariaDbIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint MinimumCanvas -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete minimum-Canvas MariaDB incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Canvas MariaDB incomplete-v10 failure with the exact pinned runtime identity'
+    $minimumCanvasMariaDbIncompleteReport.startupObservation.runtimeIdentity.build = 604
+    if (Test-T21StartupFailureReportFixture $minimumCanvasMariaDbIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint MinimumCanvas -FailureScenario IncompleteV10AuditTable) {
+        throw 'The minimum-Canvas MariaDB incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject minimum-Canvas MariaDB incomplete-v10 evidence with a mismatched runtime build'
 
     $mysqlIncompleteReport = New-T21MySqlIncompleteAuditReportFixture
     if (-not (Test-T21StartupFailureReportFixture $mysqlIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `

@@ -136,7 +136,7 @@ For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pas
 
 ### T21 V03 incomplete-v10 audit-table startup failure on Paper, Folia, and minimum Canvas
 
-Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper `1.21.6#48` / `26.3#166` and minimum/maximum Folia `1.21.6#6` / `26.2#7`. Maximum Folia has bounded runtime results for MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1`; minimum Canvas `1.21.8#603` is enabled for MySQL `8.0.42` only. Minimum Canvas MariaDB/PostgreSQL, maximum Canvas, and supplemental current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
+Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper `1.21.6#48` / `26.3#166` and minimum/maximum Folia `1.21.6#6` / `26.2#7`. Maximum Folia has bounded runtime results for MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1`; minimum Canvas `1.21.8#603` has bounded runtime results for MySQL `8.0.42` and MariaDB `12.3.3-MariaDB`. Minimum Canvas PostgreSQL, maximum Canvas, and supplemental current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -195,6 +195,22 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PlatformEndpoint MinimumCanvas `
   -DatabaseProduct MySQL `
+  -IncompleteV10AuditTableStartupFailure
+```
+
+For minimum Canvas `1.21.8#603` with MariaDB `12.3.3-MariaDB`, pass the MariaDB binary directory explicitly when it is outside the runner's default Program Files path:
+
+```powershell
+$canvasJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\canvas-1.21.8-603.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
+  -PlatformEndpoint MinimumCanvas `
+  -DatabaseProduct MariaDB `
   -IncompleteV10AuditTableStartupFailure
 ```
 
