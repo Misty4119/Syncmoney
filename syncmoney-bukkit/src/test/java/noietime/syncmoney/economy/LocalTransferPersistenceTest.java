@@ -76,8 +76,9 @@ class LocalTransferPersistenceTest {
                         firstSqlFailure.countDown();
                         throw e;
                     }
-                },
-                ignored -> { }, plugin.getLogger());
+                }, ignored -> { }, plugin.getLogger(), 10_000,
+                handler::registerPersistenceWorker, handler::persistenceWorkerStopped,
+                handler::persistenceWorkerFailed, handler::persistenceRecoveryHandoffCompleted);
 
         try {
             worker.start();
@@ -96,7 +97,6 @@ class LocalTransferPersistenceTest {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (queue.hasOutstandingWrites() && System.nanoTime() < deadline) Thread.sleep(10);
             assertFalse(queue.hasOutstandingWrites(), "the retry should complete the accepted pair together");
-            worker.shutdown();
 
             assertEquals(new BigDecimal("90.00"), handler.findBalance(sender).orElseThrow());
             assertEquals(new BigDecimal("10.00"), handler.findBalance(receiver).orElseThrow());
@@ -107,9 +107,13 @@ class LocalTransferPersistenceTest {
             try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + databasePath);
                     Statement statement = connection.createStatement()) {
                 statement.execute("DROP TRIGGER IF EXISTS " + triggerName);
+            } finally {
+                try {
+                    handler.close();
+                } finally {
+                    worker.shutdown();
+                }
             }
-            worker.shutdown();
-            handler.close();
         }
     }
 
