@@ -20,6 +20,9 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     if ($PlatformEndpoint -ceq 'MinimumCanvas') {
         return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')
     }
+    if ($PlatformEndpoint -ceq 'MaximumCanvas') {
+        return $DatabaseProduct -ceq 'MySQL'
+    }
 
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia')
 }

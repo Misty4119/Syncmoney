@@ -134,9 +134,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
-### T21 V03 incomplete-v10 audit-table startup failure on Paper, Folia, and minimum Canvas
+### T21 V03 incomplete-v10 audit-table startup failure on Paper, Folia, and selected Canvas cells
 
-Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper `1.21.6#48` / `26.3#166` and minimum/maximum Folia `1.21.6#6` / `26.2#7`, plus minimum Canvas `1.21.8#603`. Maximum Folia has bounded runtime results for MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1`; minimum Canvas `1.21.8#603` has bounded runtime results for MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1`. Maximum Canvas and supplemental current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
+Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper `1.21.6#48` / `26.3#166` and minimum/maximum Folia `1.21.6#6` / `26.2#7`, plus minimum Canvas `1.21.8#603`. Maximum Folia has bounded runtime results for all three SQL dialects; minimum Canvas `1.21.8#603` has bounded runtime results for all three SQL dialects. Maximum Canvas `26.3#972` is currently admitted for the selected MySQL `8.0.42` cell; its MariaDB and PostgreSQL cells remain rejected until selected and verified. Supplemental current-stable Paper remains rejected. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -215,6 +215,21 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 ```
 
 Run `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` for the target guard and report-predicate regressions. Retain the generated report and logs under ignored `build/reports/foundation/T21-sql-runtime/`, then record the report hash, offline log audit, and evidence limits in the foundation validation plan. Each untested dialect/platform combination remains `NOT RUN`.
+
+For the selected maximum Canvas `26.3#972` / MySQL `8.0.42` cell, use its exact runtime artifact pin:
+
+```powershell
+$canvasJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\canvas-26.3-972.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -PlatformEndpoint MaximumCanvas `
+  -DatabaseProduct MySQL `
+  -IncompleteV10AuditTableStartupFailure
+```
 
 ### MySQL, MariaDB, and PostgreSQL legacy-data compatibility on Paper, Folia, and Canvas
 
