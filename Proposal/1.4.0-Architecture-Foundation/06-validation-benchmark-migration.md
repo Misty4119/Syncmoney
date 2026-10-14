@@ -354,6 +354,16 @@ Independent targeted review found no correctness finding. It confirmed the decis
 
 This closes only the global-breaker-off/player-protection-on construction-and-wiring cell. Web/shadow disabled cases, LOCAL/LOCAL_REDIS backend-off cases, initialization/close-failure cases, remaining T21 matrix/lifecycle gates, and licensed CMI remain open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
 
+### T21 V05 — Web Admin explicitly disabled (2026-10-14)
+
+**Result: PASS_BOUNDED_E1.** `WebServiceKeyGuardTest.explicitlyDisabledWebAdminCreatesNoServerOrAuthFilter` loads an actual `YamlConfiguration` with `web-admin.enabled=false` and a valid non-placeholder API key, then confirms Web Admin remains disabled and both `WebAdminServer` and `ApiKeyAuthFilter` are absent. The valid key ensures the disabled flag, rather than placeholder-key protection, selects the path. Source inspection confirms the early return happens before auth filter, node key store, server, route/extension construction, and Undertow startup.
+
+Independent review found a test-hygiene defect: an assertion failure after accidental server startup could skip cleanup. Initialization and all assertions now run inside `try/finally`, with `manager.shutdown()` in `finally`; targeted re-review confirmed shutdown covers the failure path and found no remaining issue.
+
+Focused command `gradlew.bat :syncmoney-bukkit:test --tests noietime.syncmoney.web.WebServiceKeyGuardTest --rerun-tasks --no-daemon --console=plain` exited 0; the class passed 4/4. Captured log: `build/reports/foundation/T21-v05-web-off/web-off-focused-test.log` (3,586 bytes; SHA-256 `547acc6b177b7189099af8df24587c103a8bb21bb1d986069867565b26126ca7`). The fresh full command `gradlew.bat :syncmoney-bukkit:test --rerun-tasks --no-daemon --console=plain` exited 0 with 18/18 actionable tasks; 107 JUnit XML files recorded 537 tests, zero failures, zero errors, and zero skips. Full log: `build/reports/foundation/T21-v05-web-off/web-off-module-test.log` (4,106 bytes; SHA-256 `86cb7735857a6d2d14a891721c375071ab61d3c36009ac26cc0b0c8da2344aee`); focused class XML: `syncmoney-bukkit/build/test-results/test/TEST-noietime.syncmoney.web.WebServiceKeyGuardTest.xml` (2,972 bytes; SHA-256 `5475bd33aa68adc0d32d2d66d333fdc976e7bc528c9dba0921242434421f53de`); final test source SHA-256 `e6b0a85d2b7c66ab66ad9f3264ab1ec330369990aab4904515de3544963b3c8a`.
+
+This closes only the explicit web-off resource-construction cell at local E1. Shadow-off, LOCAL/LOCAL_REDIS backend-off, initialization/close-failure, remaining T21 matrix/lifecycle gates, and licensed CMI remain open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
+
 ## B00 — Benchmark profiles与command合同
 
 As of 2026-10-09, T19 implements these Gradle tasks and runner CLI in `:syncmoney-benchmarks`; use the commands below only when the required hash-bound baseline pilot and endpoint configuration are available.

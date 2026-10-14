@@ -51,4 +51,28 @@ class WebServiceKeyGuardTest {
             assertNull(manager.getWebAdminServer());
         }
     }
+
+    @Test
+    void explicitlyDisabledWebAdminCreatesNoServerOrAuthFilter(@TempDir Path dataFolder) {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getDataFolder()).thenReturn(dataFolder.toFile());
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("WebServiceKeyGuardTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("web-admin.enabled", false);
+        yaml.set("web-admin.security.api-key", "operator-managed-secret");
+        when(config.getConfig()).thenReturn(yaml);
+
+        WebServiceManager manager = new WebServiceManager(plugin, config,
+                null, null, null, null);
+        try {
+            manager.initialize();
+
+            assertFalse(manager.getWebAdminConfig().isEnabled());
+            assertNull(manager.getWebAdminServer());
+            assertNull(manager.getApiKeyAuthFilter());
+        } finally {
+            manager.shutdown();
+        }
+    }
 }
