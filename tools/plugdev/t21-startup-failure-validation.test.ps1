@@ -341,6 +341,8 @@ try {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
             $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
                 $true
+            } elseif ($endpointName -ceq 'MinimumCanvas') {
+                $databaseProduct -ceq 'MySQL'
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -350,9 +352,9 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum and maximum Folia across all SQL dialects, and reject the remaining endpoints'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia across all SQL dialects plus minimum Canvas/MySQL, and reject the remaining endpoint/dialect combinations'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia, plus MySQL on minimum Canvas; maximum Canvas, current-stable Paper, and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
@@ -364,7 +366,7 @@ try {
     if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
         throw "The unsupported PostgreSQL / MaximumCanvas diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
     }
-    Write-Output 'PASS: reject PostgreSQL on MaximumCanvas with a diagnostic that names the Paper/Folia endpoint allowance'
+    Write-Output 'PASS: reject PostgreSQL on MaximumCanvas with a diagnostic that names the bounded Paper/Folia and Canvas allowances'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -630,6 +632,20 @@ try {
         $copy.logs['logs\gradle-daemon-stop.txt'] = [ordered]@{ bytes = [long]$gradleStopLogInfo.Length; sha256 = $gradleStopLogHash }
         return $copy
     }
+
+    $minimumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumCanvas
+    $minimumCanvasIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MinimumCanvas'
+    if (-not (Test-T21StartupFailureReportFixture $minimumCanvasIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete minimum-Canvas MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Canvas MySQL incomplete-v10 failure with the exact pinned runtime identity'
+    $minimumCanvasIncompleteReport.startupObservation.runtimeIdentity.build = 604
+    if (Test-T21StartupFailureReportFixture $minimumCanvasIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas -FailureScenario IncompleteV10AuditTable) {
+        throw 'The minimum-Canvas MySQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject minimum-Canvas MySQL incomplete-v10 evidence with a mismatched runtime build'
 
     $mysqlIncompleteReport = New-T21MySqlIncompleteAuditReportFixture
     if (-not (Test-T21StartupFailureReportFixture $mysqlIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
