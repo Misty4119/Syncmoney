@@ -126,11 +126,37 @@ class SchemaMigrationFailureIT {
             createCurrentAuditTable(backingDataSource);
             createIndex(backingDataSource, "idx_audit_timestamp", "timestamp DESC, sequence DESC");
             createIndex(backingDataSource, "idx_audit_player", "player_uuid, timestamp DESC, sequence DESC");
-            createIndex(backingDataSource, "idx_audit_type", "type, timestamp DESC, sequence DESC");
+            createIndex(backingDataSource, "idx_audit_type_timestamp_sequence", "type, timestamp DESC, sequence DESC");
 
             HikariDataSource scopedDataSource = requireScopedMetadata(backingDataSource);
 
             assertDoesNotThrow(() -> new SchemaManager(plugin(), scopedDataSource, "postgresql"));
+        }
+    }
+
+    @Test
+    void currentAuditSchemaAddsReplacementIndexWithoutRemovingLegacyIndexOrRows() throws Exception {
+        try (HikariDataSource dataSource = dataSource("legacy-index-collision")) {
+            createVersionTable(dataSource, 1, 11);
+            createCurrentAuditTable(dataSource);
+            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO syncmoney_audit_log "
+                        + "(id, timestamp, type, player_uuid, amount, balance_after, source, server) "
+                        + "VALUES ('legacy-row', 1, 'DEPOSIT', 'player-a', 1.00, 1.00, 'test', 'test')");
+            }
+            createIndex(dataSource, "idx_audit_type", "type");
+
+            assertDoesNotThrow(() -> new SchemaManager(plugin(), dataSource, "sqlite"));
+
+            assertAll(
+                    () -> assertTrue(indexes(dataSource).contains("idx_audit_type"),
+                            "the incompatible legacy index remains untouched"),
+                    () -> assertTrue(indexes(dataSource).contains("idx_audit_type_timestamp_sequence"),
+                            "a correctly ordered replacement index is added under a non-conflicting name"),
+                    () -> assertEquals(1, auditRowCount(dataSource), "index repair must preserve audit rows"),
+                    () -> assertEquals(1, version(dataSource, "1")),
+                    () -> assertEquals(11, version(dataSource, "audit"),
+                            "repairing an existing schema must not change its version"));
         }
     }
 
@@ -157,7 +183,7 @@ class SchemaMigrationFailureIT {
             }
             createIndex(dataSource, "idx_audit_timestamp", "timestamp DESC, sequence DESC");
             createIndex(dataSource, "idx_audit_player", "player_uuid, timestamp DESC, sequence DESC");
-            createIndex(dataSource, "idx_audit_type", "type, timestamp DESC, sequence DESC");
+            createIndex(dataSource, "idx_audit_type_timestamp_sequence", "type, timestamp DESC, sequence DESC");
 
             HikariDataSource misleadingMetadata = appendSiblingAuditColumn(dataSource);
             new SchemaManager(plugin(), misleadingMetadata, "postgresql");
@@ -189,7 +215,7 @@ class SchemaMigrationFailureIT {
             createCurrentAuditTable(backingDataSource);
             createIndex(backingDataSource, "idx_audit_timestamp", "timestamp DESC, sequence DESC");
             createIndex(backingDataSource, "idx_audit_player", "player_uuid, timestamp DESC, sequence DESC");
-            createIndex(backingDataSource, "idx_audit_type", "type, timestamp DESC, sequence DESC");
+            createIndex(backingDataSource, "idx_audit_type_timestamp_sequence", "type, timestamp DESC, sequence DESC");
             HikariDataSource unknownDirectionDataSource = hideIndexDirections(backingDataSource);
 
             assertThrows(RuntimeException.class,
@@ -410,6 +436,14 @@ class SchemaMigrationFailureIT {
         return indexes;
     }
 
+    private int auditRowCount(HikariDataSource dataSource) throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement();
+                ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM syncmoney_audit_log")) {
+            assertTrue(result.next());
+            return result.getInt(1);
+        }
+    }
+
     private HikariDataSource rejectDdl(HikariDataSource delegate, Predicate<String> rejects) throws SQLException {
         HikariDataSource dataSource = mock(HikariDataSource.class);
         when(dataSource.getConnection()).thenAnswer(ignored -> wrapConnection(delegate.getConnection(), rejects));
@@ -566,7 +600,7 @@ class SchemaMigrationFailureIT {
         if (index == null) return null;
         return switch (index.toLowerCase()) {
             case "idx_audit_timestamp" -> position <= 2 ? "D" : null;
-            case "idx_audit_player", "idx_audit_type" -> position == 1 ? "A" : position <= 3 ? "D" : null;
+            case "idx_audit_player", "idx_audit_type_timestamp_sequence" -> position == 1 ? "A" : position <= 3 ? "D" : null;
             default -> null;
         };
     }

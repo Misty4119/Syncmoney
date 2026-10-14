@@ -19,6 +19,16 @@ function Assert-RunnerCondition([string]$name, [bool]$condition) {
     Write-Output "PASS: $name"
 }
 
+$enableAuditParameter = @($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ieq 'EnableAudit' })
+Assert-RunnerCondition 'keep audit and hybrid-audit runtime opt-in separate from unrelated optional features' (
+    $enableAuditParameter.Count -eq 1 -and
+    $enableAuditParameter[0].Extent.Text -match '\[switch\]\s*\$EnableAudit' -and
+    $source.Contains("T21_AUDIT_ENABLED") -and
+    $source.Contains('$script:auditEnabled = $EnableAudit.IsPresent') -and
+    $source.Contains('redisHybridAuditEnabled=$script:auditEnabled') -and
+    $source.Contains('auditSnapshots=$script:auditSnapshots')
+)
+
 function Test-T21RollbackJournalGatePlacement([string]$scriptText) {
     $parseTokens = $null
     $parseErrors = $null
@@ -49,7 +59,12 @@ $paperCleanup = Get-RunnerFunctionText 'Stop-PossiblyStartedNode'
 $processWait = Get-RunnerFunctionText 'Wait-ProcessExit'
 $schemaGate = Get-RunnerFunctionText 'Assert-SnapshotSchemaRows'
 $drainAssessment = Get-RunnerFunctionText 'Get-T21NormalDrainAssessment'
+$auditSnapshot = Get-RunnerFunctionText 'Get-AuditSnapshot'
+$auditProgress = Get-RunnerFunctionText 'Assert-AuditSnapshotAdvanced'
+$auditRetention = Get-RunnerFunctionText 'Assert-AuditSnapshotRetained'
+$auditOwnerProfile = Get-RunnerFunctionText 'Assert-T21AuditOwnerProfile'
 $backendVersions = Get-RunnerFunctionText 'Assert-BackendVersions'
+$stopNode = Get-RunnerFunctionText 'Stop-Node'
 $journalCheckpoint = Get-RunnerFunctionText 'Get-RecoveryJournalCheckpoint'
 $journalRollbackGate = Get-RunnerFunctionText 'Assert-RecoveryJournalCheckpointsUnchanged'
 
@@ -62,6 +77,31 @@ Assert-RunnerCondition 'initialize the synthetic operator fixture only in one-ti
 Assert-RunnerCondition 'read and gate config retention before each artifact startup' (
     $configObservation.Contains('Assert-T21NodeConfigObservation') -and
     $setVersion.Contains('Get-NodeConfigObservation')
+)
+Assert-RunnerCondition 'enable only audit and Redis hybrid audit while leaving cleanup and export workers disabled' (
+    $initializeConfig.Contains("process.env.T21_AUDIT_ENABLED==='true'") -and
+    $initializeConfig.Contains('config.audit={...config.audit,enabled:auditEnabled') -and
+    $initializeConfig.Contains('cleanup:{...config.audit?.cleanup,enabled:false}') -and
+    $initializeConfig.Contains('export:{...config.audit?.export,enabled:false}') -and
+    $initializeConfig.Contains('redis:{...config.audit?.redis,enabled:true}')
+)
+Assert-RunnerCondition 'verify and report persisted audit records by disposable account only in the enabled-audit profile' (
+    $auditSnapshot.Contains('syncmoney_audit_log') -and
+    $auditSnapshot.Contains('$script:accounts.AcceptanceA') -and
+    $auditSnapshot.Contains('$script:accounts.AcceptanceB') -and
+    $auditProgress.Contains('$currentCount -le $baselineCount') -and
+    $source.Contains('Assert-AuditSnapshotAdvanced $baselineAuditSnapshot $candidateAuditSnapshot') -and
+    $source.Contains('auditSnapshots=$script:auditSnapshots')
+)
+Assert-RunnerCondition 'bind audit owner drain markers to the requested enabled or disabled profile' (
+    $auditOwnerProfile.Contains("@('audit','hybridAudit')") -and
+    $stopNode.Contains('Assert-T21AuditOwnerProfile $assessment $script:auditEnabled $stage')
+)
+Assert-RunnerCondition 'require both disposable accounts to gain audit rows and retain them through rollback' (
+    $auditProgress.Contains('$currentCount -le $baselineCount') -and
+    $auditRetention.Contains('$currentCount -lt $expectedCount') -and
+    $source.Contains('Assert-AuditSnapshotAdvanced $baselineAuditSnapshot $candidateAuditSnapshot') -and
+    $source.Contains('Assert-AuditSnapshotRetained $candidateAuditSnapshot $rollbackAuditSnapshot')
 )
 $apiConsumerToggle = $startNode.IndexOf('Set-NodeApiConsumer $nodeName $candidateApiConsumer', [StringComparison]::Ordinal)
 $apiConsumerStart = $startNode.IndexOf("@('server','start','--config','.plugdev\profile.yml')", [StringComparison]::Ordinal)

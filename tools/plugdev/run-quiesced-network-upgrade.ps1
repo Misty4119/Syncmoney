@@ -11,7 +11,8 @@ param(
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Parameter(Mandatory = $true)][string]$JavaHome,
     [string]$PostgresBin = 'C:\Program Files\PostgreSQL\18\bin',
-    [string]$CandidateVersion = '1.4.0-alpha.1'
+    [string]$CandidateVersion = '1.4.0-alpha.1',
+    [switch]$EnableAudit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,12 +35,13 @@ $acceptancePath = Join-Path $root 'build\acceptance\SyncmoneyAcceptance.jar'
 $apiConsumerPath = Join-Path $root 'build\acceptance\SyncmoneyApiConsumer.jar'
 $recoveryValidatorPath = Join-Path $PSScriptRoot 'recovery-spool-validator.ps1'
 $script:originalEnvironment = [ordered]@{}
+$script:auditEnabled = $EnableAudit.IsPresent
 $environmentNames = @(
     'JAVA_HOME','Path','PLUGDEV_ROOT','PLUGDEV_HOME','GRADLE_USER_HOME','SYNCMONEY_TEST_SERVER_JAR',
     'SYNCMONEY_CANDIDATE_VERSION','SYNCMONEY_TEST_GAME_PORT','SYNCMONEY_TEST_DB_TYPE',
     'SYNCMONEY_TEST_DB_PORT','SYNCMONEY_TEST_DB_USER','SYNCMONEY_TEST_DB_PASSWORD',
     'SYNCMONEY_TEST_DB_NAME','SYNCMONEY_TEST_REDIS_PORT','T21_RUN_MARKER','T21_NODE_ROOT',
-    'T21_NODE_VERSION','T21_NODE_PORT','T21_NODE_MARKER','T21_NODE_SERVER_NAME','T21_REDIS_PORT',
+    'T21_NODE_VERSION','T21_NODE_PORT','T21_NODE_MARKER','T21_NODE_SERVER_NAME','T21_REDIS_PORT','T21_AUDIT_ENABLED',
     'PGSSLMODE'
 )
 foreach ($name in $environmentNames) { $script:originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -180,6 +182,58 @@ function Assert-BackendVersions([object]$snapshot,[long]$versionA,[long]$version
     }
 }
 
+function Get-AuditSnapshot([string]$stage) {
+    if (-not $script:auditEnabled) { return $null }
+    $uuidA=$script:accounts.AcceptanceA; $uuidB=$script:accounts.AcceptanceB
+    $sql="SELECT expected.player_uuid || '|' || COALESCE(actual.record_count,0)::text FROM (VALUES ('$uuidA'),('$uuidB')) AS expected(player_uuid) LEFT JOIN (SELECT player_uuid, COUNT(*) AS record_count FROM syncmoney_audit_log WHERE player_uuid IN ('$uuidA','$uuidB') GROUP BY player_uuid) actual USING(player_uuid) ORDER BY expected.player_uuid;"
+    $rows=@(Invoke-Psql $sql)
+    if($rows.Count -ne 2){throw "Expected audit counts for both disposable accounts after $stage; observed $($rows.Count)."}
+    $accounts=@()
+    foreach($row in $rows){
+        $parts=$row.Split('|')
+        if($parts.Count -ne 2 -or $parts[0] -notin @($uuidA,$uuidB)){throw "Unexpected audit count row after $stage."}
+        $accounts+=[ordered]@{uuid=$parts[0].ToLowerInvariant();count=[long]$parts[1]}
+    }
+    $snapshot=[ordered]@{stage=$stage;accounts=$accounts}
+    $script:auditSnapshots.Add($snapshot)
+    return $snapshot
+}
+
+function Assert-AuditSnapshotAdvanced([object]$baseline,[object]$current) {
+    if(-not $script:auditEnabled){return}
+    if($null -eq $baseline -or $null -eq $current){throw 'Enabled-audit validation is missing a baseline or candidate snapshot.'}
+    foreach($baselineAccount in $baseline.accounts){
+        $match=@($current.accounts | Where-Object {$_.uuid -ceq $baselineAccount.uuid})
+        if($match.Count -ne 1){throw "Missing audit count for disposable account $($baselineAccount.uuid)."}
+        $baselineCount=[long]$baselineAccount.count
+        $currentCount=[long]$match[0].count
+        if($currentCount -le $baselineCount){throw "Candidate shutdown did not persist an audit row for disposable account $($baselineAccount.uuid)."}
+    }
+}
+
+function Assert-AuditSnapshotRetained([object]$expected,[object]$current) {
+    if(-not $script:auditEnabled){return}
+    if($null -eq $expected -or $null -eq $current){throw 'Enabled-audit validation is missing a candidate or rollback snapshot.'}
+    foreach($expectedAccount in $expected.accounts){
+        $match=@($current.accounts | Where-Object {$_.uuid -ceq $expectedAccount.uuid})
+        if($match.Count -ne 1){throw "Missing rollback audit count for disposable account $($expectedAccount.uuid)."}
+        $expectedCount=[long]$expectedAccount.count
+        $currentCount=[long]$match[0].count
+        if($currentCount -lt $expectedCount){throw "Rollback lost audit rows for disposable account $($expectedAccount.uuid)."}
+    }
+}
+
+function Assert-T21AuditOwnerProfile([object]$assessment,[bool]$expectedEnabled,[string]$stage) {
+    $expectedStatus=if($expectedEnabled){'drained'}else{'disabled'}
+    $expectedEnabledValue=if($expectedEnabled){'true'}else{'false'}
+    foreach($owner in @('audit','hybridAudit')){
+        $records=@($assessment.ownerDrainRecords | Where-Object {$_ -match "owner=$owner\s"})
+        if($records.Count -ne 1 -or -not $records[0].Contains("status=$expectedStatus") -or -not $records[0].Contains("enabled=$expectedEnabledValue")){
+            throw "$owner owner drain did not match the requested audit profile after $stage."
+        }
+    }
+}
+
 function Assert-SnapshotSchemaRows([object]$snapshot,[string]$stage) {
     if ($script:baselineSchemaVersionRows.Count -eq 0) {
         $script:baselineSchemaVersionRows=@($snapshot.schemaVersionRows)
@@ -249,6 +303,7 @@ function Initialize-NodeConfig([string]$nodeName) {
     $node=$script:nodes[$nodeName]; $env:T21_NODE_ROOT=$node.root
     $env:T21_NODE_PORT=[string]$node.gamePort; $env:T21_NODE_SERVER_NAME=$node.serverName
     $env:T21_REDIS_PORT=[string]$script:redisPort; $env:SYNCMONEY_TEST_SERVER_JAR=$script:serverPath
+    $env:T21_AUDIT_ENABLED=if($script:auditEnabled){'true'}else{'false'}
     $js=@'
 const fs=require('node:fs'); const path=require('node:path'); const {createRequire}=require('node:module');
 const YAML=createRequire(path.join(process.env.PLUGDEV_ROOT,'package.json'))('yaml'); const root=process.env.T21_NODE_ROOT;
@@ -258,6 +313,7 @@ const config=YAML.parse(fs.readFileSync(cp,'utf8')); config['server-name']=proce
 config['db-enabled']=true; config['pubsub-enabled']=true; config.economy={...config.economy,mode:'sync'};
 config.redis={...config.redis,enabled:true,host:'127.0.0.1',port:Number(process.env.T21_REDIS_PORT),database:15};
 config.database={...config.database,enabled:true,type:'postgresql',host:'127.0.0.1',port:Number(process.env.SYNCMONEY_TEST_DB_PORT),username:process.env.SYNCMONEY_TEST_DB_USER,password:'',database:process.env.SYNCMONEY_TEST_DB_NAME};
+const auditEnabled=process.env.T21_AUDIT_ENABLED==='true'; config.audit={...config.audit,enabled:auditEnabled,cleanup:{...config.audit?.cleanup,enabled:false},export:{...config.audit?.export,enabled:false},redis:{...config.audit?.redis,enabled:true}};
 fs.writeFileSync(cp,YAML.stringify(config),'utf8');
 '@
     $path=Join-Path $script:runRoot 'initialize-node-config.cjs'; Set-Content -LiteralPath $path -Value $js -Encoding utf8
@@ -460,6 +516,7 @@ function Stop-Node([string]$nodeName,[string]$stage,[bool]$requireOwnerDrain=$fa
     Remove-Item -LiteralPath $session.path -Force
     $script:serverMayExist[$nodeName]=$false
     $assessment=Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount) $requireOwnerDrain
+    if($requireOwnerDrain){Assert-T21AuditOwnerProfile $assessment $script:auditEnabled $stage}
     $script:shutdown.Add([ordered]@{stage=$stage;node=$nodeName;pid=$session.pid;commandExit=$stop.exitCode;processExitVerified=$true;pluginDrainVerified=$assessment.pluginDrainVerified;syncmoneyDisabledMarker=$assessment.syncmoneyDisabledMarker;failureMarkers=$assessment.failureMarkers;pendingRecoveryRecords=$assessment.pendingRecoveryRecords;ownerDrainRequired=$assessment.ownerDrainRequired;ownerDrainVerified=$assessment.ownerDrainVerified;ownerDrainRecords=$assessment.ownerDrainRecords;ownerDrainFailureMarkers=$assessment.ownerDrainFailureMarkers;recoveryJournal=$journal;log=$save})
     if (-not $assessment.pluginDrainVerified) { throw "Normal drain could not be verified on $nodeName; disabled=$($assessment.syncmoneyDisabledMarker), pending=$($assessment.pendingRecoveryRecords), ownerDrainFailures=$($assessment.ownerDrainFailureMarkers -join ';'), errors=$($assessment.failureMarkers -join ';')." }
 }
@@ -690,6 +747,7 @@ function Save-Report {
         $report=[ordered]@{
             task='T21 M01-M03 quiesced two-node SYNC upgrade and normal downgrade';status=$script:status;startedAtUtc=$script:startedAtUtc;sourceCommit=(& git -C $root rev-parse HEAD 2>$null | Out-String).Trim();
             invocation=[ordered]@{project=$Project;minecraftVersion=$MinecraftVersion;build=$BuildNumber;expectedServerSha256=$ExpectedServerSha256.ToLowerInvariant();baselineSourceCommit=$BaselineSourceCommit.ToLowerInvariant();candidateVersion=$CandidateVersion};
+            auditProfile=[ordered]@{requestedEnabled=$script:auditEnabled;databaseAuditEnabled=$script:auditEnabled;redisHybridAuditEnabled=$script:auditEnabled;cleanupAndExportEnabled=$false};
             platform=[ordered]@{project=$Project;minecraftVersion=$MinecraftVersion;build=$BuildNumber;serverSha256=$script:serverSha;java=$script:javaVersion};
             plugins=[ordered]@{baselineVersion='1.3.2';baselineSha256=$script:baselineSha;baselineSourceCommit=$BaselineSourceCommit;candidateVersion=$CandidateVersion;candidateSha256=$script:candidateSha};
             harness=[ordered]@{sourceFiles=$harnessSources;acceptanceJarSha256=(Get-FileHash -LiteralPath $acceptancePath -Algorithm SHA256).Hash.ToLowerInvariant();apiConsumerJarSha256=(Get-FileHash -LiteralPath $apiConsumerPath -Algorithm SHA256).Hash.ToLowerInvariant()};
@@ -697,7 +755,7 @@ function Save-Report {
             plugDev=[ordered]@{root=$plugDevRoot;version=$script:plugDevVersion;commit=$script:plugDevCommit;cliSha256=$script:plugDevCliSha};
             nodes=@($script:nodes.Values | ForEach-Object {[ordered]@{name=$_.name;serverName=$_.serverName;port=$_.gamePort;rconPort=($_.gamePort+10000);baselineAndCandidateVersions=$_.versions}});
             quiescence=[ordered]@{scenario="Only two synthetic $Project nodes and the acceptance probe are deployed. Every node was normally stopped and drain-verified before the pre-upgrade backup; the harness issues no producer calls between maintenance start and candidate acceptance probes.";allNodesOfflineForBackup=$script:allOfflineForBackup;forcedStops=$script:forcedStops;pendingRecoveryAtGates=$script:pendingRecoveryAtGates};
-            backups=$script:backupManifest;configObservations=$script:configObservations;schemaVersionObservations=$script:schemaVersionObservations;backendShutdown=$script:backendShutdown;snapshots=$script:snapshots;vaultReceipts=$script:vaultReceipts;stages=$script:stages;shutdown=$script:shutdown;nodeCleanup=$script:nodeCleanup;recoveryJournals=$script:recoveryJournals;recoveryJournalRollbackChecks=$script:recoveryJournalRollbackChecks;gradleDaemonCleanup=$script:gradleCleanup;failure=$script:failure;cleanupFailure=$script:cleanupFailure;runDirectory=$script:runRoot
+            backups=$script:backupManifest;configObservations=$script:configObservations;schemaVersionObservations=$script:schemaVersionObservations;backendShutdown=$script:backendShutdown;snapshots=$script:snapshots;auditSnapshots=$script:auditSnapshots;vaultReceipts=$script:vaultReceipts;stages=$script:stages;shutdown=$script:shutdown;nodeCleanup=$script:nodeCleanup;recoveryJournals=$script:recoveryJournals;recoveryJournalRollbackChecks=$script:recoveryJournalRollbackChecks;gradleDaemonCleanup=$script:gradleCleanup;failure=$script:failure;cleanupFailure=$script:cleanupFailure;runDirectory=$script:runRoot
         }
         $report | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath (Join-Path $script:runRoot 'result.json') -Encoding utf8
     }
@@ -722,7 +780,7 @@ New-Item -ItemType Directory -Path $script:logsRoot,$script:pgData,$script:redis
 $script:gamePorts=@{nodeA=Get-FreePort 20000 45535 @() 10000;nodeB=0};$script:gamePorts.nodeB=Get-FreePort 20000 45535 @($script:gamePorts.nodeA,$script:gamePorts.nodeA+10000) 10000
 $script:pgPort=Get-FreePort 20000 65535 @($script:gamePorts.nodeA,$script:gamePorts.nodeA+10000,$script:gamePorts.nodeB,$script:gamePorts.nodeB+10000);$script:redisPort=Get-FreePort 20000 65535 @($script:gamePorts.nodeA,$script:gamePorts.nodeA+10000,$script:gamePorts.nodeB,$script:gamePorts.nodeB+10000,$script:pgPort)
 $script:pgUser='syncmoney_t21';$script:dbName='syncmoney_t21';$script:accounts=[ordered]@{AcceptanceA=Get-OfflineUuid 'AcceptanceA';AcceptanceB=Get-OfflineUuid 'AcceptanceB'}
-$script:nodes=[ordered]@{};$script:serverMayExist=[ordered]@{nodeA=$false;nodeB=$false};$script:stages=[Collections.Generic.List[object]]::new();$script:shutdown=[Collections.Generic.List[object]]::new();$script:snapshots=[Collections.Generic.List[object]]::new();$script:vaultReceipts=[Collections.Generic.List[object]]::new();$script:recoveryJournals=[Collections.Generic.List[object]]::new();$script:recoveryJournalRollbackChecks=[Collections.Generic.List[object]]::new();$script:nodeCleanup=[Collections.Generic.List[object]]::new();$script:configObservations=[Collections.Generic.List[object]]::new();$script:schemaVersionObservations=[Collections.Generic.List[object]]::new();$script:backendShutdown=[Collections.Generic.List[object]]::new();$script:baselineSchemaVersionRows=@();$script:backupManifest=@();$script:pendingRecoveryAtGates=[Collections.Generic.List[int]]::new();$script:forcedStops=0;$script:allOfflineForBackup=$false;$script:failure=$null;$script:cleanupFailure=$null;$script:gradleCleanup=$null;$script:psqlFailureSequence=0;$script:startedAtUtc=[DateTime]::UtcNow.ToString('o');$script:status='RUNNING';$script:pgStarted=$false;$script:redisMayExist=$false;$script:redisReady=$false;$script:redisProcess=$null;$script:redisLauncherPid=$null;$script:redisPid=$null;$script:redisConfigArgument=ConvertTo-CygwinPath $script:redisConfig
+$script:nodes=[ordered]@{};$script:serverMayExist=[ordered]@{nodeA=$false;nodeB=$false};$script:stages=[Collections.Generic.List[object]]::new();$script:shutdown=[Collections.Generic.List[object]]::new();$script:snapshots=[Collections.Generic.List[object]]::new();$script:auditSnapshots=[Collections.Generic.List[object]]::new();$script:vaultReceipts=[Collections.Generic.List[object]]::new();$script:recoveryJournals=[Collections.Generic.List[object]]::new();$script:recoveryJournalRollbackChecks=[Collections.Generic.List[object]]::new();$script:nodeCleanup=[Collections.Generic.List[object]]::new();$script:configObservations=[Collections.Generic.List[object]]::new();$script:schemaVersionObservations=[Collections.Generic.List[object]]::new();$script:backendShutdown=[Collections.Generic.List[object]]::new();$script:baselineSchemaVersionRows=@();$script:backupManifest=@();$script:pendingRecoveryAtGates=[Collections.Generic.List[int]]::new();$script:forcedStops=0;$script:allOfflineForBackup=$false;$script:failure=$null;$script:cleanupFailure=$null;$script:gradleCleanup=$null;$script:psqlFailureSequence=0;$script:startedAtUtc=[DateTime]::UtcNow.ToString('o');$script:status='RUNNING';$script:pgStarted=$false;$script:redisMayExist=$false;$script:redisReady=$false;$script:redisProcess=$null;$script:redisLauncherPid=$null;$script:redisPid=$null;$script:redisConfigArgument=ConvertTo-CygwinPath $script:redisConfig
 $script:postgresVersion=$null;$script:redisVersion=(& $script:redisServer --version 2>&1 | Out-String).Trim()
 
 try {
@@ -755,6 +813,7 @@ try {
     Start-Node 'nodeA' '1.3.2' 'baseline-seed-nodeA';Invoke-VaultWrite 'nodeA' 'smaccept write 1000.00 520.00' 'baseline-seed' '0.00' '0.00' '1000.00' '520.00';Stop-Node 'nodeA' 'baseline-seed-nodeA'
     $baselineSnapshot=Get-BackendSnapshot 'baseline node A normal drain';Assert-Balances $baselineSnapshot '1000.00' '520.00' 'baseline node A';Assert-BackendVersions $baselineSnapshot 1 1 'baseline node A';Assert-SnapshotSchemaRows $baselineSnapshot 'baseline node A normal drain';$script:snapshots.Add($baselineSnapshot)
     Start-Node 'nodeB' '1.3.2' 'baseline-read-nodeB';Invoke-NodeCommand 'nodeB' 'smaccept state-read 1000.00 520.00' 'baseline-read' 'T21_READ_PASS expected-a=1000.00 expected-b=520.00';Stop-Node 'nodeB' 'baseline-read-nodeB'
+    $baselineAuditSnapshot=Get-AuditSnapshot 'after baseline seed and shared read'
     $script:pendingRecoveryAtGates.Add(0)
 
     # Maintenance window: every baseline node has exited and its recovery journal has no pending records.
@@ -777,6 +836,7 @@ try {
     # Canary node A is upgraded with node B offline; then node B consumes only the new shared state.
     Start-Node 'nodeA' $CandidateVersion 'upgrade-canary-nodeA';Invoke-NodeCommand 'nodeA' 'smaccept state-read 1000.00 520.00' 'upgrade-canary-read' 'T21_READ_PASS expected-a=1000.00 expected-b=520.00';Invoke-VaultWrite 'nodeA' 'smaccept write 1337.25 765.50' 'upgrade-canary-write' '1000.00' '520.00' '1337.25' '765.50';Stop-Node 'nodeA' 'upgrade-canary-nodeA' $true
     $candidateSnapshot=Get-BackendSnapshot 'after candidate node A normal drain';Assert-Balances $candidateSnapshot '1337.25' '765.50' 'candidate node A';Assert-BackendVersions $candidateSnapshot 2 2 'candidate node A';Assert-SnapshotSchemaRows $candidateSnapshot 'after candidate node A normal drain';$script:snapshots.Add($candidateSnapshot)
+    $candidateAuditSnapshot=Get-AuditSnapshot 'after candidate node A normal drain';Assert-AuditSnapshotAdvanced $baselineAuditSnapshot $candidateAuditSnapshot
     $null=Get-NodeConfigObservation 'nodeA' 'after candidate shutdown before rollback'
     $journalPath=Join-Path $script:nodes.nodeA.root '.plugdev\run\plugins\Syncmoney\recovery-v1.jsonl';$journal=Assert-RecoveryJournalForRollback (Read-RecoveryJournal $journalPath);$candidateNodeAJournalCheckpoint=[ordered]@{node='nodeA';path=$journalPath;exists=$true;sha256=$journal.sha256;bytes=$journal.bytes;frameCount=$journal.frameCount;recordFrames=$journal.recordFrames;ackFrames=$journal.ackFrames;pendingCount=$journal.pendingCount;validation=$journal.validation}
     Start-Node 'nodeB' $CandidateVersion 'upgrade-nodeB';Invoke-NodeCommand 'nodeB' 'smaccept state-read 1337.25 765.50' 'upgrade-nodeB-read' 'T21_READ_PASS expected-a=1337.25 expected-b=765.50';Stop-Node 'nodeB' 'upgrade-nodeB' $true
@@ -792,6 +852,7 @@ try {
 
     # Normal downgrade changes only the plugin artifacts. The pre-upgrade database/Redis backups are never restored.
     foreach($name in @('nodeA','nodeB')){Start-Node $name '1.3.2' ("rollback-"+$name);Invoke-NodeCommand $name 'smaccept rollback-read 1337.25 765.50' ("rollback-read-"+$name) 'T21_ROLLBACK_READ_PASS expected-a=1337.25 expected-b=765.50';Stop-Node $name ("rollback-"+$name);$null=Assert-RecoveryJournalCheckpointsUnchanged $rollbackJournalCheckpoints ("rollback-"+$name);$snap=Get-BackendSnapshot ("after rollback "+$name+" normal stop");Assert-Balances $snap '1337.25' '765.50' ("rollback "+$name);Assert-BackendVersions $snap 2 2 ("rollback "+$name);Assert-SnapshotSchemaRows $snap ("after rollback "+$name+" normal stop");$script:snapshots.Add($snap)}
+    $rollbackAuditSnapshot=Get-AuditSnapshot 'after both normal rollback stops';Assert-AuditSnapshotRetained $candidateAuditSnapshot $rollbackAuditSnapshot
     $final=$script:snapshots[-1];foreach($name in @('AcceptanceA','AcceptanceB')){$pre=$newNodeSnapshot.accounts | Where-Object name -eq $name;$post=$final.accounts | Where-Object name -eq $name;if($pre.version -ne $post.version){throw "Read-only 1.3.2 rollback changed version for $name."}}
     $script:status='PASS_BOUNDED_QUIESCED_UPGRADE'
 } catch {

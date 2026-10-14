@@ -418,7 +418,7 @@ public final class SchemaManager {
                         List.of("DESC", "DESC"), "timestamp DESC, sequence DESC"),
                 new IndexDefinition("idx_audit_player", List.of("player_uuid", "timestamp", "sequence"),
                         List.of("ASC", "DESC", "DESC"), "player_uuid, timestamp DESC, sequence DESC"),
-                new IndexDefinition("idx_audit_type", List.of("type", "timestamp", "sequence"),
+                new IndexDefinition("idx_audit_type_timestamp_sequence", List.of("type", "timestamp", "sequence"),
                         List.of("ASC", "DESC", "DESC"), "type, timestamp DESC, sequence DESC"));
     }
 
