@@ -334,6 +334,16 @@ LicensedCMI必须维护者本机提供并记录版本，不下载未授权jar。
 
 组合至少：globalbreaker off/playerprotection on；audit off/cleanup-export开配置；web off；shadow off；LOCAL Redis/SQLoff；LOCAL_REDIS SQLoff；任一initstagefail与closefail。Assert不存在该module的heavyresources，guard唯一owner。
 
+### T21 V05 optional audit parent gate — cleanup/export enabled under disabled audit (2026-10-14)
+
+**Result: PASS_BOUNDED_E1.** A new `DisabledAuditTest` case explicitly sets `audit.enabled=false`, `audit.cleanup.enabled=true`, and `audit.export.enabled=true`, with a non-null mocked SQL data source and a fresh temporary export path. It confirms the configured child flags, the disabled lightweight audit logger, null hybrid-audit/cleanup/export managers, no export-directory creation, zero data-source interactions, and no `plugin.getServer()` lookup that could start a scheduler. Source inspection confirms `AuditServiceManager.initialize()` returns at the parent audit gate before constructing the child managers. No production Java code or product contract changed.
+
+The command `gradlew.bat :syncmoney-bukkit:test --rerun-tasks --no-daemon --console=plain` exited 0 with **18/18 actionable tasks**. The module emitted 107 JUnit XML files with **535 tests, zero failures, zero errors, and zero skips**; `DisabledAuditTest` was **2/2**. The captured log is `build/reports/foundation/T21-v05-audit-disabled-cleanup-export/disabled-audit-module-test.log` (4,106 bytes; SHA-256 `86cb7735857a6d2d14a891721c375071ab61d3c36009ac26cc0b0c8da2344aee`); focused XML is `syncmoney-bukkit/build/test-results/test/TEST-noietime.syncmoney.audit.DisabledAuditTest.xml` (1,442 bytes; SHA-256 `4b90dded6760d4ae504987df01875d352381a1fbc2d8e703086d093b1772cf93`); test source SHA-256 is `61b0102f4b413b76660f34d66d2500cedfb337ca25945f623c91c80ee59adc31`.
+
+The independent targeted review found no correctness finding for this cleanup/export + SQL case. It confirmed the fresh `@TempDir` path makes the post-initialize no-directory assertion reliable, the database mock is checked through query and shutdown, and the audit-parent return precedes child-manager branches. Review limitation: Redis audit remains false by the deep-stub default and no Redis manager is supplied, so this case does not establish the separate Redis-audit-enabled combination; that combination remains open under V05.
+
+This is local E1 evidence only. It does not establish runtime behavior for the other V05 optional-module or initialization/close-failure combinations. The global-breaker/player-protection case, web/shadow off cases, LOCAL/LOCAL_REDIS backend-off cases, remaining failure-stage cases, and licensed CMI runtime remain open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
+
 ## B00 — Benchmark profiles与command合同
 
 As of 2026-10-09, T19 implements these Gradle tasks and runner CLI in `:syncmoney-benchmarks`; use the commands below only when the required hash-bound baseline pilot and endpoint configuration are available.
