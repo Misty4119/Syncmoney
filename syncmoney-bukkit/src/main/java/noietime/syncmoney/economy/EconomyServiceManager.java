@@ -80,13 +80,7 @@ public class EconomyServiceManager {
                 storageManager.getDatabaseManager()
         );
 
-        if (config.shadowSync().isShadowSyncEnabled()) {
-            this.shadowSyncTask = new ShadowSyncTask(
-                    plugin, config, economyFacade,
-                    storageManager.getCacheManager(),
-                    storageManager.getDatabaseManager());
-            shadowSyncTask.start();
-        }
+        startShadowSyncIfEnabled();
 
         this.vaultProvider = new SyncmoneyVaultProvider(
                 plugin,
@@ -142,6 +136,18 @@ public class EconomyServiceManager {
         economyModeRouter.initialize(wrapper, localHandler, null, crossServerSyncManager);
 
         plugin.getLogger().fine("Economy layer initialized");
+    }
+
+    void startShadowSyncIfEnabled() {
+        if (!config.shadowSync().isShadowSyncEnabled()) {
+            return;
+        }
+
+        this.shadowSyncTask = new ShadowSyncTask(
+                plugin, config, economyFacade,
+                storageManager.getCacheManager(),
+                storageManager.getDatabaseManager());
+        shadowSyncTask.start();
     }
 
     /**
