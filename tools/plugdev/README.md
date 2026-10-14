@@ -134,9 +134,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
-### T21 V03 incomplete-v10 audit-table startup failure on Paper and minimum Folia
+### T21 V03 incomplete-v10 audit-table startup failure on Paper and Folia
 
-Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum Paper `1.21.6#48`, maximum Paper `26.3#166`, and minimum Folia `1.21.6#6`; maximum Folia, Canvas, and current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
+Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum Paper `1.21.6#48`, maximum Paper `26.3#166`, and minimum Folia `1.21.6#6`. Maximum Folia `26.2#7` is currently enabled only for MySQL `8.0.42`, which has a bounded runtime result; maximum-Folia MariaDB/PostgreSQL remain rejected until their own cases are exercised. Canvas and supplemental current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -164,6 +164,21 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MinimumFolia `
+  -DatabaseProduct MySQL `
+  -IncompleteV10AuditTableStartupFailure
+```
+
+For maximum Folia `26.2#7` with MySQL `8.0.42`, use its pinned artifact and endpoint selector:
+
+```powershell
+$foliaJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\folia-26.2-7.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $foliaJar `
+  -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -PlatformEndpoint MaximumFolia `
   -DatabaseProduct MySQL `
   -IncompleteV10AuditTableStartupFailure
 ```

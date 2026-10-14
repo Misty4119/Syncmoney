@@ -339,14 +339,32 @@ try {
 
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-            $shouldAccept = $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
+            $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
+                $databaseProduct -ceq 'MySQL'
+            } else {
+                $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
+            }
             $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
             if ($accepted -ne $shouldAccept) {
                 throw "The incomplete-v10-audit-table target guard returned $accepted for $databaseProduct / $endpointName; expected $shouldAccept."
             }
         }
     }
-    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum and maximum Paper plus minimum Folia across all three SQL dialects'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum Folia across all SQL dialects, allow only MySQL on maximum Folia, and reject the remaining endpoints'
+
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $actualIncompleteV10Diagnostic = $null
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia `
+            -IncompleteV10AuditTableStartupFailure
+    } catch {
+        $actualIncompleteV10Diagnostic = $_.Exception.Message
+    }
+    if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
+        throw "The unsupported maximum-Folia MariaDB diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
+    }
+    Write-Output 'PASS: reject maximum-Folia MariaDB with a diagnostic that names the MySQL-only maximum-Folia allowance'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -525,6 +543,19 @@ try {
         throw 'The complete minimum-Folia MySQL incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept minimum-Folia MySQL incomplete-v10 failure with the exact pinned runtime identity'
+    $maximumFoliaEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MaximumFolia
+    $maximumFoliaIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MaximumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $maximumFoliaIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete maximum-Folia MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept maximum-Folia MySQL incomplete-v10 failure with the exact pinned runtime identity'
+    $maximumFoliaIncompleteReport.startupObservation.runtimeIdentity.build = 6
+    if (Test-T21StartupFailureReportFixture $maximumFoliaIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable) {
+        throw 'The maximum-Folia MySQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject maximum-Folia incomplete-v10 evidence with a mismatched runtime build'
     $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.software = 'paper'
     if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {
