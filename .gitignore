@@ -153,6 +153,8 @@ tools/plugdev/*
 !tools/plugdev/t21-legacy-sql-upgrade-validation.ps1
 !tools/plugdev/t21-legacy-sql-upgrade-validation.test.ps1
 !tools/plugdev/run-mysql-sync-runtime.ps1
+!tools/plugdev/t21-startup-failure-validation.ps1
+!tools/plugdev/t21-startup-failure-validation.test.ps1
 !tools/plugdev/run-quiesced-network-upgrade.ps1
 !tools/plugdev/run-quiesced-network-upgrade.test.ps1
 !tools/plugdev/run-player-scheduler-lifecycle.ps1

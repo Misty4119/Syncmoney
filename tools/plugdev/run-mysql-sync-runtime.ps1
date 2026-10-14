@@ -14,6 +14,7 @@ param(
     [string]$PlatformEndpoint = 'Minimum',
     [string]$CandidateVersion = '1.4.0-alpha.1',
     [switch]$LegacySqlDataUpgrade,
+    [switch]$NewerAuditSchemaStartupFailure,
     [string]$BaselinePluginJar,
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedBaselinePluginSha256
 )
@@ -23,6 +24,7 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 SQL runtime validation requires PowerShell 7 or newer.' }
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-legacy-sql-upgrade-validation.ps1')
+. (Join-Path $PSScriptRoot 't21-startup-failure-validation.ps1')
 
 $requestedDatabaseProduct = $DatabaseProduct
 $script:databaseProduct = Resolve-T21SqlRuntimeProduct $requestedDatabaseProduct
@@ -30,6 +32,10 @@ $script:databaseServerVersion = switch ($script:databaseProduct) { 'MariaDB' { '
 $script:databaseServerVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '^12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^18\.1(?:\b|$)' } default { '^8\.0\.42(?:\b|$)' } }
 $script:databaseExecutableVersionPattern = switch ($script:databaseProduct) { 'MariaDB' { '\bVer\s+12\.3\.3-MariaDB(?:\b|$)' } 'PostgreSQL' { '^postgres \(PostgreSQL\) 18\.1$' } default { '\bVer\s+8\.0\.42(?:\b|$)' } }
 $script:platformTarget = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+if ($NewerAuditSchemaStartupFailure.IsPresent -and
+    -not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+    throw 'The newer-audit-schema startup-failure case is restricted to PostgreSQL 18.1 on minimum Paper 1.21.6#48.'
+}
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -39,6 +45,13 @@ $script:baselineSha256 = $null
 $script:baselineSourceCommit = $null
 $script:legacySqlStages = [Collections.Generic.List[object]]::new()
 $script:legacySqlDataUpgrade = $LegacySqlDataUpgrade.IsPresent
+$script:newerAuditSchemaStartupFailure = $NewerAuditSchemaStartupFailure.IsPresent
+$script:schemaStateBefore = $null
+$script:schemaStateAfter = $null
+$script:resourceCleanupObservation = $null
+if ($script:legacySqlDataUpgrade -and $script:newerAuditSchemaStartupFailure) {
+    throw 'Legacy SQL data upgrade and newer audit schema startup-failure modes are mutually exclusive.'
+}
 $script:acceptancePath = Join-Path $script:root 'build\acceptance\SyncmoneyAcceptance.jar'
 $script:apiConsumerPath = Join-Path $script:root 'build\acceptance\SyncmoneyApiConsumer.jar'
 $script:plugDevRoot = (Resolve-Path -LiteralPath $PlugDevRoot).Path
@@ -661,7 +674,10 @@ function Stop-T21Server([string]$stage) {
     $skip = if ($allLines.Count -ge $before) { $before } else { 0 }
     $stopLines = @($allLines | Select-Object -Skip $skip)
     $disabled = @($stopLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1)
-    if ($disabled.Count -eq 0) { throw "Syncmoney did not log its normal disable marker for $stage." }
+    $startupFailureDisabled = $script:newerAuditSchemaStartupFailure -and
+        (@($allLines | Select-String -Pattern 'Syncmoney initialization failed; rolling back initialized owners').Count -gt 0) -and
+        (@($allLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1).Count -gt 0)
+    if ($disabled.Count -eq 0 -and -not $startupFailureDisabled) { throw "Syncmoney did not log its normal disable marker for $stage." }
     $failureMarkers = @(Get-T21ShutdownFailureMarkers ($stopLines -join "`n"))
     if ($failureMarkers.Count -gt 0) { throw "Server shutdown failure marker observed at ${stage}: $($failureMarkers -join '; ')." }
     $platformLogStage = switch ($stage) {
@@ -670,6 +686,7 @@ function Stop-T21Server([string]$stage) {
         'after-legacy-seed' { 'legacy-seed' }
         'after-candidate-existing-read' { 'candidate-existing-read' }
         'after-legacy-rollback-read' { 'legacy-rollback-read' }
+        'after-startup-failure' { 'candidate-startup-failure' }
         default { throw "Unexpected platform log snapshot stage: $stage" }
     }
     $platformLogRelativePath = 'logs\platform-' + $platformLogStage + '.txt'
@@ -690,7 +707,7 @@ function Stop-T21Server([string]$stage) {
         processExitCode = $processExitCode
         processExitCodeObserved = $true
         processExited = $processExited
-        disabledMarker = $true
+        disabledMarker = [bool]($disabled.Count -gt 0 -or $startupFailureDisabled)
         forced = $false
     })
 }
@@ -803,6 +820,188 @@ function Get-BackendSnapshot(
     }
     if (-not $validState) { throw "$script:databaseProduct and Redis did not match the expected synthetic account state after $stage." }
     return $snapshot
+}
+
+function Get-T21NewerAuditSchemaState {
+    if ($script:databaseProduct -cne 'PostgreSQL') { throw 'The newer-audit-schema startup-failure case requires PostgreSQL.' }
+    $stateSql = @"
+SELECT COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = '1'), 'NULL') || '|' ||
+       COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = 'audit'), 'NULL') || '|' ||
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'syncmoney_audit_log') THEN 'true' ELSE 'false' END || '|' ||
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'players') THEN 'true' ELSE 'false' END;
+"@
+    $rows = @(Invoke-PostgresQuery $stateSql 'newer-audit-schema-state')
+    if ($rows.Count -ne 1) { throw 'Could not observe the newer audit-schema fixture state.' }
+    $parts = $rows[0].Trim().Split('|')
+    if ($parts.Count -ne 4 -or $parts[2] -notin @('true', 'false') -or $parts[3] -notin @('true', 'false')) {
+        throw 'The newer audit-schema state query returned an unexpected shape.'
+    }
+    $mainVersion = if ($parts[0] -ceq 'NULL') { $null } else { [int]::Parse($parts[0], [Globalization.CultureInfo]::InvariantCulture) }
+    $auditVersion = if ($parts[1] -ceq 'NULL') { $null } else { [int]::Parse($parts[1], [Globalization.CultureInfo]::InvariantCulture) }
+    $mainVersionRowJson = @(Invoke-PostgresQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = '1'), 'null');" 'newer-audit-schema-main-version-row')[0].Trim()
+    $auditVersionRowJson = @(Invoke-PostgresQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = 'audit'), 'null');" 'newer-audit-schema-audit-version-row')[0].Trim()
+    $auditTableExists = $parts[2] -ceq 'true'
+    $playersTableExists = $parts[3] -ceq 'true'
+    $playerRows = $null
+    if ($playersTableExists) {
+        $playerCount = @(Invoke-MySqlQuery 'SELECT COUNT(*) FROM players;' 'newer-audit-schema-player-row-count')
+        if ($playerCount.Count -ne 1) { throw 'Could not observe player rows after the failed startup.' }
+        $playerRows = [long]::Parse($playerCount[0].Trim(), [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $auditColumnsJson = $null
+    $auditIndexesJson = $null
+    $auditRowsJson = $null
+    if ($auditTableExists) {
+        $auditColumnsSql = @"
+SELECT COALESCE(json_agg(to_jsonb(c) ORDER BY c.ordinal_position)::text, '[]')
+FROM (
+    SELECT *
+    FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'syncmoney_audit_log'
+) AS c;
+"@
+        $auditIndexesSql = @"
+SELECT COALESCE(json_agg(json_build_object('name', indexname, 'definition', indexdef) ORDER BY indexname)::text, '[]')
+FROM pg_indexes
+WHERE schemaname = current_schema() AND tablename = 'syncmoney_audit_log';
+"@
+        $auditRowsSql = @"
+SELECT COALESCE(json_agg(to_jsonb(a) ORDER BY id)::text, '[]')
+FROM syncmoney_audit_log AS a;
+"@
+        $auditColumnsJson = @(Invoke-PostgresQuery $auditColumnsSql 'newer-audit-schema-columns')[0].Trim()
+        $auditIndexesJson = @(Invoke-PostgresQuery $auditIndexesSql 'newer-audit-schema-indexes')[0].Trim()
+        $auditRowsJson = @(Invoke-PostgresQuery $auditRowsSql 'newer-audit-schema-rows')[0].Trim()
+    }
+    return [ordered]@{
+        mainVersion = $mainVersion
+        mainVersionRowJson = $mainVersionRowJson
+        auditVersion = $auditVersion
+        auditVersionRowJson = $auditVersionRowJson
+        auditTableExists = [bool]$auditTableExists
+        playersTableExists = $playersTableExists
+        playerRows = $playerRows
+        auditColumnsJson = $auditColumnsJson
+        auditIndexesJson = $auditIndexesJson
+        auditRowsJson = $auditRowsJson
+    }
+}
+
+function Seed-T21NewerAuditSchema {
+    $ddl = @'
+CREATE TABLE syncmoney_schema_version (
+    id VARCHAR(50) PRIMARY KEY,
+    version INT NOT NULL DEFAULT 0,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description VARCHAR(255)
+);
+INSERT INTO syncmoney_schema_version (id, version, applied_at, description)
+VALUES ('audit', 12, TIMESTAMP '2026-10-14 00:00:00', 'T21 newer audit schema preservation sentinel');
+CREATE TABLE syncmoney_audit_log (
+    id VARCHAR(36) PRIMARY KEY,
+    timestamp BIGINT NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    player_uuid VARCHAR(36) NOT NULL,
+    player_name VARCHAR(16),
+    amount DECIMAL(20, 2) NOT NULL,
+    balance_after DECIMAL(20, 2) NOT NULL,
+    source VARCHAR(30) NOT NULL,
+    server VARCHAR(50) NOT NULL,
+    target_uuid VARCHAR(36),
+    target_name VARCHAR(16),
+    reason VARCHAR(255),
+    merged_count INT DEFAULT 1,
+    request_id VARCHAR(36),
+    sequence BIGINT DEFAULT 0,
+    t21_sentinel TEXT NOT NULL
+);
+INSERT INTO syncmoney_audit_log (
+    id, timestamp, type, player_uuid, player_name, amount, balance_after, source, server,
+    target_uuid, target_name, reason, merged_count, request_id, sequence, t21_sentinel
+) VALUES (
+    '00000000-0000-0000-0000-000000000321', 1791936000000, 'DEPOSIT',
+    '00000000-0000-0000-0000-000000000321', 'T21Fixture', 1.25, 99.99,
+    'TEST', 't21-startup-failure', NULL, NULL, 'v12 preservation sentinel', 1,
+    '00000000-0000-0000-0000-000000000322', 77, 't21-v12-preservation-sentinel'
+);
+CREATE INDEX idx_audit_timestamp ON syncmoney_audit_log (timestamp DESC, sequence DESC);
+CREATE INDEX idx_audit_player ON syncmoney_audit_log (player_uuid, timestamp DESC, sequence DESC);
+CREATE INDEX idx_audit_type_timestamp_sequence ON syncmoney_audit_log (type, timestamp DESC, sequence DESC);
+'@
+    $null = Invoke-PostgresQuery $ddl 'seed-newer-audit-schema'
+    $state = Get-T21NewerAuditSchemaState
+    if ($null -ne $state.mainVersion -or $state.auditVersion -ne 12 -or
+        -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
+        $state.auditVersionRowJson -notmatch '"description": "T21 newer audit schema preservation sentinel"' -or
+        $state.auditColumnsJson -notmatch '"column_name": "t21_sentinel"' -or
+        $state.auditIndexesJson -notmatch 'idx_audit_type_timestamp_sequence' -or
+        $state.auditRowsJson -notmatch 't21-v12-preservation-sentinel') {
+        throw 'The isolated SQL database did not retain the exact pre-start newer audit-schema fixture.'
+    }
+    return $state
+}
+
+function Get-T21StartupFailureResourceCleanup {
+    $sqlConnectionSql = if ($script:databaseProduct -ceq 'PostgreSQL') {
+        'SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid();'
+    } else {
+        'SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB = DATABASE() AND ID <> CONNECTION_ID();'
+    }
+    $sqlConnections = @(Invoke-MySqlQuery $sqlConnectionSql 'startup-failure-sql-connections-after-disable')
+    if ($sqlConnections.Count -ne 1) { throw 'Could not observe SQL connections after startup rollback.' }
+    $connectedClients = @(Invoke-Redis @('-n', '15', 'INFO', 'clients') 'startup-failure-redis-clients-after-disable')
+    $clientMarker = @($connectedClients | ForEach-Object { $_ -split "`r?`n" } | Where-Object { $_ -match '^connected_clients:\d+$' })
+    if ($clientMarker.Count -ne 1) { throw 'Could not observe Redis clients after startup rollback.' }
+    $redisDbSize = (Invoke-Redis @('-n', '15', 'DBSIZE') 'startup-failure-redis-dbsize-after-disable').output.Trim()
+    return [ordered]@{
+        sqlOtherConnections = [int]::Parse($sqlConnections[0].Trim(), [Globalization.CultureInfo]::InvariantCulture)
+        redisOtherClients = [Math]::Max(0, [int]($clientMarker[0] -replace '^connected_clients:', '') - 1)
+        redisDbSize = [int]::Parse($redisDbSize, [Globalization.CultureInfo]::InvariantCulture)
+    }
+}
+
+function Start-T21ServerExpectingNewerAuditSchemaFailure {
+    if (@(Get-T21ServerProcesses).Count -ne 0) { throw 'A run-marked server process exists before expected-failure startup.' }
+    Set-T21PluginInProfile $CandidateVersion
+    $before = Get-ServerLogLineCount
+    $start = Invoke-PlugDev @('server', 'start', '--config', '.plugdev/profile.yml') 'candidate-startup-failure-start'
+    if ($start.exitCode -ne 0) { throw 'PlugDev could not keep the platform alive for the expected plugin startup failure.' }
+    $null = Wait-ServerLogMarker 'Syncmoney disabled\.' '' $before 90
+    $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
+    $expectedFailureMessage = 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
+    $sqlPoolShutdownObserved = $fullLog -match '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
+    foreach ($marker in @(
+            'Loading server plugin Syncmoney v1.4.0-alpha.1',
+            'Syncmoney initialization failed; rolling back initialized owners',
+            $expectedFailureMessage,
+            '[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.',
+            'Syncmoney disabled.')) {
+        if (-not $fullLog.Contains($marker)) { throw "Expected startup-failure marker was absent: $marker" }
+    }
+    if (-not $sqlPoolShutdownObserved) { throw 'The INFO-level Syncmoney Hikari pool shutdown marker was absent after startup rollback.' }
+    if ($fullLog.Contains('Syncmoney enabled successfully')) { throw 'Syncmoney unexpectedly completed startup against the newer audit schema.' }
+    $identity = Get-T21PlatformIdentity $fullLog
+    Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
+    $pluginPin = Get-PinnedSyncmoneyPlugin $CandidateVersion $script:candidateSha256
+    $processes = @(Get-T21ServerProcesses)
+    if ($processes.Count -ne 1) { throw "Expected one run-owned Paper process after rollback; observed $($processes.Count)." }
+    $observation = [ordered]@{
+        stage = 'candidate-startup-failure'
+        pluginVersion = $CandidateVersion
+        artifactSha256 = $pluginPin.sha256
+        enabled = $false
+        processId = [int]$processes[0].ProcessId
+        runtimeIdentity = $identity
+        expectedFailure = 'newer-audit-schema'
+        failureObserved = $true
+        failureMessage = $expectedFailureMessage
+        rollbackComplete = $true
+        sqlPoolShutdownObserved = [bool]$sqlPoolShutdownObserved
+        disabledMarker = $true
+        successMarkerObserved = $false
+    }
+    $script:startups.Add($observation)
+    return $observation
 }
 
 function Add-T21LegacySqlStage(
@@ -1161,7 +1360,7 @@ $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; Acce
 
 $script:report = [ordered]@{
     schemaVersion = 4
-    task = "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
+    task = if ($script:newerAuditSchemaStartupFailure) { "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)" } else { "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)" }
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
     runId = $script:runId
@@ -1284,6 +1483,10 @@ try {
     $null = Invoke-MySqlQuery $sql 'mysql-create-isolated-schema' -asRoot
     }
 
+    if ($script:newerAuditSchemaStartupFailure) {
+        $script:schemaStateBefore = Seed-T21NewerAuditSchema
+    }
+
     $redisConfig = Join-Path $script:redisRoot 'redis.conf'
     $redisLines = @(
         'bind 127.0.0.1', "port $script:redisPort", 'protected-mode yes', 'daemonize no',
@@ -1331,7 +1534,27 @@ try {
         configCredentialsConfigured=[bool]$configObservation.credentialsConfigured
     }
 
-    if ($script:legacySqlDataUpgrade) {
+    if ($script:newerAuditSchemaStartupFailure) {
+        $startup = Start-T21ServerExpectingNewerAuditSchemaFailure
+        $script:schemaStateAfter = Get-T21NewerAuditSchemaState
+        if ($null -eq $script:schemaStateBefore -or
+            $script:schemaStateAfter.mainVersion -ne 1 -or $script:schemaStateAfter.auditVersion -ne 12 -or
+            -not $script:schemaStateAfter.auditTableExists -or -not $script:schemaStateAfter.playersTableExists -or
+            $script:schemaStateAfter.playerRows -ne 0 -or
+            $script:schemaStateBefore.auditVersionRowJson -cne $script:schemaStateAfter.auditVersionRowJson -or
+            $script:schemaStateBefore.auditColumnsJson -cne $script:schemaStateAfter.auditColumnsJson -or
+            $script:schemaStateBefore.auditIndexesJson -cne $script:schemaStateAfter.auditIndexesJson -or
+            $script:schemaStateBefore.auditRowsJson -cne $script:schemaStateAfter.auditRowsJson) {
+            throw 'The failed candidate startup mutated the audit version row, audit table columns/indexes/data, or player state.'
+        }
+        $script:resourceCleanupObservation = Get-T21StartupFailureResourceCleanup
+        if ($script:resourceCleanupObservation.sqlOtherConnections -ne 0 -or
+            $script:resourceCleanupObservation.redisOtherClients -ne 0 -or
+            $script:resourceCleanupObservation.redisDbSize -ne 0) {
+            throw 'SQL or Redis resources remained active after the startup rollback completed.'
+        }
+        Stop-T21Server 'after-startup-failure'
+    } elseif ($script:legacySqlDataUpgrade) {
         $baselineStartup = Start-T21Server 'legacy-seed' '1.3.2'
         $seedLineStart = Get-ServerLogLineCount
         $null = Invoke-PlugDev @('server', 'command', 'smaccept write 1000.00 520.00') 'legacy-seed-write-command'
@@ -1420,6 +1643,8 @@ try {
             sha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\run-mysql-sync-runtime.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             validatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             testSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            startupFailureValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-startup-failure-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            startupFailureValidatorTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-startup-failure-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             legacyValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             legacyTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
         }
@@ -1438,7 +1663,63 @@ try {
     $script:report.failure = $script:failure
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
-        if ($script:legacySqlDataUpgrade) {
+        if ($script:newerAuditSchemaStartupFailure) {
+            $script:finalReport = [ordered]@{
+                schemaVersion=1
+                task='T21-V03-SYNC-newer-audit-schema-startup-failure'
+                status='PASS_BOUNDED_SUBCASE'
+                runId=$script:runId
+                runDirectory=$script:runRoot
+                server=[ordered]@{
+                    software=$script:platformTarget.software
+                    minecraftVersion=$script:platformTarget.minecraftVersion
+                    build=$script:platformTarget.build
+                    sha256=$serverSha256
+                }
+                candidate=[ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256 }
+                artifacts=[ordered]@{ acceptanceSha256=$acceptanceSha256; apiConsumerSha256=$apiConsumerSha256 }
+                java=[ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
+                plugDev=[ordered]@{
+                    sourceCommit=$script:report.plugDev.sourceCommit
+                    cliSha256=$script:report.plugDev.cliSha256
+                }
+                sqlBackend=[ordered]@{ product=$script:databaseProduct; version=$script:databaseServerVersion }
+                redis=[ordered]@{ version='8.10.1' }
+                configuration=[ordered]@{
+                    mode='sync'
+                    databaseEnabled=$true
+                    databaseType=$(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
+                    databaseIsolated=$true
+                    redisEnabled=$true
+                    redisDatabase=15
+                    redisIsolated=$true
+                }
+                backendProcesses=$script:report.backendProcesses
+                startupObservation=$script:startups[0]
+                schemaStateBefore=$script:schemaStateBefore
+                schemaStateAfter=$script:schemaStateAfter
+                resourceCleanup=$script:resourceCleanupObservation
+                platformLogs=@($script:platformServerLogs)
+                normalStops=@($script:normalStops)
+                backendShutdowns=@($script:backendShutdowns)
+                gradleDaemonCleanup=$script:report.gradleDaemonCleanup
+                cleanupFailures=@($script:cleanupFailures)
+                failure=$script:failure
+                logs=$script:report.logs
+                sourcePins=[ordered]@{
+                    runnerSha256=$script:report.runner.sha256
+                    validatorSha256=$script:report.runner.startupFailureValidatorSha256
+                    validatorTestSha256=$script:report.runner.startupFailureValidatorTestSha256
+                    sharedValidatorSha256=$script:report.runner.validatorSha256
+                    sharedValidatorTestSha256=$script:report.runner.testSha256
+                    acceptanceJarSha256=$acceptanceSha256
+                    apiConsumerJarSha256=$apiConsumerSha256
+                }
+            }
+            $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
+                $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
+                -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
+        } elseif ($script:legacySqlDataUpgrade) {
             $backendProcesses = $script:report.backendProcesses
             $databaseProcess = $backendProcesses[$script:sqlReportKey]
             $redisProcess = $backendProcesses.redis
@@ -1531,6 +1812,8 @@ try {
             $script:finalReport.status = 'FAIL'
             $script:failure = if ($script:legacySqlDataUpgrade) {
                 'The completed report did not satisfy the product-specific T21 legacy SQL data upgrade predicate.'
+            } elseif ($script:newerAuditSchemaStartupFailure) {
+                'The completed report did not satisfy Test-T21NewerAuditSchemaStartupFailureReport.'
             } else {
                 'The completed runtime evidence did not satisfy Test-T21MySqlRuntimeReport.'
             }
