@@ -175,18 +175,103 @@ try {
         [string]$expectedAcceptanceSha,
         [string]$expectedApiConsumerSha,
         [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'PostgreSQL',
-        [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint = 'Minimum'
+        [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
+        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable')][string]$FailureScenario = 'NewerAuditSchema'
     ) {
         return Test-T21NewerAuditSchemaStartupFailureReport $candidateReport $expectedServerSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha `
             -ExpectedPlugDevRoot $expectedPlugDevRoot -ExpectedPlugDevSourceCommit $expectedPlugDevSourceCommit -ExpectedPlugDevCliSha256 $expectedPlugDevCliSha256 `
             -ExpectedPlugDevCliDistManifestSha256 $expectedPlugDevCliDistManifestSha256 `
-            -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint -FailureScenario $FailureScenario
     }
 
     if (-not (Test-T21StartupFailureReportFixture $report $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum)) {
         throw 'The complete bounded newer-audit-schema failure report was rejected.'
     }
     Write-Output 'PASS: accept a complete minimum-Paper PostgreSQL startup rollback report'
+
+    $incompleteReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $incompleteReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
+    $incompleteReport.schemaStateBefore.mainVersion = 1
+    $incompleteReport.schemaStateBefore.mainVersionRowJson = '{"id":"1","version":1,"applied_at":"2026-10-14T00:00:00","description":"T21 pre-existing main schema"}'
+    $incompleteReport.schemaStateBefore.auditVersion = 9
+    $incompleteReport.schemaStateBefore.playersTableExists = $false
+    $incompleteReport.schemaStateBefore.playerRows = $null
+    $incompleteReport.schemaStateBefore.auditVersionRowJson = '{"id":"audit","version":9,"applied_at":"2026-10-14T00:00:00","description":"T21 incomplete audit v9 sentinel"}'
+    $incompleteReport.schemaStateAfter.mainVersion = 1
+    $incompleteReport.schemaStateAfter.mainVersionRowJson = $incompleteReport.schemaStateBefore.mainVersionRowJson
+    $incompleteReport.schemaStateAfter.auditVersion = 9
+    $incompleteReport.schemaStateAfter.playersTableExists = $true
+    $incompleteReport.schemaStateAfter.playerRows = 0
+    $incompleteReport.schemaStateAfter.auditVersionRowJson = $incompleteReport.schemaStateBefore.auditVersionRowJson
+    foreach ($schemaState in @($incompleteReport.schemaStateBefore, $incompleteReport.schemaStateAfter)) {
+        $idColumn = ConvertFrom-Json -InputObject ([string]$schemaState.auditColumnsJson) -AsHashtable -ErrorAction Stop | Select-Object -First 1
+        $idColumn.table_schema = 'public'
+        $idColumn.table_name = 'syncmoney_audit_log'
+        $idColumn.column_name = 'id'
+        $idColumn.ordinal_position = 1
+        $idColumn.data_type = 'character varying'
+        $idColumn.character_maximum_length = 36
+        $idColumn.character_octet_length = 144
+        $idColumn.is_nullable = 'NO'
+        $idColumn.udt_schema = 'pg_catalog'
+        $idColumn.udt_name = 'varchar'
+        $idColumn.is_identity = 'NO'
+        $idColumn.is_generated = 'NEVER'
+        $idColumn.is_updatable = 'YES'
+        $schemaState.auditColumnsJson = ConvertTo-Json -InputObject @($idColumn) -Depth 10 -Compress
+        $schemaState.auditIndexesJson = '[{"name":"syncmoney_audit_log_pkey","definition":"CREATE UNIQUE INDEX syncmoney_audit_log_pkey ON public.syncmoney_audit_log USING btree (id)"}]'
+        $schemaState.auditRowsJson = '[{"id":"00000000-0000-0000-0000-000000000329"}]'
+    }
+    $incompleteReport.startupObservation.expectedFailure = 'incomplete-v10-audit-table'
+    $incompleteReport.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
+    $incompleteReport.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
+    $incompleteLog = @(
+        '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
+        '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
+        '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 9, target 11'
+        '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
+        'java.lang.IllegalStateException: Failed audit schema migration to version 10; version metadata was not advanced past 9'
+        'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
+        '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
+        '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
+        '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+    )
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$incompleteLog, [Text.UTF8Encoding]::new($false))
+    $incompleteLogInfo = Get-Item -LiteralPath $platformLogPath
+    $incompleteLogHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $incompleteReport.platformLogs[0].bytes = [long]$incompleteLogInfo.Length
+    $incompleteReport.platformLogs[0].sha256 = $incompleteLogHash
+    $incompleteReport.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$incompleteLogInfo.Length
+    $incompleteReport.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $incompleteLogHash
+    if (-not (Test-T21StartupFailureReportFixture $incompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete incomplete-v10-audit-table startup-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept bounded v9 incomplete-audit-table failure with preserved schema and data'
+
+    $incompleteReport.schemaStateAfter.auditVersion = 10
+    if (Test-T21StartupFailureReportFixture $incompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+        throw 'The incomplete audit table report accepted an audit schema version advanced to 10.'
+    }
+    $incompleteReport.schemaStateAfter.auditVersion = 9
+    Write-Output 'PASS: reject an incomplete-audit-table report that advances the audit version'
+
+    $incompleteReport.startupObservation.failureDetailMarker = 'Audit schema version 12'
+    if (Test-T21StartupFailureReportFixture $incompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+        throw 'The incomplete audit table report accepted the wrong startup failure cause.'
+    }
+    $incompleteReport.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
+    Write-Output 'PASS: reject a v9 report without the incomplete-v10-column failure cause'
+
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+    $logInfo = Get-Item -LiteralPath $platformLogPath
+    $logHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $report.platformLogs[0].bytes = [long]$logInfo.Length
+    $report.platformLogs[0].sha256 = $logHash
+    $report.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$logInfo.Length
+    $report.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
 
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         $expectedEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointName
@@ -250,6 +335,17 @@ try {
     }
     if (-not $unsupportedEndpointRejected) { throw 'The startup-failure target guard accepted an endpoint outside the pinned platform set.' }
     Write-Output 'PASS: allow every pinned platform endpoint for all three SQL dialects and reject an unpinned endpoint'
+
+    foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
+        foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
+            $shouldAccept = $endpointName -ceq 'Minimum' -and $databaseProduct -ceq 'PostgreSQL'
+            $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
+            if ($accepted -ne $shouldAccept) {
+                throw "The incomplete-v10-audit-table target guard returned $accepted for $databaseProduct / $endpointName; expected $shouldAccept."
+            }
+        }
+    }
+    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum Paper and PostgreSQL only'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -576,9 +672,12 @@ try {
 
     $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
     if ($runnerSource -notmatch '\[switch\]\$NewerAuditSchemaStartupFailure' -or
+        $runnerSource -notmatch '\[switch\]\$IncompleteV10AuditTableStartupFailure' -or
         $runnerSource -notmatch 'Test-T21NewerAuditSchemaStartupFailureTarget' -or
+        $runnerSource -notmatch 'Test-T21IncompleteAuditTableStartupFailureTarget' -or
         $runnerSource -notmatch 'function Seed-T21NewerAuditSchema' -or
-        $runnerSource -notmatch 'function Start-T21ServerExpectingNewerAuditSchemaFailure' -or
+        $runnerSource -notmatch 'function Seed-T21IncompleteV10AuditTable' -or
+        $runnerSource -notmatch 'function Start-T21ServerExpectingAuditSchemaFailure' -or
         $runnerSource -notmatch 'Test-T21NewerAuditSchemaStartupFailureReport' -or
         $runnerSource -notmatch 'Get-T21PlugDevCliDistManifest' -or
         $runnerSource -notmatch 'cliDistInvocationObservations' -or
@@ -587,25 +686,39 @@ try {
         throw 'The SQL runtime runner does not implement the bounded newer-audit-schema startup-failure mode.'
     }
     $seedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21NewerAuditSchema', [StringComparison]::Ordinal)
-    $startupFailureIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingNewerAuditSchemaFailure', [StringComparison]::Ordinal)
+    $incompleteSeedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21IncompleteV10AuditTable', [StringComparison]::Ordinal)
+    $startupFailureIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure', [StringComparison]::Ordinal)
     if ($seedIndex -lt 0 -or $startupFailureIndex -le $seedIndex) {
         throw 'The runner must seed the newer audit schema before starting the candidate plugin.'
     }
-    $targetGuardIndex = $runnerSource.IndexOf('Test-T21NewerAuditSchemaStartupFailureTarget', [StringComparison]::Ordinal)
+    if ($incompleteSeedIndex -lt 0 -or $startupFailureIndex -le $incompleteSeedIndex) {
+        throw 'The runner must seed the incomplete v10 audit table before starting the candidate plugin.'
+    }
+    $targetGuardIndex = $runnerSource.IndexOf('Test-T21IncompleteAuditTableStartupFailureTarget', [StringComparison]::Ordinal)
     $runtimePathResolutionIndex = $runnerSource.IndexOf('$script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path', [StringComparison]::Ordinal)
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
     Write-Output 'PASS: seed the newer schema before the expected-failure Paper start and validate its report'
 
+    $startupValidatorSource = Get-Content -LiteralPath $validatorPath -Raw
+    if ($startupValidatorSource -notmatch 'FailureScenario' -or
+        $startupValidatorSource -notmatch 'IncompleteV10AuditTable' -or
+        $startupValidatorSource -notmatch 'Required v10 audit columns are missing:' -or
+        $startupValidatorSource -notmatch 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure') {
+        throw 'The startup-failure report predicate does not verify the incomplete-v10-audit-table case.'
+    }
+    Write-Output 'PASS: report predicate checks v9 metadata preservation and the failed v10 migration cause'
+
     if ($runnerSource -match 'The newer-audit-schema startup-failure case requires PostgreSQL\.' -or
-        $runnerSource -notmatch '(?s)function Get-T21NewerAuditSchemaState.*?else\s*\{.*?information_schema\.COLUMNS' -or
-        $runnerSource -notmatch '(?s)function Seed-T21NewerAuditSchema.*?Invoke-MySqlQuery \$ddl') {
+        $runnerSource -notmatch '(?s)function Get-T21StartupFailureSchemaState.*?else\s*\{.*?information_schema\.COLUMNS' -or
+        $runnerSource -notmatch '(?s)function Seed-T21NewerAuditSchema.*?Invoke-MySqlQuery \$ddl' -or
+        $runnerSource -notmatch '(?s)function Seed-T21IncompleteV10AuditTable.*?Invoke-MySqlQuery \$ddl') {
         throw 'The SQL startup-failure runner must seed and capture dialect-native metadata for MySQL, MariaDB, and PostgreSQL.'
     }
-    Write-Output 'PASS: seed and capture dialect-native startup-failure schema snapshots'
+    Write-Output 'PASS: seed newer and incomplete schemas and capture dialect-native metadata'
 
-    Write-Output 'T21 newer-audit-schema failure validator tests PASS'
+    Write-Output 'T21 startup-failure validator tests PASS'
 } finally {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\', '/'))
     $testPath = [IO.Path]::GetFullPath($testRoot).TrimEnd([char[]]@('\', '/'))
