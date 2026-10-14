@@ -138,21 +138,6 @@ For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pas
 
 Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper `1.21.6#48` / `26.3#166`, minimum/maximum Folia `1.21.6#6` / `26.2#7`, and minimum/maximum Canvas `1.21.8#603` / `26.3#972` (18/18 bounded E2 endpoint/backend cells). This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. Supplemental current-stable Paper and unpinned endpoints remain rejected for this scenario. The runner requires Java feature version 25 and records the full `java -version` banner. The maximum-Canvas/PostgreSQL report records `25.0.4+7-LTS-189`; its offline audit matches the `25.0.4` version-string prefix but does not enforce the complete build suffix. This is minimum-runtime evidence, not a claim covering every Java 25+ runtime. Candidate/server JAR hashes and the local PlugDev source revision must also match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
 
-```powershell
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
-pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
-  -ServerJar $paperJar `
-  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
-  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
-  -JavaHome $env:JAVA_HOME `
-  -PlatformEndpoint Minimum `
-  -DatabaseProduct MySQL `
-  -IncompleteV10AuditTableStartupFailure
-```
-
 For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
 
 ```powershell
@@ -262,6 +247,27 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -DatabaseProduct PostgreSQL `
   -IncompleteV10AuditTableStartupFailure
 ```
+
+### T21 V03 required audit v11 DDL permission failure
+
+Use `-RequiredV11DdlPermissionDeniedStartupFailure` to seed an isolated audit schema-version-10 database with a complete v10 audit table and sentinel row, then revoke only `ALTER` from the candidate's MySQL account while retaining `CREATE`. The runner parses each `SHOW GRANTS` statement for both loopback account hosts and binds its privilege list to the exact account and schema. Each host must have only global `USAGE` plus one grant on the isolated schema that includes `CREATE` and omits `ALTER`; a global `CREATE`, unrelated schema, or mismatched host is rejected. The runner verifies that candidate startup fails on `request_id` DDL without advancing the audit version or changing the v10 table, index, row, main version row, or empty `players` table. This first bounded cell accepts only MySQL `8.0.42` on minimum Paper `1.21.6#48`; other database products and endpoints remain `NOT RUN` pending separate evidence. This is not whole-database atomic rollback evidence.
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct MySQL `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
+Run `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` for the required-v11 target guard, report predicate, and grant-log consistency regressions. Retain the generated report and logs under ignored `build/reports/foundation/T21-sql-runtime/`, then record the report hash, offline log audit, and evidence limits in the foundation validation plan.
 
 ### MySQL, MariaDB, and PostgreSQL legacy-data compatibility on Paper, Folia, and Canvas
 

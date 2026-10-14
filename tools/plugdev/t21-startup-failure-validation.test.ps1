@@ -176,7 +176,7 @@ try {
         [string]$expectedApiConsumerSha,
         [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'PostgreSQL',
         [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
-        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable')][string]$FailureScenario = 'NewerAuditSchema'
+        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
     ) {
         return Test-T21NewerAuditSchemaStartupFailureReport $candidateReport $expectedServerSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha `
             -ExpectedPlugDevRoot $expectedPlugDevRoot -ExpectedPlugDevSourceCommit $expectedPlugDevSourceCommit -ExpectedPlugDevCliSha256 $expectedPlugDevCliSha256 `
@@ -524,6 +524,328 @@ try {
         $copy.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
         return $copy
     }
+
+    function Set-T21MySqlGrantFixtureLines([object]$Report, [string]$Field, [string]$LogRelativePath, [string[]]$Lines) {
+        $Report.databaseDdlPrivileges[$Field] = [string[]]$Lines
+        $logPath = Join-Path $Report.runDirectory $LogRelativePath
+        [IO.File]::WriteAllLines($logPath, [string[]]$Lines, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $logPath
+        $Report.logs[$LogRelativePath].bytes = [long]$logInfo.Length
+        $Report.logs[$LogRelativePath].sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    function Set-T21MySqlAuditRowsFixtureJson([object]$Report, [string]$RowsJson) {
+        $Report.schemaStateBefore.auditRowsJson = $RowsJson
+        $Report.schemaStateAfter.auditRowsJson = $RowsJson
+        $logRelativePath = 'logs\newer-audit-schema-rows.txt'
+        $logPath = Join-Path $Report.runDirectory $logRelativePath
+        [IO.File]::WriteAllText($logPath, $RowsJson, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $logPath
+        $Report.logs[$logRelativePath] = [ordered]@{
+            bytes = [long]$logInfo.Length
+            sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+    function New-T21MySqlRequiredV11DdlFailureReportFixture([string]$platformEndpoint = 'Minimum') {
+        $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
+        $copy = New-T21MySqlStartupFailureReportFixture 'MySQL' '8.0.42'
+        $v11RunRoot = Join-Path $testRoot 'v11-required-ddl'
+        $v11LogsRoot = Join-Path $v11RunRoot 'logs'
+        New-Item -ItemType Directory -Force -Path $v11LogsRoot | Out-Null
+        foreach ($existingLog in Get-ChildItem -LiteralPath (Join-Path $testRoot 'logs') -File) {
+            $v11LogPath = Join-Path $v11LogsRoot $existingLog.Name
+            Copy-Item -LiteralPath $existingLog.FullName -Destination $v11LogPath
+            $v11LogInfo = Get-Item -LiteralPath $v11LogPath
+            $copy.logs[('logs\' + $existingLog.Name)] = [ordered]@{
+                bytes = [long]$v11LogInfo.Length
+                sha256 = (Get-FileHash -LiteralPath $v11LogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        }
+        $copy.runDirectory = $v11RunRoot
+        $copy.gradleDaemonCleanup.isolatedUserHome = [IO.Path]::GetFullPath((Join-Path $v11RunRoot '.gradle-user-home'))
+        $copy.server = [ordered]@{
+            software = $endpoint.software
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+            sha256 = $endpoint.sha256
+        }
+        $copy.startupObservation.runtimeIdentity = [ordered]@{
+            software = $endpoint.software
+            runtimeVersion = $endpoint.minecraftVersion
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+        }
+        $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
+        $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
+        $copy.task = 'T21-V03-SYNC-v11-audit-ddl-permission-failure'
+        $grantLines127 = @(
+            'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
+            'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
+        )
+        $grantLinesLocal = @(
+            'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`localhost`'
+            'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`localhost`'
+        )
+        $copy.databaseDdlPrivileges = [ordered]@{
+            product = 'MySQL'
+            grantee = 'sm_t21_a1b2c3d4@127.0.0.1'
+            grants = $grantLines127
+            localGrants = $grantLinesLocal
+            alterGranted = $false
+            createGranted = $true
+            verifiedBeforeStartup = $true
+        }
+        foreach ($grantLog in @(
+            [ordered]@{ path='logs\runtime-user-grants-127.txt'; lines=$grantLines127 }
+            [ordered]@{ path='logs\runtime-user-grants-local.txt'; lines=$grantLinesLocal }
+        )) {
+            $grantLogPath = Join-Path $v11RunRoot $grantLog.path
+            [IO.File]::WriteAllLines($grantLogPath, [string[]]$grantLog.lines, [Text.UTF8Encoding]::new($false))
+            $grantLogInfo = Get-Item -LiteralPath $grantLogPath
+            $copy.logs[$grantLog.path] = [ordered]@{
+                bytes = [long]$grantLogInfo.Length
+                sha256 = (Get-FileHash -LiteralPath $grantLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        }
+        $copy.schemaStateBefore.mainVersion = 1
+        $copy.schemaStateBefore.mainVersionRowJson = '{"id":"1","version":1,"applied_at":"2026-10-14 00:00:00","description":"T21 pre-existing main schema"}'
+        $copy.schemaStateBefore.auditVersion = 10
+        $copy.schemaStateBefore.auditVersionRowJson = '{"id":"audit","version":10,"applied_at":"2026-10-14 00:00:00","description":"T21 required v11 DDL failure sentinel"}'
+        $copy.schemaStateBefore.playersTableExists = $false
+        $copy.schemaStateBefore.playerRows = $null
+        $copy.schemaStateAfter.mainVersion = 1
+        $copy.schemaStateAfter.mainVersionRowJson = $copy.schemaStateBefore.mainVersionRowJson
+        $copy.schemaStateAfter.auditVersion = 10
+        $copy.schemaStateAfter.auditVersionRowJson = $copy.schemaStateBefore.auditVersionRowJson
+        $copy.schemaStateAfter.playersTableExists = $true
+        $copy.schemaStateAfter.playerRows = 0
+
+        $v10Columns = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+            'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+        $allColumns = @(ConvertFrom-Json -InputObject ([string]$copy.schemaStateBefore.auditColumnsJson) -AsHashtable -ErrorAction Stop)
+        $columnRows = @($allColumns | Where-Object { [string]$_['column_name'] -cin $v10Columns })
+        for ($index = 0; $index -lt $columnRows.Count; $index++) { $columnRows[$index].ordinal_position = $index + 1 }
+        $columnJson = ConvertTo-Json -InputObject ([object[]]$columnRows) -Depth 10 -Compress
+        $copy.schemaStateBefore.auditColumnsJson = $columnJson
+        $copy.schemaStateAfter.auditColumnsJson = $columnJson
+        $indexJson = ConvertTo-Json -InputObject @([ordered]@{
+            name = 'PRIMARY'
+            nonUnique = 0
+            indexType = 'BTREE'
+            visibility = 'YES'
+            columns = @([ordered]@{ position = 1; columnName = 'id'; direction = 'A'; subPart = $null })
+        }) -Depth 10 -Compress
+        $copy.schemaStateBefore.auditIndexesJson = $indexJson
+        $copy.schemaStateAfter.auditIndexesJson = $indexJson
+        $rowJson = '[{"id":"00000000-0000-0000-0000-000000000330","timestamp":1791936000000,"type":"DEPOSIT","player_uuid":"00000000-0000-0000-0000-000000000330","player_name":"T21Fixture","amount":1.25,"balance_after":99.99,"source":"TEST","server":"t21-v11-ddl-permission","target_uuid":null,"target_name":null,"reason":"v10 preservation sentinel","merged_count":1,"t21_sentinel":"t21-v10-preservation-sentinel"}]'
+        $copy.schemaStateBefore.auditRowsJson = $rowJson
+        $copy.schemaStateAfter.auditRowsJson = $rowJson
+        $rowsLogPath = Join-Path $v11RunRoot 'logs\newer-audit-schema-rows.txt'
+        [IO.File]::WriteAllText($rowsLogPath, $rowJson, [Text.UTF8Encoding]::new($false))
+        $rowsLogInfo = Get-Item -LiteralPath $rowsLogPath
+        $copy.logs['logs\newer-audit-schema-rows.txt'] = [ordered]@{
+            bytes = [long]$rowsLogInfo.Length
+            sha256 = (Get-FileHash -LiteralPath $rowsLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        $copy.startupObservation.expectedFailure = 'required-v11-audit-ddl-permission-failure'
+        $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 11; version metadata was not advanced past 10'
+        $copy.startupObservation.failureDetailMarker = 'ALTER command denied'
+
+        $platformSoftware = switch ($endpoint.software) {
+            'paper' { 'Paper' }
+            'folia' { 'Folia' }
+            'canvas' { 'Canvas' }
+            default { throw "Unsupported fixture platform software '$($endpoint.software)'." }
+        }
+        $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading {2} {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build, $platformSoftware
+        $platformLog = @(
+            $platformLine
+            '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 10, target 11'
+            '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
+            'java.lang.IllegalStateException: Failed audit schema migration to version 11; version metadata was not advanced past 10'
+            "Caused by: java.sql.SQLException: ALTER command denied to user 'sm_t21_fixture'@'127.0.0.1' for table 'syncmoney_audit_log'"
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+        )
+        $platformLogPath = Join-Path $v11RunRoot 'logs\platform-candidate-startup-failure.txt'
+        [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $platformLogPath
+        $logHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $copy.platformLogs[0].bytes = [long]$logInfo.Length
+        $copy.platformLogs[0].sha256 = $logHash
+        $copy.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$logInfo.Length
+        $copy.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
+        return $copy
+    }
+
+    if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum)) {
+        throw 'The v11 required-DDL failure gate must admit only minimum-Paper MySQL until additional runtime cells are verified.'
+    }
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL'
+
+    $ddlFailureReport = New-T21MySqlRequiredV11DdlFailureReportFixture
+    if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept v11 DDL permission failure only with v10 schema/version preservation and observed privilege boundary'
+    $jsonNumericField = ConvertFrom-Json -InputObject '1.25' -ErrorAction Stop
+    if (-not (Test-T21JsonNumber $jsonNumericField) -or
+        (Test-T21JsonNumber '1.25') -or
+        (Test-T21JsonNumber $true)) {
+        throw 'The v11 sentinel JSON-number predicate must accept JSON numeric values and reject strings and booleans.'
+    }
+    Write-Output 'PASS: classify JSON numbers separately from strings and booleans'
+    $validGrants127 = [string[]]$ddlFailureReport.databaseDdlPrivileges.grants.Clone()
+    $validGrantsLocal = [string[]]$ddlFailureReport.databaseDdlPrivileges.localGrants.Clone()
+
+    $ddlFailureReport.configuration.databaseNameObserved = 'syncmoney_t21_ff001122'
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted a databaseNameObserved value that disagreed with the configured, grant-checked database.'
+    }
+    $ddlFailureReport.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
+    Write-Output 'PASS: require the observed config database name to match the schema protected by the app-account grants'
+
+    $validRowsJson = [string]$ddlFailureReport.schemaStateBefore.auditRowsJson
+    $alteredRowsJson = $validRowsJson.Replace('"player_name":"T21Fixture"', '"player_name":"ForgedFixture"', [StringComparison]::Ordinal)
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $alteredRowsJson
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted an unchanged row whose fixture payload differed from the exact seeded sentinel.'
+    }
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $validRowsJson
+    Write-Output 'PASS: pin the complete v10 sentinel row payload in the pre-start report predicate'
+
+    foreach ($moneyField in @('amount', 'balance_after')) {
+        $validMoneyValue = if ($moneyField -ceq 'amount') { '1.25' } else { '99.99' }
+        $stringMoneyRowsJson = $validRowsJson.Replace(('"' + $moneyField + '":' + $validMoneyValue), ('"' + $moneyField + '":"' + $validMoneyValue + '"'), [StringComparison]::Ordinal)
+        Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $stringMoneyRowsJson
+        if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+            throw "The required-v11-DDL report accepted a JSON string in the sentinel '$moneyField' field."
+        }
+        Write-Output "PASS: reject a JSON string in the sentinel '$moneyField' numeric field"
+    }
+    foreach ($moneyField in @('amount', 'balance_after')) {
+        $validMoneyValue = if ($moneyField -ceq 'amount') { '1.25' } else { '99.99' }
+        $nearbyMoneyValue = if ($moneyField -ceq 'amount') { '1.2500000000000001' } else { '99.9900000000000001' }
+        $nearbyMoneyRowsJson = $validRowsJson.Replace(('"' + $moneyField + '":' + $validMoneyValue), ('"' + $moneyField + '":' + $nearbyMoneyValue), [StringComparison]::Ordinal)
+        Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $nearbyMoneyRowsJson
+        if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+            throw "The required-v11-DDL report accepted a nearby JSON number in the sentinel '$moneyField' field."
+        }
+        Write-Output "PASS: reject a nearby JSON number in the sentinel '$moneyField' numeric field"
+    }
+    foreach ($moneyField in @('amount', 'balance_after')) {
+        $validMoneyValue = if ($moneyField -ceq 'amount') { '1.25' } else { '99.99' }
+        $longNearbyMoneyValue = if ($moneyField -ceq 'amount') { '1.2500000000000000000000000000000000000001' } else { '99.99000000000000000000000000001' }
+        $longNearbyRowsJson = $validRowsJson.Replace(('"' + $moneyField + '":' + $validMoneyValue), ('"' + $moneyField + '":' + $longNearbyMoneyValue), [StringComparison]::Ordinal)
+        Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $longNearbyRowsJson
+        if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+            throw "The required-v11-DDL report accepted a precision-overflow JSON number in the sentinel '$moneyField' field."
+        }
+        Write-Output "PASS: reject a precision-overflow JSON number in the sentinel '$moneyField' numeric field"
+    }
+    $equivalentMoneyRowsJson = $validRowsJson.Replace('"amount":1.25', '"amount":125e-2', [StringComparison]::Ordinal).
+        Replace('"balance_after":99.99', '"balance_after":999900e-4', [StringComparison]::Ordinal)
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $equivalentMoneyRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The required-v11-DDL report rejected JSON numbers exactly equivalent to the expected decimal sentinels.'
+    }
+    Write-Output 'PASS: accept exact decimal values expressed with exponent notation and insignificant trailing zeros'
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $validRowsJson
+
+    $duplicateAmountRowsJson = $validRowsJson.Replace('"amount":1.25', '"amount":1.26,"amount":1.25', [StringComparison]::Ordinal)
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $duplicateAmountRowsJson
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted duplicate amount properties when the later value matched the sentinel.'
+    }
+    Write-Output 'PASS: reject duplicate JSON properties even when the later money value matches the sentinel'
+    Set-T21MySqlAuditRowsFixtureJson $ddlFailureReport $validRowsJson
+
+    $grantLogPath = Join-Path $ddlFailureReport.runDirectory 'logs\runtime-user-grants-127.txt'
+    $grantLogLines = [string[]]$ddlFailureReport.databaseDdlPrivileges.grants.Clone()
+    $grantLogLines[1] = $grantLogLines[1].Replace('DELETE, CREATE', 'DELETE, ALTER, CREATE', [StringComparison]::Ordinal)
+    [IO.File]::WriteAllLines($grantLogPath, $grantLogLines, [Text.UTF8Encoding]::new($false))
+    $grantLogInfo = Get-Item -LiteralPath $grantLogPath
+    $ddlFailureReport.logs['logs\runtime-user-grants-127.txt'].bytes = [long]$grantLogInfo.Length
+    $ddlFailureReport.logs['logs\runtime-user-grants-127.txt'].sha256 = (Get-FileHash -LiteralPath $grantLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted safe structured grants that disagreed with a hashed SHOW GRANTS log containing ALTER.'
+    }
+    [IO.File]::WriteAllLines($grantLogPath, [string[]]$ddlFailureReport.databaseDdlPrivileges.grants, [Text.UTF8Encoding]::new($false))
+    $grantLogInfo = Get-Item -LiteralPath $grantLogPath
+    $ddlFailureReport.logs['logs\runtime-user-grants-127.txt'].bytes = [long]$grantLogInfo.Length
+    $ddlFailureReport.logs['logs\runtime-user-grants-127.txt'].sha256 = (Get-FileHash -LiteralPath $grantLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Output 'PASS: reject hashed SHOW GRANTS logs that disagree with the structured privilege evidence'
+    $tick = [char]96
+    $wrongHostGrants127 = [string[]]$validGrants127.Clone()
+    $wrongHostGrants127[1] = $wrongHostGrants127[1].Replace(([string]$tick + '127.0.0.1' + [string]$tick), ([string]$tick + 'localhost' + [string]$tick), [StringComparison]::Ordinal)
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $wrongHostGrants127
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted a target-schema grant for the wrong MySQL account host.'
+    }
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $validGrants127
+    Write-Output 'PASS: reject a schema grant assigned to the wrong MySQL account host when its structured fields and raw log agree'
+
+    $databaseName = 'syncmoney_t21_a1b2c3d4'
+    $databaseUser = 'sm_t21_a1b2c3d4'
+    $globalCreateWithSchemaUsage = [string[]]@(
+        ('GRANT CREATE ON *.* TO ' + $tick + $databaseUser + $tick + '@' + $tick + '127.0.0.1' + $tick)
+        ('GRANT USAGE ON ' + $tick + $databaseName + $tick + '.* TO ' + $tick + $databaseUser + $tick + '@' + $tick + '127.0.0.1' + $tick)
+    )
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $globalCreateWithSchemaUsage
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted global CREATE paired with only a schema-scoped USAGE grant.'
+    }
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $validGrants127
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'localGrants' 'logs\runtime-user-grants-local.txt' $validGrantsLocal
+    Write-Output 'PASS: reject global CREATE when the target schema grant has no CREATE privilege'
+    $globalCreateWithUnrelatedSchema = [string[]]@(
+        ('GRANT CREATE ON *.* TO ' + $tick + $databaseUser + $tick + '@' + $tick + '127.0.0.1' + $tick)
+        ('GRANT USAGE ON ' + $tick + 'unrelated_schema' + $tick + '.* TO ' + $tick + $databaseUser + $tick + '@' + $tick + '127.0.0.1' + $tick)
+        ('GRANT USAGE ON ' + $tick + $databaseName + $tick + '.* TO ' + $tick + 'sm_t21_ff001122' + $tick + '@' + $tick + '127.0.0.1' + $tick)
+    )
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $globalCreateWithUnrelatedSchema
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted global CREATE and unrelated schema grants that split database and grantee evidence across statements.'
+    }
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $validGrants127
+    Write-Output 'PASS: reject global CREATE and schema grants whose expected database and grantee are split across statements'
+
+    $ddlFailureReport.schemaStateAfter.auditVersion = 11
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted an audit schema version advanced after denied DDL.'
+    }
+    $ddlFailureReport.schemaStateAfter.auditVersion = 10
+    Write-Output 'PASS: reject v11 DDL failure evidence that advances the audit version'
+
+    $ddlFailureReport.databaseDdlPrivileges.alterGranted = $true
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted an application grant that still includes ALTER.'
+    }
+    $ddlFailureReport.databaseDdlPrivileges.alterGranted = $false
+    Write-Output 'PASS: reject a required-v11-DDL report without a verified ALTER-denied privilege boundary'
+
+    $alterGrantLines = [string[]]$validGrants127.Clone()
+    $alterGrantLines[1] = $alterGrantLines[1].Replace('DELETE, CREATE', 'DELETE, ALTER, CREATE', [StringComparison]::Ordinal)
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $alterGrantLines
+    if (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The required-v11-DDL report accepted an ALTER grant whose structured fields and hashed raw log agree.'
+    }
+    Set-T21MySqlGrantFixtureLines $ddlFailureReport 'grants' 'logs\runtime-user-grants-127.txt' $validGrants127
+    Write-Output 'PASS: reject an actual ALTER grant when its structured fields and hashed raw log agree'
 
     function New-T21PostgreSqlIncompleteAuditReportFixture([string]$platformEndpoint = 'MaximumFolia') {
         $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
@@ -1112,10 +1434,15 @@ try {
     $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
     if ($runnerSource -notmatch '\[switch\]\$NewerAuditSchemaStartupFailure' -or
         $runnerSource -notmatch '\[switch\]\$IncompleteV10AuditTableStartupFailure' -or
+        $runnerSource -notmatch '\[switch\]\$RequiredV11DdlPermissionDeniedStartupFailure' -or
         $runnerSource -notmatch 'Test-T21NewerAuditSchemaStartupFailureTarget' -or
         $runnerSource -notmatch 'Test-T21IncompleteAuditTableStartupFailureTarget' -or
+        $runnerSource -notmatch 'Test-T21RequiredV11DdlFailureTarget' -or
         $runnerSource -notmatch 'function Seed-T21NewerAuditSchema' -or
         $runnerSource -notmatch 'function Seed-T21IncompleteV10AuditTable' -or
+        $runnerSource -notmatch 'function Seed-T21RequiredV11DdlPermissionFailure' -or
+        $runnerSource -notmatch 'REVOKE ALTER ON' -or
+        $runnerSource -notmatch 'SHOW GRANTS FOR' -or
         $runnerSource -notmatch 'function Start-T21ServerExpectingAuditSchemaFailure' -or
         $runnerSource -notmatch 'Test-T21NewerAuditSchemaStartupFailureReport' -or
         $runnerSource -notmatch 'Get-T21PlugDevCliDistManifest' -or
@@ -1126,12 +1453,16 @@ try {
     }
     $seedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21NewerAuditSchema', [StringComparison]::Ordinal)
     $incompleteSeedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21IncompleteV10AuditTable', [StringComparison]::Ordinal)
+    $requiredDdlSeedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure', [StringComparison]::Ordinal)
     $startupFailureIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure', [StringComparison]::Ordinal)
     if ($seedIndex -lt 0 -or $startupFailureIndex -le $seedIndex) {
         throw 'The runner must seed the newer audit schema before starting the candidate plugin.'
     }
     if ($incompleteSeedIndex -lt 0 -or $startupFailureIndex -le $incompleteSeedIndex) {
         throw 'The runner must seed the incomplete v10 audit table before starting the candidate plugin.'
+    }
+    if ($requiredDdlSeedIndex -lt 0 -or $startupFailureIndex -le $requiredDdlSeedIndex) {
+        throw 'The runner must revoke and verify the app user ALTER privilege before starting the candidate plugin.'
     }
     $targetGuardIndex = $runnerSource.IndexOf('Test-T21IncompleteAuditTableStartupFailureTarget', [StringComparison]::Ordinal)
     $runtimePathResolutionIndex = $runnerSource.IndexOf('$script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path', [StringComparison]::Ordinal)
@@ -1144,10 +1475,13 @@ try {
     if ($startupValidatorSource -notmatch 'FailureScenario' -or
         $startupValidatorSource -notmatch 'IncompleteV10AuditTable' -or
         $startupValidatorSource -notmatch 'Required v10 audit columns are missing:' -or
-        $startupValidatorSource -notmatch 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure') {
+        $startupValidatorSource -notmatch 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' -or
+        $startupValidatorSource -notmatch 'RequiredV11DdlPermissionDenied' -or
+        $startupValidatorSource -notmatch 'ALTER command denied' -or
+        $startupValidatorSource -notmatch 'T21-V03-SYNC-v11-audit-ddl-permission-failure') {
         throw 'The startup-failure report predicate does not verify the incomplete-v10-audit-table case.'
     }
-    Write-Output 'PASS: report predicate checks v9 metadata preservation and the failed v10 migration cause'
+    Write-Output 'PASS: report predicates check v9 rejection and v10 preservation after denied v11 DDL'
 
     if ($runnerSource -match 'The newer-audit-schema startup-failure case requires PostgreSQL\.' -or
         $runnerSource -notmatch '(?s)function Get-T21StartupFailureSchemaState.*?else\s*\{.*?information_schema\.COLUMNS' -or

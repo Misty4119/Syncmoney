@@ -16,6 +16,7 @@ param(
     [switch]$LegacySqlDataUpgrade,
     [switch]$NewerAuditSchemaStartupFailure,
     [switch]$IncompleteV10AuditTableStartupFailure,
+    [switch]$RequiredV11DdlPermissionDeniedStartupFailure,
     [string]$BaselinePluginJar,
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedBaselinePluginSha256
 )
@@ -41,6 +42,10 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper, minimum/maximum Folia, and minimum/maximum Canvas; current-stable Paper and unpinned endpoints are not supported.'
 }
+if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
+    -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+    throw 'The required-v11-DDL-permission-failure case currently supports only MySQL 8.0.42 on pinned minimum Paper 1.21.6#48.'
+}
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -52,12 +57,19 @@ $script:legacySqlStages = [Collections.Generic.List[object]]::new()
 $script:legacySqlDataUpgrade = $LegacySqlDataUpgrade.IsPresent
 $script:newerAuditSchemaStartupFailure = $NewerAuditSchemaStartupFailure.IsPresent
 $script:incompleteV10AuditTableStartupFailure = $IncompleteV10AuditTableStartupFailure.IsPresent
-$script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:incompleteV10AuditTableStartupFailure
+$script:requiredV11DdlPermissionDeniedStartupFailure = $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent
+$script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:incompleteV10AuditTableStartupFailure -or
+    $script:requiredV11DdlPermissionDeniedStartupFailure
 $script:schemaStateBefore = $null
 $script:schemaStateAfter = $null
+$script:databaseDdlPrivileges = $null
 $script:resourceCleanupObservation = $null
+$startupFailureModeCount = 0
+if ($script:newerAuditSchemaStartupFailure) { $startupFailureModeCount++ }
+if ($script:incompleteV10AuditTableStartupFailure) { $startupFailureModeCount++ }
+if ($script:requiredV11DdlPermissionDeniedStartupFailure) { $startupFailureModeCount++ }
 if (($script:legacySqlDataUpgrade -and $script:auditSchemaStartupFailure) -or
-    ($script:newerAuditSchemaStartupFailure -and $script:incompleteV10AuditTableStartupFailure)) {
+    $startupFailureModeCount -gt 1) {
     throw 'The selected T21 SQL runtime case modes are mutually exclusive.'
 }
 $script:acceptancePath = Join-Path $script:root 'build\acceptance\SyncmoneyAcceptance.jar'
@@ -983,7 +995,14 @@ ORDER BY INDEX_NAME, SEQ_IN_INDEX;
 
             $auditRowsSql = if ($script:incompleteV10AuditTableStartupFailure) {
                 'SELECT JSON_OBJECT(''id'', id) FROM syncmoney_audit_log ORDER BY id;'
-            } else { @"
+            } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) { @"
+SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
+    'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
+    'server', server, 'target_uuid', target_uuid, 'target_name', target_name, 'reason', reason,
+    'merged_count', merged_count, 't21_sentinel', t21_sentinel)
+FROM syncmoney_audit_log
+ORDER BY id;
+"@ } else { @"
 SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
     'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
     'server', server, 'target_uuid', target_uuid, 'target_name', target_name, 'reason', reason,
@@ -1094,6 +1113,131 @@ INSERT INTO syncmoney_audit_log (id) VALUES ('00000000-0000-0000-0000-0000000003
     return $state
 }
 
+function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]$DatabaseName, [string]$UserName, [string]$HostName) {
+    if ($null -eq $GrantLines -or $GrantLines.Count -ne 2 -or
+        [string]::IsNullOrWhiteSpace($DatabaseName) -or [string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($HostName)) {
+        return $false
+    }
+
+    $grantPattern = '^\s*GRANT\s+(?<privileges>.*?)\s+ON\s+(?<scope>\*\.\*|\x60(?<schema>[^\x60]+)\x60\.\*)\s+TO\s+\x60(?<user>[^\x60]+)\x60@\x60(?<host>[^\x60]+)\x60\s*$'
+    $usageGrantCount = 0
+    $schemaGrantCount = 0
+    foreach ($grantLine in $GrantLines) {
+        if ($grantLine -isnot [string] -or [string]::IsNullOrWhiteSpace($grantLine)) { return $false }
+        $grantMatch = [regex]::Match($grantLine, $grantPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $grantMatch.Success -or
+            $grantMatch.Groups['user'].Value -cne $UserName -or
+            $grantMatch.Groups['host'].Value -cne $HostName) { return $false }
+
+        $privilegeNames = @($grantMatch.Groups['privileges'].Value.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() })
+        if ($privilegeNames.Count -eq 0 -or @($privilegeNames | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+            return $false
+        }
+
+        if ($grantMatch.Groups['scope'].Value -ceq '*.*') {
+            if ($privilegeNames.Count -ne 1 -or $privilegeNames[0] -cne 'USAGE') { return $false }
+            $usageGrantCount++
+            continue
+        }
+
+        if ($grantMatch.Groups['schema'].Value -cne $DatabaseName -or
+            'ALTER' -in $privilegeNames -or 'CREATE' -notin $privilegeNames) { return $false }
+        $schemaGrantCount++
+    }
+
+    return $usageGrantCount -eq 1 -and $schemaGrantCount -eq 1
+}
+
+function Seed-T21RequiredV11DdlPermissionFailure {
+    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -cne 'Minimum') {
+        throw 'The required-v11-DDL-permission-failure seed is currently limited to minimum-Paper MySQL.'
+    }
+    $ddl = @'
+CREATE TABLE syncmoney_schema_version (
+    id VARCHAR(50) PRIMARY KEY,
+    version INT NOT NULL DEFAULT 0,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description VARCHAR(255)
+);
+INSERT INTO syncmoney_schema_version (id, version, applied_at, description)
+VALUES ('1', 1, TIMESTAMP '2026-10-14 00:00:00', 'T21 pre-existing main schema');
+INSERT INTO syncmoney_schema_version (id, version, applied_at, description)
+VALUES ('audit', 10, TIMESTAMP '2026-10-14 00:00:00', 'T21 required v11 DDL failure sentinel');
+CREATE TABLE syncmoney_audit_log (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    timestamp BIGINT NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    player_uuid VARCHAR(36) NOT NULL,
+    player_name VARCHAR(16),
+    amount DECIMAL(20, 2) NOT NULL,
+    balance_after DECIMAL(20, 2) NOT NULL,
+    source VARCHAR(30) NOT NULL,
+    server VARCHAR(50) NOT NULL,
+    target_uuid VARCHAR(36),
+    target_name VARCHAR(16),
+    reason VARCHAR(255),
+    merged_count INT DEFAULT 1,
+    t21_sentinel TEXT NOT NULL
+);
+INSERT INTO syncmoney_audit_log (
+    id, timestamp, type, player_uuid, player_name, amount, balance_after, source, server,
+    target_uuid, target_name, reason, merged_count, t21_sentinel
+) VALUES (
+    '00000000-0000-0000-0000-000000000330', 1791936000000, 'DEPOSIT',
+    '00000000-0000-0000-0000-000000000330', 'T21Fixture', 1.25, 99.99,
+    'TEST', 't21-v11-ddl-permission', NULL, NULL, 'v10 preservation sentinel', 1,
+    't21-v10-preservation-sentinel'
+);
+'@
+    $null = Invoke-MySqlQuery $ddl 'seed-v11-audit-ddl-permission-failure'
+
+    $revokeAlter = "REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'127.0.0.1'; REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
+    $null = Invoke-MySqlQuery $revokeAlter 'revoke-runtime-user-alter' -asRoot
+    $grants127 = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'127.0.0.1';" 'runtime-user-grants-127' -asRoot)
+    $grantsLocal = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'localhost';" 'runtime-user-grants-local' -asRoot)
+    if ($grants127.Count -eq 0 -or $grantsLocal.Count -eq 0) {
+        throw 'MySQL returned no application-user grant evidence after the v11 DDL privilege setup.'
+    }
+    $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $script:databaseName $script:databaseUser '127.0.0.1'
+    $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $script:databaseName $script:databaseUser 'localhost'
+    if (-not $validGrants127 -or -not $validGrantsLocal) {
+        throw 'MySQL SHOW GRANTS did not establish the expected schema-scoped CREATE-without-ALTER privilege boundary for each runtime account host.'
+    }
+    $alterGranted = $false
+    $createGranted = $true
+    $script:databaseDdlPrivileges = [ordered]@{
+        product = 'MySQL'
+        grantee = "$($script:databaseUser)@127.0.0.1"
+        grants = [string[]]$grants127
+        localGrants = [string[]]$grantsLocal
+        alterGranted = [bool]$alterGranted
+        createGranted = [bool]$createGranted
+        verifiedBeforeStartup = $true
+    }
+
+    $state = Get-T21StartupFailureSchemaState
+    $columns = @(ConvertFrom-Json -InputObject $state.auditColumnsJson -AsHashtable -ErrorAction Stop)
+    $columnNames = @($columns | ForEach-Object { [string]$_['column_name'] })
+    $rows = @(ConvertFrom-Json -InputObject $state.auditRowsJson -AsHashtable -ErrorAction Stop)
+    $indexes = @(ConvertFrom-Json -InputObject $state.auditIndexesJson -AsHashtable -ErrorAction Stop)
+    $expectedColumns = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+        'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+    if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 10 -or
+        -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
+        $state.mainVersionRowJson -notmatch 'T21 pre-existing main schema' -or
+        $state.auditVersionRowJson -notmatch 'T21 required v11 DDL failure sentinel' -or
+        $columnNames.Count -ne $expectedColumns.Count -or
+        @($expectedColumns | Where-Object { $_ -cnotin $columnNames }).Count -ne 0 -or
+        @($columnNames | Where-Object { $_ -in @('request_id', 'sequence') }).Count -ne 0 -or
+        $indexes.Count -ne 1 -or $indexes[0].name -cne 'PRIMARY') {
+        throw 'The isolated MySQL database did not retain the exact pre-start v10 schema, privilege boundary, and data fixture.'
+    }
+    if ($rows.Count -ne 1 -or -not (Test-T21RequiredV11AuditSentinelRow $rows[0])) {
+        throw 'The isolated MySQL database did not retain the exact seeded v10 audit row before candidate startup.'
+    }
+    return $state
+}
+
 function Get-T21StartupFailureResourceCleanup {
     $sqlConnectionSql = if ($script:databaseProduct -ceq 'PostgreSQL') {
         'SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid();'
@@ -1113,7 +1257,7 @@ function Get-T21StartupFailureResourceCleanup {
     }
 }
 
-function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable')][string]$FailureScenario) {
+function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario) {
     if (@(Get-T21ServerProcesses).Count -ne 0) { throw 'A run-marked server process exists before expected-failure startup.' }
     Set-T21PluginInProfile $CandidateVersion
     $before = Get-ServerLogLineCount
@@ -1121,18 +1265,26 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     if ($start.exitCode -ne 0) { throw 'PlugDev could not keep the platform alive for the expected plugin startup failure.' }
     $null = Wait-ServerLogMarker 'Syncmoney disabled\.' '' $before 90
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
-    $expectedFailureMessage = if ($FailureScenario -ceq 'NewerAuditSchema') {
-        'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
-    } else {
-        'Failed audit schema migration to version 10; version metadata was not advanced past 9'
+    $expectedFailureMessage = switch ($FailureScenario) {
+        'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
+        'IncompleteV10AuditTable' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
+        default { 'Failed audit schema migration to version 11; version metadata was not advanced past 10' }
     }
-    $expectedFailureKind = if ($FailureScenario -ceq 'NewerAuditSchema') { 'newer-audit-schema' } else { 'incomplete-v10-audit-table' }
-    $failureDetailMarker = if ($FailureScenario -ceq 'IncompleteV10AuditTable') { 'Required v10 audit columns are missing:' } else { $null }
+    $expectedFailureKind = switch ($FailureScenario) {
+        'NewerAuditSchema' { 'newer-audit-schema' }
+        'IncompleteV10AuditTable' { 'incomplete-v10-audit-table' }
+        default { 'required-v11-audit-ddl-permission-failure' }
+    }
+    $failureDetailMarker = switch ($FailureScenario) {
+        'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
+        'RequiredV11DdlPermissionDenied' { 'ALTER command denied' }
+        default { $null }
+    }
     $sqlPoolShutdownObserved = $fullLog -match '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
-    $scenarioMarkers = if ($FailureScenario -ceq 'NewerAuditSchema') {
-        @()
-    } else {
-        @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker)
+    $scenarioMarkers = switch ($FailureScenario) {
+        'NewerAuditSchema' { @() }
+        'IncompleteV10AuditTable' { @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker) }
+        default { @('Syncmoney audit schema version: current 10, target 11', $failureDetailMarker) }
     }
     foreach ($marker in @(
             'Loading server plugin Syncmoney v1.4.0-alpha.1',
@@ -1529,6 +1681,8 @@ $script:report = [ordered]@{
         "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
         "T21-V03-SYNC-incomplete-v10-audit-table-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
+    } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
+        "T21-V03-SYNC-v11-audit-ddl-permission-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } else { "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)" }
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
@@ -1664,6 +1818,8 @@ try {
         $script:schemaStateBefore = Seed-T21NewerAuditSchema
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
         $script:schemaStateBefore = Seed-T21IncompleteV10AuditTable
+    } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
+        $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure
     }
 
     $redisConfig = Join-Path $script:redisRoot 'redis.conf'
@@ -1714,10 +1870,18 @@ try {
     }
 
     if ($script:auditSchemaStartupFailure) {
-        $failureScenario = if ($script:newerAuditSchemaStartupFailure) { 'NewerAuditSchema' } else { 'IncompleteV10AuditTable' }
+        $failureScenario = switch ($true) {
+            $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
+            $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
+            default { 'RequiredV11DdlPermissionDenied' }
+        }
         $startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario
         $script:schemaStateAfter = Get-T21StartupFailureSchemaState
-        $expectedAuditVersion = if ($script:newerAuditSchemaStartupFailure) { 12 } else { 9 }
+        $expectedAuditVersion = switch ($failureScenario) {
+            'NewerAuditSchema' { 12 }
+            'IncompleteV10AuditTable' { 9 }
+            default { 10 }
+        }
         if ($null -eq $script:schemaStateBefore -or
             $script:schemaStateAfter.mainVersion -ne 1 -or $script:schemaStateAfter.auditVersion -ne $expectedAuditVersion -or
             -not $script:schemaStateAfter.auditTableExists -or -not $script:schemaStateAfter.playersTableExists -or
@@ -1726,7 +1890,7 @@ try {
             $script:schemaStateBefore.auditColumnsJson -cne $script:schemaStateAfter.auditColumnsJson -or
             $script:schemaStateBefore.auditIndexesJson -cne $script:schemaStateAfter.auditIndexesJson -or
             $script:schemaStateBefore.auditRowsJson -cne $script:schemaStateAfter.auditRowsJson -or
-            ($script:incompleteV10AuditTableStartupFailure -and
+            (($script:incompleteV10AuditTableStartupFailure -or $script:requiredV11DdlPermissionDeniedStartupFailure) -and
                 $script:schemaStateBefore.mainVersionRowJson -cne $script:schemaStateAfter.mainVersionRowJson)) {
             throw 'The failed candidate startup mutated the audit schema version, audit table columns/indexes/data, pre-existing main schema row, or player state.'
         }
@@ -1861,8 +2025,10 @@ try {
                 schemaVersion=1
                 task=if ($script:newerAuditSchemaStartupFailure) {
                     'T21-V03-SYNC-newer-audit-schema-startup-failure'
-                } else {
+                } elseif ($script:incompleteV10AuditTableStartupFailure) {
                     'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
+                } else {
+                    'T21-V03-SYNC-v11-audit-ddl-permission-failure'
                 }
                 status='PASS_BOUNDED_SUBCASE'
                 runId=$script:runId
@@ -1904,6 +2070,7 @@ try {
                 startupObservation=$script:startups[0]
                 schemaStateBefore=$script:schemaStateBefore
                 schemaStateAfter=$script:schemaStateAfter
+                databaseDdlPrivileges=$script:databaseDdlPrivileges
                 resourceCleanup=$script:resourceCleanupObservation
                 platformLogs=@($script:platformServerLogs)
                 normalStops=@($script:normalStops)
@@ -1923,7 +2090,11 @@ try {
                     plugDevCliDistManifestSha256=$script:report.plugDev.cliDistManifestSha256Before
                 }
             }
-            $failureScenario = if ($script:newerAuditSchemaStartupFailure) { 'NewerAuditSchema' } else { 'IncompleteV10AuditTable' }
+            $failureScenario = switch ($true) {
+                $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
+                $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
+                default { 'RequiredV11DdlPermissionDenied' }
+            }
             $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
                 $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
                 -ExpectedPlugDevRoot $script:plugDevRoot `

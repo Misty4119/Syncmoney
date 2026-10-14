@@ -27,11 +27,149 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia')
 }
 
+function Test-T21RequiredV11DdlFailureTarget(
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint
+) {
+    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Minimum'
+}
+
 function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
     if ($Value -isnot [System.Collections.IDictionary]) { return $false }
     $actualFields = @($Value.Keys | ForEach-Object { [string]$_ })
     return $actualFields.Count -eq $ExpectedFields.Count -and
         @($ExpectedFields | Where-Object { $_ -cnotin $actualFields }).Count -eq 0
+}
+
+function Test-T21JsonNumber([object]$Value) {
+    if ($null -eq $Value) { return $false }
+    $numericTypes = @([byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64], [single], [double], [decimal])
+    return $Value.GetType() -in $numericTypes
+}
+
+function Test-T21ExactJsonDecimalToken([string]$Token, [string]$ExpectedSignificantDigits, [int]$ExpectedExponent) {
+    $numberMatch = [regex]::Match($Token, '^(?<sign>-?)(?<integer>0|[1-9][0-9]*)(?:\.(?<fraction>[0-9]+))?(?:[eE](?<exponent>[+-]?[0-9]+))?$')
+    if (-not $numberMatch.Success -or $numberMatch.Groups['sign'].Value -ceq '-') { return $false }
+
+    $fractionDigits = $numberMatch.Groups['fraction'].Value
+    $significantDigits = $numberMatch.Groups['integer'].Value + $fractionDigits
+    $significantDigits = [regex]::Replace($significantDigits, '^0+', '')
+    if ($significantDigits.Length -eq 0) { return $false }
+
+    $trailingZeroCount = [regex]::Match($significantDigits, '0+$').Length
+    if ($trailingZeroCount -gt 0) {
+        $significantDigits = $significantDigits.Substring(0, $significantDigits.Length - $trailingZeroCount)
+    }
+    if ($significantDigits -cne $ExpectedSignificantDigits) { return $false }
+
+    $decimalExponent = [System.Numerics.BigInteger]::Zero
+    if ($numberMatch.Groups['exponent'].Success) {
+        $decimalExponent = [System.Numerics.BigInteger]::Parse(
+            $numberMatch.Groups['exponent'].Value,
+            [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $normalizedExponent = $decimalExponent - [System.Numerics.BigInteger]$fractionDigits.Length +
+        [System.Numerics.BigInteger]$trailingZeroCount
+    return $normalizedExponent -eq [System.Numerics.BigInteger]$ExpectedExponent
+}
+
+function Test-T21RequiredV11AuditSentinelMoneyJson([string]$RowsJson) {
+    $expectedFields = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+        'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+    $document = $null
+    try {
+        $document = [System.Text.Json.JsonDocument]::Parse($RowsJson)
+        $root = $document.RootElement
+        if ($root.ValueKind -ne [System.Text.Json.JsonValueKind]::Array -or $root.GetArrayLength() -ne 1) { return $false }
+        $row = $root[0]
+        if ($row.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $false }
+
+        $propertyNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($property in $row.EnumerateObject()) {
+            if (-not $propertyNames.Add($property.Name) -or $property.Name -cnotin $expectedFields) { return $false }
+        }
+        if ($propertyNames.Count -ne $expectedFields.Count) { return $false }
+        foreach ($expectedField in $expectedFields) {
+            if (-not $propertyNames.Contains($expectedField)) { return $false }
+        }
+
+        $amountElement = $row.GetProperty('amount')
+        $balanceAfterElement = $row.GetProperty('balance_after')
+        if ($amountElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or
+            $balanceAfterElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Number) { return $false }
+        return (Test-T21ExactJsonDecimalToken $amountElement.GetRawText() '125' -2) -and
+            (Test-T21ExactJsonDecimalToken $balanceAfterElement.GetRawText() '9999' -2)
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $document) { $document.Dispose() }
+    }
+}
+
+function Test-T21RequiredV11AuditSentinelRow([object]$Row) {
+    $expectedFields = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+        'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+    if (-not (Test-T21ExactDictionaryFields $Row $expectedFields)) { return $false }
+
+    $expectedStrings = [ordered]@{
+        id = '00000000-0000-0000-0000-000000000330'
+        type = 'DEPOSIT'
+        player_uuid = '00000000-0000-0000-0000-000000000330'
+        player_name = 'T21Fixture'
+        source = 'TEST'
+        server = 't21-v11-ddl-permission'
+        reason = 'v10 preservation sentinel'
+        t21_sentinel = 't21-v10-preservation-sentinel'
+    }
+    foreach ($field in $expectedStrings.Keys) {
+        if ($Row[$field] -isnot [string] -or [string]$Row[$field] -cne $expectedStrings[$field]) { return $false }
+    }
+    if (-not (Test-T21IntegralNumber $Row['timestamp'] 1791936000000 1791936000000) -or
+        -not (Test-T21IntegralNumber $Row['merged_count'] 1 1) -or
+        $null -ne $Row['target_uuid'] -or $null -ne $Row['target_name']) { return $false }
+    if (-not (Test-T21JsonNumber $Row['amount']) -or -not (Test-T21JsonNumber $Row['balance_after'])) { return $false }
+    try {
+        if ([decimal]$Row['amount'] -ne [decimal]1.25 -or [decimal]$Row['balance_after'] -ne [decimal]99.99) { return $false }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]$DatabaseName, [string]$UserName, [string]$HostName) {
+    if ($null -eq $GrantLines -or $GrantLines.Count -ne 2 -or
+        [string]::IsNullOrWhiteSpace($DatabaseName) -or [string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($HostName)) {
+        return $false
+    }
+
+    $grantPattern = '^\s*GRANT\s+(?<privileges>.*?)\s+ON\s+(?<scope>\*\.\*|\x60(?<schema>[^\x60]+)\x60\.\*)\s+TO\s+\x60(?<user>[^\x60]+)\x60@\x60(?<host>[^\x60]+)\x60\s*$'
+    $usageGrantCount = 0
+    $schemaGrantCount = 0
+    foreach ($grantLine in $GrantLines) {
+        if ($grantLine -isnot [string] -or [string]::IsNullOrWhiteSpace($grantLine)) { return $false }
+        $grantMatch = [regex]::Match($grantLine, $grantPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $grantMatch.Success -or
+            $grantMatch.Groups['user'].Value -cne $UserName -or
+            $grantMatch.Groups['host'].Value -cne $HostName) { return $false }
+
+        $privilegeNames = @($grantMatch.Groups['privileges'].Value.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() })
+        if ($privilegeNames.Count -eq 0 -or @($privilegeNames | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+            return $false
+        }
+
+        if ($grantMatch.Groups['scope'].Value -ceq '*.*') {
+            if ($privilegeNames.Count -ne 1 -or $privilegeNames[0] -cne 'USAGE') { return $false }
+            $usageGrantCount++
+            continue
+        }
+
+        if ($grantMatch.Groups['schema'].Value -cne $DatabaseName -or
+            'ALTER' -in $privilegeNames -or 'CREATE' -notin $privilegeNames) { return $false }
+        $schemaGrantCount++
+    }
+
+    return $usageGrantCount -eq 1 -and $schemaGrantCount -eq 1
 }
 
 function Get-T21PlugDevCliDistManifestHash([object[]]$Files) {
@@ -119,19 +257,25 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable')][string]$FailureScenario = 'NewerAuditSchema'
+    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
 ) {
     try {
-        $targetAccepted = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
-        } else {
-            Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+        $targetAccepted = switch ($FailureScenario) {
+            'NewerAuditSchema' {
+                Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
+            'IncompleteV10AuditTable' {
+                Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
+            default {
+                Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
         }
         if (-not $targetAccepted) { return $false }
-        $expectedTask = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            'T21-V03-SYNC-newer-audit-schema-startup-failure'
-        } else {
-            'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
+        $expectedTask = switch ($FailureScenario) {
+            'NewerAuditSchema' { 'T21-V03-SYNC-newer-audit-schema-startup-failure' }
+            'IncompleteV10AuditTable' { 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' }
+            default { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
         }
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
         $sqlReportKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
@@ -197,13 +341,21 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
 
         $startup = Get-T21ObservedValue $report 'startupObservation'
         $startupIdentity = Get-T21ObservedValue $startup 'runtimeIdentity'
-        $expectedFailureMessage = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
-        } else {
-            'Failed audit schema migration to version 10; version metadata was not advanced past 9'
+        $expectedFailureMessage = switch ($FailureScenario) {
+            'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
+            'IncompleteV10AuditTable' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
+            default { 'Failed audit schema migration to version 11; version metadata was not advanced past 10' }
         }
-        $expectedFailureKind = if ($FailureScenario -ceq 'NewerAuditSchema') { 'newer-audit-schema' } else { 'incomplete-v10-audit-table' }
-        $expectedFailureDetailMarker = if ($FailureScenario -ceq 'NewerAuditSchema') { $null } else { 'Required v10 audit columns are missing:' }
+        $expectedFailureKind = switch ($FailureScenario) {
+            'NewerAuditSchema' { 'newer-audit-schema' }
+            'IncompleteV10AuditTable' { 'incomplete-v10-audit-table' }
+            default { 'required-v11-audit-ddl-permission-failure' }
+        }
+        $expectedFailureDetailMarker = switch ($FailureScenario) {
+            'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
+            'RequiredV11DdlPermissionDenied' { 'ALTER command denied' }
+            default { $null }
+        }
         if ((Get-T21ObservedValue $startup 'stage') -cne 'candidate-startup-failure' -or
             (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
             ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
@@ -211,7 +363,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             (Get-T21ObservedValue $startup 'expectedFailure') -cne $expectedFailureKind -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'failureObserved') $true) -or
             (Get-T21ObservedValue $startup 'failureMessage') -cne $expectedFailureMessage -or
-            ($FailureScenario -ceq 'IncompleteV10AuditTable' -and
+            ($null -ne $expectedFailureDetailMarker -and
                 (Get-T21ObservedValue $startup 'failureDetailMarker') -cne $expectedFailureDetailMarker) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'rollbackComplete') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'sqlPoolShutdownObserved') $true) -or
@@ -239,13 +391,14 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
             if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
         } else {
+            $expectedPreexistingAuditVersion = if ($FailureScenario -ceq 'IncompleteV10AuditTable') { 9 } else { 10 }
             if ([int](Get-T21ObservedValue $schemaBefore 'mainVersion') -ne 1 -or
-                [int](Get-T21ObservedValue $schemaBefore 'auditVersion') -ne 9 -or
+                [int](Get-T21ObservedValue $schemaBefore 'auditVersion') -ne $expectedPreexistingAuditVersion -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'auditTableExists') $true) -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'playersTableExists') $false) -or
                 $null -ne (Get-T21ObservedValue $schemaBefore 'playerRows') -or
                 [int](Get-T21ObservedValue $schemaAfter 'mainVersion') -ne 1 -or
-                [int](Get-T21ObservedValue $schemaAfter 'auditVersion') -ne 9 -or
+                [int](Get-T21ObservedValue $schemaAfter 'auditVersion') -ne $expectedPreexistingAuditVersion -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'auditTableExists') $true) -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'playersTableExists') $true) -or
                 [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 0 -or
@@ -261,21 +414,32 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             if ([string]::IsNullOrWhiteSpace($beforeValue) -or $beforeValue -cne $afterValue) { return $false }
         }
         $auditVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditVersionRowJson')) -AsHashtable -ErrorAction Stop
-        $expectedAuditVersion = if ($FailureScenario -ceq 'NewerAuditSchema') { 12 } else { 9 }
-        $expectedAuditDescription = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            'T21 newer audit schema preservation sentinel'
-        } else {
-            'T21 incomplete audit v9 sentinel'
+        $expectedAuditVersion = switch ($FailureScenario) {
+            'NewerAuditSchema' { 12 }
+            'IncompleteV10AuditTable' { 9 }
+            default { 10 }
+        }
+        $expectedAuditDescription = switch ($FailureScenario) {
+            'NewerAuditSchema' { 'T21 newer audit schema preservation sentinel' }
+            'IncompleteV10AuditTable' { 'T21 incomplete audit v9 sentinel' }
+            default { 'T21 required v11 DDL failure sentinel' }
         }
         if ($auditVersionRow['id'] -cne 'audit' -or [int]$auditVersionRow['version'] -ne $expectedAuditVersion -or
             $auditVersionRow['description'] -cne $expectedAuditDescription -or
             [string]::IsNullOrWhiteSpace([string]$auditVersionRow['applied_at'])) { return $false }
 
         $auditColumns = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditColumnsJson')) -AsHashtable -ErrorAction Stop)
-        $requiredAuditColumns = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
-                'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 'request_id', 'sequence', 't21_sentinel')
-        } else { @('id') }
+        $requiredAuditColumns = switch ($FailureScenario) {
+            'NewerAuditSchema' {
+                @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+                    'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 'request_id', 'sequence', 't21_sentinel')
+            }
+            'IncompleteV10AuditTable' { @('id') }
+            default {
+                @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
+                    'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+            }
+        }
         $requiredAuditColumns = @($requiredAuditColumns)
         $actualAuditColumns = @($auditColumns | ForEach-Object { [string]$_['column_name'] })
         $requiredColumnMetadataFields = if ($DatabaseProduct -ceq 'PostgreSQL') {
@@ -374,6 +538,9 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 @{ typePattern = '^(?:bigint|bigint\(20\))$'; nullable = 'YES'; default = '0'; character = $false }
                 @{ typePattern = '^text$'; nullable = 'NO'; default = $null; character = $true }
             )
+            if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+                $expectedColumnMetadata = @($expectedColumnMetadata[0..12]) + @($expectedColumnMetadata[15])
+            }
             $expected = $expectedColumnMetadata[$columnIndex]
             $default = $column['column_default']
             $defaultIsNull = [string]$column['column_default_is_null']
@@ -403,7 +570,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
 
         $auditIndexes = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditIndexesJson')) -AsHashtable -ErrorAction Stop)
-        if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
+        if ($FailureScenario -in @('IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')) {
             if ($auditIndexes.Count -ne 1) { return $false }
             if ($DatabaseProduct -ceq 'PostgreSQL') {
                 if ([string]$auditIndexes[0]['name'] -cne 'syncmoney_audit_log_pkey' -or
@@ -468,15 +635,44 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             }
         }
 
-        $auditRows = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditRowsJson')) -AsHashtable -ErrorAction Stop)
+        $auditRowsJson = [string](Get-T21ObservedValue $schemaBefore 'auditRowsJson')
+        $auditRows = @(ConvertFrom-Json -InputObject $auditRowsJson -AsHashtable -ErrorAction Stop)
         if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
             if ($auditRows.Count -ne 1 -or
                 $auditRows[0].Count -ne 1 -or
                 $auditRows[0]['id'] -cne '00000000-0000-0000-0000-000000000329') { return $false }
+        } elseif ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+            if ($auditRows.Count -ne 1 -or
+                -not (Test-T21RequiredV11AuditSentinelRow $auditRows[0]) -or
+                -not (Test-T21RequiredV11AuditSentinelMoneyJson $auditRowsJson)) { return $false }
         } elseif ($auditRows.Count -ne 1 -or
             $auditRows[0]['id'] -cne '00000000-0000-0000-0000-000000000321' -or
             $auditRows[0]['t21_sentinel'] -cne 't21-v12-preservation-sentinel') { return $false }
 
+        if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+            $privileges = Get-T21ObservedValue $report 'databaseDdlPrivileges'
+            $configuration = Get-T21ObservedValue $report 'configuration'
+            $databaseName = [string](Get-T21ObservedValue $configuration 'databaseName')
+            $observedDatabaseName = [string](Get-T21ObservedValue $configuration 'databaseNameObserved')
+            $databaseMatch = [regex]::Match($databaseName, '^syncmoney_t21_(?<suffix>[a-f0-9]{8})$')
+            $grantee = [string](Get-T21ObservedValue $privileges 'grantee')
+            $granteeMatch = [regex]::Match($grantee, '^sm_t21_(?<suffix>[a-f0-9]{8})@127\.0\.0\.1$')
+            $expectedUser = if ($databaseMatch.Success) { 'sm_t21_' + $databaseMatch.Groups['suffix'].Value } else { '' }
+            $grants127 = @(Get-T21ObservedValue $privileges 'grants')
+            $grantsLocal = @(Get-T21ObservedValue $privileges 'localGrants')
+            $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $databaseName $expectedUser '127.0.0.1'
+            $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $databaseName $expectedUser 'localhost'
+            if (-not (Test-T21ExactDictionaryFields $privileges @('product', 'grantee', 'grants', 'localGrants', 'alterGranted', 'createGranted', 'verifiedBeforeStartup')) -or
+                (Get-T21ObservedValue $privileges 'product') -cne 'MySQL' -or
+                -not $databaseMatch.Success -or -not $granteeMatch.Success -or
+                $observedDatabaseName -cne $databaseName -or
+                $granteeMatch.Groups['suffix'].Value -cne $databaseMatch.Groups['suffix'].Value -or
+                $grantee -cne ($expectedUser + '@127.0.0.1') -or
+                -not $validGrants127 -or -not $validGrantsLocal -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'alterGranted') $false) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'createGranted') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'verifiedBeforeStartup') $true)) { return $false }
+        }
         $resourceCleanup = Get-T21ObservedValue $report 'resourceCleanup'
         $sqlOtherConnections = Get-T21ObservedValue $resourceCleanup 'sqlOtherConnections'
         $redisOtherClients = Get-T21ObservedValue $resourceCleanup 'redisOtherClients'
@@ -626,6 +822,29 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             if (-not $declaredLogPaths.Contains($actualRelativeLogPath)) { return $false }
         }
 
+        if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+            $privileges = Get-T21ObservedValue $report 'databaseDdlPrivileges'
+            $grantLogPaths = [ordered]@{
+                grants = 'logs\runtime-user-grants-127.txt'
+                localGrants = 'logs\runtime-user-grants-local.txt'
+            }
+            foreach ($grantField in $grantLogPaths.Keys) {
+                $grantLogPath = [string]$grantLogPaths[$grantField]
+                if (-not $declaredLogPaths.Contains($grantLogPath) -or
+                    $null -eq (Get-T21ObservedValue $logMap $grantLogPath)) { return $false }
+
+                $reportedGrantLines = @(Get-T21ObservedValue $privileges $grantField)
+                $rawGrantLines = [IO.File]::ReadAllLines((Join-Path $runRoot $grantLogPath), [Text.UTF8Encoding]::new($false))
+                if ($reportedGrantLines.Count -ne $rawGrantLines.Count) { return $false }
+                for ($lineIndex = 0; $lineIndex -lt $rawGrantLines.Count; $lineIndex++) {
+                    if ($reportedGrantLines[$lineIndex] -isnot [string] -or
+                        -not [string]::Equals([string]$reportedGrantLines[$lineIndex], $rawGrantLines[$lineIndex], [StringComparison]::Ordinal)) {
+                        return $false
+                    }
+                }
+            }
+        }
+
         $platformLogs = @(Get-T21ObservedValue $report 'platformLogs')
         if ($platformLogs.Count -ne 1) { return $false }
         $platformLog = $platformLogs[0]
@@ -646,12 +865,20 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         if ([long](Get-T21ObservedValue $mappedLog 'bytes') -ne $expectedBytes -or
             ([string](Get-T21ObservedValue $mappedLog 'sha256')).ToLowerInvariant() -cne $expectedHash) { return $false }
         $logText = Get-Content -LiteralPath $fullLogPath -Raw -ErrorAction Stop
-        $scenarioMarkers = if ($FailureScenario -ceq 'NewerAuditSchema') {
-            @('Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.')
-        } else {
-            @('Syncmoney audit schema version: current 9, target 11',
-                'Failed audit schema migration to version 10; version metadata was not advanced past 9',
-                'Required v10 audit columns are missing:')
+        $scenarioMarkers = switch ($FailureScenario) {
+            'NewerAuditSchema' {
+                @('Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.')
+            }
+            'IncompleteV10AuditTable' {
+                @('Syncmoney audit schema version: current 9, target 11',
+                    'Failed audit schema migration to version 10; version metadata was not advanced past 9',
+                    'Required v10 audit columns are missing:')
+            }
+            default {
+                @('Syncmoney audit schema version: current 10, target 11',
+                    'Failed audit schema migration to version 11; version metadata was not advanced past 10',
+                    'ALTER command denied')
+            }
         }
         foreach ($requiredMarker in @(
                 'Loading server plugin Syncmoney v1.4.0-alpha.1',
