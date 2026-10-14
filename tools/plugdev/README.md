@@ -134,6 +134,27 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
+### T21 V03 minimum-Paper incomplete-v10 audit-table startup failure
+
+Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. This bounded case is currently permitted only on minimum Paper `1.21.6#48` with MySQL, MariaDB, or PostgreSQL; it does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, Paper JAR, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct MySQL `
+  -IncompleteV10AuditTableStartupFailure
+```
+
+Run `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` for the target guard and report-predicate regressions. Retain the generated report and logs under ignored `build/reports/foundation/T21-sql-runtime/`, then record the report hash, offline log audit, and evidence limits in the foundation validation plan. Untested dialect/platform combinations remain `NOT RUN`.
+
 ### MySQL, MariaDB, and PostgreSQL legacy-data compatibility on Paper, Folia, and Canvas
 
 Pass `-LegacySqlDataUpgrade`, a verified 1.3.2 baseline JAR, and its SHA-256 to exercise the legacy-data lifecycle. The runner accepts MySQL `8.0.42`, MariaDB `12.3.3`, and PostgreSQL `18.1` on the exact pinned Paper (`Minimum` `1.21.6#48`, user-pinned `Maximum` `26.3#166`), Folia (`MinimumFolia` `1.21.6#6`, `MaximumFolia` `26.2#7`), and Canvas (`MinimumCanvas` `1.21.8#603`, `MaximumCanvas` `26.3#972`) endpoints. Supplemental Paper `CurrentStable` (`26.3#178`) evidence is also recorded and does not change the user-confirmed maximum. Select MariaDB with `-DatabaseProduct MariaDB` and provide `-MariaDbBin`; its report identifies the product as MariaDB while Syncmoney configuration correctly remains `database.type: mysql`. Select PostgreSQL with `-DatabaseProduct PostgreSQL` and provide `-PostgreSqlBin`. The lifecycle seeds two disposable account rows under 1.3.2, verifies balances and versions through candidate startup/read and 1.3.2 rollback, and compares the audit schema at each stage. The observed MySQL candidate additively repairs three missing audit indexes. The pinned PostgreSQL and MariaDB 1.3.2 baselines already contain their expected nine-index sets; their predicates require those exact sets to remain unchanged through candidate read and rollback. PostgreSQL inventory retains expression-index keys and records `indisprimary`. MySQL, MariaDB, and PostgreSQL have product-specific report predicates and native audit metadata capture. Current bounded E2 legacy-data evidence covers all three SQL products on the user-pinned minimum and maximum Paper/Folia/Canvas endpoints, plus all three products on supplemental current-stable Paper `26.3#178`. These are bounded lifecycle observations; they do not establish schema migration, other modes, or the remaining T21 gates.

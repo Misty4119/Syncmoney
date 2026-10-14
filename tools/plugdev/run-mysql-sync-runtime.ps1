@@ -39,7 +39,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The incomplete-v10-audit-table startup-failure case is currently bounded to PostgreSQL 18.1 on minimum Paper.'
+    throw 'The incomplete-v10-audit-table startup-failure case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1064,7 +1064,7 @@ CREATE INDEX idx_audit_type_timestamp_sequence ON syncmoney_audit_log (type, tim
 }
 
 function Seed-T21IncompleteV10AuditTable {
-    if ($script:databaseProduct -cne 'PostgreSQL') { throw 'The incomplete-v10-audit-table fixture is PostgreSQL-only.' }
+    if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { throw 'The incomplete-v10-audit-table fixture requires MySQL, MariaDB, or PostgreSQL.' }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
     id VARCHAR(50) PRIMARY KEY,
@@ -1089,7 +1089,7 @@ INSERT INTO syncmoney_audit_log (id) VALUES ('00000000-0000-0000-0000-0000000003
         $state.auditVersionRowJson -notmatch 'T21 incomplete audit v9 sentinel' -or
         $columns.Count -ne 1 -or $columns[0].column_name -cne 'id' -or
         $rows.Count -ne 1 -or $rows[0].id -cne '00000000-0000-0000-0000-000000000329') {
-        throw 'The isolated PostgreSQL database did not retain the exact pre-start incomplete-v10 audit fixture.'
+        throw "The isolated $script:databaseProduct database did not retain the exact pre-start incomplete-v10 audit fixture."
     }
     return $state
 }
@@ -1894,6 +1894,8 @@ try {
                     databaseEnabled=$true
                     databaseType=$(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
                     databaseIsolated=$true
+                    databaseName=$script:report.configuration.databaseName
+                    databaseNameObserved=[string]$configObservation.databaseName
                     redisEnabled=$true
                     redisDatabase=15
                     redisIsolated=$true

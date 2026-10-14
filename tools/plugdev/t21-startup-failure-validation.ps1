@@ -14,7 +14,14 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -ceq 'Minimum'
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -ceq 'Minimum'
+}
+
+function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
+    if ($Value -isnot [System.Collections.IDictionary]) { return $false }
+    $actualFields = @($Value.Keys | ForEach-Object { [string]$_ })
+    return $actualFields.Count -eq $ExpectedFields.Count -and
+        @($ExpectedFields | Where-Object { $_ -cnotin $actualFields }).Count -eq 0
 }
 
 function Get-T21PlugDevCliDistManifestHash([object[]]$Files) {
@@ -276,7 +283,6 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
         if ($actualAuditColumns.Count -ne $requiredAuditColumns.Count -or $auditColumns.Count -ne $requiredAuditColumns.Count) { return $false }
         if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
-            if ($DatabaseProduct -cne 'PostgreSQL') { return $false }
             $column = $auditColumns[0]
             $columnMetadataFields = @($column.Keys | ForEach-Object { [string]$_ })
             if ($column -isnot [System.Collections.IDictionary] -or
@@ -284,17 +290,39 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 @($requiredColumnMetadataFields | Where-Object { $_ -cnotin $columnMetadataFields }).Count -ne 0 -or
                 [string]$column['table_name'] -cne 'syncmoney_audit_log' -or
                 [string]$column['column_name'] -cne 'id' -or
-                [int]$column['ordinal_position'] -ne 1 -or
-                [string]$column['table_schema'] -cne 'public' -or
-                [string]$column['data_type'] -cne 'character varying' -or
-                [int]$column['character_maximum_length'] -ne 36 -or
-                [int]$column['character_octet_length'] -ne 144 -or
-                [string]$column['is_nullable'] -cne 'NO' -or
-                [string]$column['udt_name'] -cne 'varchar' -or
-                [string]$column['is_identity'] -cne 'NO' -or
-                [string]$column['is_generated'] -cne 'NEVER' -or
-                [string]$column['is_updatable'] -cne 'YES' -or
-                [string]::IsNullOrWhiteSpace([string]$column['table_catalog'])) { return $false }
+                -not (Test-T21IntegralNumber $column['ordinal_position'] 1 1) -or
+                [string]$column['is_nullable'] -cne 'NO') { return $false }
+            if ($DatabaseProduct -ceq 'PostgreSQL') {
+                if ([string]$column['table_schema'] -cne 'public' -or
+                    [string]$column['data_type'] -cne 'character varying' -or
+                    [int]$column['character_maximum_length'] -ne 36 -or
+                    [int]$column['character_octet_length'] -ne 144 -or
+                    [string]$column['udt_name'] -cne 'varchar' -or
+                    [string]$column['is_identity'] -cne 'NO' -or
+                    [string]$column['is_generated'] -cne 'NEVER' -or
+                    [string]$column['is_updatable'] -cne 'YES' -or
+                    [string]::IsNullOrWhiteSpace([string]$column['table_catalog'])) { return $false }
+            } else {
+                $configuration = Get-T21ObservedValue $report 'configuration'
+                $databaseName = [string](Get-T21ObservedValue $configuration 'databaseName')
+                $observedDatabaseName = [string](Get-T21ObservedValue $configuration 'databaseNameObserved')
+                $expectedCollation = if ($DatabaseProduct -ceq 'MySQL') { 'utf8mb4_0900_ai_ci' } else { 'utf8mb4_general_ci' }
+                $generationExpressionValid = if ($DatabaseProduct -ceq 'MariaDB') {
+                    $null -eq $column['generation_expression']
+                } else {
+                    $column['generation_expression'] -is [string] -and [string]$column['generation_expression'] -ceq ''
+                }
+                if ($databaseName -notmatch '^syncmoney_t21_[a-f0-9]{8}$' -or
+                    $observedDatabaseName -cne $databaseName -or
+                    [string]$column['table_schema'] -cne $databaseName -or
+                    [string]$column['column_type'] -cne 'varchar(36)' -or
+                    [string]$column['column_default_is_null'] -cne 'true' -or
+                    $null -ne $column['column_default'] -or
+                    $column['extra'] -isnot [string] -or [string]$column['extra'] -cne '' -or
+                    [string]$column['character_set_name'] -cne 'utf8mb4' -or
+                    [string]$column['collation_name'] -cne $expectedCollation -or
+                    -not $generationExpressionValid) { return $false }
+            }
             $schemaBeforeMainRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
             if ($schemaBeforeMainRow['id'] -cne '1' -or [int]$schemaBeforeMainRow['version'] -ne 1) { return $false }
         } else {
@@ -365,9 +393,25 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
 
         $auditIndexes = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditIndexesJson')) -AsHashtable -ErrorAction Stop)
         if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
-            if ($auditIndexes.Count -ne 1 -or
-                [string]$auditIndexes[0]['name'] -cne 'syncmoney_audit_log_pkey' -or
-                [string]$auditIndexes[0]['definition'] -notmatch 'UNIQUE.*\(id\)') { return $false }
+            if ($auditIndexes.Count -ne 1) { return $false }
+            if ($DatabaseProduct -ceq 'PostgreSQL') {
+                if ([string]$auditIndexes[0]['name'] -cne 'syncmoney_audit_log_pkey' -or
+                    [string]$auditIndexes[0]['definition'] -notmatch 'UNIQUE.*\(id\)') { return $false }
+            } else {
+                $index = $auditIndexes[0]
+                $columns = @(Get-T21ObservedValue $index 'columns')
+                if (-not (Test-T21ExactDictionaryFields $index @('name', 'nonUnique', 'indexType', 'visibility', 'columns')) -or
+                    -not (Test-T21IntegralNumber (Get-T21ObservedValue $index 'nonUnique') 0 0) -or
+                    $index['name'] -isnot [string] -or [string]$index['name'] -cne 'PRIMARY' -or
+                    $index['indexType'] -isnot [string] -or [string]$index['indexType'] -cne 'BTREE' -or
+                    $index['visibility'] -isnot [string] -or [string]$index['visibility'] -cne 'YES' -or
+                    $columns.Count -ne 1 -or
+                    -not (Test-T21ExactDictionaryFields $columns[0] @('position', 'columnName', 'direction', 'subPart')) -or
+                    -not (Test-T21IntegralNumber (Get-T21ObservedValue $columns[0] 'position') 1 1) -or
+                    $columns[0]['columnName'] -isnot [string] -or [string]$columns[0]['columnName'] -cne 'id' -or
+                    $columns[0]['direction'] -isnot [string] -or [string]$columns[0]['direction'] -cne 'A' -or
+                    -not $columns[0].Contains('subPart') -or $null -ne $columns[0]['subPart']) { return $false }
+            }
         } elseif ($DatabaseProduct -ceq 'PostgreSQL') {
             $requiredAuditIndexes = @('idx_audit_timestamp', 'idx_audit_player', 'idx_audit_type_timestamp_sequence', 'syncmoney_audit_log_pkey')
             $actualAuditIndexNames = @($auditIndexes | ForEach-Object { [string]$_['name'] })

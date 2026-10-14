@@ -338,14 +338,14 @@ try {
 
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-            $shouldAccept = $endpointName -ceq 'Minimum' -and $databaseProduct -ceq 'PostgreSQL'
+            $shouldAccept = $endpointName -ceq 'Minimum'
             $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
             if ($accepted -ne $shouldAccept) {
                 throw "The incomplete-v10-audit-table target guard returned $accepted for $databaseProduct / $endpointName; expected $shouldAccept."
             }
         }
     }
-    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum Paper and PostgreSQL only'
+    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum Paper across all three SQL dialects'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -405,6 +405,166 @@ try {
         }
         return $copy
     }
+
+    function New-T21MySqlIncompleteAuditReportFixture(
+        [string]$product = 'MySQL',
+        [string]$version = '8.0.42'
+    ) {
+        $copy = New-T21MySqlStartupFailureReportFixture $product $version
+        $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
+        $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
+        $copy.task = 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
+        $copy.schemaStateBefore.mainVersion = 1
+        $copy.schemaStateBefore.mainVersionRowJson = '{"id":"1","version":1,"applied_at":"2026-10-14 00:00:00","description":"T21 pre-existing main schema"}'
+        $copy.schemaStateBefore.auditVersion = 9
+        $copy.schemaStateBefore.auditVersionRowJson = '{"id":"audit","version":9,"applied_at":"2026-10-14 00:00:00","description":"T21 incomplete audit v9 sentinel"}'
+        $copy.schemaStateBefore.playersTableExists = $false
+        $copy.schemaStateBefore.playerRows = $null
+        $copy.schemaStateAfter.mainVersion = 1
+        $copy.schemaStateAfter.mainVersionRowJson = $copy.schemaStateBefore.mainVersionRowJson
+        $copy.schemaStateAfter.auditVersion = 9
+        $copy.schemaStateAfter.auditVersionRowJson = $copy.schemaStateBefore.auditVersionRowJson
+        $copy.schemaStateAfter.playersTableExists = $true
+        $copy.schemaStateAfter.playerRows = 0
+
+        $columnJson = ConvertTo-Json -InputObject @([ordered]@{
+            table_schema = 'syncmoney_t21_a1b2c3d4'
+            table_name = 'syncmoney_audit_log'
+            column_name = 'id'
+            ordinal_position = 1
+            column_default = $null
+            is_nullable = 'NO'
+            column_type = 'varchar(36)'
+            column_default_is_null = 'true'
+            extra = ''
+            character_set_name = 'utf8mb4'
+            collation_name = if ($product -ceq 'MySQL') { 'utf8mb4_0900_ai_ci' } else { 'utf8mb4_general_ci' }
+            generation_expression = if ($product -ceq 'MariaDB') { $null } else { '' }
+        }) -Depth 10 -Compress
+        $copy.schemaStateBefore.auditColumnsJson = $columnJson
+        $copy.schemaStateAfter.auditColumnsJson = $columnJson
+        $indexJson = ConvertTo-Json -InputObject @([ordered]@{
+            name = 'PRIMARY'
+            nonUnique = 0
+            indexType = 'BTREE'
+            visibility = 'YES'
+            columns = @([ordered]@{ position = 1; columnName = 'id'; direction = 'A'; subPart = $null })
+        }) -Depth 10 -Compress
+        $copy.schemaStateBefore.auditIndexesJson = $indexJson
+        $copy.schemaStateAfter.auditIndexesJson = $indexJson
+        $rowsJson = '[{"id":"00000000-0000-0000-0000-000000000329"}]'
+        $copy.schemaStateBefore.auditRowsJson = $rowsJson
+        $copy.schemaStateAfter.auditRowsJson = $rowsJson
+        $copy.startupObservation.expectedFailure = 'incomplete-v10-audit-table'
+        $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
+        $copy.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
+
+        $platformLog = @(
+            '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
+            '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 9, target 11'
+            '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
+            'java.lang.IllegalStateException: Failed audit schema migration to version 10; version metadata was not advanced past 9'
+            'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+        )
+        $platformLogPath = Join-Path $testRoot 'logs\platform-candidate-startup-failure.txt'
+        [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $platformLogPath
+        $logHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $copy.platformLogs[0].bytes = [long]$logInfo.Length
+        $copy.platformLogs[0].sha256 = $logHash
+        $copy.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$logInfo.Length
+        $copy.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
+        return $copy
+    }
+
+    $mysqlIncompleteReport = New-T21MySqlIncompleteAuditReportFixture
+    if (-not (Test-T21StartupFailureReportFixture $mysqlIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete minimum-Paper MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Paper MySQL incomplete-v10 failure with preserved table metadata'
+
+    $mariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB'
+    if (-not (Test-T21StartupFailureReportFixture $mariaDbIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete minimum-Paper MariaDB incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Paper MariaDB incomplete-v10 failure with utf8mb4_general_ci metadata'
+    foreach ($schemaState in @($mariaDbIncompleteReport.schemaStateBefore, $mariaDbIncompleteReport.schemaStateAfter)) {
+        $columns = @(ConvertFrom-Json -InputObject ([string]$schemaState.auditColumnsJson) -AsHashtable -ErrorAction Stop)
+        $columns[0].generation_expression = ''
+        $schemaState.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    }
+    if (Test-T21StartupFailureReportFixture $mariaDbIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+        throw 'The MariaDB incomplete-v10 report accepted MySQL-style empty generation-expression metadata.'
+    }
+    Write-Output 'PASS: require MariaDB generation-expression null metadata'
+    $mariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB'
+    foreach ($schemaState in @($mariaDbIncompleteReport.schemaStateBefore, $mariaDbIncompleteReport.schemaStateAfter)) {
+        $columns = @(ConvertFrom-Json -InputObject ([string]$schemaState.auditColumnsJson) -AsHashtable -ErrorAction Stop)
+        $columns[0].collation_name = 'utf8mb4_0900_ai_ci'
+        $schemaState.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    }
+    if (Test-T21StartupFailureReportFixture $mariaDbIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+        throw 'The MariaDB incomplete-v10 report accepted MySQL-only collation metadata.'
+    }
+    Write-Output 'PASS: reject MySQL collation metadata in a MariaDB incomplete-v10 report'
+    $nonUniquePrimaryIndexJson = '[{"name":"PRIMARY","nonUnique":1,"indexType":"BTREE","visibility":"YES","columns":[{"position":1,"columnName":"id","direction":"A","subPart":null}]}]'
+    $mysqlIncompleteReport.schemaStateBefore.auditIndexesJson = $nonUniquePrimaryIndexJson
+    $mysqlIncompleteReport.schemaStateAfter.auditIndexesJson = $nonUniquePrimaryIndexJson
+    if (Test-T21StartupFailureReportFixture $mysqlIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+        throw 'The MySQL incomplete-v10 report accepted matching before/after snapshots with a non-unique primary index.'
+    }
+    Write-Output 'PASS: reject matching before/after snapshots with a non-unique MySQL primary index'
+
+    foreach ($indexMutation in @(
+            [ordered]@{ scope = 'index'; property = 'nonUnique'; value = $null }
+            [ordered]@{ scope = 'index'; property = 'nonUnique'; value = $false }
+            [ordered]@{ scope = 'index'; property = 'nonUnique'; value = [double]0.4 }
+            [ordered]@{ scope = 'index'; property = 'nonUnique'; value = '0' }
+            [ordered]@{ scope = 'index'; property = 'nonUnique'; remove = $true }
+            [ordered]@{ scope = 'column'; property = 'subPart'; remove = $true }
+        )) {
+        $invalidIndexReport = New-T21MySqlIncompleteAuditReportFixture
+        foreach ($schemaState in @($invalidIndexReport.schemaStateBefore, $invalidIndexReport.schemaStateAfter)) {
+            $indexes = @(ConvertFrom-Json -InputObject ([string]$schemaState.auditIndexesJson) -AsHashtable -ErrorAction Stop)
+            $target = if ($indexMutation.scope -ceq 'column') { $indexes[0].columns[0] } else { $indexes[0] }
+            if ($indexMutation.Contains('remove') -and $indexMutation['remove'] -eq $true) { $target.Remove($indexMutation.property) }
+            else { $target[$indexMutation.property] = $indexMutation.value }
+            $schemaState.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 10 -Compress
+        }
+        if (Test-T21StartupFailureReportFixture $invalidIndexReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+            throw "The MySQL incomplete-v10 report accepted malformed primary-index metadata: $($indexMutation.property)."
+        }
+    }
+    Write-Output 'PASS: reject malformed MySQL primary-index scalar types and missing metadata fields'
+
+    foreach ($columnMutation in @(
+            [ordered]@{ property = 'extra'; value = $null }
+            [ordered]@{ property = 'ordinal_position'; value = [double]1.4 }
+            [ordered]@{ property = 'table_schema'; value = 'other_database' }
+        )) {
+        $invalidColumnReport = New-T21MySqlIncompleteAuditReportFixture
+        foreach ($schemaState in @($invalidColumnReport.schemaStateBefore, $invalidColumnReport.schemaStateAfter)) {
+            $columns = @(ConvertFrom-Json -InputObject ([string]$schemaState.auditColumnsJson) -AsHashtable -ErrorAction Stop)
+            $columns[0][$columnMutation.property] = $columnMutation.value
+            $schemaState.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+        }
+        if (Test-T21StartupFailureReportFixture $invalidColumnReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable) {
+            throw "The MySQL incomplete-v10 report accepted malformed column metadata: $($columnMutation.property)."
+        }
+    }
+    Write-Output 'PASS: reject malformed MySQL column types and an unbound schema identity'
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
 
     $provenanceReport = New-T21MySqlStartupFailureReportFixture 'MariaDB' '12.3.3-MariaDB'
     $provenanceReport.plugDev.sourceCommit = '0' * 40
