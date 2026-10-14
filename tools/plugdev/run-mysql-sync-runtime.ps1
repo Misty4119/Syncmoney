@@ -39,7 +39,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The incomplete-v10-audit-table startup-failure case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum or maximum Paper.'
+    throw 'The incomplete-v10-audit-table startup-failure case is bounded to MySQL, MariaDB, or PostgreSQL on minimum or maximum Paper, or minimum Folia.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1148,7 +1148,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
     $pluginPin = Get-PinnedSyncmoneyPlugin $CandidateVersion $script:candidateSha256
     $processes = @(Get-T21ServerProcesses)
-    if ($processes.Count -ne 1) { throw "Expected one run-owned Paper process after rollback; observed $($processes.Count)." }
+    if ($processes.Count -ne 1) { throw "Expected one run-owned platform process after rollback; observed $($processes.Count)." }
     $observation = [ordered]@{
         stage = 'candidate-startup-failure'
         pluginVersion = $CandidateVersion
@@ -1528,7 +1528,7 @@ $script:report = [ordered]@{
     task = if ($script:newerAuditSchemaStartupFailure) {
         "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
-        'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure-PostgreSQL-Minimum-Paper'
+        "T21-V03-SYNC-incomplete-v10-audit-table-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } else { "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)" }
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc

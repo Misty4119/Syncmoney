@@ -14,7 +14,7 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum')
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia')
 }
 
 function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
@@ -209,7 +209,8 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'successMarkerObserved') $false) -or
             [int](Get-T21ObservedValue $startupIdentity 'build') -ne [int]$expectedPlatform.build -or
             (Get-T21ObservedValue $startupIdentity 'software') -cne $expectedPlatform.software -or
-            (Get-T21ObservedValue $startupIdentity 'minecraftVersion') -cne $expectedPlatform.minecraftVersion) { return $false }
+            (Get-T21ObservedValue $startupIdentity 'minecraftVersion') -cne $expectedPlatform.minecraftVersion -or
+            (Get-T21ObservedValue $startupIdentity 'runtimeVersion') -cne $expectedPlatform.minecraftVersion) { return $false }
 
         $schemaBefore = Get-T21ObservedValue $report 'schemaStateBefore'
         $schemaAfter = Get-T21ObservedValue $report 'schemaStateAfter'

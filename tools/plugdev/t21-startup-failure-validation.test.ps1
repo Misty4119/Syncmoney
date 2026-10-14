@@ -130,7 +130,7 @@ try {
         }
         startupObservation = [ordered]@{
             stage = 'candidate-startup-failure'; pluginVersion = '1.4.0-alpha.1'; artifactSha256 = ('a' * 64)
-            enabled = $false; processId = 4001; runtimeIdentity = [ordered]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48 }
+            enabled = $false; processId = 4001; runtimeIdentity = [ordered]@{ software = 'paper'; runtimeVersion = '1.21.6'; minecraftVersion = '1.21.6'; build = 48 }
             expectedFailure = 'newer-audit-schema'; failureObserved = $true; failureMessage = 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
             rollbackComplete = $true; sqlPoolShutdownObserved = $true; disabledMarker = $true; successMarkerObserved = $false
         }
@@ -292,6 +292,7 @@ try {
         $endpointReport.server.build = $expectedEndpoint.build
         $endpointReport.server.sha256 = $expectedEndpoint.sha256
         $endpointReport.startupObservation.runtimeIdentity.software = $expectedEndpoint.software
+        $endpointReport.startupObservation.runtimeIdentity.runtimeVersion = $expectedEndpoint.minecraftVersion
         $endpointReport.startupObservation.runtimeIdentity.minecraftVersion = $expectedEndpoint.minecraftVersion
         $endpointReport.startupObservation.runtimeIdentity.build = $expectedEndpoint.build
         $endpointReport.platformLogs[0].bytes = [long]$endpointLogInfo.Length
@@ -338,14 +339,14 @@ try {
 
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-            $shouldAccept = $endpointName -in @('Minimum', 'Maximum')
+            $shouldAccept = $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
             if ($accepted -ne $shouldAccept) {
                 throw "The incomplete-v10-audit-table target guard returned $accepted for $databaseProduct / $endpointName; expected $shouldAccept."
             }
         }
     }
-    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum and maximum Paper across all three SQL dialects'
+    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum and maximum Paper plus minimum Folia across all three SQL dialects'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -421,6 +422,7 @@ try {
         }
         $copy.startupObservation.runtimeIdentity = [ordered]@{
             software = $endpoint.software
+            runtimeVersion = $endpoint.minecraftVersion
             minecraftVersion = $endpoint.minecraftVersion
             build = $endpoint.build
         }
@@ -472,7 +474,13 @@ try {
         $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
         $copy.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
 
-        $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build
+        $platformSoftware = switch ($endpoint.software) {
+            'paper' { 'Paper' }
+            'folia' { 'Folia' }
+            'canvas' { 'Canvas' }
+            default { throw "Unsupported fixture platform software '$($endpoint.software)'." }
+        }
+        $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading {2} {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build, $platformSoftware
         $platformLog = @(
             $platformLine
             '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
@@ -509,6 +517,33 @@ try {
         throw 'The complete maximum-Paper MySQL incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept maximum-Paper MySQL incomplete-v10 failure with the exact pinned runtime identity'
+
+    $minimumFoliaEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumFolia
+    $minimumFoliaIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MinimumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete minimum-Folia MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Folia MySQL incomplete-v10 failure with the exact pinned runtime identity'
+    $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.software = 'paper'
+    if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {
+        throw 'The minimum-Folia MySQL incomplete-v10 report accepted a Paper runtime identity.'
+    }
+    Write-Output 'PASS: reject minimum-Folia incomplete-v10 evidence with a mismatched runtime platform'
+    $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.software = 'folia'
+    $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.runtimeVersion = '1.21.7'
+    if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {
+        throw 'The minimum-Folia MySQL incomplete-v10 report accepted a runtime version that differs from the pinned Minecraft version.'
+    }
+    Write-Output 'PASS: reject minimum-Folia incomplete-v10 evidence with a mismatched runtime version'
+    $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.Remove('runtimeVersion')
+    if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {
+        throw 'The minimum-Folia MySQL incomplete-v10 report accepted a missing runtime version.'
+    }
+    Write-Output 'PASS: reject minimum-Folia incomplete-v10 evidence with a missing runtime version'
 
     $mariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB'
     if (-not (Test-T21StartupFailureReportFixture $mariaDbIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -881,7 +916,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    Write-Output 'PASS: seed the newer schema before the expected-failure Paper start and validate its report'
+    Write-Output 'PASS: seed the newer schema before the expected-failure platform start and validate its report'
 
     $startupValidatorSource = Get-Content -LiteralPath $validatorPath -Raw
     if ($startupValidatorSource -notmatch 'FailureScenario' -or

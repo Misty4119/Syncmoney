@@ -134,9 +134,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 For Folia or Canvas, set `-PlatformEndpoint` to the exact selector above and pass the matching SHA-256-pinned JAR from the T15 endpoint table. For PostgreSQL, add `-PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL`. The run writes its machine report and per-run logs under ignored `build/reports/foundation/T21-sql-runtime/`. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` to check the report predicates and runner regressions. Accepted bounded reports and their exact artifact, source, and validation hashes are recorded in the T21 M05 evidence section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Each bounded result leaves all untested cells `NOT RUN`; T21 remains in progress.
 
-### T21 V03 incomplete-v10 audit-table startup failure on minimum and maximum Paper
+### T21 V03 incomplete-v10 audit-table startup failure on Paper and minimum Folia
 
-Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness is bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`; other pinned Folia/Canvas endpoints and current-stable Paper remain rejected. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact Paper JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
+Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-version-9 database whose existing audit table contains only its `id` primary key and a sentinel row, then verify that candidate startup rejects the missing required v10 columns while preserving the captured audit state. The harness accepts MySQL, MariaDB, or PostgreSQL on minimum Paper `1.21.6#48`, maximum Paper `26.3#166`, and minimum Folia `1.21.6#6`; maximum Folia, Canvas, and current-stable Paper remain rejected for this case. This does not assert whole-database atomic rollback because normal startup creates the empty `players` table before audit migration fails. The candidate JAR, exact server JAR for the selected endpoint, local PlugDev source, and Java 25 runtime must match their recorded pins. Supply `-MariaDbBin` when the MariaDB 12.3.3 binaries are outside the runner's default Program Files path.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -153,7 +153,22 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -IncompleteV10AuditTableStartupFailure
 ```
 
-Run `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` for the target guard and report-predicate regressions. Retain the generated report and logs under ignored `build/reports/foundation/T21-sql-runtime/`, then record the report hash, offline log audit, and evidence limits in the foundation validation plan. The first maximum-Paper runtime run is MySQL only; untested dialect/platform combinations remain `NOT RUN`.
+For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
+
+```powershell
+$foliaJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\folia-1.21.6-6.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $foliaJar `
+  -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint MinimumFolia `
+  -DatabaseProduct MySQL `
+  -IncompleteV10AuditTableStartupFailure
+```
+
+Run `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` for the target guard and report-predicate regressions. Retain the generated report and logs under ignored `build/reports/foundation/T21-sql-runtime/`, then record the report hash, offline log audit, and evidence limits in the foundation validation plan. Each untested dialect/platform combination remains `NOT RUN`.
 
 ### MySQL, MariaDB, and PostgreSQL legacy-data compatibility on Paper, Folia, and Canvas
 
