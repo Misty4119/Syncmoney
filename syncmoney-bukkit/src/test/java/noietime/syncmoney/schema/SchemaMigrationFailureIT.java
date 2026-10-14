@@ -78,13 +78,21 @@ class SchemaMigrationFailureIT {
             createVersionTable(dataSource, 1, 9);
             try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
                 statement.executeUpdate("CREATE TABLE syncmoney_audit_log (id VARCHAR(36) PRIMARY KEY)");
+                statement.executeUpdate("INSERT INTO syncmoney_audit_log (id) VALUES ('incomplete-v10-sentinel')");
             }
 
             assertThrows(RuntimeException.class, () -> new SchemaManager(plugin(), dataSource, "sqlite"));
 
-            assertEquals(9, version(dataSource, "audit"),
-                    "version 10 must not be recorded unless its baseline table columns exist");
-            assertEquals(1, version(dataSource, "1"));
+            assertAll(
+                    () -> assertEquals(9, version(dataSource, "audit"),
+                            "version 10 must not be recorded unless its baseline table columns exist"),
+                    () -> assertEquals(1, version(dataSource, "1")),
+                    () -> assertEquals(Set.of("id"), columns(dataSource),
+                            "a partial pre-existing audit table must not be completed opportunistically"),
+                    () -> assertEquals(Set.of(), indexes(dataSource),
+                            "a failed migration must not add secondary audit indexes"),
+                    () -> assertEquals(Set.of("incomplete-v10-sentinel"), auditRowIds(dataSource),
+                            "a partial pre-existing audit table's row must remain unchanged"));
         }
     }
 
@@ -442,6 +450,17 @@ class SchemaMigrationFailureIT {
             assertTrue(result.next());
             return result.getInt(1);
         }
+    }
+
+    private Set<String> auditRowIds(HikariDataSource dataSource) throws SQLException {
+        Set<String> rowIds = new HashSet<>();
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement();
+                ResultSet result = statement.executeQuery("SELECT id FROM syncmoney_audit_log")) {
+            while (result.next()) {
+                rowIds.add(result.getString(1));
+            }
+        }
+        return rowIds;
     }
 
     private HikariDataSource rejectDdl(HikariDataSource delegate, Predicate<String> rejects) throws SQLException {
