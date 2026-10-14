@@ -344,7 +344,7 @@ try {
             } elseif ($endpointName -ceq 'MinimumCanvas') {
                 $true
             } elseif ($endpointName -ceq 'MaximumCanvas') {
-                $databaseProduct -in @('MySQL', 'MariaDB')
+                $true
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -354,21 +354,21 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and Folia plus minimum Canvas across all SQL dialects, and maximum Canvas with MySQL or MariaDB only'
+    Write-Output 'PASS: allow incomplete-v10 targets on pinned Paper, Folia, and Canvas endpoints across all SQL dialects'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL or MariaDB on maximum Canvas; MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper, minimum/maximum Folia, and minimum Canvas; current-stable Paper, maximum Canvas with PostgreSQL, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper, minimum/maximum Folia, and minimum/maximum Canvas; current-stable Paper and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
-            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentStable `
             -IncompleteV10AuditTableStartupFailure
     } catch {
         $actualIncompleteV10Diagnostic = $_.Exception.Message
     }
     if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
-        throw "The unsupported PostgreSQL / MaximumCanvas diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
+        throw "The unsupported PostgreSQL / CurrentStable diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
     }
-    Write-Output 'PASS: reject PostgreSQL on MaximumCanvas with a diagnostic that names the selected MySQL/MariaDB allowance'
+    Write-Output 'PASS: reject the current-stable endpoint with a diagnostic that names the supported pinned-endpoint matrix'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -602,7 +602,11 @@ try {
         $copy.schemaStateBefore.auditIndexesJson = $indexJson
         $copy.schemaStateAfter.auditIndexesJson = $indexJson
 
-        $platformSoftware = if ($endpoint.software -ceq 'folia') { 'Folia' } else { 'Paper' }
+        $platformSoftware = switch ($endpoint.software) {
+            'folia' { 'Folia' }
+            'canvas' { 'Canvas' }
+            default { 'Paper' }
+        }
         $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading {2} {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build, $platformSoftware
         $platformLog = @(
             $platformLine
@@ -663,6 +667,19 @@ try {
         throw 'The complete maximum-Canvas MariaDB incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept maximum-Canvas MariaDB incomplete-v10 failure with the exact pinned runtime identity'
+
+    $maximumCanvasPostgreSqlIncompleteReport = New-T21PostgreSqlIncompleteAuditReportFixture 'MaximumCanvas'
+    if (-not (Test-T21StartupFailureReportFixture $maximumCanvasPostgreSqlIncompleteReport $maximumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete maximum-Canvas PostgreSQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept maximum-Canvas PostgreSQL incomplete-v10 failure with the exact pinned runtime identity'
+    $maximumCanvasPostgreSqlIncompleteReport.startupObservation.runtimeIdentity.build = 971
+    if (Test-T21StartupFailureReportFixture $maximumCanvasPostgreSqlIncompleteReport $maximumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas -FailureScenario IncompleteV10AuditTable) {
+        throw 'The maximum-Canvas PostgreSQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject maximum-Canvas PostgreSQL incomplete-v10 evidence with a mismatched runtime build'
 
     $minimumCanvasMariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB' 'MinimumCanvas'
     if (-not (Test-T21StartupFailureReportFixture $minimumCanvasMariaDbIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
