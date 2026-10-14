@@ -14,8 +14,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
@@ -27,6 +29,8 @@ import java.util.logging.Logger;
  * [AsyncScheduler] This class is designed to run on async threads.
  */
 public final class AuditLogger {
+
+    private static final long OWNER_QUIESCENCE_WARNING_INTERVAL_MILLIS = 10_000L;
 
     private final Plugin plugin;
     private final SyncmoneyConfig config;
@@ -40,6 +44,12 @@ public final class AuditLogger {
     private final ConcurrentLinkedQueue<AuditRecord> buffer;
 
     private final AtomicBoolean flushing = new AtomicBoolean(false);
+
+    private final Object persistenceLifecycleLock = new Object();
+    private int confirmedPersistenceInFlight;
+    private int activeLogCalls;
+    private int lateLogRejected;
+    private boolean closing;
 
     private volatile boolean enabled = true;
 
@@ -56,6 +66,8 @@ public final class AuditLogger {
     private volatile ScheduledTask scheduledFlushTask = null;
 
     private final ConcurrentLinkedQueue<AuditRecord> deadLetterQueue = new ConcurrentLinkedQueue<>();
+
+    private final AtomicLong droppedAuditRecords = new AtomicLong();
 
     private static final int MAX_DEAD_LETTER_SIZE = 1000;
 
@@ -172,23 +184,41 @@ public final class AuditLogger {
             return;
         }
 
-        synchronized (mergeLock) {
-            if (shouldMergeWithLastRecord(record)) {
-                record = mergeWithLastRecord(record);
-                if (record == null) {
-                    return;
+        boolean rejected;
+        synchronized (persistenceLifecycleLock) {
+            rejected = closing;
+            if (rejected) lateLogRejected++;
+            else activeLogCalls++;
+        }
+        if (rejected) {
+            publishLateLogRejection();
+            return;
+        }
+
+        try {
+            synchronized (mergeLock) {
+                if (shouldMergeWithLastRecord(record)) {
+                    record = mergeWithLastRecord(record);
+                    if (record == null) {
+                        return;
+                    }
+                }
+
+                if (buffer.size() >= MAX_BUFFER_SIZE) {
+                    logger.warning("Audit buffer is full, forcing flush...");
+                    flush();
+                }
+
+                buffer.add(record);
+
+                if (buffer.size() >= batchSize) {
+                    flushAsync();
                 }
             }
-
-            if (buffer.size() >= MAX_BUFFER_SIZE) {
-                logger.warning("Audit buffer is full, forcing flush...");
-                flush();
-            }
-
-            buffer.add(record);
-
-            if (buffer.size() >= batchSize) {
-                flushAsync();
+        } finally {
+            synchronized (persistenceLifecycleLock) {
+                activeLogCalls--;
+                persistenceLifecycleLock.notifyAll();
             }
         }
     }
@@ -198,7 +228,24 @@ public final class AuditLogger {
         if (!enabled || dataSource == null || record == null) {
             throw new SQLException("Confirmed audit persistence is unavailable");
         }
-        AuditDbWriter.writeWithRetryIdempotently(dataSource, record, maxRetry);
+        boolean rejected;
+        synchronized (persistenceLifecycleLock) {
+            rejected = closing;
+            if (rejected) lateLogRejected++;
+            else confirmedPersistenceInFlight++;
+        }
+        if (rejected) {
+            publishLateLogRejection();
+            throw new SQLException("Audit logger is closing; confirmed audit write remains recoverable");
+        }
+        try {
+            AuditDbWriter.writeWithRetryIdempotently(dataSource, record, maxRetry);
+        } finally {
+            synchronized (persistenceLifecycleLock) {
+                confirmedPersistenceInFlight--;
+                persistenceLifecycleLock.notifyAll();
+            }
+        }
     }
 
     /**
@@ -371,22 +418,32 @@ public final class AuditLogger {
      * Asynchronously flushes buffer.
      */
     private void flushAsync() {
-        if (flushing.get() || buffer.isEmpty()) {
-            return;
+        synchronized (persistenceLifecycleLock) {
+            if (closing || buffer.isEmpty() || !flushing.compareAndSet(false, true)) {
+                return;
+            }
         }
 
-        if (!flushing.compareAndSet(false, true)) {
-            return;
+        try {
+            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                try {
+                    flush();
+                } finally {
+                    completeAsyncFlush();
+                }
+            });
+        } catch (RuntimeException schedulingFailure) {
+            completeAsyncFlush();
+            logger.warning("Unable to schedule audit flush: " + schedulingFailure.getMessage());
         }
-        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-            try {
-                flush();
-            } finally {
-                flushing.set(false);
-            }
-        });
     }
 
+    private void completeAsyncFlush() {
+        synchronized (persistenceLifecycleLock) {
+            flushing.set(false);
+            persistenceLifecycleLock.notifyAll();
+        }
+    }
     /**
      * Synchronously flushes buffer (batch writes to database).
      * [RED-01 FIX] Now delegates to AuditDbWriter.batchWriteWithRetry()
@@ -399,7 +456,7 @@ public final class AuditLogger {
         List<AuditRecord> batch = new ArrayList<>();
         AuditRecord record;
 
-        while ((record = buffer.poll()) != null && batch.size() < batchSize) {
+        while (batch.size() < batchSize && (record = buffer.poll()) != null) {
             batch.add(record);
         }
 
@@ -424,6 +481,7 @@ public final class AuditLogger {
             if (deadLetterQueue.size() < MAX_DEAD_LETTER_SIZE) {
                 deadLetterQueue.add(record);
             } else {
+                droppedAuditRecords.incrementAndGet();
                 logger.severe("Dead letter queue full, dropping audit record: " + record.id());
             }
         }
@@ -440,7 +498,7 @@ public final class AuditLogger {
 
         List<AuditRecord> retryBatch = new ArrayList<>();
         AuditRecord record;
-        while ((record = deadLetterQueue.poll()) != null && retryBatch.size() < batchSize) {
+        while (retryBatch.size() < batchSize && (record = deadLetterQueue.poll()) != null) {
             retryBatch.add(record);
         }
 
@@ -756,18 +814,98 @@ public final class AuditLogger {
      */
     public void close() {
 
+        synchronized (persistenceLifecycleLock) {
+            closing = true;
+        }
+
         if (scheduledFlushTask != null) {
             scheduledFlushTask.cancel();
             logger.fine("Cancelled scheduled audit flush task.");
         }
 
+        boolean interrupted = awaitOwnerWorkQuiescence();
+        try {
+            drainBufferedRecords();
+            drainDeadLetterRecords();
 
-        flush();
+            logger.fine("AuditLogger closed. Dead letter queue size: " + deadLetterQueue.size());
+            synchronized (persistenceLifecycleLock) {
+                int buffered = buffer.size();
+                int ownerInFlight = confirmedPersistenceInFlight + activeLogCalls;
+                int lateRejected = lateLogRejected;
+                int inFlight = (flushing.get() ? 1 : 0) + ownerInFlight;
+                int retries = deadLetterQueue.size();
+                int deadLetters = deadLetterQueue.size();
+                long dropped = droppedAuditRecords.get();
+                boolean noPendingWork = buffered == 0 && inFlight == 0 && retries == 0
+                        && deadLetters == 0 && dropped == 0 && lateRejected == 0;
+                String status = !enabled && noPendingWork ? "disabled" : enabled && noPendingWork ? "drained" : "pending";
+                logger.info("T21_DRAIN owner=audit status=" + status + " enabled=" + enabled + " buffered=" + buffered
+                        + " inFlight=" + inFlight + " retry=" + retries + " deadLetter=" + deadLetters
+                        + " dropped=" + dropped + " lateRejected=" + lateRejected);
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
 
+    private void drainBufferedRecords() {
+        while (!buffer.isEmpty()) {
+            int pendingBefore = buffer.size();
+            flush();
+            if (buffer.size() >= pendingBefore) {
+                break;
+            }
+        }
+    }
 
-        retryDeadLetterQueue();
+    private void drainDeadLetterRecords() {
+        while (!deadLetterQueue.isEmpty()) {
+            int pendingBefore = deadLetterQueue.size();
+            retryDeadLetterQueue();
+            if (deadLetterQueue.size() >= pendingBefore) {
+                break;
+            }
+        }
+    }
+    private boolean awaitOwnerWorkQuiescence() {
+        long nextWarning = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(OWNER_QUIESCENCE_WARNING_INTERVAL_MILLIS);
+        boolean interrupted = false;
+        synchronized (persistenceLifecycleLock) {
+            while (confirmedPersistenceInFlight > 0 || activeLogCalls > 0 || flushing.get()) {
+                long remaining = nextWarning - System.nanoTime();
+                if (remaining <= 0) remaining = TimeUnit.MILLISECONDS.toNanos(1);
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(persistenceLifecycleLock, remaining);
+                } catch (InterruptedException waitInterrupted) {
+                    this.logger.warning("Interrupted while waiting for audit persistence to quiesce; continuing "
+                            + "to keep the database available until its owner finishes.");
+                    interrupted = true;
+                }
+                if (System.nanoTime() >= nextWarning
+                        && (confirmedPersistenceInFlight > 0 || activeLogCalls > 0 || flushing.get())) {
+                    this.logger.warning("Audit persistence is still active during shutdown; waiting before drain.");
+                    nextWarning = System.nanoTime()
+                            + TimeUnit.MILLISECONDS.toNanos(OWNER_QUIESCENCE_WARNING_INTERVAL_MILLIS);
+                }
+            }
+        }
+        return interrupted;
+    }
 
-        logger.fine("AuditLogger closed. Dead letter queue size: " + deadLetterQueue.size());
+    private void publishLateLogRejection() {
+        synchronized (persistenceLifecycleLock) {
+            int ownerInFlight = confirmedPersistenceInFlight + activeLogCalls;
+            int lateRejected = lateLogRejected;
+            int inFlight = (flushing.get() ? 1 : 0) + ownerInFlight;
+            int retries = deadLetterQueue.size();
+            int deadLetters = deadLetterQueue.size();
+            long dropped = droppedAuditRecords.get();
+            logger.warning("Rejected an audit record after shutdown began; the audit owner remains pending.");
+            logger.info("T21_DRAIN owner=audit status=pending enabled=" + enabled + " buffered=" + buffer.size()
+                    + " inFlight=" + inFlight + " retry=" + retries + " deadLetter=" + deadLetters
+                    + " dropped=" + dropped + " lateRejected=" + lateRejected);
+        }
     }
 
     /**

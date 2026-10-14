@@ -6,6 +6,7 @@ $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($runnerPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw "The quiesced upgrade runner does not parse: $($errors[0].Message)" }
+$source = Get-Content -LiteralPath $runnerPath -Raw
 
 function Get-RunnerFunctionText([string]$name) {
     $matches = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name }, $true))
@@ -182,15 +183,98 @@ Assert-RunnerCondition 'use PlugDev RCON command for Paper stop without its PID-
 )
 Assert-RunnerCondition 'use shared shutdown markers and record actual markers before asserting a normal drain' (
     $normalNodeStop.Contains('Get-T21ShutdownFailureMarkers $content') -and
-    $normalNodeStop.Contains('Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount)') -and
+    $normalNodeStop.Contains('Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount) $requireOwnerDrain') -and
     $normalNodeStop.Contains('pluginDrainVerified=$assessment.pluginDrainVerified') -and
     $normalNodeStop.Contains('syncmoneyDisabledMarker=$assessment.syncmoneyDisabledMarker') -and
     $normalNodeStop.Contains('pendingRecoveryRecords=$assessment.pendingRecoveryRecords')
 )
-$drainAssessmentProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content 'Syncmoney disabled.' -failureMarkers @() -pendingRecoveryCount 0")
+$ownerDrainFixture = @'
+T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0 workerTerminated=true recoveryPending=0 recoveryBlocked=false
+T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0
+T21_DRAIN owner=audit status=drained enabled=true buffered=0 inFlight=0 retry=0 deadLetter=0 dropped=0 lateRejected=0
+T21_DRAIN owner=hybridAudit status=drained enabled=true queued=0 inFlight=0 retry=0 lateRejected=0
+'@
+$healthyCandidateContent = "Syncmoney disabled.`n$ownerDrainFixture"
+$drainAssessmentProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$healthyCandidateContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
 $healthyDrainAssessment = & $drainAssessmentProbe
-Assert-RunnerCondition 'accept a completed Syncmoney disable with no markers or pending records' (
-    $healthyDrainAssessment.pluginDrainVerified -eq $true -and $healthyDrainAssessment.syncmoneyDisabledMarker -eq $true
+Assert-RunnerCondition 'accept a completed candidate disable with zero owner-local drain counters' (
+    $healthyDrainAssessment.pluginDrainVerified -eq $true -and $healthyDrainAssessment.syncmoneyDisabledMarker -eq $true -and
+    $healthyDrainAssessment.ownerDrainVerified -eq $true -and $healthyDrainAssessment.ownerDrainRecords.Count -eq 4
+)
+$crlfCandidateContent = $healthyCandidateContent.Replace("`n", "`r`n")
+$crlfDrainProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$crlfCandidateContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$crlfDrainAssessment = & $crlfDrainProbe
+Assert-RunnerCondition 'accept owner drain evidence from Windows CRLF server logs' (
+    $crlfDrainAssessment.pluginDrainVerified -eq $true -and $crlfDrainAssessment.ownerDrainRecords.Count -eq 4
+)
+$missingOwnerDrainProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content 'Syncmoney disabled.' -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$missingOwnerDrainAssessment = & $missingOwnerDrainProbe
+Assert-RunnerCondition 'reject candidate shutdown when owner-local drain evidence is absent' (
+    $missingOwnerDrainAssessment.pluginDrainVerified -eq $false -and
+    $missingOwnerDrainAssessment.ownerDrainVerified -eq $false
+)
+$nonzeroOwnerDrainContent = "Syncmoney disabled.`n$($ownerDrainFixture.Replace('owner=database status=drained queued=0', 'owner=database status=pending queued=1'))"
+$nonzeroOwnerDrainProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$nonzeroOwnerDrainContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$nonzeroOwnerDrainAssessment = & $nonzeroOwnerDrainProbe
+Assert-RunnerCondition 'reject candidate shutdown when a structured owner status has pending database work' (
+    $nonzeroOwnerDrainAssessment.pluginDrainVerified -eq $false -and $nonzeroOwnerDrainAssessment.ownerDrainVerified -eq $false
+)
+$missingHybridLateCount = $healthyCandidateContent.Replace(' retry=0 lateRejected=0', ' retry=0')
+$missingHybridLateCountProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$missingHybridLateCount -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$missingHybridLateCountAssessment = & $missingHybridLateCountProbe
+Assert-RunnerCondition 'reject hybrid audit drain evidence that omits late-rejection accounting' (
+    $missingHybridLateCountAssessment.pluginDrainVerified -eq $false
+)
+$lateHybridRejection = $healthyCandidateContent.Replace(
+    'owner=hybridAudit status=drained enabled=true queued=0 inFlight=0 retry=0 lateRejected=0',
+    'owner=hybridAudit status=drained enabled=true queued=0 inFlight=0 retry=0 lateRejected=1'
+)
+$lateHybridRejectionProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$lateHybridRejection -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$lateHybridRejectionAssessment = & $lateHybridRejectionProbe
+Assert-RunnerCondition 'reject hybrid audit drain evidence with a late rejected call' (
+    $lateHybridRejectionAssessment.pluginDrainVerified -eq $false
+)
+$blockedRecoveryContent = "Syncmoney disabled.`n$($ownerDrainFixture.Replace('recoveryBlocked=false', 'recoveryBlocked=true'))"
+$blockedRecoveryProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$blockedRecoveryContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$blockedRecoveryAssessment = & $blockedRecoveryProbe
+Assert-RunnerCondition 'reject an economy drain marker with blocked recovery preflight' ($blockedRecoveryAssessment.pluginDrainVerified -eq $false)
+$fractionalOwnerDrainContent = "Syncmoney disabled.`n$($ownerDrainFixture.Replace('owner=database status=drained queued=0', 'owner=database status=drained queued=0.5'))"
+$fractionalOwnerDrainProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$fractionalOwnerDrainContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$fractionalOwnerDrainAssessment = & $fractionalOwnerDrainProbe
+Assert-RunnerCondition 'reject fractional owner counters that only begin with zero' (
+    $fractionalOwnerDrainAssessment.pluginDrainVerified -eq $false
+)
+$duplicateCounterContent = "Syncmoney disabled.`n$($ownerDrainFixture.Replace('queued=0 inFlight=0', 'queued=0 queued=9 inFlight=0'))"
+$duplicateCounterProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$duplicateCounterContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$duplicateCounterAssessment = & $duplicateCounterProbe
+Assert-RunnerCondition 'reject duplicate owner counter fields' ($duplicateCounterAssessment.pluginDrainVerified -eq $false)
+$duplicateStatusContent = "Syncmoney disabled.`n$($ownerDrainFixture.Replace('owner=economy status=drained', 'owner=economy status=drained status=pending'))"
+$duplicateStatusProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$duplicateStatusContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$duplicateStatusAssessment = & $duplicateStatusProbe
+Assert-RunnerCondition 'reject duplicate owner status fields' ($duplicateStatusAssessment.pluginDrainVerified -eq $false)
+$malformedOwnerMarkerContent = "$healthyCandidateContent`nT21_DRAIN owner=_unexpected status=pending"
+$malformedOwnerMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$malformedOwnerMarkerContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$malformedOwnerMarkerAssessment = & $malformedOwnerMarkerProbe
+Assert-RunnerCondition 'reject malformed or unknown T21_DRAIN owner markers' (
+    $malformedOwnerMarkerAssessment.pluginDrainVerified -eq $false -and
+    $malformedOwnerMarkerAssessment.ownerDrainVerified -eq $false
+)
+$caseVariantOwnerMarkerContent = "$healthyCandidateContent`nt21_drain owner=_unexpected status=pending"
+$caseVariantOwnerMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$caseVariantOwnerMarkerContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$caseVariantOwnerMarkerAssessment = & $caseVariantOwnerMarkerProbe
+Assert-RunnerCondition 'reject case-variant T21_DRAIN markers' (
+    $caseVariantOwnerMarkerAssessment.pluginDrainVerified -eq $false -and
+    $caseVariantOwnerMarkerAssessment.ownerDrainVerified -eq $false
+)
+$sameLineCaseVariantOwnerMarkerContent = $healthyCandidateContent.Replace(
+    'T21_DRAIN owner=database',
+    't21_drain owner=_unexpected status=pending T21_DRAIN owner=database'
+)
+$sameLineCaseVariantOwnerMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$sameLineCaseVariantOwnerMarkerContent -failureMarkers @() -pendingRecoveryCount 0 -requireOwnerDrain `$true")
+$sameLineCaseVariantOwnerMarkerAssessment = & $sameLineCaseVariantOwnerMarkerProbe
+Assert-RunnerCondition 'reject multiple case-variant and canonical markers on one owner line' (
+    $sameLineCaseVariantOwnerMarkerAssessment.pluginDrainVerified -eq $false -and
+    $sameLineCaseVariantOwnerMarkerAssessment.ownerDrainVerified -eq $false
 )
 $missingDisableMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content 'server stopped without plugin completion' -failureMarkers @() -pendingRecoveryCount 0")
 $missingDisableAssessment = & $missingDisableMarkerProbe
@@ -209,21 +293,26 @@ Assert-RunnerCondition 'carry a false shutdown marker through the result report 
 Assert-RunnerCondition 'describe the requested platform in the quiescence report' (
     $saveReport.Contains('scenario="Only two synthetic $Project nodes')
 )
-$failureMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content 'Syncmoney disabled.' -failureMarkers @('DB writer drain timed out') -pendingRecoveryCount 0")
+$failureMarkerProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$healthyCandidateContent -failureMarkers @('DB writer drain timed out') -pendingRecoveryCount 0 -requireOwnerDrain `$true")
 $failedMarkerAssessment = & $failureMarkerProbe
 Assert-RunnerCondition 'fail drain assessment when a shutdown failure marker is present despite disable completion' (
     $failedMarkerAssessment.pluginDrainVerified -eq $false -and $failedMarkerAssessment.syncmoneyDisabledMarker -eq $true
 )
-$pendingRecoveryProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content 'Syncmoney disabled.' -failureMarkers @() -pendingRecoveryCount 1")
+$pendingRecoveryProbe = [scriptblock]::Create($drainAssessment + "`nGet-T21NormalDrainAssessment -content `$healthyCandidateContent -failureMarkers @() -pendingRecoveryCount 1 -requireOwnerDrain `$true")
 $pendingRecoveryAssessment = & $pendingRecoveryProbe
 Assert-RunnerCondition 'fail drain assessment while recovery records remain pending' ($pendingRecoveryAssessment.pluginDrainVerified -eq $false)
-$assessmentCall = $normalNodeStop.IndexOf('Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount)', [StringComparison]::Ordinal)
+$assessmentCall = $normalNodeStop.IndexOf('Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount) $requireOwnerDrain', [StringComparison]::Ordinal)
 $assessmentRecord = $normalNodeStop.IndexOf('$script:shutdown.Add([ordered]@{', [StringComparison]::Ordinal)
 $assessmentFailure = $normalNodeStop.IndexOf('if (-not $assessment.pluginDrainVerified)', [StringComparison]::Ordinal)
 Assert-RunnerCondition 'record failed drain assessment before throwing so the failure report retains false evidence' (
     $assessmentCall -ge 0 -and $assessmentRecord -gt $assessmentCall -and $assessmentFailure -gt $assessmentRecord
 )
-$source = Get-Content -LiteralPath $runnerPath -Raw
+Assert-RunnerCondition 'require structured owner drain evidence only for the 1.4 candidate shutdown stages' (
+    $source.Contains("Stop-Node 'nodeA' 'upgrade-canary-nodeA' `$true") -and
+    $source.Contains("Stop-Node 'nodeB' 'upgrade-nodeB' `$true") -and
+    $source.Contains("Stop-Node 'nodeA' 'baseline-seed-nodeA'") -and
+    $source.Contains('Stop-Node $name ("rollback-"+$name)')
+)
 Assert-RunnerCondition 'bind quiesced runtime reports to acceptance artifacts and harness source hashes' (
     $source.Contains('Get-RunHarnessSourceManifest') -and
     $source.Contains('acceptanceJarSha256=') -and

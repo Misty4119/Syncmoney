@@ -3,9 +3,13 @@ package noietime.syncmoney.economy;
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.storage.recovery.RecoverySpool;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +21,70 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ConsumerShutdownTest {
+    @Test
+    void recoveryPreflightFailureCannotReportEconomyAsDrained(@TempDir Path temp) throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setLevel(Level.ALL);
+        java.util.List<String> messages = new java.util.concurrent.CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) { messages.add(record.getMessage()); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        capture.setLevel(Level.ALL);
+        logger.addHandler(capture);
+        when(plugin.getLogger()).thenReturn(logger);
+        Path journal = temp.resolve("corrupt-recovery.jsonl");
+        Files.writeString(journal, "{malformed}\n");
+        EconomyEventConsumer consumer = new EconomyEventConsumer(plugin,
+                mock(SyncmoneyConfig.class, RETURNS_DEEP_STUBS), new EconomyWriteQueue(10), mock(CacheManager.class),
+                null, null, null, null, null, null, null, null, null, new RecoverySpool(journal));
+
+        try {
+            consumer.start();
+            consumer.shutdown();
+
+            assertTrue(messages.stream().anyMatch(message -> message.equals(
+                    "T21_DRAIN owner=economy status=pending queued=0 outstanding=0 retry=0 "
+                            + "workerTerminated=true recoveryPending=0 recoveryBlocked=true")));
+            assertFalse(messages.stream().anyMatch(message -> message.contains("T21_DRAIN owner=economy status=drained")));
+        } finally {
+            logger.removeHandler(capture);
+        }
+    }
+
+    @Test
+    void shutdownLogsFinalEconomyDrainCounters() {
+        Plugin plugin = mock(Plugin.class);
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setLevel(Level.ALL);
+        java.util.List<String> messages = new java.util.concurrent.CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) { messages.add(record.getMessage()); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        capture.setLevel(Level.ALL);
+        logger.addHandler(capture);
+        when(plugin.getLogger()).thenReturn(logger);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, RETURNS_DEEP_STUBS);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10);
+        EconomyEventConsumer consumer = new EconomyEventConsumer(plugin, config, queue, mock(CacheManager.class),
+                null, null, null, null, null, null, null, null, null);
+
+        try {
+            consumer.start();
+            consumer.shutdown();
+
+            assertTrue(messages.stream().anyMatch(message -> message.equals(
+                    "T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0 "
+                            + "workerTerminated=true recoveryPending=0 recoveryBlocked=false")));
+        } finally {
+            logger.removeHandler(capture);
+        }
+    }
+
     @Test
     void shutdownClosesAdmissionAndDrainsAProducerReservationAcceptedBeforeShutdown() throws Exception {
         Plugin plugin = mock(Plugin.class);

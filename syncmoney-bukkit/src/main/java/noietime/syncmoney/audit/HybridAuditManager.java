@@ -38,6 +38,7 @@ public final class HybridAuditManager {
 
     private static final String AUDIT_LIST_KEY = RedisKeys.AUDIT_RECENT;
     private static final String AUDIT_INDEX_KEY = RedisKeys.AUDIT_INDEX;
+    private static final long MIGRATION_QUIESCENCE_WARNING_INTERVAL_MILLIS = 10_000L;
     private static final String CONFIRMED_AUDIT_SCRIPT = """
             local entries = redis.call('LRANGE', KEYS[1], 0, -1)
             for _, value in ipairs(entries) do
@@ -70,6 +71,12 @@ public final class HybridAuditManager {
 
     private final AtomicInteger pendingMigrationCount = new AtomicInteger(0);
     private final AtomicBoolean migrating = new AtomicBoolean(false);
+    private final Object migrationLifecycleLock = new Object();
+    private long migrationGeneration;
+    private boolean closing;
+    private int activeLogCalls;
+    private int lateLogRejected;
+    private int confirmedPersistenceInFlight;
     private volatile long lastMigrationTime = 0;
 
 
@@ -175,32 +182,49 @@ public final class HybridAuditManager {
             return;
         }
 
-
-        if (isDuplicateRecord(record)) {
-            logger.fine("Duplicate audit record skipped: " + record.id());
+        boolean rejected;
+        synchronized (migrationLifecycleLock) {
+            rejected = closing;
+            if (rejected) lateLogRejected++;
+            else activeLogCalls++;
+        }
+        if (rejected) {
+            publishLateLogRejection();
             return;
         }
 
-
-        int sequence = sequenceGenerator.incrementAndGet();
-        AuditRecord recordWithSequence = record.withSequence(sequence);
-
-        if (redisEnabled && luaScriptManager != null) {
-
-            writeToRedis(recordWithSequence);
+        try {
+            if (isDuplicateRecord(record)) {
+                logger.fine("Duplicate audit record skipped: " + record.id());
+                return;
+            }
 
 
-            migrationQueue.add(recordWithSequence);
+            int sequence = sequenceGenerator.incrementAndGet();
+            AuditRecord recordWithSequence = record.withSequence(sequence);
+
+            if (redisEnabled && luaScriptManager != null) {
+
+                writeToRedis(recordWithSequence);
 
 
-            checkAndTriggerMigration();
-        } else {
+                if (dataSource != null) {
+                    migrationQueue.add(recordWithSequence);
+                    checkAndTriggerMigration();
+                }
+            } else {
 
-            writeToDatabase(recordWithSequence);
+                writeToDatabase(recordWithSequence);
+            }
+
+
+            broadcastAuditEvent(recordWithSequence);
+        } finally {
+            synchronized (migrationLifecycleLock) {
+                activeLogCalls--;
+                migrationLifecycleLock.notifyAll();
+            }
         }
-
-
-        broadcastAuditEvent(recordWithSequence);
     }
 
     /**
@@ -214,39 +238,56 @@ public final class HybridAuditManager {
             throw new SQLException("Confirmed audit record is invalid or audit is disabled");
         }
 
-        boolean redisInserted = false;
-        SQLException persistenceFailure = null;
-        if (redisEnabled) {
-            try (var jedis = redisManager.getResource()) {
-                String json = objectMapper.writeValueAsString(record);
-                Object result = jedis.eval(CONFIRMED_AUDIT_SCRIPT, 2,
-                        AUDIT_LIST_KEY, AUDIT_INDEX_KEY, json, record.id(), Integer.toString(windowSize));
-                if (!(result instanceof Number count)) {
-                    throw new SQLException("Redis did not return a confirmed audit write receipt");
+        boolean rejected;
+        synchronized (migrationLifecycleLock) {
+            rejected = closing;
+            if (rejected) lateLogRejected++;
+            else confirmedPersistenceInFlight++;
+        }
+        if (rejected) {
+            publishLateLogRejection();
+            throw new SQLException("Hybrid audit manager is closing; confirmed audit write remains recoverable");
+        }
+        try {
+            boolean redisInserted = false;
+            SQLException persistenceFailure = null;
+            if (redisEnabled) {
+                try (var jedis = redisManager.getResource()) {
+                    String json = objectMapper.writeValueAsString(record);
+                    Object result = jedis.eval(CONFIRMED_AUDIT_SCRIPT, 2,
+                            AUDIT_LIST_KEY, AUDIT_INDEX_KEY, json, record.id(), Integer.toString(windowSize));
+                    if (!(result instanceof Number count)) {
+                        throw new SQLException("Redis did not return a confirmed audit write receipt");
+                    }
+                    redisInserted = count.longValue() == 1L;
+                } catch (Exception failure) {
+                    persistenceFailure = new SQLException("Redis audit persistence failed", failure);
                 }
-                redisInserted = count.longValue() == 1L;
-            } catch (Exception failure) {
-                persistenceFailure = new SQLException("Redis audit persistence failed", failure);
+            }
+
+            if (dataSource != null) {
+                try {
+                    AuditDbWriter.writeWithRetryIdempotently(dataSource, record, Constants.AUDIT_MAX_RETRY);
+                } catch (SQLException failure) {
+                    if (persistenceFailure != null) failure.addSuppressed(persistenceFailure);
+                    throw failure;
+                }
+            } else if (!redisEnabled) {
+                throw new SQLException("Confirmed audit persistence has no configured backend");
+            }
+
+            if (persistenceFailure != null) {
+                if (dataSource == null) throw persistenceFailure;
+                logger.warning("Redis recent-audit write failed, but the confirmed record was persisted to SQL: "
+                        + persistenceFailure.getMessage());
+            }
+            if (redisInserted) broadcastAuditEvent(record);
+        } finally {
+            synchronized (migrationLifecycleLock) {
+                confirmedPersistenceInFlight--;
+                migrationLifecycleLock.notifyAll();
             }
         }
-
-        if (dataSource != null) {
-            try {
-                AuditDbWriter.writeWithRetryIdempotently(dataSource, record, Constants.AUDIT_MAX_RETRY);
-            } catch (SQLException failure) {
-                if (persistenceFailure != null) failure.addSuppressed(persistenceFailure);
-                throw failure;
-            }
-        } else if (!redisEnabled) {
-            throw new SQLException("Confirmed audit persistence has no configured backend");
-        }
-
-        if (persistenceFailure != null) {
-            if (dataSource == null) throw persistenceFailure;
-            logger.warning("Redis recent-audit write failed, but the confirmed record was persisted to SQL: "
-                    + persistenceFailure.getMessage());
-        }
-        if (redisInserted) broadcastAuditEvent(record);
     }
 
     /**
@@ -347,37 +388,53 @@ public final class HybridAuditManager {
      * Checks and triggers migration if threshold is reached or time-based flush is due.
      */
     private void checkAndTriggerMigration() {
-        int pending = migrationQueue.size();
-        long currentTime = System.currentTimeMillis();
+        synchronized (migrationLifecycleLock) {
+            if (closing) return;
 
+            int pending = migrationQueue.size();
+            long currentTime = System.currentTimeMillis();
 
-        boolean shouldMigrate = false;
+            boolean shouldMigrate = false;
 
-
-        if (pending >= migrationThreshold) {
-            shouldMigrate = true;
-        }
-
-
-        if (flushIntervalMs > 0 && !shouldMigrate && pending > 0) {
-            if (lastMigrationTime == 0) {
-
-                shouldMigrate = true;
-            } else if (currentTime - lastMigrationTime >= flushIntervalMs) {
-
+            if (pending >= migrationThreshold) {
                 shouldMigrate = true;
             }
-        }
 
-        if (shouldMigrate && migrating.compareAndSet(false, true)) {
-            lastMigrationTime = currentTime;
-            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-                try {
-                    performMigration();
-                } finally {
-                    migrating.set(false);
+            if (flushIntervalMs > 0 && !shouldMigrate && pending > 0) {
+                if (lastMigrationTime == 0) {
+                    shouldMigrate = true;
+                } else if (currentTime - lastMigrationTime >= flushIntervalMs) {
+                    shouldMigrate = true;
                 }
-            });
+            }
+
+            if (shouldMigrate && migrating.compareAndSet(false, true)) {
+                long previousMigrationTime = lastMigrationTime;
+                lastMigrationTime = currentTime;
+                long generation = ++migrationGeneration;
+                try {
+                    plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+                        synchronized (migrationLifecycleLock) {
+                            if (!migrating.get() || migrationGeneration != generation) return;
+                        }
+                        try {
+                            performMigration();
+                        } finally {
+                            synchronized (migrationLifecycleLock) {
+                                if (migrationGeneration == generation) migrating.set(false);
+                                migrationLifecycleLock.notifyAll();
+                            }
+                        }
+                    });
+                } catch (RuntimeException schedulingFailure) {
+                    lastMigrationTime = previousMigrationTime;
+                    if (migrationGeneration == generation && migrating.compareAndSet(true, false)) {
+                        migrationLifecycleLock.notifyAll();
+                    }
+                    logger.warning("Unable to schedule hybrid audit migration; queued records remain available "
+                            + "for a later retry or shutdown drain: " + schedulingFailure.getMessage());
+                }
+            }
         }
     }
 
@@ -416,9 +473,8 @@ public final class HybridAuditManager {
      * [REFACTORED] Now delegates to AuditDbWriter.batchWrite()
      */
     private void batchWriteToDatabase(List<AuditRecord> records) throws SQLException {
-        if (dataSource == null || records.isEmpty()) {
-            return;
-        }
+        if (records.isEmpty()) return;
+        if (dataSource == null) throw new SQLException("Audit database is unavailable");
 
         AuditDbWriter.batchWrite(dataSource, records);
     }
@@ -953,19 +1009,80 @@ public final class HybridAuditManager {
      * Closes and flushes remaining data.
      */
     public void close() {
-
-        if (scheduledMigrationTask != null) {
-            scheduledMigrationTask.cancel();
-            logger.fine("Cancelled scheduled audit migration task.");
+        synchronized (migrationLifecycleLock) {
+            closing = true;
+            if (scheduledMigrationTask != null) {
+                scheduledMigrationTask.cancel();
+                logger.fine("Cancelled scheduled audit migration task.");
+            }
         }
 
+        boolean interrupted = awaitMigrationQuiescence();
+        try {
+            drainMigrationQueueOnClose();
 
-        if (!migrationQueue.isEmpty()) {
-            logger.info("Flushing " + migrationQueue.size() + " remaining audit records...");
+            logger.fine("HybridAuditManager closed.");
+            synchronized (migrationLifecycleLock) {
+                int queued = migrationQueue.size();
+                int inFlight = (migrating.get() ? 1 : 0) + confirmedPersistenceInFlight + activeLogCalls;
+                int retries = 0;
+                int rejected = lateLogRejected;
+                boolean noPendingWork = queued == 0 && inFlight == 0 && retries == 0 && rejected == 0;
+                String status = !enabled && noPendingWork ? "disabled" : enabled && noPendingWork ? "drained" : "pending";
+                logger.info("T21_DRAIN owner=hybridAudit status=" + status + " enabled=" + enabled + " queued=" + queued
+                        + " inFlight=" + inFlight + " retry=" + retries + " lateRejected=" + rejected);
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
+
+    private void drainMigrationQueueOnClose() {
+        while (!migrationQueue.isEmpty()) {
+            int pendingBefore = migrationQueue.size();
+            logger.info("Flushing " + pendingBefore + " remaining audit records...");
             performMigration();
+            if (migrationQueue.size() >= pendingBefore) {
+                logger.warning("Hybrid audit shutdown drain made no progress; remaining records will be reported as pending.");
+                break;
+            }
         }
+    }
+    private boolean awaitMigrationQuiescence() {
+        long nextWarning = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(MIGRATION_QUIESCENCE_WARNING_INTERVAL_MILLIS);
+        boolean interrupted = false;
+        synchronized (migrationLifecycleLock) {
+            while (migrating.get() || confirmedPersistenceInFlight > 0 || activeLogCalls > 0) {
+                long remaining = nextWarning - System.nanoTime();
+                if (remaining <= 0) remaining = TimeUnit.MILLISECONDS.toNanos(1);
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(migrationLifecycleLock, remaining);
+                } catch (InterruptedException waitInterrupted) {
+                    logger.warning("Interrupted while waiting for hybrid audit migration to quiesce; continuing "
+                            + "to keep the database available until its owner finishes.");
+                    interrupted = true;
+                }
+                if (System.nanoTime() >= nextWarning
+                        && (migrating.get() || confirmedPersistenceInFlight > 0 || activeLogCalls > 0)) {
+                    logger.warning("Hybrid audit migration is still active during shutdown; waiting before drain.");
+                    nextWarning = System.nanoTime()
+                            + TimeUnit.MILLISECONDS.toNanos(MIGRATION_QUIESCENCE_WARNING_INTERVAL_MILLIS);
+                }
+            }
+        }
+        return interrupted;
+    }
 
-        logger.fine("HybridAuditManager closed.");
+    private void publishLateLogRejection() {
+        synchronized (migrationLifecycleLock) {
+            int queued = migrationQueue.size();
+            int inFlight = (migrating.get() ? 1 : 0) + confirmedPersistenceInFlight + activeLogCalls;
+            int rejected = lateLogRejected;
+            logger.warning("Rejected a hybrid audit record after shutdown began; the audit owner remains pending.");
+            logger.info("T21_DRAIN owner=hybridAudit status=pending enabled=" + enabled + " queued=" + queued
+                    + " inFlight=" + inFlight + " retry=0 lateRejected=" + rejected);
+        }
     }
 
     /**

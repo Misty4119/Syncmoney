@@ -28,6 +28,8 @@ public final class DbWriterConsumer implements Runnable {
     private final RedisManager redisManager;
     private volatile boolean running = true;
     private volatile long shutdownDrainDeadlineNanos;
+    private volatile int inFlightTaskCount;
+    private long droppedTaskCount;
     private final boolean debug;
 
     private final Map<DbWriteQueue.DbWriteTask, Integer> retryCounts = new IdentityHashMap<>();
@@ -80,7 +82,12 @@ public final class DbWriterConsumer implements Runnable {
                 List<DbWriteQueue.DbWriteTask> batch = collectBatch();
 
                 if (!batch.isEmpty()) {
-                    processBatch(batch);
+                    inFlightTaskCount = batch.size();
+                    try {
+                        processBatch(batch);
+                    } finally {
+                        inFlightTaskCount = 0;
+                    }
                 } else {
                     Thread.sleep(50);
                 }
@@ -99,6 +106,15 @@ public final class DbWriterConsumer implements Runnable {
                     + "no durable T07 recovery record exists yet and SQL may remain behind");
             pendingStaleTransfers.values().forEach(pending -> pending.task().complete(false));
         }
+
+        int queued = queue.size();
+        int retries = retryCounts.size();
+        int stale = pendingStaleTransfers.size();
+        int inFlight = inFlightTaskCount;
+        boolean drained = queued == 0 && inFlight == 0 && retries == 0 && stale == 0 && droppedTaskCount == 0;
+        plugin.getLogger().info("T21_DRAIN owner=database status=" + (drained ? "drained" : "pending")
+                + " queued=" + queued + " inFlight=" + inFlight + " retry=" + retries + " stale=" + stale
+                + " dropped=" + droppedTaskCount);
 
         plugin.getLogger().fine("DB Writer Consumer stopped.");
     }
@@ -247,6 +263,7 @@ public final class DbWriterConsumer implements Runnable {
 
         if (attempts > Constants.DB_WRITE_MAX_RETRIES) {
             retryCounts.remove(task);
+            droppedTaskCount++;
             task.complete(false);
             plugin.getLogger().severe("Dropping DB write task after " + (attempts - 1)
                     + " failed retries for player " + task.playerUuid()
@@ -258,6 +275,7 @@ public final class DbWriterConsumer implements Runnable {
             plugin.getLogger().warning("Re-queued failed DB write task (attempt " + attempts
                     + "/" + Constants.DB_WRITE_MAX_RETRIES + ") for player " + task.playerUuid());
         } else {
+            droppedTaskCount++;
             task.complete(false);
             plugin.getLogger().severe("DB write queue is full; could not re-queue task for player "
                     + task.playerUuid() + " - it will be retried on the next failure cycle");

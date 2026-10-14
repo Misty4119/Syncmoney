@@ -335,11 +335,91 @@ function Invoke-VaultWrite([string]$nodeName,[string]$command,[string]$stage,[st
     $script:vaultReceipts.Add([ordered]@{node=$nodeName;stage=$stage;before=@($beforeA,$beforeB);after=@($expectedA,$expectedB);marker=$marker.Substring($marker.IndexOf('T21_WRITE_PASS ',[StringComparison]::Ordinal))})
 }
 
-function Get-T21NormalDrainAssessment([string]$content,[string[]]$failureMarkers,[int]$pendingRecoveryCount) {
+function Get-T21NormalDrainAssessment([string]$content,[string[]]$failureMarkers,[int]$pendingRecoveryCount,[bool]$requireOwnerDrain=$false) {
     $syncmoneyDisabledMarker=$content.Contains('Syncmoney disabled.')
     $markers=@($failureMarkers)
-    $verified=($syncmoneyDisabledMarker -and $markers.Count -eq 0 -and $pendingRecoveryCount -eq 0)
-    return [ordered]@{pluginDrainVerified=$verified;syncmoneyDisabledMarker=$syncmoneyDisabledMarker;failureMarkers=$markers;pendingRecoveryRecords=$pendingRecoveryCount}
+    $ownerDrainRecords=@()
+    $ownerDrainFailureMarkers=@()
+    if ($requireOwnerDrain) {
+        $requiredOwnerMetrics=[ordered]@{
+            economy=[ordered]@{queued='0';outstanding='0';retry='0';workerTerminated='true';recoveryPending='0';recoveryBlocked='false'}
+            database=[ordered]@{queued='0';inFlight='0';retry='0';stale='0';dropped='0'}
+            audit=[ordered]@{enabled=$null;buffered='0';inFlight='0';retry='0';deadLetter='0';dropped='0';lateRejected='0'}
+            hybridAudit=[ordered]@{enabled=$null;queued='0';inFlight='0';retry='0';lateRejected='0'}
+        }
+        $allOwnerMarkers=[regex]::Matches($content,'(?im)^.*T21_DRAIN[^\n]*$')
+        $allMarkerOccurrences=[regex]::Matches($content,'(?i)T21_DRAIN')
+        if ($allOwnerMarkers.Count -ne $requiredOwnerMetrics.Count -or $allMarkerOccurrences.Count -ne $requiredOwnerMetrics.Count) {
+            $ownerDrainFailureMarkers+=('expected '+$requiredOwnerMetrics.Count+' unique owner records and marker occurrences, observed '+$allOwnerMarkers.Count+' records and '+$allMarkerOccurrences.Count+' markers')
+        }
+        foreach ($owner in $requiredOwnerMetrics.Keys) {
+            $ownerMarkers=[regex]::Matches($content,"(?m)^.*T21_DRAIN owner=$([regex]::Escape($owner))[^\n]*$")
+            if ($ownerMarkers.Count -ne 1) {
+                $ownerDrainFailureMarkers+=('expected one '+$owner+' owner record, observed '+$ownerMarkers.Count)
+                continue
+            }
+            $ownerLine=$ownerMarkers[0].Value
+            $ownerDrainRecords+=$ownerLine.Trim()
+            $markerIndex=$ownerLine.IndexOf('T21_DRAIN ',[StringComparison]::Ordinal)
+            if ($markerIndex -lt 0) {
+                $ownerDrainFailureMarkers+=($owner+' drain marker is malformed')
+                continue
+            }
+            $tokens=$ownerLine.Substring($markerIndex+'T21_DRAIN '.Length).Trim() -split '\s+'
+            $fields=@{}
+            foreach ($token in $tokens) {
+                if ($token -cnotmatch '^(?<name>[A-Za-z][A-Za-z0-9]*)=(?<value>[A-Za-z0-9_.-]+)$') {
+                    $ownerDrainFailureMarkers+=($owner+' has malformed field '+$token)
+                    continue
+                }
+                $name=$Matches.name
+                $value=$Matches.value
+                if ($fields.ContainsKey($name)) {
+                    $ownerDrainFailureMarkers+=($owner+' has duplicate '+$name+' field')
+                    continue
+                }
+                $fields[$name]=$value
+            }
+
+            $expectedMetrics=$requiredOwnerMetrics[$owner]
+            $expectedFields=@('owner','status')+@($expectedMetrics.Keys)
+            foreach ($field in $expectedFields) {
+                if (-not $fields.ContainsKey($field)) {
+                    $ownerDrainFailureMarkers+=($owner+' is missing '+$field)
+                }
+            }
+            foreach ($field in $fields.Keys) {
+                if ($expectedFields -cnotcontains $field) {
+                    $ownerDrainFailureMarkers+=($owner+' has unexpected '+$field+' field')
+                }
+            }
+            if ($fields.ContainsKey('owner') -and $fields['owner'] -cne $owner) {
+                $ownerDrainFailureMarkers+=($owner+' marker owner does not match its record')
+            }
+
+            $status=$fields['status']
+            if ($status -cne 'drained' -and $status -cne 'disabled') {
+                $ownerDrainFailureMarkers+=($owner+' status is missing or non-drained')
+            } elseif ($status -ceq 'disabled' -and $owner -cnotin @('audit','hybridAudit')) {
+                $ownerDrainFailureMarkers+=($owner+' is required in SYNC mode and cannot report disabled')
+            }
+            if ($expectedMetrics.Contains('enabled')) {
+                $expectedEnabled=if ($status -ceq 'disabled') {'false'} else {'true'}
+                if ($fields.ContainsKey('enabled') -and $fields['enabled'] -cne $expectedEnabled) {
+                    $ownerDrainFailureMarkers+=($owner+' enabled state does not match its status')
+                }
+            }
+            foreach ($metric in $expectedMetrics.Keys) {
+                if ($metric -ceq 'enabled') { continue }
+                if ($fields.ContainsKey($metric) -and $fields[$metric] -cne $expectedMetrics[$metric]) {
+                    $ownerDrainFailureMarkers+=($owner+' has nonzero or invalid '+$metric)
+                }
+            }
+        }
+    }
+    $ownerDrainVerified=(!$requireOwnerDrain -or $ownerDrainFailureMarkers.Count -eq 0)
+    $verified=($syncmoneyDisabledMarker -and $markers.Count -eq 0 -and $pendingRecoveryCount -eq 0 -and $ownerDrainVerified)
+    return [ordered]@{pluginDrainVerified=$verified;syncmoneyDisabledMarker=$syncmoneyDisabledMarker;failureMarkers=$markers;pendingRecoveryRecords=$pendingRecoveryCount;ownerDrainRequired=$requireOwnerDrain;ownerDrainVerified=$ownerDrainVerified;ownerDrainRecords=$ownerDrainRecords;ownerDrainFailureMarkers=$ownerDrainFailureMarkers}
 }
 
 function Get-RecoveryJournalCheckpoint([string]$nodeName) {
@@ -364,7 +444,7 @@ function Assert-RecoveryJournalCheckpointsUnchanged([object[]]$checkpoints,[stri
     if ($seen.Count -ne 2 -or -not $seen.Contains('nodeA') -or -not $seen.Contains('nodeB')) { throw "Recovery journal checkpoints before $stage do not cover nodeA and nodeB." }
 }
 
-function Stop-Node([string]$nodeName,[string]$stage) {
+function Stop-Node([string]$nodeName,[string]$stage,[bool]$requireOwnerDrain=$false) {
     $session=Get-NodeSession $nodeName
     $stop=Invoke-NodeCli $nodeName @('server','command','stop') "$stage-stop.txt"
     if (-not (Wait-ProcessExit $session.pid 40)) { throw "Server PID $($session.pid) remained after normal stop for $nodeName." }
@@ -379,9 +459,9 @@ function Stop-Node([string]$nodeName,[string]$stage) {
     $save=Join-Path $script:logsRoot "$stage-server.log"; Copy-Item -LiteralPath $log -Destination $save
     Remove-Item -LiteralPath $session.path -Force
     $script:serverMayExist[$nodeName]=$false
-    $assessment=Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount)
-    $script:shutdown.Add([ordered]@{stage=$stage;node=$nodeName;pid=$session.pid;commandExit=$stop.exitCode;processExitVerified=$true;pluginDrainVerified=$assessment.pluginDrainVerified;syncmoneyDisabledMarker=$assessment.syncmoneyDisabledMarker;failureMarkers=$assessment.failureMarkers;pendingRecoveryRecords=$assessment.pendingRecoveryRecords;recoveryJournal=$journal;log=$save})
-    if (-not $assessment.pluginDrainVerified) { throw "Normal drain could not be verified on $nodeName; disabled=$($assessment.syncmoneyDisabledMarker), pending=$($assessment.pendingRecoveryRecords), errors=$($assessment.failureMarkers -join ';')." }
+    $assessment=Get-T21NormalDrainAssessment $content $found ([int]$journal.pendingCount) $requireOwnerDrain
+    $script:shutdown.Add([ordered]@{stage=$stage;node=$nodeName;pid=$session.pid;commandExit=$stop.exitCode;processExitVerified=$true;pluginDrainVerified=$assessment.pluginDrainVerified;syncmoneyDisabledMarker=$assessment.syncmoneyDisabledMarker;failureMarkers=$assessment.failureMarkers;pendingRecoveryRecords=$assessment.pendingRecoveryRecords;ownerDrainRequired=$assessment.ownerDrainRequired;ownerDrainVerified=$assessment.ownerDrainVerified;ownerDrainRecords=$assessment.ownerDrainRecords;ownerDrainFailureMarkers=$assessment.ownerDrainFailureMarkers;recoveryJournal=$journal;log=$save})
+    if (-not $assessment.pluginDrainVerified) { throw "Normal drain could not be verified on $nodeName; disabled=$($assessment.syncmoneyDisabledMarker), pending=$($assessment.pendingRecoveryRecords), ownerDrainFailures=$($assessment.ownerDrainFailureMarkers -join ';'), errors=$($assessment.failureMarkers -join ';')." }
 }
 
 function Stop-PossiblyStartedNode([string]$nodeName) {
@@ -695,11 +775,11 @@ try {
     $afterRestart=Get-BackendSnapshot 'after verified pre-upgrade backup and backend restart';Assert-Balances $afterRestart '1000.00' '520.00' 'backend restart';Assert-BackendVersions $afterRestart 1 1 'backend restart';Assert-SnapshotSchemaRows $afterRestart 'after verified pre-upgrade backup and backend restart';$script:snapshots.Add($afterRestart)
 
     # Canary node A is upgraded with node B offline; then node B consumes only the new shared state.
-    Start-Node 'nodeA' $CandidateVersion 'upgrade-canary-nodeA';Invoke-NodeCommand 'nodeA' 'smaccept state-read 1000.00 520.00' 'upgrade-canary-read' 'T21_READ_PASS expected-a=1000.00 expected-b=520.00';Invoke-VaultWrite 'nodeA' 'smaccept write 1337.25 765.50' 'upgrade-canary-write' '1000.00' '520.00' '1337.25' '765.50';Stop-Node 'nodeA' 'upgrade-canary-nodeA'
+    Start-Node 'nodeA' $CandidateVersion 'upgrade-canary-nodeA';Invoke-NodeCommand 'nodeA' 'smaccept state-read 1000.00 520.00' 'upgrade-canary-read' 'T21_READ_PASS expected-a=1000.00 expected-b=520.00';Invoke-VaultWrite 'nodeA' 'smaccept write 1337.25 765.50' 'upgrade-canary-write' '1000.00' '520.00' '1337.25' '765.50';Stop-Node 'nodeA' 'upgrade-canary-nodeA' $true
     $candidateSnapshot=Get-BackendSnapshot 'after candidate node A normal drain';Assert-Balances $candidateSnapshot '1337.25' '765.50' 'candidate node A';Assert-BackendVersions $candidateSnapshot 2 2 'candidate node A';Assert-SnapshotSchemaRows $candidateSnapshot 'after candidate node A normal drain';$script:snapshots.Add($candidateSnapshot)
     $null=Get-NodeConfigObservation 'nodeA' 'after candidate shutdown before rollback'
     $journalPath=Join-Path $script:nodes.nodeA.root '.plugdev\run\plugins\Syncmoney\recovery-v1.jsonl';$journal=Assert-RecoveryJournalForRollback (Read-RecoveryJournal $journalPath);$candidateNodeAJournalCheckpoint=[ordered]@{node='nodeA';path=$journalPath;exists=$true;sha256=$journal.sha256;bytes=$journal.bytes;frameCount=$journal.frameCount;recordFrames=$journal.recordFrames;ackFrames=$journal.ackFrames;pendingCount=$journal.pendingCount;validation=$journal.validation}
-    Start-Node 'nodeB' $CandidateVersion 'upgrade-nodeB';Invoke-NodeCommand 'nodeB' 'smaccept state-read 1337.25 765.50' 'upgrade-nodeB-read' 'T21_READ_PASS expected-a=1337.25 expected-b=765.50';Stop-Node 'nodeB' 'upgrade-nodeB'
+    Start-Node 'nodeB' $CandidateVersion 'upgrade-nodeB';Invoke-NodeCommand 'nodeB' 'smaccept state-read 1337.25 765.50' 'upgrade-nodeB-read' 'T21_READ_PASS expected-a=1337.25 expected-b=765.50';Stop-Node 'nodeB' 'upgrade-nodeB' $true
     $newNodeSnapshot=Get-BackendSnapshot 'after candidate node B normal drain';Assert-Balances $newNodeSnapshot '1337.25' '765.50' 'candidate node B';Assert-BackendVersions $newNodeSnapshot 2 2 'candidate node B';Assert-SnapshotSchemaRows $newNodeSnapshot 'after candidate node B normal drain';$script:snapshots.Add($newNodeSnapshot)
     $null=Get-NodeConfigObservation 'nodeB' 'after candidate shutdown before rollback'
     $nodeARecoveryCheckpoint=Get-RecoveryJournalCheckpoint 'nodeA'

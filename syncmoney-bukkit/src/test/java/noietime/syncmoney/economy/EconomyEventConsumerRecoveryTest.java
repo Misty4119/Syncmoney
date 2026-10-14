@@ -34,6 +34,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -123,6 +126,16 @@ class EconomyEventConsumerRecoveryTest {
         RecoverySpool spool = new RecoverySpool(journal);
         Plugin plugin = plugin();
         SyncmoneyConfig config = config();
+        Logger logger = Logger.getLogger("EconomyEventConsumerRecoveryTest");
+        logger.setLevel(Level.ALL);
+        CopyOnWriteArrayList<String> messages = new CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) { messages.add(record.getMessage()); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        capture.setLevel(Level.ALL);
+        logger.addHandler(capture);
         CacheManager cache = mock(CacheManager.class);
         DbWriteQueue dbQueue = mock(DbWriteQueue.class);
         NameResolver names = mock(NameResolver.class);
@@ -146,11 +159,16 @@ class EconomyEventConsumerRecoveryTest {
         } finally {
             afterRestart.stop();
             afterRestart.shutdown();
+            logger.removeHandler(capture);
         }
 
         verify(cache, times(1)).atomicAddBalanceReceipt(uuid, BigDecimal.TEN);
         assertEquals(1, pending(new RecoverySpool(journal)).size(),
                 "ambiguous evidence must remain pending for operator reconciliation");
+        assertTrue(messages.stream().anyMatch(message -> message.equals(
+                "T21_DRAIN owner=economy status=pending queued=0 outstanding=0 retry=0 "
+                        + "workerTerminated=true recoveryPending=1 recoveryBlocked=false")),
+                "unresolved durable recovery must not be reported as drained");
     }
 
     @Test

@@ -14,6 +14,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,6 +48,41 @@ class DbWriterConsumerTest {
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
         consumer = new DbWriterConsumer(mockPlugin, mockQueue, mockDbManager);
+    }
+
+    @Test
+    void stoppedWriterLogsItsFinalDrainCounters() throws InterruptedException {
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setLevel(Level.ALL);
+        var messages = new CopyOnWriteArrayList<String>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) { messages.add(record.getMessage()); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        capture.setLevel(Level.ALL);
+        logger.addHandler(capture);
+        when(mockPlugin.getLogger()).thenReturn(logger);
+        when(mockQueue.isEmpty()).thenReturn(true);
+        consumer = new DbWriterConsumer(mockPlugin, mockQueue, mockDbManager);
+
+        Thread writer = new Thread(consumer, "test-db-writer-drain-status");
+        try {
+            writer.start();
+            consumer.stop();
+            writer.join(TimeUnit.SECONDS.toMillis(5));
+
+            assertFalse(writer.isAlive(), "writer must stop before its final drain record is emitted");
+            assertTrue(messages.stream().anyMatch(message -> message.equals(
+                    "T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0")));
+        } finally {
+            if (writer.isAlive()) {
+                consumer.stop();
+                writer.interrupt();
+                writer.join(TimeUnit.SECONDS.toMillis(5));
+            }
+            logger.removeHandler(capture);
+        }
     }
 
     @Test

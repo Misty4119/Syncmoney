@@ -259,6 +259,7 @@ public final class EconomyEventConsumer implements Runnable {
             exec.shutdown();
             if (Thread.currentThread() == workerThread) {
                 shutdownCheckpointRequested = true;
+                logShutdownDrainStatus();
                 return;
             }
             try {
@@ -282,6 +283,22 @@ public final class EconomyEventConsumer implements Runnable {
                         + "recovery handoff will continue on its worker");
             }
         }
+        logShutdownDrainStatus();
+    }
+
+    private void logShutdownDrainStatus() {
+        int queued = queue.size();
+        int outstanding = queue.snapshotOutstandingEvents().size();
+        int retries = failedEvents.size();
+        int recoveryPending = durableRecovery.size();
+        ExecutorService exec = executor;
+        boolean workerTerminated = exec == null || exec.isTerminated();
+        boolean drained = queued == 0 && outstanding == 0 && retries == 0 && recoveryPending == 0
+                && workerTerminated && !recoveryBlocked;
+        plugin.getLogger().info("T21_DRAIN owner=economy status=" + (drained ? "drained" : "pending")
+                + " queued=" + queued + " outstanding=" + outstanding + " retry=" + retries
+                + " workerTerminated=" + workerTerminated + " recoveryPending=" + recoveryPending
+                + " recoveryBlocked=" + recoveryBlocked);
     }
 
     /**

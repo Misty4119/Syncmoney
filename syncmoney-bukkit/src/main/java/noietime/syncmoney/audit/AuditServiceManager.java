@@ -77,7 +77,12 @@ public class AuditServiceManager {
         plugin.getLogger().fine("Shutting down audit layer...");
         ShutdownStepRunner.run(plugin.getLogger(),
                 new ShutdownStepRunner.Step("hybrid audit", () -> {
-                    if (hybridAuditManager != null) hybridAuditManager.close();
+                    if (hybridAuditManager != null) {
+                        hybridAuditManager.close();
+                    } else {
+                        plugin.getLogger().info("T21_DRAIN owner=hybridAudit status=disabled enabled=false "
+                                + "queued=0 inFlight=0 retry=0 lateRejected=0");
+                    }
                 }),
                 new ShutdownStepRunner.Step("audit logger", () -> {
                     if (auditLogger != null) auditLogger.close();
