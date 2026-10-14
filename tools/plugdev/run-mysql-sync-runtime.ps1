@@ -39,7 +39,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    throw 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL and MariaDB on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path

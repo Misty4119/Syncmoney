@@ -340,7 +340,7 @@ try {
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
             $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
-                $databaseProduct -ceq 'MySQL'
+                $databaseProduct -in @('MySQL', 'MariaDB')
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -350,21 +350,21 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum Folia across all SQL dialects, allow only MySQL on maximum Folia, and reject the remaining endpoints'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum Folia across all SQL dialects, allow MySQL and MariaDB on maximum Folia, and reject the remaining endpoints'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL and MariaDB on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
-            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia `
             -IncompleteV10AuditTableStartupFailure
     } catch {
         $actualIncompleteV10Diagnostic = $_.Exception.Message
     }
     if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
-        throw "The unsupported maximum-Folia MariaDB diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
+        throw "The unsupported maximum-Folia PostgreSQL diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
     }
-    Write-Output 'PASS: reject maximum-Folia MariaDB with a diagnostic that names the MySQL-only maximum-Folia allowance'
+    Write-Output 'PASS: reject maximum-Folia PostgreSQL with a diagnostic that names the MySQL/MariaDB maximum-Folia allowance'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -556,6 +556,12 @@ try {
         throw 'The maximum-Folia MySQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
     }
     Write-Output 'PASS: reject maximum-Folia incomplete-v10 evidence with a mismatched runtime build'
+    $maximumFoliaMariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB' 'MaximumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $maximumFoliaMariaDbIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete maximum-Folia MariaDB incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept maximum-Folia MariaDB incomplete-v10 failure with the exact pinned runtime identity'
     $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.software = 'paper'
     if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {

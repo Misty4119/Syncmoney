@@ -15,7 +15,7 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     [string]$PlatformEndpoint
 ) {
     if ($PlatformEndpoint -ceq 'MaximumFolia') {
-        return $DatabaseProduct -ceq 'MySQL'
+        return $DatabaseProduct -in @('MySQL', 'MariaDB')
     }
 
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia')
