@@ -216,6 +216,18 @@ test("guard runtime proof requires the entity owner, exact quota outcome, player
     redisVersion: "5",
   };
   assert.equal(hasGuardRuntimeProof(evidence), true);
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("Deposit rejected by PlayerTransactionGuard:")
+      ? `${line} ${line}`
+      : line),
+  }), false, "a single line must not hide duplicate rejection warnings");
+  assert.equal(hasGuardRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("Deposit rejected by PlayerTransactionGuard:")
+      ? `${line} ${line.replace("Deposit rejected by PlayerTransactionGuard:", "deposit rejected by playertransactionguard:")}`
+      : line),
+  }), false, "warning marker duplicate detection must ignore casing");
   assert.equal(hasGuardRuntimeProof({ ...evidence, redisBalance: "6.00" }), false);
   assert.equal(hasGuardRuntimeProof({ ...evidence, redisVersion: "6" }), false);
   assert.equal(hasGuardRuntimeProof({
@@ -255,18 +267,130 @@ test("guard acceptance is an isolated Canvas-only profile and records runtime ev
 
   assert.match(runner, /\[switch\]\$Guard/);
   assert.match(runner, /\$Guard\.IsPresent -and \$pin\.software -ne 'canvas'/);
-  assert.match(runner, /\$guardClient = Invoke-Client 'guard'/);
-  assert.match(runner, /--has-guard-runtime-proof-json/);
+  assert.match(runner, /\$guardClient = Invoke-Client 'guard-pair'/);
+  assert.match(runner, /--has-guard-pair-runtime-proof-json/);
   assert.match(runner, /guard-on/);
   assert.match(prepare, /player-protection/);
-  assert.match(client, /AcceptanceGuard/);
+  assert.match(client, /AcceptanceGuardA/);
+  assert.match(client, /AcceptanceGuardB/);
+  assert.match(client, /guard-pair/);
   assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS/);
-  assert.match(client, /uuid=\$\{bot\.player\?\.uuid \?\? bot\.entity\?\.uuid\}/);
+  assert.match(client, /player=\$\{player\} uuid=\$\{uuid\}/);
   assert.match(probe, /Bukkit\.isOwnedByCurrentRegion\(player\)/);
-  assert.match(probe, /T21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=/);
+  assert.match(probe, /T21_GUARD_TRANSACTIONS player=" \+ player\.getName\(\) \+ " uuid=/);
   assert.match(probe, /outcomes=/);
   assert.match(probe, /accepted=" \+ accepted \+ " rejected=" \+ rejected/);
-  assert.match(runner, /candidateSha -cne '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd'/);
+  assert.match(runner, /candidateSha -cne 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'/);
+});
+
+test("Canvas guard-pair proof requires two entity owners, independent quotas, notices, and persisted balances", () => {
+  const hasGuardPairRuntimeProof = lifecycleAssertions.hasGuardPairRuntimeProof;
+  assert.equal(typeof hasGuardPairRuntimeProof, "function");
+
+  const uuidA = "35c93f74-c540-3b38-8093-b5cb3c2263be";
+  const uuidB = "aa8f2cb5-988d-3b71-84b0-bd7b8bf5b474";
+  const evidence = {
+    serverLines: [
+      `T21_GUARD_OWNER player=AcceptanceGuardA uuid=${uuidA} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidA}`,
+      `T21_GUARD_OWNER player=AcceptanceGuardB uuid=${uuidB} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidB}`,
+    ],
+    clientLines: [
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
+    ],
+    participants: [
+      { player: "AcceptanceGuardA", uuid: uuidA, redisBalance: "5.00", redisVersion: "5" },
+      { player: "AcceptanceGuardB", uuid: uuidB, redisBalance: "5.00", redisVersion: "5" },
+    ],
+  };
+
+  assert.equal(hasGuardPairRuntimeProof(evidence), true);
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("Deposit rejected by PlayerTransactionGuard:")
+      ? `${line} ${line}`
+      : line),
+  }), false, "a single line must not hide duplicate rejection warnings for one owner");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("Deposit rejected by PlayerTransactionGuard:")
+      ? `${line} ${line.replace("Deposit rejected by PlayerTransactionGuard:", "deposit rejected by playertransactionguard:")}`
+      : line),
+  }), false, "warning marker duplicate detection must ignore casing for both owners");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: [...evidence.serverLines, evidence.serverLines[2]],
+  }), false, "duplicate guard rejection warnings must not be collapsed into one participant UUID");
+  const malformedUuid = "------------------------------------";
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replaceAll(uuidA, malformedUuid)),
+    clientLines: evidence.clientLines.map((line) => line.replaceAll(uuidA, malformedUuid)),
+    participants: evidence.participants.map((participant) => participant.player === "AcceptanceGuardA"
+      ? { ...participant, uuid: malformedUuid }
+      : participant),
+  }), false, "every participant proof must use a canonical UUID shape");
+  assert.equal(hasGuardPairRuntimeProof({ ...evidence, participants: evidence.participants.map((p) => ({ ...p, redisBalance: "6.00" })) }), false);
+  assert.equal(hasGuardPairRuntimeProof({ ...evidence, participants: evidence.participants.map((p) => ({ ...p, redisVersion: "6" })) }), false);
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    participants: [evidence.participants[0], { ...evidence.participants[1], uuid: uuidA }],
+  }), false, "each entity owner must be a distinct account");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replace("otherOwned=false", "otherOwned=true")),
+  }), false, "the peer player must be outside this callback's entity owner");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.replace("outcomes=SSSSSF", "outcomes=SSSFSS")),
+  }), false, "the sixth transaction must be the rejected transaction for both accounts");
+  assert.equal(hasGuardPairRuntimeProof({ ...evidence, clientLines: evidence.clientLines.slice(0, 1) }), false);
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    clientLines: evidence.clientLines.map((line) => line.replace(uuidB, uuidA)),
+  }), false, "each player notification must match that player's owner UUID");
+  assert.equal(hasGuardPairRuntimeProof({ ...evidence, serverLines: [...evidence.serverLines, "T21_GUARD_FAIL phase=transactions"] }), false);
+  assert.equal(hasGuardPairRuntimeProof({ ...evidence, clientLines: [...evidence.clientLines, evidence.clientLines[0]] }), false);
+});
+
+test("Canvas guard runner collects and validates the paired owner scenario", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
+  const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
+
+  assert.match(runner, /Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardA .*outcomes=SSSSSF/);
+  assert.match(runner, /Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardB .*outcomes=SSSSSF/);
+  assert.match(runner, /--has-guard-pair-runtime-proof-json/);
+  assert.match(runner, /uuid=\(\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\)/i);
+  assert.match(runner, /guardParticipants/);
+  assert.match(runner, /guard-pair/);
+  assert.match(client, /AcceptanceGuardA/);
+  assert.match(client, /AcceptanceGuardB/);
+  assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=\$\{player\}/);
+  assert.match(probe, /T21_GUARD_OWNER player=" \+ player\.getName\(\)/);
+  assert.match(probe, /require\(!otherOwned, "guard transactions run outside the peer entity owner"\)/);
+  const notEstablished = runner.slice(
+    runner.indexOf("$notEstablished = @("),
+    runner.indexOf("$script:result = [ordered]@{")
+  );
+  assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} else \{\s*\$notEstablished \+= 'Canvas two-owner guard scenario was not run'/);
+  assert.match(probe, /runGuardTransactions\(\s*plugin, transactionGuard, economy, player, peer,/);
+  const pairMethod = probe.slice(
+    probe.indexOf("private void runGuardPairScenario"),
+    probe.indexOf("private CompletableFuture<Void> dispatchGuardParticipant"),
+  );
+  const moveIndex = pairMethod.indexOf("moveAndCaptureRegionLocation");
+  assert.ok(moveIndex >= 0);
+  assert.ok(pairMethod.indexOf("getPluginManager()") < moveIndex,
+    "capture Syncmoney on the global scheduler before player movement can complete inline");
+  assert.ok(pairMethod.indexOf("getServicesManager()") < moveIndex,
+    "capture Vault on the global scheduler before player movement can complete inline");
+  assert.doesNotMatch(pairMethod.slice(pairMethod.indexOf(".whenComplete(")), /getPluginManager\(\)|getServicesManager\(\)/,
+    "the entity-scheduler future continuation must not query Bukkit managers");
 });
 
 test("selects test ports only after the operating system accepts a local bind", () => {

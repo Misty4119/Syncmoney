@@ -12,8 +12,8 @@ import {
 } from "./player-scheduler-lifecycle-assertions.mjs";
 
 const [scenario, protocolVersion, gamePortText, redisPortText, pauseMsText, redisCliPath, mineflayerRoot] = process.argv.slice(2);
-if (!["teleport", "logout", "cross-owner", "guard"].includes(scenario)) {
-  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
+if (!["teleport", "logout", "cross-owner", "guard", "guard-pair"].includes(scenario)) {
+  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard|guard-pair> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
 }
 
 function readPort(value, name) {
@@ -44,8 +44,10 @@ function createAcceptanceBot(username) {
 }
 
 const guardScenario = scenario === "guard";
-const bot = createAcceptanceBot(guardScenario ? "AcceptanceGuard" : "AcceptanceA");
-const otherBot = scenario === "cross-owner" ? createAcceptanceBot("AcceptanceB") : null;
+const guardPairScenario = scenario === "guard-pair";
+const bot = createAcceptanceBot(guardPairScenario ? "AcceptanceGuardA" : guardScenario ? "AcceptanceGuard" : "AcceptanceA");
+const otherBot = scenario === "cross-owner" ? createAcceptanceBot("AcceptanceB")
+  : guardPairScenario ? createAcceptanceBot("AcceptanceGuardB") : null;
 const spawnedPlayers = new Set();
 
 let finished = false;
@@ -57,6 +59,7 @@ let logoutTransportAbort = false;
 let clientObservedNether = false;
 let serverReportedNetherArrival = false;
 const crossOwnerClientsPassed = new Set();
+const guardPairNotices = new Set();
 
 function observeCrossOwnerPass(activeBot, text) {
   if (scenario !== "cross-owner") return;
@@ -64,6 +67,22 @@ function observeCrossOwnerPass(activeBot, text) {
   const complete = observeCrossOwnerClientPass(crossOwnerClientsPassed, activeBot.username, text);
   console.log(`BOT_CROSS_OWNER_PASS player=${activeBot.username}`);
   if (complete) finish(0, "both live clients received their targeted owner-proof completion marker");
+}
+
+function observeGuardPairNotice(activeBot, text) {
+  if (!guardPairScenario || !text.includes("Transaction too fast, please wait a moment")) return;
+  const player = activeBot.username;
+  const uuid = activeBot.player?.uuid ?? activeBot.entity?.uuid;
+  if (!uuid || !["AcceptanceGuardA", "AcceptanceGuardB"].includes(player)) {
+    console.log(`BOT_GUARD_FAIL reason=missing-player-identity player=${player}`);
+    finish(1, "rate-limit notice came from an unidentified guard participant");
+    return;
+  }
+  console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=${player} uuid=${uuid} message=${text}`);
+  guardPairNotices.add(player);
+  if (guardPairNotices.has("AcceptanceGuardA") && guardPairNotices.has("AcceptanceGuardB")) {
+    finish(0, "both entity owners received their own rate-limit notification");
+  }
 }
 
 function finish(code, reason) {
@@ -105,12 +124,13 @@ function observeClientError(username, error) {
   }
   if (!finished) finish(1, "client protocol or connection error");
 }
-bot.on("error", (error) => observeClientError("AcceptanceA", error));
-otherBot?.on("error", (error) => observeClientError("AcceptanceB", error));
+bot.on("error", (error) => observeClientError(bot.username, error));
+otherBot?.on("error", (error) => observeClientError(otherBot.username, error));
 bot.on("message", (message) => {
   const text = message.toString();
   console.log(`BOT_CHAT ${text}`);
   observeCrossOwnerPass(bot, text);
+  observeGuardPairNotice(bot, text);
   if (guardScenario && text.includes("Transaction too fast, please wait a moment")) {
     console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS uuid=${bot.player?.uuid ?? bot.entity?.uuid} message=${text}`);
     finish(0, "client received the player-owner rate-limit notification");
@@ -142,15 +162,16 @@ bot.on("end", (reason) => {
 if (otherBot) {
   otherBot.on("message", (message) => {
     const text = message.toString();
-    console.log(`BOT_CHAT name=AcceptanceB ${text}`);
+    console.log(`BOT_CHAT name=${otherBot.username} ${text}`);
     observeCrossOwnerPass(otherBot, text);
+    observeGuardPairNotice(otherBot, text);
   });
   otherBot.on("kicked", (reason) => {
-    console.log(`BOT_KICKED name=AcceptanceB ${JSON.stringify(reason)}`);
+    console.log(`BOT_KICKED name=${otherBot.username} ${JSON.stringify(reason)}`);
     if (!finished) finish(1, "peer client was kicked before owner proof completed");
   });
   otherBot.on("end", (reason) => {
-    console.log(`BOT_END name=AcceptanceB ${String(reason)}`);
+    console.log(`BOT_END name=${otherBot.username} ${String(reason)}`);
     if (!finished) finish(1, "peer client disconnected before owner proof completed");
   });
 }
@@ -164,6 +185,14 @@ function onSpawn(activeBot) {
       console.log("BOT_CROSS_OWNER_CLIENTS_READY players=AcceptanceA,AcceptanceB");
       bot.chat("/smaccept lifecycle cross-owner AcceptanceB");
       console.log("BOT_COMMAND_SENT /smaccept lifecycle cross-owner AcceptanceB");
+    }
+    return;
+  }
+  if (guardPairScenario) {
+    if (spawnedPlayers.has("AcceptanceGuardA") && spawnedPlayers.has("AcceptanceGuardB")) {
+      console.log("BOT_GUARD_CLIENTS_READY players=AcceptanceGuardA,AcceptanceGuardB");
+      bot.chat("/smaccept lifecycle guard-pair AcceptanceGuardB");
+      console.log("BOT_COMMAND_SENT /smaccept lifecycle guard-pair AcceptanceGuardB");
     }
     return;
   }

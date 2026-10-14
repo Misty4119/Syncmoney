@@ -49,7 +49,7 @@ foreach ($path in @($candidateJar, $acceptanceJar, $apiConsumerJar, $serverJar, 
 $serverSha = (Get-FileHash -LiteralPath $serverJar -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($serverSha -cne $pin.sha256) { throw "Exact server artifact hash mismatch: expected $($pin.sha256), observed $serverSha." }
 $candidateSha = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($candidateSha -cne '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd') {
+if ($candidateSha -cne 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452') {
     throw "Candidate artifact does not match the T21 source pin: $candidateSha"
 }
 
@@ -596,8 +596,10 @@ plugins {
 
     $guardClient = $null
     if ($Guard.IsPresent) {
-        $guardClient = Invoke-Client 'guard'
-        $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=[0-9a-f-]{36} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'entity-owner guard outcome'
+        $guardClient = Invoke-Client 'guard-pair'
+        $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardA entity-owner guard outcome'
+        $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardB entity-owner guard outcome'
+        $null = Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired Canvas owner guard outcome'
     }
 
     $teleport = Invoke-Client 'teleport'
@@ -626,16 +628,32 @@ plugins {
     $guardVersion = $null
     $guardBalanceKey = $null
     $guardVersionKey = $null
+    $guardParticipants = @()
     if ($Guard.IsPresent) {
         $ownerLines = @($serverLines | Where-Object { $_ -match 'T21_GUARD_OWNER' })
-        if ($ownerLines.Count -ne 1) { throw "Expected one guard owner proof, observed $($ownerLines.Count)." }
-        $ownerMatch = [regex]::Match($ownerLines[0], 'T21_GUARD_OWNER player=AcceptanceGuard uuid=([0-9a-f-]{36})')
-        if (-not $ownerMatch.Success) { throw 'The guard owner proof did not contain a valid player UUID.' }
-        $guardUuid = $ownerMatch.Groups[1].Value.ToLowerInvariant()
-        $guardBalanceKey = "syncmoney:balance:$guardUuid"
-        $guardVersionKey = "syncmoney:version:$guardUuid"
-        $guardBalance = (Invoke-Redis @('GET', $guardBalanceKey) -Raw).Trim()
-        $guardVersion = (Invoke-Redis @('GET', $guardVersionKey) -Raw).Trim()
+        if ($ownerLines.Count -ne 2) { throw "Expected two guard owner proofs, observed $($ownerLines.Count)." }
+        foreach ($playerName in @('AcceptanceGuardA', 'AcceptanceGuardB')) {
+            $ownerMatch = [regex]::Match(($ownerLines | Where-Object { $_ -match "T21_GUARD_OWNER player=$playerName " } | Select-Object -First 1),
+                "T21_GUARD_OWNER player=$playerName uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) selfOwned=true otherOwned=false scheduler=entity")
+            if (-not $ownerMatch.Success) { throw "The guard owner proof for $playerName was missing or not on a distinct entity owner." }
+            $guardUuid = $ownerMatch.Groups[1].Value.ToLowerInvariant()
+            $participantBalanceKey = "syncmoney:balance:$guardUuid"
+            $participantVersionKey = "syncmoney:version:$guardUuid"
+            $participantBalance = (Invoke-Redis @('GET', $participantBalanceKey) -Raw).Trim()
+            $participantVersion = (Invoke-Redis @('GET', $participantVersionKey) -Raw).Trim()
+            $guardParticipants += [ordered]@{
+                player = $playerName
+                uuid = $guardUuid
+                redisBalance = $participantBalance
+                redisVersion = $participantVersion
+                balanceKey = $participantBalanceKey
+                versionKey = $participantVersionKey
+            }
+        }
+        $guardBalanceKey = $guardParticipants[0].balanceKey
+        $guardVersionKey = $guardParticipants[0].versionKey
+        $guardBalance = $guardParticipants[0].redisBalance
+        $guardVersion = $guardParticipants[0].redisVersion
         $guardServerEvidenceLines = @($serverLines | Where-Object {
             $_ -match 'T21_GUARD_(?:OWNER|TRANSACTIONS|FAIL)|Deposit rejected by PlayerTransactionGuard:'
         })
@@ -643,21 +661,19 @@ plugins {
         $guardEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{
             serverLines = @($guardServerEvidenceLines)
             clientLines = @($guardClientEvidenceLines)
-            redisBalance = $guardBalance
-            redisVersion = $guardVersion
+            participants = @($guardParticipants)
         }) -Compress
-        $guardEvidenceOutput = @(& node $assertionModule '--has-guard-runtime-proof-json' $guardEvidenceJson 2>&1)
+        $guardEvidenceOutput = @(& node $assertionModule '--has-guard-pair-runtime-proof-json' $guardEvidenceJson 2>&1)
         $guardEvidenceExit = $LASTEXITCODE
         $guardEvidenceResult = ($guardEvidenceOutput | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim()
         if ($guardEvidenceExit -ne 0 -or $guardEvidenceResult -cne 'true') {
-            throw "Canvas player guard evidence failed offline validation: $($guardEvidenceOutput -join ' ')."
+            throw "Canvas guard-pair evidence failed offline validation: $($guardEvidenceOutput -join ' ')."
         }
         $guardEvidence = [ordered]@{
-            ownerProof = $true
-            rateLimitRejection = $true
-            playerNotification = $true
-            redisBalance = $guardBalance
-            redisVersion = [int]$guardVersion
+            ownerProofs = 2
+            independentRateLimitRejections = 2
+            playerNotifications = 2
+            participants = $guardParticipants
             ownerEvidenceLines = $guardServerEvidenceLines
             clientNotificationLines = $guardClientEvidenceLines
         }
@@ -669,12 +685,16 @@ plugins {
     })
     $notEstablished = @('CMI callback retirement', 'hard-kill recovery', 'fleet-wide quiescence', 'full backend/failure matrix')
     if (-not $crossOwnerEnabled) { $notEstablished += 'Folia two-region cross-owner behavior' }
-    $notEstablished += 'full Canvas owner/guard combination matrix outside the tested rate-limit path'
+    if ($Guard.IsPresent) {
+        $notEstablished += 'full Canvas owner/guard lifecycle matrix outside the tested two-owner quota scenario'
+    } else {
+        $notEstablished += 'Canvas two-owner guard scenario was not run'
+    }
     $script:result = [ordered]@{
         schemaVersion = 1
         status = 'PASS'
         evidenceLevel = 'E2_REAL_SERVER_AND_ISOLATED_REDIS'
-        task = if ($Guard.IsPresent) { 'T21 Canvas entity-owner guard and player lifecycle scheduler subcase' } else { 'T21 player lifecycle scheduler subcase' }
+        task = if ($Guard.IsPresent) { 'T21 Canvas two-owner entity guard and player lifecycle scheduler subcase' } else { 'T21 player lifecycle scheduler subcase' }
         runId = $runId
         endpoint = [ordered]@{ label = $Endpoint; software = $pin.software; minecraftVersion = $pin.version; build = $pin.build; serverJar = $serverJar; serverJarSha256 = $serverSha }
         runtime = [ordered]@{ java = $javaVersion; node = (& node --version); plugDevVersion = $plugDevPackage.version; mineflayerVersion = $mineflayerPackage.version; redis = $redisServerVersion }
@@ -693,7 +713,7 @@ plugins {
         }
         isolation = [ordered]@{ runRoot = $runRoot; projectRoot = $projectRoot; plugDevHome = $plugDevHome; gradleUserHome = $gradleHome; redisData = $redisData; runMarker = $runMarker; gamePort = $gamePort; rconPort = $rconPort; redisPort = $redisPort; redisDatabase = 15; redisAof = $true; appendFsync = 'always'; mode = 'local_redis'; playerProtection = $Guard.IsPresent; playerProtectionOnlyConfigSha256 = $script:guardConfigSha256 }
         server = [ordered]@{ processId = $script:serverProcessId; normalStartExitCode = $startExit; normalStopExitCode = $script:normalServerStopExitCode; processExitVerified = $true; syncmoneyDisabledMarker = $true; logSha256 = (Get-FileHash (Join-Path $logsRoot 'server.log') -Algorithm SHA256).Hash.ToLowerInvariant() }
-        redis = [ordered]@{ processId = $script:redisProcessId; normalShutdownExitCode = $script:normalRedisStopExitCode; processExitCode = $script:redisExitCode; processExitVerified = $true; databaseSize = $redisDbSize; balanceKey = $balanceKey; balance = $redisBalance; versionKey = $versionKey; version = [int]$accountVersion; guardBalanceKey = $guardBalanceKey; guardBalance = $guardBalance; guardVersionKey = $guardVersionKey; guardVersion = if ($null -eq $guardVersion) { $null } else { [int]$guardVersion }; files = $redisFiles }
+        redis = [ordered]@{ processId = $script:redisProcessId; normalShutdownExitCode = $script:normalRedisStopExitCode; processExitCode = $script:redisExitCode; processExitVerified = $true; databaseSize = $redisDbSize; balanceKey = $balanceKey; balance = $redisBalance; versionKey = $versionKey; version = [int]$accountVersion; guardBalanceKey = $guardBalanceKey; guardBalance = $guardBalance; guardVersionKey = $guardVersionKey; guardVersion = if ($null -eq $guardVersion) { $null } else { [int]$guardVersion }; guardAccounts = $guardParticipants; files = $redisFiles }
         client = [ordered]@{
             crossOwner = if ($null -eq $crossOwnerClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $crossOwnerClient.exitCode; logSha256 = $crossOwnerClient.logSha256 } }
             guard = if ($null -eq $guardClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $guardClient.exitCode; logSha256 = $guardClient.logSha256 } }
@@ -704,7 +724,7 @@ plugins {
         forcedCleanup = $false
         notEstablished = $notEstablished
     }
-    Write-RunnerLog "PASS endpoint=$Endpoint Redis=$redisBalance/v$accountVersion guard=$guardBalance/v$guardVersion teleport=$($scenarioEvidence.teleportDisposition) pending=$($scenarioEvidence.pendingBoundaries.teleport)/$($scenarioEvidence.pendingBoundaries.logout)"
+    Write-RunnerLog "PASS endpoint=$Endpoint Redis=$redisBalance/v$accountVersion guardAccounts=$($guardParticipants.Count) teleport=$($scenarioEvidence.teleportDisposition) pending=$($scenarioEvidence.pendingBoundaries.teleport)/$($scenarioEvidence.pendingBoundaries.logout)"
 } catch {
     $script:failure = $_.Exception.Message
     Write-RunnerLog "FAIL endpoint=$Endpoint error=$($script:failure)"

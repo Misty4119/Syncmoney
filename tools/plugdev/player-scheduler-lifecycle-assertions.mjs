@@ -145,20 +145,21 @@ export function hasGuardRuntimeProof(evidence) {
     const line = String(rawLine ?? "");
     if (line.includes("T21_GUARD_FAIL")) return false;
     if (line.includes("Deposit rejected by PlayerTransactionGuard:")) {
+      if ((line.match(/Deposit rejected by PlayerTransactionGuard:/gi) ?? []).length !== 1) return false;
       guardRejectionWarnings += 1;
-      const warning = line.match(/Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ([0-9a-f-]{36})\s*$/i);
+      const warning = line.match(/Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/i);
       if (!warning) return false;
       warningUuid = warning[1].toLowerCase();
     }
     if (line.includes("T21_GUARD_OWNER")) {
       ownerMarkers += 1;
-      const owner = line.match(/\bT21_GUARD_OWNER player=AcceptanceGuard uuid=([0-9a-f-]{36}) selfOwned=true scheduler=entity\s*$/i);
+      const owner = line.match(/\bT21_GUARD_OWNER player=AcceptanceGuard uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) selfOwned=true scheduler=entity\s*$/i);
       if ((line.match(/T21_GUARD_OWNER/g) ?? []).length !== 1 || !owner) return false;
       ownerUuid = owner[1].toLowerCase();
     }
     if (line.includes("T21_GUARD_TRANSACTIONS")) {
       transactionMarkers += 1;
-      const transaction = line.match(/\bT21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=([0-9a-f-]{36}) accepted=5 rejected=1 outcomes=([SF]{6}) before=0\.00 after=5\.00\s*$/i);
+      const transaction = line.match(/\bT21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) accepted=5 rejected=1 outcomes=([SF]{6}) before=0\.00 after=5\.00\s*$/i);
       if ((line.match(/T21_GUARD_TRANSACTIONS/g) ?? []).length !== 1 || !transaction) return false;
       transactionUuid = transaction[1].toLowerCase();
       transactionOutcomes = transaction[2];
@@ -174,12 +175,73 @@ export function hasGuardRuntimeProof(evidence) {
     if (line.includes("BOT_GUARD_FAIL")) return false;
     if (line.includes("BOT_GUARD_RATE_LIMIT_NOTICE_PASS")) {
       noticeMarkers += 1;
-      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+uuid=([0-9a-f-]{36})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
+      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
       if ((line.match(/BOT_GUARD_RATE_LIMIT_NOTICE_PASS/g) ?? []).length !== 1 || !notice) return false;
       noticeUuid = notice[1].toLowerCase();
     }
   }
   return noticeMarkers === 1 && noticeUuid === ownerUuid;
+}
+
+export function hasGuardPairRuntimeProof(evidence) {
+  const players = ["AcceptanceGuardA", "AcceptanceGuardB"];
+  if (!evidence || !Array.isArray(evidence.serverLines) || !Array.isArray(evidence.clientLines) ||
+      !Array.isArray(evidence.participants) || evidence.participants.length !== players.length) return false;
+
+  const participantByName = new Map();
+  for (const participant of evidence.participants) {
+    if (!participant || !players.includes(participant.player) || participantByName.has(participant.player) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(participant.uuid ?? "") ||
+        participant.redisBalance !== "5.00" || participant.redisVersion !== "5") return false;
+    participantByName.set(participant.player, { ...participant, uuid: participant.uuid.toLowerCase() });
+  }
+  if (participantByName.size !== players.length ||
+      participantByName.get(players[0]).uuid === participantByName.get(players[1]).uuid) return false;
+
+  const ownerByName = new Map();
+  const transactionsByName = new Map();
+  const warningUuids = new Set();
+  for (const rawLine of evidence.serverLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("T21_GUARD_FAIL")) return false;
+    if (line.includes("Deposit rejected by PlayerTransactionGuard:")) {
+      if ((line.match(/Deposit rejected by PlayerTransactionGuard:/gi) ?? []).length !== 1) return false;
+      const warning = line.match(/Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/i);
+      if (!warning) return false;
+      const warningUuid = warning[1].toLowerCase();
+      if (warningUuids.has(warningUuid)) return false;
+      warningUuids.add(warningUuid);
+    }
+    if (line.includes("T21_GUARD_OWNER")) {
+      const owner = line.match(/\bT21_GUARD_OWNER player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) selfOwned=true otherOwned=false scheduler=entity\s*$/i);
+      if ((line.match(/T21_GUARD_OWNER/g) ?? []).length !== 1 || !owner || ownerByName.has(owner[1])) return false;
+      ownerByName.set(owner[1], owner[2].toLowerCase());
+    }
+    if (line.includes("T21_GUARD_TRANSACTIONS")) {
+      const transaction = line.match(/\bT21_GUARD_TRANSACTIONS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) accepted=5 rejected=1 outcomes=([SF]{6}) before=0\.00 after=5\.00\s*$/i);
+      if ((line.match(/T21_GUARD_TRANSACTIONS/g) ?? []).length !== 1 || !transaction || transactionsByName.has(transaction[1]) || transaction[3] !== "SSSSSF") return false;
+      transactionsByName.set(transaction[1], transaction[2].toLowerCase());
+    }
+  }
+  if (ownerByName.size !== players.length || transactionsByName.size !== players.length || warningUuids.size !== players.length) return false;
+
+  const noticesByName = new Map();
+  for (const rawLine of evidence.clientLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("BOT_GUARD_FAIL")) return false;
+    if (line.includes("BOT_GUARD_RATE_LIMIT_NOTICE_PASS")) {
+      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+player=(AcceptanceGuardA|AcceptanceGuardB)\s+uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
+      if ((line.match(/BOT_GUARD_RATE_LIMIT_NOTICE_PASS/g) ?? []).length !== 1 || !notice || noticesByName.has(notice[1])) return false;
+      noticesByName.set(notice[1], notice[2].toLowerCase());
+    }
+  }
+  if (noticesByName.size !== players.length) return false;
+
+  return players.every((player) => {
+    const uuid = participantByName.get(player).uuid;
+    return ownerByName.get(player) === uuid && transactionsByName.get(player) === uuid &&
+      noticesByName.get(player) === uuid && warningUuids.has(uuid);
+  });
 }
 
 export function normalizedDimension(value) {
@@ -241,6 +303,16 @@ if (process.argv[2] === "--has-guard-runtime-proof-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasGuardRuntimeProof(evidence) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-guard-pair-runtime-proof-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasGuardPairRuntimeProof(evidence) ? "true" : "false");
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;

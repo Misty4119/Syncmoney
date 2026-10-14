@@ -1,6 +1,7 @@
 package noietime.syncmoney.acceptance;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyWriteQueue;
 import net.milkbowl.vault.economy.Economy;
@@ -51,6 +52,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                         runGuardScenario(player);
                     } else {
                         getLogger().warning("T21 guard scenario requires an Acceptance player");
+                    }
+                    return true;
+                }
+                if (scenario.equalsIgnoreCase("guard-pair")) {
+                    if (sender instanceof org.bukkit.entity.Player player && args.length > 2) {
+                        runGuardPairScenario(player, args[2]);
+                    } else {
+                        getLogger().warning("T21 guard-pair scenario requires AcceptanceGuardA and its peer name");
                     }
                     return true;
                 }
@@ -439,9 +448,10 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             try {
                 Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
                 require(plugin != null && plugin.isEnabled(), "Syncmoney enabled for guard scenario");
-                require(plugin.getBreakerManager() != null
-                                && plugin.getBreakerManager().getPlayerTransactionGuard() != null,
-                        "per-player guard initialized");
+                var breakerManager = plugin.getBreakerManager();
+                require(breakerManager != null, "breaker manager initialized");
+                PlayerTransactionGuard transactionGuard = breakerManager.getPlayerTransactionGuard();
+                require(transactionGuard != null, "per-player guard initialized");
                 var registration = getServer().getServicesManager().getRegistration(Economy.class);
                 require(registration != null && registration.getPlugin() == plugin,
                         "Vault provider registered for guard scenario");
@@ -455,7 +465,8 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                             try {
                                 BigDecimal balanceBefore = awaitAccountReady(plugin.getEconomyFacade(), uuid);
                                 player.getScheduler().run(this,
-                                        entityTask -> runGuardTransactions(plugin, economy, player, uuid, balanceBefore),
+                                        entityTask -> runGuardTransactions(
+                                                plugin, transactionGuard, economy, player, uuid, balanceBefore),
                                         () -> getLogger().severe("T21_GUARD_FAIL phase=entity-retired reason=AcceptanceGuard"));
                             } catch (Throwable failure) {
                                 reportGuardFailure("account-ready", failure);
@@ -471,18 +482,118 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         });
     }
 
-    private void runGuardTransactions(Syncmoney plugin, Economy economy,
+    private void runGuardTransactions(Syncmoney plugin, PlayerTransactionGuard transactionGuard, Economy economy,
             org.bukkit.entity.Player player, UUID uuid, BigDecimal balanceBefore) {
+        runGuardTransactions(plugin, transactionGuard, economy, player, null, uuid, balanceBefore, null);
+    }
+
+    private void runGuardPairScenario(org.bukkit.entity.Player anchor, String otherPlayerName) {
+        if (!anchor.getName().equals("AcceptanceGuardA") || !otherPlayerName.equals("AcceptanceGuardB")) {
+            getLogger().severe("T21_GUARD_FAIL phase=player-pair reason=unexpected-acceptance-player-pair");
+            return;
+        }
+        getServer().getGlobalRegionScheduler().run(this, globalTask -> {
+            try {
+                var other = getServer().getPlayerExact(otherPlayerName);
+                require(other != null, "second guard Acceptance player is online");
+                require(other != anchor, "guard participants are different entities");
+                Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
+                require(plugin != null && plugin.isEnabled(), "Syncmoney enabled for guard-pair scenario");
+                var breakerManager = plugin.getBreakerManager();
+                require(breakerManager != null, "breaker manager initialized for guard-pair scenario");
+                PlayerTransactionGuard transactionGuard = breakerManager.getPlayerTransactionGuard();
+                require(transactionGuard != null, "per-player guard initialized");
+                var registration = getServer().getServicesManager().getRegistration(Economy.class);
+                require(registration != null && registration.getPlugin() == plugin,
+                        "Vault provider registered for guard-pair scenario");
+                Economy economy = registration.getProvider();
+                World overworld = getServer().getWorlds().stream()
+                        .filter(world -> world.getEnvironment() == World.Environment.NORMAL)
+                        .findFirst().orElseThrow(() -> new IllegalStateException("Overworld unavailable"));
+                moveAndCaptureRegionLocation(other, overworld, "AcceptanceGuardB",
+                        new org.bukkit.Location(overworld, 16_384.5, 100, 16_384.5))
+                        .whenComplete((location, moveFailure) -> {
+                            if (moveFailure != null) {
+                                reportGuardFailure("pair-separation", moveFailure);
+                                return;
+                            }
+                            try {
+                                CompletableFuture<Void> first = dispatchGuardParticipant(
+                                        plugin, transactionGuard, economy, anchor, other, "AcceptanceGuardA");
+                                CompletableFuture<Void> second = dispatchGuardParticipant(
+                                        plugin, transactionGuard, economy, other, anchor, "AcceptanceGuardB");
+                                CompletableFuture.allOf(first, second).whenComplete((ignored, failure) -> {
+                                    if (failure != null) {
+                                        reportGuardFailure("pair-transactions", failure);
+                                    } else {
+                                        getLogger().info("T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB");
+                                    }
+                                });
+                            } catch (Throwable failure) {
+                                reportGuardFailure("pair-setup", failure);
+                            }
+                        });
+            } catch (Throwable failure) {
+                reportGuardFailure("pair-start", failure);
+            }
+        });
+    }
+
+    private CompletableFuture<Void> dispatchGuardParticipant(
+            Syncmoney plugin, PlayerTransactionGuard transactionGuard, Economy economy,
+            org.bukkit.entity.Player player,
+            org.bukkit.entity.Player peer, String expectedName) {
+        var completed = new CompletableFuture<Void>();
+        player.getScheduler().run(this, ownerTask -> {
+            try {
+                boolean selfOwned = Bukkit.isOwnedByCurrentRegion(player);
+                boolean peerOwned = Bukkit.isOwnedByCurrentRegion(peer);
+                require(player.getName().equals(expectedName), "guard owner callback is for " + expectedName);
+                require(selfOwned && !peerOwned,
+                        "guard callback is owned by " + expectedName + " and not by its peer");
+                UUID uuid = player.getUniqueId();
+                getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                    try {
+                        BigDecimal balanceBefore = awaitAccountReady(plugin.getEconomyFacade(), uuid);
+                        player.getScheduler().run(this,
+                                entityTask -> runGuardTransactions(
+                                        plugin, transactionGuard, economy, player, peer,
+                                        uuid, balanceBefore, completed),
+                                () -> completeGuardFailure(completed,
+                                        "T21 guard player retired before transactions: " + expectedName));
+                    } catch (Throwable failure) {
+                        reportGuardFailure("account-ready-" + expectedName, failure);
+                        completed.completeExceptionally(failure);
+                    }
+                });
+            } catch (Throwable failure) {
+                reportGuardFailure("owner-dispatch-" + expectedName, failure);
+                completed.completeExceptionally(failure);
+            }
+        }, () -> completeGuardFailure(completed,
+                "T21 guard player retired before owner callback: " + expectedName));
+        return completed;
+    }
+
+    private void runGuardTransactions(Syncmoney plugin, PlayerTransactionGuard transactionGuard, Economy economy,
+            org.bukkit.entity.Player player, org.bukkit.entity.Player peer,
+            UUID uuid, BigDecimal balanceBefore, CompletableFuture<Void> completed) {
         try {
             boolean owner = Bukkit.isOwnedByCurrentRegion(player);
-            require(owner, "guard transactions run on AcceptanceGuard's current entity owner");
-            getLogger().info("T21_GUARD_OWNER player=AcceptanceGuard uuid=" + uuid
-                    + " selfOwned=" + owner + " scheduler=entity");
-            require(plugin.getBreakerManager() != null
-                            && plugin.getBreakerManager().getPlayerTransactionGuard() != null,
+            require(owner, "guard transactions run on " + player.getName() + " current entity owner");
+            boolean otherOwned = peer != null && Bukkit.isOwnedByCurrentRegion(peer);
+            if (peer != null) {
+                require(!otherOwned, "guard transactions run outside the peer entity owner");
+                getLogger().info("T21_GUARD_OWNER player=" + player.getName() + " uuid=" + uuid
+                        + " selfOwned=" + owner + " otherOwned=" + otherOwned + " scheduler=entity");
+            } else {
+                getLogger().info("T21_GUARD_OWNER player=" + player.getName() + " uuid=" + uuid
+                        + " selfOwned=" + owner + " scheduler=entity");
+            }
+            require(transactionGuard != null,
                     "per-player guard remains active on the entity owner");
             require(balanceBefore.compareTo(BigDecimal.ZERO) == 0,
-                    "fresh isolated AcceptanceGuard account starts at zero: " + balanceBefore);
+                    "fresh isolated " + player.getName() + " account starts at zero: " + balanceBefore);
 
             int accepted = 0;
             int rejected = 0;
@@ -511,13 +622,21 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                     "per-second guard rejected the sixth transaction in order: " + outcomes);
             require(balanceAfter.compareTo(BigDecimal.valueOf(5)) == 0,
                     "rejected guard transaction did not change the balance: " + balanceAfter);
-            getLogger().info("T21_GUARD_TRANSACTIONS player=AcceptanceGuard uuid=" + uuid
+            getLogger().info("T21_GUARD_TRANSACTIONS player=" + player.getName() + " uuid=" + uuid
                     + " accepted=" + accepted + " rejected=" + rejected + " outcomes=" + outcomes
                     + " before=" + balanceBefore.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString()
                     + " after=" + balanceAfter.toPlainString());
+            if (completed != null) completed.complete(null);
         } catch (Throwable failure) {
             reportGuardFailure("transactions", failure);
+            if (completed != null) completed.completeExceptionally(failure);
         }
+    }
+
+    private void completeGuardFailure(CompletableFuture<Void> completed, String message) {
+        var failure = new IllegalStateException(message);
+        getLogger().severe("T21_GUARD_FAIL " + message);
+        completed.completeExceptionally(failure);
     }
 
     private void reportGuardFailure(String phase, Throwable failure) {
