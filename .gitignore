@@ -137,6 +137,15 @@ tools/plugdev/*
 !tools/plugdev/run-redis-aof-restart.test.ps1
 !tools/plugdev/run-sync-upgrade-cleanup.ps1
 !tools/plugdev/run-sync-upgrade-cleanup.test.ps1
+!tools/plugdev/m10-online-client.mjs
+!tools/plugdev/m10-online-client-identity.mjs
+!tools/plugdev/m10-online-client-identity.test.mjs
+!tools/plugdev/m10-runtime-matrix-offline-audit.ps1
+!tools/plugdev/m10-runtime-matrix-offline-audit.test.ps1
+!tools/plugdev/m10-redis-pubsub-observer.mjs
+!tools/plugdev/m10-redis-pubsub-observer.test.mjs
+!tools/plugdev/run-m10-reconciliation.ps1
+!tools/plugdev/run-m10-reconciliation.test.ps1
 !tools/plugdev/recovery-spool-validator.ps1
 !tools/plugdev/recovery-spool-validator.test.ps1
 !tools/plugdev/t21-upgrade-validation.ps1

@@ -709,6 +709,10 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             require(plugin != null && plugin.isEnabled(), "plugin enabled");
             verifyPluginVersion(plugin);
             var facade = plugin.getEconomyFacade();
+            if (args.length > 0 && args[0].equalsIgnoreCase("m10")) {
+                runM10ReconciliationProbe(plugin, args);
+                return;
+            }
             if (args.length > 0 && args[0].equalsIgnoreCase("legacy-sqlite")) {
                 runLegacySqliteCheck(plugin, facade, args);
                 return;
@@ -809,6 +813,183 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         }
     }
 
+    /** Runtime-only M10 probe: mutate one disposable account and inspect memory without loading authority. */
+    private void runM10ReconciliationProbe(Syncmoney plugin, String[] args) {
+        try {
+            require(args.length >= 3, "usage: smaccept m10 <snapshot|deposit|await> <player|uuid> [arguments]");
+            String action = args[1].toLowerCase(java.util.Locale.ROOT);
+            if (action.equals("ready")) {
+                require(args.length == 4, "usage: smaccept m10 ready <player> <timeout-seconds>");
+                String playerName = args[2];
+                int timeoutSeconds = Integer.parseInt(args[3]);
+                require(timeoutSeconds > 0 && timeoutSeconds <= 120, "bounded M10 player-load timeout");
+                dispatchM10OnlinePlayer(playerName, "ready", uuid -> {
+                    getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds);
+                        try {
+                            while (System.nanoTime() < deadline) {
+                                var state = plugin.getEconomyFacade().getMemoryState(uuid);
+                                if (state != null) {
+                                    getLogger().info("T21_M10_READY_PASS name=" + playerName + " uuid=" + uuid
+                                            + " balance=" + formatT21Amount(state.balance()) + " version=" + state.version());
+                                    return;
+                                }
+                                Thread.sleep(100);
+                            }
+                            throw new IllegalStateException("player account load did not populate memory before timeout");
+                        } catch (Throwable e) {
+                            getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=ready", e);
+                        }
+                    });
+                });
+                return;
+            }
+
+            if (action.equals("snapshot")) {
+                String playerName = args[2];
+                String requestId = args.length > 3 ? args[3] : "unspecified";
+                dispatchM10OnlinePlayer(playerName, "snapshot", uuid -> {
+                    getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                        try {
+                            var state = plugin.getEconomyFacade().getMemoryState(uuid);
+                            require(state != null, "memory state exists for online player " + playerName);
+                            getLogger().info("T21_M10_MEMORY request=" + requestId + " name=" + playerName + " uuid=" + uuid
+                                    + " balance=" + formatT21Amount(state.balance()) + " version=" + state.version());
+                        } catch (Throwable e) {
+                            getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=snapshot", e);
+                        }
+                    });
+                });
+                return;
+            }
+
+            if (action.equals("warm")) {
+                require(args.length == 4, "usage: smaccept m10 warm <uuid> <timeout-seconds>");
+                UUID uuid = UUID.fromString(args[2]);
+                int timeoutSeconds = Integer.parseInt(args[3]);
+                require(timeoutSeconds > 0 && timeoutSeconds <= 120, "bounded M10 account-warm timeout");
+                getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                    try {
+                        BigDecimal balance = awaitAccountReady(plugin.getEconomyFacade(), uuid,
+                                java.util.concurrent.TimeUnit.SECONDS.toMillis(timeoutSeconds));
+                        var state = plugin.getEconomyFacade().getMemoryState(uuid);
+                        require(state != null && state.balance().compareTo(balance) == 0,
+                                "warmed M10 account state is available");
+                        getLogger().info("T21_M10_WARM_PASS uuid=" + uuid + " balance=" + formatT21Amount(balance)
+                                + " version=" + state.version());
+                    } catch (Throwable e) {
+                        getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=warm", e);
+                    }
+                });
+                return;
+            }
+
+            if (action.equals("deposit")) {
+                require(args.length == 5, "usage: smaccept m10 deposit <uuid> <amount> <request-id>");
+                UUID uuid = UUID.fromString(args[2]);
+                BigDecimal amount = new BigDecimal(args[3]);
+                String requestId = args[4];
+                require(requestId.matches("[0-9a-fA-F-]{8,64}"), "M10 deposit request ID format");
+                require(amount.signum() > 0, "positive M10 deposit amount");
+                getServer().getGlobalRegionScheduler().run(this, globalTask -> {
+                    try {
+                        var registration = getServer().getServicesManager().getRegistration(Economy.class);
+                        require(registration != null && registration.getPlugin() == plugin, "Vault provider registration");
+                        Economy vault = registration.getProvider();
+                        OfflinePlayer offlinePlayer = getServer().getOfflinePlayer(uuid);
+                        // Vault's public Economy contract is synchronous; keep this probe on
+                        // Paper's global scheduler while the product write path stays memory-first.
+                        runM10Deposit(plugin, vault, offlinePlayer, uuid, amount, requestId);
+                    } catch (Throwable e) {
+                        getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=deposit-dispatch", e);
+                    }
+                });
+                return;
+            }
+
+            if (action.equals("await")) {
+                require(args.length == 6, "usage: smaccept m10 await <player> <balance> <version> <timeout-seconds>");
+                String playerName = args[2];
+                BigDecimal expectedBalance = new BigDecimal(args[3]);
+                long expectedVersion = Long.parseLong(args[4]);
+                int timeoutSeconds = Integer.parseInt(args[5]);
+                require(timeoutSeconds > 0 && timeoutSeconds <= 900, "bounded M10 await timeout");
+                dispatchM10OnlinePlayer(playerName, "await", uuid -> {
+                    getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds);
+                        try {
+                            while (System.nanoTime() < deadline) {
+                                var state = plugin.getEconomyFacade().getMemoryState(uuid);
+                                if (state != null && state.version() == expectedVersion
+                                        && state.balance().compareTo(expectedBalance) == 0) {
+                                    getLogger().info("T21_M10_RECONCILE_PASS name=" + playerName + " uuid=" + uuid
+                                            + " balance=" + formatT21Amount(state.balance())
+                                            + " version=" + state.version());
+                                    return;
+                                }
+                                Thread.sleep(500);
+                            }
+                            var state = plugin.getEconomyFacade().getMemoryState(uuid);
+                            getLogger().severe("T21_M10_FAIL action=await expected=" + formatT21Amount(expectedBalance)
+                                    + "/v" + expectedVersion + " actual="
+                                    + (state == null ? "missing" : formatT21Amount(state.balance()) + "/v" + state.version()));
+                        } catch (Throwable e) {
+                            getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=await", e);
+                        }
+                    });
+                });
+                return;
+            }
+
+            throw new IllegalArgumentException("Unknown M10 probe action: " + action);
+        } catch (Throwable e) {
+            getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=dispatch", e);
+        }
+    }
+
+    /** Resolve online-player identity on the entity owner before handing immutable data to async polling. */
+    private void dispatchM10OnlinePlayer(String playerName, String action,
+                                         java.util.function.Consumer<UUID> callback) {
+        getServer().getGlobalRegionScheduler().run(this, globalTask -> {
+            var player = getServer().getPlayerExact(playerName);
+            if (player == null) {
+                getLogger().severe("T21_M10_FAIL action=" + action
+                        + " reason=acceptance-player-not-online name=" + playerName);
+                return;
+            }
+            player.getScheduler().run(this, entityTask -> {
+                if (!player.isOnline()) {
+                    getLogger().severe("T21_M10_FAIL action=" + action
+                            + " reason=acceptance-player-not-online name=" + playerName);
+                    return;
+                }
+                try {
+                    callback.accept(player.getUniqueId());
+                } catch (Throwable e) {
+                    getLogger().log(java.util.logging.Level.SEVERE,
+                            "T21_M10_FAIL action=" + action + " reason=entity-callback", e);
+                }
+            }, () -> getLogger().severe("T21_M10_FAIL action=" + action
+                    + " reason=entity-retired name=" + playerName));
+        });
+    }
+
+    private void runM10Deposit(Syncmoney plugin, Economy vault, OfflinePlayer player, UUID uuid,
+                               BigDecimal amount, String requestId) {
+        try {
+            var response = vault.depositPlayer(player, amount.doubleValue());
+            require(response.transactionSuccess(), "Vault deposit accepted: " + response.errorMessage);
+            BigDecimal actualBalance = BigDecimal.valueOf(response.balance);
+            var state = plugin.getEconomyFacade().getMemoryState(uuid);
+            require(state != null && state.balance().compareTo(actualBalance) == 0,
+                    "accepted Vault deposit is reflected in local memory");
+            getLogger().info("T21_M10_DEPOSIT_PASS request=" + requestId + " uuid=" + uuid + " amount=" + formatT21Amount(amount)
+                    + " balance=" + formatT21Amount(actualBalance) + " version=" + state.version());
+        } catch (Throwable e) {
+            getLogger().log(java.util.logging.Level.SEVERE, "T21_M10_FAIL action=deposit", e);
+        }
+    }
+
     private VaultMutationReceipt mutateThroughVault(
             Economy vault,
             OfflinePlayer player,
@@ -852,8 +1033,12 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
 
     private BigDecimal awaitAccountReady(noietime.syncmoney.economy.EconomyFacade facade, UUID uuid)
             throws InterruptedException {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS
-                .toNanos(ACCOUNT_LOAD_TIMEOUT_MILLIS);
+        return awaitAccountReady(facade, uuid, ACCOUNT_LOAD_TIMEOUT_MILLIS);
+    }
+
+    private BigDecimal awaitAccountReady(noietime.syncmoney.economy.EconomyFacade facade, UUID uuid,
+                                         long timeoutMillis) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         while (System.nanoTime() < deadline) {
             BigDecimal balance = facade.getBalanceForPlaceholder(uuid);
             if (balance != null) return balance;
