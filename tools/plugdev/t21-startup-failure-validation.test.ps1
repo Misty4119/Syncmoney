@@ -340,7 +340,7 @@ try {
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
             $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
-                $databaseProduct -in @('MySQL', 'MariaDB')
+                $true
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -350,21 +350,21 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum Folia across all SQL dialects, allow MySQL and MariaDB on maximum Folia, and reject the remaining endpoints'
+    Write-Output 'PASS: allow incomplete-v10 targets on minimum and maximum Paper and minimum and maximum Folia across all SQL dialects, and reject the remaining endpoints'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum Folia, plus MySQL and MariaDB on maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
+    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper and minimum/maximum Folia; Canvas, current-stable Paper, and unpinned endpoints are not supported.'
     $actualIncompleteV10Diagnostic = $null
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
-            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas `
             -IncompleteV10AuditTableStartupFailure
     } catch {
         $actualIncompleteV10Diagnostic = $_.Exception.Message
     }
     if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
-        throw "The unsupported maximum-Folia PostgreSQL diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
+        throw "The unsupported PostgreSQL / MaximumCanvas diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
     }
-    Write-Output 'PASS: reject maximum-Folia PostgreSQL with a diagnostic that names the MySQL/MariaDB maximum-Folia allowance'
+    Write-Output 'PASS: reject PostgreSQL on MaximumCanvas with a diagnostic that names the Paper/Folia endpoint allowance'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -521,6 +521,116 @@ try {
         return $copy
     }
 
+    function New-T21PostgreSqlIncompleteAuditReportFixture([string]$platformEndpoint = 'MaximumFolia') {
+        $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
+        $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+        $postgresRunRoot = Join-Path $testRoot 'postgres-incomplete-v10-fixture'
+        $postgresLogsRoot = Join-Path $postgresRunRoot 'logs'
+        $postgresGradleHome = Join-Path $postgresRunRoot '.gradle-user-home'
+        New-Item -ItemType Directory -Force -Path $postgresLogsRoot, $postgresGradleHome | Out-Null
+        $copy.runDirectory = [IO.Path]::GetFullPath($postgresRunRoot)
+        $copy.gradleDaemonCleanup.isolatedUserHome = [IO.Path]::GetFullPath($postgresGradleHome)
+        $copy.logs = [ordered]@{}
+        $copy.task = 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
+        $copy.server = [ordered]@{
+            software = $endpoint.software
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+            sha256 = $endpoint.sha256
+        }
+        $copy.configuration.databaseType = 'postgresql'
+        $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
+        $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
+        $copy.sqlBackend = [ordered]@{ product = 'PostgreSQL'; version = '18.1' }
+        $copy.startupObservation.runtimeIdentity = [ordered]@{
+            software = $endpoint.software
+            runtimeVersion = $endpoint.minecraftVersion
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+        }
+        $copy.startupObservation.expectedFailure = 'incomplete-v10-audit-table'
+        $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
+        $copy.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
+
+        $mainVersionRowJson = '{"id":"1","version":1,"applied_at":"2026-10-14T00:00:00","description":"T21 pre-existing main schema"}'
+        $auditVersionRowJson = '{"id":"audit","version":9,"applied_at":"2026-10-14T00:00:00","description":"T21 incomplete audit v9 sentinel"}'
+        foreach ($schema in @($copy.schemaStateBefore, $copy.schemaStateAfter)) {
+            $schema.mainVersion = 1
+            $schema.mainVersionRowJson = $mainVersionRowJson
+            $schema.auditVersion = 9
+            $schema.auditTableExists = $true
+            $schema.auditVersionRowJson = $auditVersionRowJson
+            $schema.playersTableExists = $true
+            $schema.auditRowsJson = '[{"id":"00000000-0000-0000-0000-000000000329"}]'
+        }
+        $copy.schemaStateBefore.playersTableExists = $false
+        $copy.schemaStateBefore.playerRows = $null
+        $copy.schemaStateAfter.playerRows = 0
+
+        $columnMetadataFields = @(
+            'table_catalog', 'table_schema', 'table_name', 'column_name', 'ordinal_position', 'column_default', 'is_nullable', 'data_type',
+            'character_maximum_length', 'character_octet_length', 'numeric_precision', 'numeric_precision_radix', 'numeric_scale',
+            'datetime_precision', 'interval_type', 'interval_precision', 'character_set_catalog', 'character_set_schema', 'character_set_name',
+            'collation_catalog', 'collation_schema', 'collation_name', 'domain_catalog', 'domain_schema', 'domain_name', 'udt_catalog',
+            'udt_schema', 'udt_name', 'scope_catalog', 'scope_schema', 'scope_name', 'maximum_cardinality', 'dtd_identifier',
+            'is_self_referencing', 'is_identity', 'identity_generation', 'identity_start', 'identity_increment', 'identity_maximum',
+            'identity_minimum', 'identity_cycle', 'is_generated', 'generation_expression', 'is_updatable'
+        )
+        $column = [ordered]@{}
+        foreach ($field in $columnMetadataFields) { $column[$field] = $null }
+        $column.table_catalog = 'syncmoney_t21_a1b2c3d4'
+        $column.table_schema = 'public'
+        $column.table_name = 'syncmoney_audit_log'
+        $column.column_name = 'id'
+        $column.ordinal_position = 1
+        $column.is_nullable = 'NO'
+        $column.data_type = 'character varying'
+        $column.character_maximum_length = 36
+        $column.character_octet_length = 144
+        $column.udt_name = 'varchar'
+        $column.is_identity = 'NO'
+        $column.is_generated = 'NEVER'
+        $column.is_updatable = 'YES'
+        $columnJson = ConvertTo-Json -InputObject ([object[]]@([pscustomobject]$column)) -Depth 10 -Compress
+        $copy.schemaStateBefore.auditColumnsJson = $columnJson
+        $copy.schemaStateAfter.auditColumnsJson = $columnJson
+        $indexJson = '[{"name":"syncmoney_audit_log_pkey","definition":"CREATE UNIQUE INDEX syncmoney_audit_log_pkey ON public.syncmoney_audit_log USING btree (id)"}]'
+        $copy.schemaStateBefore.auditIndexesJson = $indexJson
+        $copy.schemaStateAfter.auditIndexesJson = $indexJson
+
+        $platformSoftware = if ($endpoint.software -ceq 'folia') { 'Folia' } else { 'Paper' }
+        $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading {2} {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build, $platformSoftware
+        $platformLog = @(
+            $platformLine
+            '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 9, target 11'
+            '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
+            'java.lang.IllegalStateException: Failed audit schema migration to version 10; version metadata was not advanced past 9'
+            'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
+            '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
+            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+        )
+        $postgresPlatformLogPath = Join-Path $postgresLogsRoot 'platform-candidate-startup-failure.txt'
+        [IO.File]::WriteAllLines($postgresPlatformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+        $platformLogInfo = Get-Item -LiteralPath $postgresPlatformLogPath
+        $platformLogHash = (Get-FileHash -LiteralPath $postgresPlatformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $postgresVersionLogPath = Join-Path $postgresLogsRoot 'postgres-server-version.txt'
+        [IO.File]::WriteAllText($postgresVersionLogPath, "postgres (PostgreSQL) 18.1`n", [Text.UTF8Encoding]::new($false))
+        $postgresVersionLogInfo = Get-Item -LiteralPath $postgresVersionLogPath
+        $postgresVersionLogHash = (Get-FileHash -LiteralPath $postgresVersionLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $gradleStopLogPath = Join-Path $postgresLogsRoot 'gradle-daemon-stop.txt'
+        [IO.File]::WriteAllText($gradleStopLogPath, "No Gradle daemons are running.`n", [Text.UTF8Encoding]::new($false))
+        $gradleStopLogInfo = Get-Item -LiteralPath $gradleStopLogPath
+        $gradleStopLogHash = (Get-FileHash -LiteralPath $gradleStopLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $copy.platformLogs[0].bytes = [long]$platformLogInfo.Length
+        $copy.platformLogs[0].sha256 = $platformLogHash
+        $copy.logs['logs\platform-candidate-startup-failure.txt'] = [ordered]@{ bytes = [long]$platformLogInfo.Length; sha256 = $platformLogHash }
+        $copy.logs['logs\postgres-server-version.txt'] = [ordered]@{ bytes = [long]$postgresVersionLogInfo.Length; sha256 = $postgresVersionLogHash }
+        $copy.logs['logs\gradle-daemon-stop.txt'] = [ordered]@{ bytes = [long]$gradleStopLogInfo.Length; sha256 = $gradleStopLogHash }
+        return $copy
+    }
+
     $mysqlIncompleteReport = New-T21MySqlIncompleteAuditReportFixture
     if (-not (Test-T21StartupFailureReportFixture $mysqlIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTable)) {
@@ -562,6 +672,18 @@ try {
         throw 'The complete maximum-Folia MariaDB incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept maximum-Folia MariaDB incomplete-v10 failure with the exact pinned runtime identity'
+    $maximumFoliaPostgreSqlIncompleteReport = New-T21PostgreSqlIncompleteAuditReportFixture 'MaximumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $maximumFoliaPostgreSqlIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete maximum-Folia PostgreSQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept maximum-Folia PostgreSQL incomplete-v10 failure with the exact pinned runtime identity'
+    $maximumFoliaPostgreSqlIncompleteReport.startupObservation.runtimeIdentity.build = 6
+    if (Test-T21StartupFailureReportFixture $maximumFoliaPostgreSqlIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable) {
+        throw 'The maximum-Folia PostgreSQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject maximum-Folia PostgreSQL incomplete-v10 evidence with a mismatched runtime build'
     $minimumFoliaIncompleteReport.startupObservation.runtimeIdentity.software = 'paper'
     if (Test-T21StartupFailureReportFixture $minimumFoliaIncompleteReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTable) {
