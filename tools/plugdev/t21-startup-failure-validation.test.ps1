@@ -338,14 +338,14 @@ try {
 
     foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-            $shouldAccept = $endpointName -ceq 'Minimum'
+            $shouldAccept = $endpointName -in @('Minimum', 'Maximum')
             $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
             if ($accepted -ne $shouldAccept) {
                 throw "The incomplete-v10-audit-table target guard returned $accepted for $databaseProduct / $endpointName; expected $shouldAccept."
             }
         }
     }
-    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum Paper across all three SQL dialects'
+    Write-Output 'PASS: bound the incomplete-v10-audit-table case to minimum and maximum Paper across all three SQL dialects'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -408,9 +408,22 @@ try {
 
     function New-T21MySqlIncompleteAuditReportFixture(
         [string]$product = 'MySQL',
-        [string]$version = '8.0.42'
+        [string]$version = '8.0.42',
+        [string]$platformEndpoint = 'Minimum'
     ) {
+        $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
         $copy = New-T21MySqlStartupFailureReportFixture $product $version
+        $copy.server = [ordered]@{
+            software = $endpoint.software
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+            sha256 = $endpoint.sha256
+        }
+        $copy.startupObservation.runtimeIdentity = [ordered]@{
+            software = $endpoint.software
+            minecraftVersion = $endpoint.minecraftVersion
+            build = $endpoint.build
+        }
         $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
         $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
         $copy.task = 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
@@ -459,8 +472,9 @@ try {
         $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
         $copy.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
 
+        $platformLine = '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper {0}-{1}-main@fixture for Minecraft {0}' -f $endpoint.minecraftVersion, $endpoint.build
         $platformLog = @(
-            '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
+            $platformLine
             '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
             '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 9, target 11'
             '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
@@ -487,6 +501,14 @@ try {
         throw 'The complete minimum-Paper MySQL incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept minimum-Paper MySQL incomplete-v10 failure with preserved table metadata'
+
+    $maximumPaperEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumPaperIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'Maximum'
+    if (-not (Test-T21StartupFailureReportFixture $maximumPaperIncompleteReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete maximum-Paper MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept maximum-Paper MySQL incomplete-v10 failure with the exact pinned runtime identity'
 
     $mariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB'
     if (-not (Test-T21StartupFailureReportFixture $mariaDbIncompleteReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `

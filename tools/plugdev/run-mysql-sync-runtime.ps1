@@ -39,7 +39,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The incomplete-v10-audit-table startup-failure case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper.'
+    throw 'The incomplete-v10-audit-table startup-failure case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum or maximum Paper.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path

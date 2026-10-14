@@ -14,7 +14,7 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -ceq 'Minimum'
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum')
 }
 
 function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
