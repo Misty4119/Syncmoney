@@ -34,7 +34,7 @@ $script:databaseExecutableVersionPattern = switch ($script:databaseProduct) { 'M
 $script:platformTarget = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
 if ($NewerAuditSchemaStartupFailure.IsPresent -and
     -not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The newer-audit-schema startup-failure case is restricted to PostgreSQL 18.1 on minimum Paper 1.21.6#48.'
+    throw 'The newer-audit-schema startup-failure case is restricted to MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum Paper 1.21.6#48.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -55,6 +55,16 @@ if ($script:legacySqlDataUpgrade -and $script:newerAuditSchemaStartupFailure) {
 $script:acceptancePath = Join-Path $script:root 'build\acceptance\SyncmoneyAcceptance.jar'
 $script:apiConsumerPath = Join-Path $script:root 'build\acceptance\SyncmoneyApiConsumer.jar'
 $script:plugDevRoot = (Resolve-Path -LiteralPath $PlugDevRoot).Path
+$script:plugDevSourceCommit = (& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $script:plugDevSourceCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'Could not pin the local PlugDev source commit.' }
+$script:plugDevCliPath = Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js'
+if (-not (Test-Path -LiteralPath $script:plugDevCliPath -PathType Leaf)) { throw 'The local PlugDev CLI artifact is unavailable.' }
+$script:plugDevCliSha256 = (Get-FileHash -LiteralPath $script:plugDevCliPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$script:plugDevCliDistManifest = Get-T21PlugDevCliDistManifest $script:plugDevRoot
+if (-not (Test-T21PlugDevCliDistManifest $script:plugDevCliDistManifest $script:plugDevCliDistManifest.sha256 $script:plugDevCliSha256)) {
+    throw 'The local PlugDev CLI entrypoint is missing from or inconsistent with its complete runtime manifest.'
+}
+$script:plugDevCliInvocationObservations = [Collections.Generic.List[object]]::new()
 $script:javaHomePath = (Resolve-Path -LiteralPath $JavaHome).Path
 $script:mysqlBinPath = (Resolve-Path -LiteralPath $script:databaseBin).Path
 $script:node = (Get-Command node.exe, node -ErrorAction Stop | Select-Object -First 1).Source
@@ -517,11 +527,30 @@ function Initialize-T21ProjectWorkspace([string]$projectRoot) {
 
 function Invoke-PlugDev([string[]]$arguments, [string]$label) {
     $logPath = Join-Path $script:logsRoot ($label + '.txt')
+    $expectedManifestSha256 = [string]$script:plugDevCliDistManifest.sha256
+    $manifestBefore = Get-T21PlugDevCliDistManifest $script:plugDevRoot
+    $completed = $false
     Push-Location $script:workspace
     try {
-        return Invoke-LoggedCommand $script:node (@((Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js')) + $arguments) $label $logPath
+        if ($manifestBefore.sha256 -cne $expectedManifestSha256) { throw 'The local PlugDev CLI bundle changed before an invocation.' }
+        $result = Invoke-LoggedCommand $script:node (@((Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js')) + $arguments) $label $logPath
+        $completed = $true
+        return $result
     } finally {
-        Pop-Location
+        try {
+            $manifestAfter = Get-T21PlugDevCliDistManifest $script:plugDevRoot
+            $script:plugDevCliInvocationObservations.Add([ordered]@{
+                label=$label
+                beforeSha256=$manifestBefore.sha256
+                afterSha256=$manifestAfter.sha256
+                commandCompleted=$completed
+            })
+            if ($manifestBefore.sha256 -cne $expectedManifestSha256 -or $manifestAfter.sha256 -cne $expectedManifestSha256) {
+                throw 'The local PlugDev CLI bundle changed during a runtime invocation.'
+            }
+        } finally {
+            Pop-Location
+        }
     }
 }
 
@@ -823,14 +852,23 @@ function Get-BackendSnapshot(
 }
 
 function Get-T21NewerAuditSchemaState {
-    if ($script:databaseProduct -cne 'PostgreSQL') { throw 'The newer-audit-schema startup-failure case requires PostgreSQL.' }
-    $stateSql = @"
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $stateSql = @"
 SELECT COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = '1'), 'NULL') || '|' ||
        COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = 'audit'), 'NULL') || '|' ||
        CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'syncmoney_audit_log') THEN 'true' ELSE 'false' END || '|' ||
        CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'players') THEN 'true' ELSE 'false' END;
 "@
-    $rows = @(Invoke-PostgresQuery $stateSql 'newer-audit-schema-state')
+    } else {
+        $stateSql = @"
+SELECT CONCAT_WS('|',
+    COALESCE((SELECT CAST(version AS CHAR) FROM syncmoney_schema_version WHERE id = '1'), 'NULL'),
+    COALESCE((SELECT CAST(version AS CHAR) FROM syncmoney_schema_version WHERE id = 'audit'), 'NULL'),
+    IF(EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'syncmoney_audit_log'), 'true', 'false'),
+    IF(EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'players'), 'true', 'false'));
+"@
+    }
+    $rows = @(Invoke-MySqlQuery $stateSql 'newer-audit-schema-state')
     if ($rows.Count -ne 1) { throw 'Could not observe the newer audit-schema fixture state.' }
     $parts = $rows[0].Trim().Split('|')
     if ($parts.Count -ne 4 -or $parts[2] -notin @('true', 'false') -or $parts[3] -notin @('true', 'false')) {
@@ -838,8 +876,13 @@ SELECT COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = '
     }
     $mainVersion = if ($parts[0] -ceq 'NULL') { $null } else { [int]::Parse($parts[0], [Globalization.CultureInfo]::InvariantCulture) }
     $auditVersion = if ($parts[1] -ceq 'NULL') { $null } else { [int]::Parse($parts[1], [Globalization.CultureInfo]::InvariantCulture) }
-    $mainVersionRowJson = @(Invoke-PostgresQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = '1'), 'null');" 'newer-audit-schema-main-version-row')[0].Trim()
-    $auditVersionRowJson = @(Invoke-PostgresQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = 'audit'), 'null');" 'newer-audit-schema-audit-version-row')[0].Trim()
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $mainVersionRowJson = @(Invoke-MySqlQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = '1'), 'null');" 'newer-audit-schema-main-version-row')[0].Trim()
+        $auditVersionRowJson = @(Invoke-MySqlQuery "SELECT COALESCE((SELECT to_jsonb(v)::text FROM syncmoney_schema_version AS v WHERE id = 'audit'), 'null');" 'newer-audit-schema-audit-version-row')[0].Trim()
+    } else {
+        $mainVersionRowJson = @(Invoke-MySqlQuery "SELECT COALESCE((SELECT JSON_OBJECT('id', id, 'version', version, 'applied_at', applied_at, 'description', description) FROM syncmoney_schema_version WHERE id = '1'), 'null');" 'newer-audit-schema-main-version-row')[0].Trim()
+        $auditVersionRowJson = @(Invoke-MySqlQuery "SELECT COALESCE((SELECT JSON_OBJECT('id', id, 'version', version, 'applied_at', applied_at, 'description', description) FROM syncmoney_schema_version WHERE id = 'audit'), 'null');" 'newer-audit-schema-audit-version-row')[0].Trim()
+    }
     $auditTableExists = $parts[2] -ceq 'true'
     $playersTableExists = $parts[3] -ceq 'true'
     $playerRows = $null
@@ -852,7 +895,8 @@ SELECT COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = '
     $auditIndexesJson = $null
     $auditRowsJson = $null
     if ($auditTableExists) {
-        $auditColumnsSql = @"
+        if ($script:databaseProduct -ceq 'PostgreSQL') {
+            $auditColumnsSql = @"
 SELECT COALESCE(json_agg(to_jsonb(c) ORDER BY c.ordinal_position)::text, '[]')
 FROM (
     SELECT *
@@ -860,18 +904,86 @@ FROM (
     WHERE table_schema = current_schema() AND table_name = 'syncmoney_audit_log'
 ) AS c;
 "@
-        $auditIndexesSql = @"
+            $auditIndexesSql = @"
 SELECT COALESCE(json_agg(json_build_object('name', indexname, 'definition', indexdef) ORDER BY indexname)::text, '[]')
 FROM pg_indexes
 WHERE schemaname = current_schema() AND tablename = 'syncmoney_audit_log';
 "@
-        $auditRowsSql = @"
+            $auditRowsSql = @"
 SELECT COALESCE(json_agg(to_jsonb(a) ORDER BY id)::text, '[]')
 FROM syncmoney_audit_log AS a;
 "@
-        $auditColumnsJson = @(Invoke-PostgresQuery $auditColumnsSql 'newer-audit-schema-columns')[0].Trim()
-        $auditIndexesJson = @(Invoke-PostgresQuery $auditIndexesSql 'newer-audit-schema-indexes')[0].Trim()
-        $auditRowsJson = @(Invoke-PostgresQuery $auditRowsSql 'newer-audit-schema-rows')[0].Trim()
+            $auditColumnsJson = @(Invoke-MySqlQuery $auditColumnsSql 'newer-audit-schema-columns')[0].Trim()
+            $auditIndexesJson = @(Invoke-MySqlQuery $auditIndexesSql 'newer-audit-schema-indexes')[0].Trim()
+            $auditRowsJson = @(Invoke-MySqlQuery $auditRowsSql 'newer-audit-schema-rows')[0].Trim()
+        } else {
+            $auditColumnsSql = @"
+SELECT JSON_OBJECT(
+    'table_schema', TABLE_SCHEMA, 'table_name', TABLE_NAME, 'column_name', COLUMN_NAME,
+    'ordinal_position', ORDINAL_POSITION, 'column_default', COLUMN_DEFAULT,
+    'column_default_is_null', IF(COLUMN_DEFAULT IS NULL, 'true', 'false'), 'is_nullable', IS_NULLABLE,
+    'column_type', COLUMN_TYPE, 'extra', EXTRA, 'character_set_name', CHARACTER_SET_NAME,
+    'collation_name', COLLATION_NAME, 'generation_expression', GENERATION_EXPRESSION)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'syncmoney_audit_log'
+ORDER BY ORDINAL_POSITION, COLUMN_NAME;
+"@
+            $columnRows = @(Invoke-MySqlQuery $auditColumnsSql 'newer-audit-schema-columns')
+            $columnObjects = [Collections.Generic.List[object]]::new()
+            foreach ($columnRow in $columnRows) { $columnObjects.Add((ConvertFrom-Json -InputObject $columnRow -AsHashtable -ErrorAction Stop)) }
+            $auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columnObjects.ToArray()) -Depth 10 -Compress
+
+            $visibilityExpression = if ($script:databaseProduct -ceq 'MariaDB') {
+                "IF(IGNORED = 'YES', 'NO', 'YES')"
+            } else {
+                'IS_VISIBLE'
+            }
+            $auditIndexesSql = @"
+SELECT JSON_OBJECT('name', INDEX_NAME, 'nonUnique', NON_UNIQUE, 'position', SEQ_IN_INDEX,
+    'columnName', COLUMN_NAME, 'direction', COLLATION, 'indexType', INDEX_TYPE,
+    'visibility', $visibilityExpression, 'subPart', SUB_PART)
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'syncmoney_audit_log'
+ORDER BY INDEX_NAME, SEQ_IN_INDEX;
+"@
+            $indexRows = @(
+                @(Invoke-MySqlQuery $auditIndexesSql 'newer-audit-schema-indexes') |
+                    ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable -ErrorAction Stop }
+            )
+            $indexObjects = [Collections.Generic.List[object]]::new()
+            foreach ($indexGroup in @($indexRows | Group-Object -Property name | Sort-Object -Property Name)) {
+                $orderedRows = @($indexGroup.Group | Sort-Object { [int]$_.position })
+                $indexColumns = @(
+                    foreach ($indexRow in $orderedRows) {
+                        [ordered]@{
+                            position = [int]$indexRow.position
+                            columnName = [string]$indexRow.columnName
+                            direction = [string]$indexRow.direction
+                            subPart = $indexRow.subPart
+                        }
+                    }
+                )
+                $indexObjects.Add([ordered]@{
+                    name = [string]$indexGroup.Name
+                    nonUnique = [int]$orderedRows[0].nonUnique
+                    indexType = [string]$orderedRows[0].indexType
+                    visibility = [string]$orderedRows[0].visibility
+                    columns = $indexColumns
+                })
+            }
+            $auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexObjects.ToArray()) -Depth 10 -Compress
+
+            $auditRowsSql = @"
+SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
+    'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
+    'server', server, 'target_uuid', target_uuid, 'target_name', target_name, 'reason', reason,
+    'merged_count', merged_count, 'request_id', request_id, 'sequence', sequence, 't21_sentinel', t21_sentinel)
+FROM syncmoney_audit_log
+ORDER BY id;
+"@
+            $auditRowLines = @(Invoke-MySqlQuery $auditRowsSql 'newer-audit-schema-rows')
+            $auditRowsJson = '[' + ($auditRowLines -join ',') + ']'
+        }
     }
     return [ordered]@{
         mainVersion = $mainVersion
@@ -928,12 +1040,12 @@ CREATE INDEX idx_audit_timestamp ON syncmoney_audit_log (timestamp DESC, sequenc
 CREATE INDEX idx_audit_player ON syncmoney_audit_log (player_uuid, timestamp DESC, sequence DESC);
 CREATE INDEX idx_audit_type_timestamp_sequence ON syncmoney_audit_log (type, timestamp DESC, sequence DESC);
 '@
-    $null = Invoke-PostgresQuery $ddl 'seed-newer-audit-schema'
+    $null = Invoke-MySqlQuery $ddl 'seed-newer-audit-schema'
     $state = Get-T21NewerAuditSchemaState
     if ($null -ne $state.mainVersion -or $state.auditVersion -ne 12 -or
         -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
         $state.auditVersionRowJson -notmatch '"description": "T21 newer audit schema preservation sentinel"' -or
-        $state.auditColumnsJson -notmatch '"column_name": "t21_sentinel"' -or
+        $state.auditColumnsJson -notmatch '"column_name"\s*:\s*"t21_sentinel"' -or
         $state.auditIndexesJson -notmatch 'idx_audit_type_timestamp_sequence' -or
         $state.auditRowsJson -notmatch 't21-v12-preservation-sentinel') {
         throw 'The isolated SQL database did not retain the exact pre-start newer audit-schema fixture.'
@@ -1370,7 +1482,15 @@ $script:report = [ordered]@{
     acceptance = [ordered]@{ sha256=$acceptanceSha256 }
     apiConsumer = [ordered]@{ sha256=$apiConsumerSha256 }
     java = [ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
-    plugDev = [ordered]@{ root=$script:plugDevRoot; sourceCommit=(& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim(); cliSha256=(Get-FileHash -LiteralPath (Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js') -Algorithm SHA256).Hash.ToLowerInvariant() }
+    plugDev = [ordered]@{
+        root=$script:plugDevRoot
+        sourceCommit=$script:plugDevSourceCommit
+        cliSha256=$script:plugDevCliSha256
+        cliDistManifest=$script:plugDevCliDistManifest
+        cliDistManifestSha256Before=$script:plugDevCliDistManifest.sha256
+        cliDistManifestSha256After=$null
+        cliDistInvocationObservations=@()
+    }
     configuration = [ordered]@{
         schema=12; mode='sync'; databaseEnabled=$true; databaseType=$(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }); databaseIsolated=$true
         databaseHost='127.0.0.1'; databasePort=$script:mysqlPort; databaseName=$script:databaseName
@@ -1637,7 +1757,17 @@ try {
             $relative = $log.FullName.Substring($script:runRoot.Length).TrimStart('\')
             $script:report.logs[$relative] = [ordered]@{ bytes=[long]$log.Length; sha256=(Get-FileHash -LiteralPath $log.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
         }
-        $script:report.plugDev.sourceCommit = (& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim()
+        $plugDevSourceCommitAfter = (& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $plugDevSourceCommitAfter -cne $script:plugDevSourceCommit) {
+            $script:cleanupFailures.Add('The local PlugDev source commit changed during runtime acceptance.')
+        }
+        $script:report.plugDev.sourceCommit = $plugDevSourceCommitAfter
+        $plugDevCliDistManifestAfter = Get-T21PlugDevCliDistManifest $script:plugDevRoot
+        $script:report.plugDev.cliDistManifestSha256After = $plugDevCliDistManifestAfter.sha256
+        $script:report.plugDev.cliDistInvocationObservations = @($script:plugDevCliInvocationObservations.ToArray())
+        if ($plugDevCliDistManifestAfter.sha256 -cne $script:plugDevCliDistManifest.sha256) {
+            $script:cleanupFailures.Add('The local PlugDev CLI bundle changed during runtime acceptance.')
+        }
         $script:report.runner = [ordered]@{
             path='tools/plugdev/run-mysql-sync-runtime.ps1'
             sha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\run-mysql-sync-runtime.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -1680,8 +1810,13 @@ try {
                 artifacts=[ordered]@{ acceptanceSha256=$acceptanceSha256; apiConsumerSha256=$apiConsumerSha256 }
                 java=[ordered]@{ feature=$javaFeature; banner=$javaBanner.Trim() }
                 plugDev=[ordered]@{
+                    root=$script:report.plugDev.root
                     sourceCommit=$script:report.plugDev.sourceCommit
                     cliSha256=$script:report.plugDev.cliSha256
+                    cliDistManifest=$script:report.plugDev.cliDistManifest
+                    cliDistManifestSha256Before=$script:report.plugDev.cliDistManifestSha256Before
+                    cliDistManifestSha256After=$script:report.plugDev.cliDistManifestSha256After
+                    cliDistInvocationObservations=$script:report.plugDev.cliDistInvocationObservations
                 }
                 sqlBackend=[ordered]@{ product=$script:databaseProduct; version=$script:databaseServerVersion }
                 redis=[ordered]@{ version='8.10.1' }
@@ -1714,10 +1849,14 @@ try {
                     sharedValidatorTestSha256=$script:report.runner.testSha256
                     acceptanceJarSha256=$acceptanceSha256
                     apiConsumerJarSha256=$apiConsumerSha256
+                    plugDevCliDistManifestSha256=$script:report.plugDev.cliDistManifestSha256Before
                 }
             }
             $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
                 $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
+                -ExpectedPlugDevRoot $script:plugDevRoot `
+                -ExpectedPlugDevSourceCommit $script:plugDevSourceCommit -ExpectedPlugDevCliSha256 $script:plugDevCliSha256 `
+                -ExpectedPlugDevCliDistManifestSha256 $script:plugDevCliDistManifest.sha256 `
                 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
         } elseif ($script:legacySqlDataUpgrade) {
             $backendProcesses = $script:report.backendProcesses

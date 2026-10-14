@@ -6,7 +6,79 @@ function Test-T21NewerAuditSchemaStartupFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -ceq 'Minimum'
+    return $PlatformEndpoint -ceq 'Minimum'
+}
+
+function Get-T21PlugDevCliDistManifestHash([object[]]$Files) {
+    if ($null -eq $Files -or $Files.Count -eq 0) { throw 'The PlugDev CLI runtime manifest cannot be empty.' }
+    $entriesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $Files) {
+        $path = [string](Get-T21ObservedValue $entry 'path')
+        $bytes = Get-T21ObservedValue $entry 'bytes'
+        $sha256 = [string](Get-T21ObservedValue $entry 'sha256')
+        if ([string]::IsNullOrWhiteSpace($path) -or $path.Contains('\') -or $path.StartsWith('/') -or
+            $path -match '[\r\n\t]' -or $path -match '(^|/)\.{1,2}(/|$)' -or
+            -not (Test-T21IntegralNumber $bytes 0 ([long]::MaxValue)) -or $sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+            $entriesByPath.ContainsKey($path)) {
+            throw 'The PlugDev CLI runtime manifest contains an invalid or duplicate entry.'
+        }
+        $entriesByPath.Add($path, [ordered]@{ path=$path; bytes=[long]$bytes; sha256=$sha256.ToLowerInvariant() })
+    }
+
+    $paths = [string[]]@($entriesByPath.Keys)
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $lines = [Collections.Generic.List[string]]::new()
+    foreach ($path in $paths) {
+        $entry = $entriesByPath[$path]
+        $encodedPath = [Convert]::ToBase64String($utf8.GetBytes($path))
+        $lines.Add("$encodedPath`t$($entry.bytes)`t$($entry.sha256)")
+    }
+    $canonicalBytes = $utf8.GetBytes(($lines -join "`n") + "`n")
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($canonicalBytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-T21PlugDevCliDistManifest([string]$PlugDevRoot) {
+    $distPath = Join-Path $PlugDevRoot 'packages\cli\dist'
+    if (-not (Test-Path -LiteralPath $distPath -PathType Container)) { throw 'The local PlugDev CLI runtime directory is unavailable.' }
+    $items = @(Get-ChildItem -LiteralPath $distPath -Force -Recurse -ErrorAction Stop)
+    if (@($items | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) {
+        throw 'The local PlugDev CLI runtime directory contains a reparse point.'
+    }
+    $files = @($items | Where-Object { -not $_.PSIsContainer })
+    if ($files.Count -eq 0) { throw 'The local PlugDev CLI runtime directory has no files.' }
+    $entries = [Collections.Generic.List[object]]::new()
+    foreach ($file in $files) {
+        $relativePath = $file.FullName.Substring($distPath.Length).TrimStart([char[]]@([char]92, [char]47)).Replace([string][char]92, '/')
+        $entries.Add([ordered]@{
+            path=$relativePath
+            bytes=[long]$file.Length
+            sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        })
+    }
+    $manifestFiles = [object[]]$entries.ToArray()
+    return [ordered]@{
+        directory='packages/cli/dist'
+        files=$manifestFiles
+        sha256=(Get-T21PlugDevCliDistManifestHash $manifestFiles)
+    }
+}
+
+function Test-T21PlugDevCliDistManifest([object]$Manifest, [string]$ExpectedSha256, [string]$ExpectedCliSha256) {
+    try {
+        if ((Get-T21ObservedValue $Manifest 'directory') -cne 'packages/cli/dist') { return $false }
+        $files = Get-T21ObservedValue $Manifest 'files'
+        $manifestSha256 = Get-T21PlugDevCliDistManifestHash ([object[]]$files)
+        if ($manifestSha256 -cne $ExpectedSha256.ToLowerInvariant() -or
+            ([string](Get-T21ObservedValue $Manifest 'sha256')).ToLowerInvariant() -cne $manifestSha256) { return $false }
+        $cliFile = @($files | Where-Object { (Get-T21ObservedValue $_ 'path') -ceq 'cli.js' })
+        return $cliFile.Count -eq 1 -and
+            ([string](Get-T21ObservedValue $cliFile[0] 'sha256')).ToLowerInvariant() -ceq $ExpectedCliSha256.ToLowerInvariant()
+    } catch {
+        return $false
+    }
 }
 
 function Test-T21NewerAuditSchemaStartupFailureReport(
@@ -15,6 +87,10 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     [string]$expectedCandidateSha256,
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
+    [Parameter(Mandatory = $true)][string]$ExpectedPlugDevRoot,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ExpectedPlugDevSourceCommit,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedPlugDevCliSha256,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedPlugDevCliDistManifestSha256,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
@@ -22,8 +98,13 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     try {
         if (-not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint)) { return $false }
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
-        $sqlReportKey = 'postgresql'
-        $expectedDatabaseType = 'postgresql'
+        $sqlReportKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
+        $expectedDatabaseType = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
+        $expectedDatabaseVersion = switch ($DatabaseProduct) {
+            'MySQL' { '8.0.42' }
+            'MariaDB' { '12.3.3-MariaDB' }
+            'PostgreSQL' { '18.1' }
+        }
         if ((Get-T21ObservedValue $report 'schemaVersion') -ne 1 -or
             (Get-T21ObservedValue $report 'task') -cne 'T21-V03-SYNC-newer-audit-schema-startup-failure' -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE' -or
@@ -40,13 +121,30 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $artifacts = Get-T21ObservedValue $report 'artifacts'
         $java = Get-T21ObservedValue $report 'java'
         $plugDev = Get-T21ObservedValue $report 'plugDev'
+        $expectedPlugDevRoot = [IO.Path]::GetFullPath($ExpectedPlugDevRoot)
+        $reportedPlugDevRoot = [IO.Path]::GetFullPath([string](Get-T21ObservedValue $plugDev 'root'))
+        $plugDevManifest = Get-T21ObservedValue $plugDev 'cliDistManifest'
+        $plugDevManifestFiles = Get-T21ObservedValue $plugDevManifest 'files'
+        $plugDevObservations = @(Get-T21ObservedValue $plugDev 'cliDistInvocationObservations')
         if ((Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
             ([string](Get-T21ObservedValue $artifacts 'acceptanceSha256')).ToLowerInvariant() -cne $expectedAcceptanceSha256.ToLowerInvariant() -or
             ([string](Get-T21ObservedValue $artifacts 'apiConsumerSha256')).ToLowerInvariant() -cne $expectedApiConsumerSha256.ToLowerInvariant() -or
             [int](Get-T21ObservedValue $java 'feature') -ne 25 -or
-            ([string](Get-T21ObservedValue $plugDev 'sourceCommit')) -notmatch '^[0-9a-f]{40}$' -or
-            ([string](Get-T21ObservedValue $plugDev 'cliSha256')) -notmatch '^[0-9a-f]{64}$') { return $false }
+            -not [string]::Equals($reportedPlugDevRoot, $expectedPlugDevRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            ([string](Get-T21ObservedValue $plugDev 'sourceCommit')).ToLowerInvariant() -cne $ExpectedPlugDevSourceCommit.ToLowerInvariant() -or
+            ([string](Get-T21ObservedValue $plugDev 'sourceCommit')) -notmatch '^[0-9a-fA-F]{40}$' -or
+            ([string](Get-T21ObservedValue $plugDev 'cliSha256')).ToLowerInvariant() -cne $ExpectedPlugDevCliSha256.ToLowerInvariant() -or
+            ([string](Get-T21ObservedValue $plugDev 'cliSha256')) -notmatch '^[0-9a-fA-F]{64}$' -or
+            -not (Test-T21PlugDevCliDistManifest $plugDevManifest $ExpectedPlugDevCliDistManifestSha256 $ExpectedPlugDevCliSha256) -or
+            ([string](Get-T21ObservedValue $plugDev 'cliDistManifestSha256Before')).ToLowerInvariant() -cne $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant() -or
+            ([string](Get-T21ObservedValue $plugDev 'cliDistManifestSha256After')).ToLowerInvariant() -cne $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant() -or
+            $plugDevObservations.Count -eq 0) { return $false }
+        foreach ($observation in $plugDevObservations) {
+            if ([string]::IsNullOrWhiteSpace([string](Get-T21ObservedValue $observation 'label')) -or
+                ([string](Get-T21ObservedValue $observation 'beforeSha256')).ToLowerInvariant() -cne $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant() -or
+                ([string](Get-T21ObservedValue $observation 'afterSha256')).ToLowerInvariant() -cne $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant()) { return $false }
+        }
 
         $configuration = Get-T21ObservedValue $report 'configuration'
         if ((Get-T21ObservedValue $configuration 'mode') -cne 'sync' -or
@@ -58,8 +156,8 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             [int](Get-T21ObservedValue $configuration 'redisDatabase') -ne 15) { return $false }
 
         $sqlBackend = Get-T21ObservedValue $report 'sqlBackend'
-        if ((Get-T21ObservedValue $sqlBackend 'product') -cne 'PostgreSQL' -or
-            (Get-T21ObservedValue $sqlBackend 'version') -cne '18.1') { return $false }
+        if ((Get-T21ObservedValue $sqlBackend 'product') -cne $DatabaseProduct -or
+            (Get-T21ObservedValue $sqlBackend 'version') -cne $expectedDatabaseVersion) { return $false }
 
         $startup = Get-T21ObservedValue $report 'startupObservation'
         $startupIdentity = Get-T21ObservedValue $startup 'runtimeIdentity'
@@ -110,15 +208,20 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $requiredAuditColumns = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
             'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 'request_id', 'sequence', 't21_sentinel')
         $actualAuditColumns = @($auditColumns | ForEach-Object { [string]$_['column_name'] })
-        $requiredColumnMetadataFields = @(
-            'table_catalog', 'table_schema', 'table_name', 'column_name', 'ordinal_position', 'column_default', 'is_nullable', 'data_type',
-            'character_maximum_length', 'character_octet_length', 'numeric_precision', 'numeric_precision_radix', 'numeric_scale',
-            'datetime_precision', 'interval_type', 'interval_precision', 'character_set_catalog', 'character_set_schema', 'character_set_name',
-            'collation_catalog', 'collation_schema', 'collation_name', 'domain_catalog', 'domain_schema', 'domain_name', 'udt_catalog',
-            'udt_schema', 'udt_name', 'scope_catalog', 'scope_schema', 'scope_name', 'maximum_cardinality', 'dtd_identifier',
-            'is_self_referencing', 'is_identity', 'identity_generation', 'identity_start', 'identity_increment', 'identity_maximum',
-            'identity_minimum', 'identity_cycle', 'is_generated', 'generation_expression', 'is_updatable'
-        )
+        $requiredColumnMetadataFields = if ($DatabaseProduct -ceq 'PostgreSQL') {
+            @(
+                'table_catalog', 'table_schema', 'table_name', 'column_name', 'ordinal_position', 'column_default', 'is_nullable', 'data_type',
+                'character_maximum_length', 'character_octet_length', 'numeric_precision', 'numeric_precision_radix', 'numeric_scale',
+                'datetime_precision', 'interval_type', 'interval_precision', 'character_set_catalog', 'character_set_schema', 'character_set_name',
+                'collation_catalog', 'collation_schema', 'collation_name', 'domain_catalog', 'domain_schema', 'domain_name', 'udt_catalog',
+                'udt_schema', 'udt_name', 'scope_catalog', 'scope_schema', 'scope_name', 'maximum_cardinality', 'dtd_identifier',
+                'is_self_referencing', 'is_identity', 'identity_generation', 'identity_start', 'identity_increment', 'identity_maximum',
+                'identity_minimum', 'identity_cycle', 'is_generated', 'generation_expression', 'is_updatable'
+            )
+        } else {
+            @('table_schema', 'table_name', 'column_name', 'ordinal_position', 'column_default', 'is_nullable', 'column_type',
+                'column_default_is_null', 'extra', 'character_set_name', 'collation_name', 'generation_expression')
+        }
         if ($actualAuditColumns.Count -ne $requiredAuditColumns.Count -or $auditColumns.Count -ne $requiredAuditColumns.Count) { return $false }
         $expectedTableCatalog = $null
         for ($columnIndex = 0; $columnIndex -lt $requiredAuditColumns.Count; $columnIndex++) {
@@ -129,29 +232,105 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 @($requiredColumnMetadataFields | Where-Object { $_ -cnotin $columnMetadataFields }).Count -ne 0 -or
                 $actualAuditColumns[$columnIndex] -cne $requiredAuditColumns[$columnIndex] -or
                 [int]$column['ordinal_position'] -ne ($columnIndex + 1) -or
-                [string]::IsNullOrWhiteSpace([string]$column['table_catalog']) -or
-                [string]$column['table_schema'] -cne 'public' -or
                 [string]$column['table_name'] -cne 'syncmoney_audit_log') { return $false }
-            if ($null -eq $expectedTableCatalog) { $expectedTableCatalog = [string]$column['table_catalog'] }
-            elseif ([string]$column['table_catalog'] -cne $expectedTableCatalog) { return $false }
+            if ($DatabaseProduct -ceq 'PostgreSQL') {
+                if ([string]::IsNullOrWhiteSpace([string]$column['table_catalog']) -or [string]$column['table_schema'] -cne 'public') { return $false }
+                if ($null -eq $expectedTableCatalog) { $expectedTableCatalog = [string]$column['table_catalog'] }
+                elseif ([string]$column['table_catalog'] -cne $expectedTableCatalog) { return $false }
+            } else {
+            if ([string]::IsNullOrWhiteSpace([string]$column['table_schema'])) { return $false }
+                if ($null -eq $expectedTableCatalog) { $expectedTableCatalog = [string]$column['table_schema'] }
+                elseif ([string]$column['table_schema'] -cne $expectedTableCatalog) { return $false }
+
+            $expectedColumnMetadata = @(
+                @{ typePattern = '^varchar\(36\)$'; nullable = 'NO'; default = $null; character = $true }
+                @{ typePattern = '^(?:bigint|bigint\(20\))$'; nullable = 'NO'; default = $null; character = $false }
+                @{ typePattern = '^varchar\(20\)$'; nullable = 'NO'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(36\)$'; nullable = 'NO'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(16\)$'; nullable = 'YES'; default = $null; character = $true }
+                @{ typePattern = '^decimal\(20,2\)$'; nullable = 'NO'; default = $null; character = $false }
+                @{ typePattern = '^decimal\(20,2\)$'; nullable = 'NO'; default = $null; character = $false }
+                @{ typePattern = '^varchar\(30\)$'; nullable = 'NO'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(50\)$'; nullable = 'NO'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(36\)$'; nullable = 'YES'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(16\)$'; nullable = 'YES'; default = $null; character = $true }
+                @{ typePattern = '^varchar\(255\)$'; nullable = 'YES'; default = $null; character = $true }
+                @{ typePattern = '^(?:int|int\(11\))$'; nullable = 'YES'; default = '1'; character = $false }
+                @{ typePattern = '^varchar\(36\)$'; nullable = 'YES'; default = $null; character = $true }
+                @{ typePattern = '^(?:bigint|bigint\(20\))$'; nullable = 'YES'; default = '0'; character = $false }
+                @{ typePattern = '^text$'; nullable = 'NO'; default = $null; character = $true }
+            )
+            $expected = $expectedColumnMetadata[$columnIndex]
+            $default = $column['column_default']
+            $defaultIsNull = [string]$column['column_default_is_null']
+            $defaultMatches = if ($null -eq $expected.default) {
+                if ($DatabaseProduct -ceq 'MariaDB' -and $expected.nullable -ceq 'YES') {
+                    $defaultIsNull -ceq 'false' -and [string]$default -ceq 'NULL'
+                } else {
+                    $defaultIsNull -ceq 'true' -and $null -eq $default
+                }
+            } else {
+                $defaultIsNull -ceq 'false' -and [string]$default -ceq [string]$expected.default
+            }
+            if ([string]$column['column_type'] -cnotmatch $expected.typePattern -or
+                [string]$column['is_nullable'] -cne $expected.nullable -or
+                -not $defaultMatches -or
+                [string]$column['extra'] -cne '' -or
+                ($null -ne $column['generation_expression'] -and [string]$column['generation_expression'] -cne '')) { return $false }
+            $expectedCollation = if ($DatabaseProduct -ceq 'MySQL') { 'utf8mb4_0900_ai_ci' } else { 'utf8mb4_general_ci' }
+            if ($expected.character) {
+                if ([string]$column['character_set_name'] -cne 'utf8mb4' -or
+                    [string]$column['collation_name'] -cne $expectedCollation) { return $false }
+            } elseif ($null -ne $column['character_set_name'] -or $null -ne $column['collation_name']) {
+                return $false
+            }
+            }
         }
 
         $auditIndexes = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditIndexesJson')) -AsHashtable -ErrorAction Stop)
-        $requiredAuditIndexes = @('idx_audit_timestamp', 'idx_audit_player', 'idx_audit_type_timestamp_sequence', 'syncmoney_audit_log_pkey')
-        $actualAuditIndexNames = @($auditIndexes | ForEach-Object { [string]$_['name'] })
-        if ($auditIndexes.Count -ne $requiredAuditIndexes.Count -or
-            @($requiredAuditIndexes | Where-Object { $_ -notin $actualAuditIndexNames }).Count -ne 0) { return $false }
-        foreach ($index in $auditIndexes) {
-            if ([string]::IsNullOrWhiteSpace([string]$index['definition'])) { return $false }
-        }
-        foreach ($expectedIndex in @(
-                @{ name = 'idx_audit_timestamp'; pattern = 'timestamp.*DESC.*sequence.*DESC' }
-                @{ name = 'idx_audit_player'; pattern = 'player_uuid.*timestamp.*DESC.*sequence.*DESC' }
-                @{ name = 'idx_audit_type_timestamp_sequence'; pattern = 'type.*timestamp.*DESC.*sequence.*DESC' }
-                @{ name = 'syncmoney_audit_log_pkey'; pattern = 'UNIQUE.*\(id\)' }
-            )) {
-            $matchingIndex = @($auditIndexes | Where-Object { $_['name'] -ceq $expectedIndex.name })
-            if ($matchingIndex.Count -ne 1 -or [string]$matchingIndex[0]['definition'] -notmatch $expectedIndex.pattern) { return $false }
+        if ($DatabaseProduct -ceq 'PostgreSQL') {
+            $requiredAuditIndexes = @('idx_audit_timestamp', 'idx_audit_player', 'idx_audit_type_timestamp_sequence', 'syncmoney_audit_log_pkey')
+            $actualAuditIndexNames = @($auditIndexes | ForEach-Object { [string]$_['name'] })
+            if ($auditIndexes.Count -ne $requiredAuditIndexes.Count -or
+                @($requiredAuditIndexes | Where-Object { $_ -notin $actualAuditIndexNames }).Count -ne 0) { return $false }
+            foreach ($index in $auditIndexes) {
+                if ([string]::IsNullOrWhiteSpace([string]$index['definition'])) { return $false }
+            }
+            foreach ($expectedIndex in @(
+                    @{ name = 'idx_audit_timestamp'; pattern = 'timestamp.*DESC.*sequence.*DESC' }
+                    @{ name = 'idx_audit_player'; pattern = 'player_uuid.*timestamp.*DESC.*sequence.*DESC' }
+                    @{ name = 'idx_audit_type_timestamp_sequence'; pattern = 'type.*timestamp.*DESC.*sequence.*DESC' }
+                    @{ name = 'syncmoney_audit_log_pkey'; pattern = 'UNIQUE.*\(id\)' }
+                )) {
+                $matchingIndex = @($auditIndexes | Where-Object { $_['name'] -ceq $expectedIndex.name })
+                if ($matchingIndex.Count -ne 1 -or [string]$matchingIndex[0]['definition'] -notmatch $expectedIndex.pattern) { return $false }
+            }
+        } else {
+            $expectedIndexes = [ordered]@{
+                PRIMARY = @([ordered]@{ columnName = 'id'; direction = 'A' })
+                idx_audit_timestamp = @([ordered]@{ columnName = 'timestamp'; direction = 'D' }, [ordered]@{ columnName = 'sequence'; direction = 'D' })
+                idx_audit_player = @([ordered]@{ columnName = 'player_uuid'; direction = 'A' }, [ordered]@{ columnName = 'timestamp'; direction = 'D' }, [ordered]@{ columnName = 'sequence'; direction = 'D' })
+                idx_audit_type_timestamp_sequence = @([ordered]@{ columnName = 'type'; direction = 'A' }, [ordered]@{ columnName = 'timestamp'; direction = 'D' }, [ordered]@{ columnName = 'sequence'; direction = 'D' })
+            }
+            $actualIndexNames = @($auditIndexes | ForEach-Object { [string]$_['name'] })
+            if ($auditIndexes.Count -ne $expectedIndexes.Count -or
+                @($expectedIndexes.Keys | Where-Object { $_ -cnotin $actualIndexNames }).Count -ne 0) { return $false }
+            foreach ($index in $auditIndexes) {
+                $name = [string]$index['name']
+                if (-not $expectedIndexes.Contains($name) -or
+                    [string]$index['indexType'] -cne 'BTREE' -or
+                    (Get-T21ObservedValue $index 'visibility') -cne 'YES' -or
+                    [int]$index['nonUnique'] -ne $(if ($name -ceq 'PRIMARY') { 0 } else { 1 })) { return $false }
+                $columns = @($index['columns'])
+                $expectedColumns = @($expectedIndexes[$name])
+                if ($columns.Count -ne $expectedColumns.Count) { return $false }
+                for ($columnIndex = 0; $columnIndex -lt $columns.Count; $columnIndex++) {
+                    if ([int]$columns[$columnIndex]['position'] -ne ($columnIndex + 1) -or
+                        [string]$columns[$columnIndex]['columnName'] -cne [string]$expectedColumns[$columnIndex]['columnName'] -or
+                        [string]$columns[$columnIndex]['direction'] -cne [string]$expectedColumns[$columnIndex]['direction'] -or
+                        $null -ne $columns[$columnIndex]['subPart']) { return $false }
+                }
+            }
         }
 
         $auditRows = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditRowsJson')) -AsHashtable -ErrorAction Stop)
@@ -160,9 +339,12 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             $auditRows[0]['t21_sentinel'] -cne 't21-v12-preservation-sentinel') { return $false }
 
         $resourceCleanup = Get-T21ObservedValue $report 'resourceCleanup'
-        if ([int](Get-T21ObservedValue $resourceCleanup 'sqlOtherConnections') -ne 0 -or
-            [int](Get-T21ObservedValue $resourceCleanup 'redisOtherClients') -ne 0 -or
-            [int](Get-T21ObservedValue $resourceCleanup 'redisDbSize') -ne 0) { return $false }
+        $sqlOtherConnections = Get-T21ObservedValue $resourceCleanup 'sqlOtherConnections'
+        $redisOtherClients = Get-T21ObservedValue $resourceCleanup 'redisOtherClients'
+        $redisDbSize = Get-T21ObservedValue $resourceCleanup 'redisDbSize'
+        if (-not (Test-T21IntegralNumber $sqlOtherConnections 0 ([long]::MaxValue)) -or $sqlOtherConnections -ne 0 -or
+            -not (Test-T21IntegralNumber $redisOtherClients 0 ([long]::MaxValue)) -or $redisOtherClients -ne 0 -or
+            -not (Test-T21IntegralNumber $redisDbSize 0 ([long]::MaxValue)) -or $redisDbSize -ne 0) { return $false }
 
         $startupPid = [int](Get-T21ObservedValue $startup 'processId')
         if ($startupPid -le 0) { return $false }
@@ -178,10 +360,35 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $normalStop 'disabledMarker') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $normalStop 'forced') $false)) { return $false }
 
+        $gradleCleanup = Get-T21ObservedValue $report 'gradleDaemonCleanup'
+        $expectedGradleHome = [IO.Path]::GetFullPath((Join-Path ([string](Get-T21ObservedValue $report 'runDirectory')) '.gradle-user-home'))
+        $reportedGradleHome = [IO.Path]::GetFullPath([string](Get-T21ObservedValue $gradleCleanup 'isolatedUserHome'))
+        $processIdsBeforeStop = @(Get-T21ObservedValue $gradleCleanup 'processIdsBeforeStop')
+        $processIdsAfterStop = @(Get-T21ObservedValue $gradleCleanup 'processIdsAfterStop')
+        $processExitVerified = Get-T21ObservedValue $gradleCleanup 'processExitVerified'
+        $stopCommandExitCode = Get-T21ObservedValue $gradleCleanup 'stopCommandExitCode'
+        $stopLogPath = [string](Get-T21ObservedValue $gradleCleanup 'stopLogPath')
+        if ([string]::IsNullOrWhiteSpace([string](Get-T21ObservedValue $gradleCleanup 'isolatedUserHome')) -or
+            -not [string]::Equals($reportedGradleHome, $expectedGradleHome, [StringComparison]::OrdinalIgnoreCase) -or
+            (Test-T21PathContainsReparsePoint $expectedGradleHome) -or
+            -not (Test-T21ObservedBoolean $processExitVerified $true) -or
+            $processIdsAfterStop.Count -ne 0 -or
+            @($processIdsBeforeStop | Where-Object { -not (Test-T21IntegralNumber $_ 1 ([long]::MaxValue)) }).Count -gt 0 -or
+            @($processIdsBeforeStop | Select-Object -Unique).Count -ne $processIdsBeforeStop.Count) { return $false }
+
+        $logMap = Get-T21ObservedValue $report 'logs'
+        if ($processIdsBeforeStop.Count -gt 0) {
+            if (-not (Test-T21ExpectedExitCode $stopCommandExitCode 0) -or
+                $stopLogPath -cne 'logs\gradle-daemon-stop.txt' -or
+                $null -eq (Get-T21ObservedValue $logMap $stopLogPath)) { return $false }
+        } elseif ((-not (Test-T21ExpectedExitCode $stopCommandExitCode 0) -and $null -ne $stopCommandExitCode) -or
+            -not [string]::IsNullOrEmpty($stopLogPath)) { return $false }
+
         $backendProcesses = Get-T21ObservedValue $report 'backendProcesses'
         $sqlProcess = Get-T21ObservedValue $backendProcesses $sqlReportKey
         $redisProcess = Get-T21ObservedValue $backendProcesses 'redis'
         if ((Get-T21ObservedValue $sqlProcess 'product') -cne $DatabaseProduct -or
+            (Get-T21ObservedValue $sqlProcess 'version') -cne $expectedDatabaseVersion -or
             [int](Get-T21ObservedValue $sqlProcess 'processId') -le 0 -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlProcess 'runOwned') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlProcess 'listenerOwnerVerified') $true) -or
@@ -192,11 +399,13 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
 
         $backendShutdowns = @(Get-T21ObservedValue $report 'backendShutdowns')
         if ($backendShutdowns.Count -ne 2) { return $false }
-        $expectedSqlBackendName = $DatabaseProduct.ToLowerInvariant()
+        $expectedSqlBackendName = $sqlReportKey
+        $expectedSqlShutdownCommand = if ($DatabaseProduct -ceq 'PostgreSQL') { 'pg_ctl stop -m fast -w' } else { 'mysqladmin shutdown' }
         $sqlShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq $expectedSqlBackendName })
         $redisShutdown = @($backendShutdowns | Where-Object { (Get-T21ObservedValue $_ 'backend') -ceq 'redis' })
         if ($sqlShutdown.Count -ne 1 -or $redisShutdown.Count -ne 1 -or
             [int](Get-T21ObservedValue $sqlShutdown[0] 'processId') -ne [int](Get-T21ObservedValue $sqlProcess 'processId') -or
+            (Get-T21ObservedValue $sqlShutdown[0] 'command') -cne $expectedSqlShutdownCommand -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'commandExitCode') 0) -or
             -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'processExitCode') 0) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'processExitCodeObserved') $true) -or
@@ -209,6 +418,12 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'processExitCodeObserved') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'processExited') $true) -or
             -not (Test-T21ObservedBoolean (Get-T21ObservedValue $redisShutdown[0] 'forced') $false)) { return $false }
+        if ($DatabaseProduct -cne 'PostgreSQL' -and
+            ([int](Get-T21ObservedValue $sqlShutdown[0] 'launchProcessId') -le 0 -or
+                [int](Get-T21ObservedValue $sqlShutdown[0] 'launchProcessId') -ne [int](Get-T21ObservedValue $sqlProcess 'launchProcessId') -or
+                -not (Test-T21ExpectedExitCode (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExitCode') 0) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExitCodeObserved') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $sqlShutdown[0] 'launchProcessExited') $true))) { return $false }
 
         $sourcePins = Get-T21ObservedValue $report 'sourcePins'
         $pinFiles = [ordered]@{
@@ -224,10 +439,54 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             if ($pinValue.ToLowerInvariant() -cne $expectedPin) { return $false }
         }
         if (([string](Get-T21ObservedValue $sourcePins 'acceptanceJarSha256')).ToLowerInvariant() -cne $expectedAcceptanceSha256.ToLowerInvariant() -or
-            ([string](Get-T21ObservedValue $sourcePins 'apiConsumerJarSha256')).ToLowerInvariant() -cne $expectedApiConsumerSha256.ToLowerInvariant()) { return $false }
+            ([string](Get-T21ObservedValue $sourcePins 'apiConsumerJarSha256')).ToLowerInvariant() -cne $expectedApiConsumerSha256.ToLowerInvariant() -or
+            ([string](Get-T21ObservedValue $sourcePins 'plugDevCliDistManifestSha256')).ToLowerInvariant() -cne $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant()) { return $false }
 
         $runRoot = [IO.Path]::GetFullPath([string](Get-T21ObservedValue $report 'runDirectory'))
         if (-not (Test-Path -LiteralPath $runRoot -PathType Container) -or (Test-T21PathContainsReparsePoint $runRoot)) { return $false }
+        $runRootPrefix = $runRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        $logsRoot = [IO.Path]::GetFullPath((Join-Path $runRoot 'logs')).TrimEnd([char[]]@('\', '/'))
+        $logsRootPrefix = $logsRoot + [IO.Path]::DirectorySeparatorChar
+        if (-not (Test-Path -LiteralPath $logsRoot -PathType Container) -or (Test-T21PathContainsReparsePoint $logsRoot)) { return $false }
+        $logMap = Get-T21ObservedValue $report 'logs'
+        $logEntries = if ($logMap -is [Collections.IDictionary]) {
+            @($logMap.GetEnumerator())
+        } else {
+            @($logMap.PSObject.Properties | Where-Object { $_.MemberType -in @('NoteProperty', 'Property') })
+        }
+        if ($logEntries.Count -eq 0) { return $false }
+        $pathComparison = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+        $logPathComparer = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
+        $declaredLogPaths = [Collections.Generic.HashSet[string]]::new($logPathComparer)
+        foreach ($logEntry in $logEntries) {
+            $logPath = if ($logEntry -is [Collections.DictionaryEntry]) { [string]$logEntry.Key } else { [string]$logEntry.Name }
+            $logEvidence = $logEntry.Value
+            if ([string]::IsNullOrWhiteSpace($logPath) -or [IO.Path]::IsPathRooted($logPath)) { return $false }
+            $fullManifestLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $logPath))
+            if (-not $fullManifestLogPath.StartsWith($logsRootPrefix, $pathComparison) -or
+                (Test-T21PathContainsReparsePoint $fullManifestLogPath) -or
+                -not (Test-Path -LiteralPath $fullManifestLogPath -PathType Leaf)) { return $false }
+            $relativeManifestLogPath = $fullManifestLogPath.Substring($runRootPrefix.Length).Replace('/', '\')
+            if (-not $declaredLogPaths.Add($relativeManifestLogPath)) { return $false }
+            $manifestLogInfo = Get-Item -LiteralPath $fullManifestLogPath -Force -ErrorAction Stop
+            $manifestLogBytes = Get-T21ObservedValue $logEvidence 'bytes'
+            $manifestLogSha256 = [string](Get-T21ObservedValue $logEvidence 'sha256')
+            if (-not (Test-T21IntegralNumber $manifestLogBytes 0 ([long]::MaxValue)) -or
+                $manifestLogSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+                [long]$manifestLogBytes -ne [long]$manifestLogInfo.Length -or
+                $manifestLogSha256.ToLowerInvariant() -cne (Get-FileHash -LiteralPath $fullManifestLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()) { return $false }
+        }
+        $logTreeItems = @(Get-ChildItem -LiteralPath $logsRoot -Recurse -Force -ErrorAction Stop)
+        foreach ($logTreeItem in $logTreeItems) {
+            if (($logTreeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        }
+        $actualLogFiles = @($logTreeItems | Where-Object { -not $_.PSIsContainer })
+        if ($actualLogFiles.Count -ne $declaredLogPaths.Count) { return $false }
+        foreach ($actualLogFile in $actualLogFiles) {
+            $actualRelativeLogPath = $actualLogFile.FullName.Substring($runRootPrefix.Length).Replace('/', '\')
+            if (-not $declaredLogPaths.Contains($actualRelativeLogPath)) { return $false }
+        }
+
         $platformLogs = @(Get-T21ObservedValue $report 'platformLogs')
         if ($platformLogs.Count -ne 1) { return $false }
         $platformLog = $platformLogs[0]
@@ -235,7 +494,6 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         if ($relativePath -cne 'logs\platform-candidate-startup-failure.txt' -or
             (Get-T21ObservedValue $platformLog 'stage') -cne 'candidate-startup-failure') { return $false }
         $fullLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $relativePath))
-        $runRootPrefix = $runRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
         if (-not $fullLogPath.StartsWith($runRootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
             (Test-T21PathContainsReparsePoint $fullLogPath) -or
             -not (Test-Path -LiteralPath $fullLogPath -PathType Leaf)) { return $false }
@@ -245,7 +503,6 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedHash = ([string](Get-T21ObservedValue $platformLog 'sha256')).ToLowerInvariant()
         if ($expectedBytes -le 0 -or [long]$actualLog.Length -ne $expectedBytes -or
             $actualLogHash -cne $expectedHash -or $expectedHash -notmatch '^[0-9a-f]{64}$') { return $false }
-        $logMap = Get-T21ObservedValue $report 'logs'
         $mappedLog = Get-T21ObservedValue $logMap $relativePath
         if ([long](Get-T21ObservedValue $mappedLog 'bytes') -ne $expectedBytes -or
             ([string](Get-T21ObservedValue $mappedLog 'sha256')).ToLowerInvariant() -cne $expectedHash) { return $false }
