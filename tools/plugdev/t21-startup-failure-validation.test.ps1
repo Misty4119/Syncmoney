@@ -188,6 +188,43 @@ try {
     }
     Write-Output 'PASS: accept a complete minimum-Paper PostgreSQL startup rollback report'
 
+    foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
+        $expectedEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointName
+        $endpointReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+        $endpointSoftwareName = switch ($expectedEndpoint.software) {
+            'paper' { 'Paper' }
+            'folia' { 'Folia' }
+            'canvas' { 'Canvas' }
+            default { throw "Unsupported fixture platform software '$($expectedEndpoint.software)'." }
+        }
+        $endpointLog = [string[]]$platformLog.Clone()
+        $endpointLog[0] = "[07:43:59] [Server thread/INFO]: [Bootstrap] Loading $endpointSoftwareName $($expectedEndpoint.minecraftVersion)-$($expectedEndpoint.build)-main@fixture for Minecraft $($expectedEndpoint.minecraftVersion)"
+        [IO.File]::WriteAllLines($platformLogPath, $endpointLog, [Text.UTF8Encoding]::new($false))
+        $endpointLogInfo = Get-Item -LiteralPath $platformLogPath
+        $endpointLogHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $endpointReport.server.software = $expectedEndpoint.software
+        $endpointReport.server.minecraftVersion = $expectedEndpoint.minecraftVersion
+        $endpointReport.server.build = $expectedEndpoint.build
+        $endpointReport.server.sha256 = $expectedEndpoint.sha256
+        $endpointReport.startupObservation.runtimeIdentity.software = $expectedEndpoint.software
+        $endpointReport.startupObservation.runtimeIdentity.minecraftVersion = $expectedEndpoint.minecraftVersion
+        $endpointReport.startupObservation.runtimeIdentity.build = $expectedEndpoint.build
+        $endpointReport.platformLogs[0].bytes = [long]$endpointLogInfo.Length
+        $endpointReport.platformLogs[0].sha256 = $endpointLogHash
+        $endpointReport.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$endpointLogInfo.Length
+        $endpointReport.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $endpointLogHash
+        if (-not (Test-T21StartupFailureReportFixture $endpointReport $expectedEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint $endpointName)) {
+            throw "The complete $endpointName PostgreSQL startup rollback report was rejected."
+        }
+        Write-Output "PASS: accept a complete $endpointName PostgreSQL startup rollback report against its pinned server SHA-256"
+        $endpointReport.server.sha256 = '0' * 64
+        if (Test-T21StartupFailureReportFixture $endpointReport $expectedEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint $endpointName) {
+            throw "The $endpointName startup rollback report accepted a server SHA-256 that differs from its pinned endpoint."
+        }
+        Write-Output "PASS: reject a $endpointName startup rollback report with a mismatched server SHA-256"
+    }
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+
     $sqlShutdown = @($report.backendShutdowns | Where-Object { $_.backend -ceq 'postgresql' })
     if ($sqlShutdown.Count -ne 1) { throw 'The fixture must contain exactly one PostgreSQL shutdown observation.' }
     $sqlShutdown[0].shutdownTargetVerified = $false
@@ -197,23 +234,22 @@ try {
     $sqlShutdown[0].shutdownTargetVerified = $true
     Write-Output 'PASS: reject an unverified PostgreSQL shutdown target'
 
-    foreach ($target in @(
-            [ordered]@{ databaseProduct = 'PostgreSQL'; endpoint = 'Maximum' }
-            [ordered]@{ databaseProduct = 'MySQL'; endpoint = 'Maximum' }
-            [ordered]@{ databaseProduct = 'MariaDB'; endpoint = 'MinimumFolia' }
-            [ordered]@{ databaseProduct = 'PostgreSQL'; endpoint = 'MinimumFolia' }
-            [ordered]@{ databaseProduct = 'PostgreSQL'; endpoint = 'MinimumCanvas' }
-        )) {
-        if (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $target.databaseProduct -PlatformEndpoint $target.endpoint) {
-            throw "The startup-failure target guard accepted $($target.databaseProduct) / $($target.endpoint)."
+    $startupFailureEndpoints = @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
+    foreach ($endpointName in $startupFailureEndpoints) {
+        foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
+            if (-not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName)) {
+                throw "The startup-failure target guard rejected $databaseProduct / $endpointName."
+            }
         }
     }
-    foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-        if (-not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) {
-            throw "The startup-failure target guard rejected the required minimum-Paper $databaseProduct cell."
-        }
+    $unsupportedEndpointRejected = $false
+    try {
+        [void](Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint 'Unpinned')
+    } catch {
+        $unsupportedEndpointRejected = $true
     }
-    Write-Output 'PASS: allow each SQL dialect on minimum Paper and reject unselected endpoints'
+    if (-not $unsupportedEndpointRejected) { throw 'The startup-failure target guard accepted an endpoint outside the pinned platform set.' }
+    Write-Output 'PASS: allow every pinned platform endpoint for all three SQL dialects and reject an unpinned endpoint'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop

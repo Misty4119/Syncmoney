@@ -34,7 +34,7 @@ $script:databaseExecutableVersionPattern = switch ($script:databaseProduct) { 'M
 $script:platformTarget = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
 if ($NewerAuditSchemaStartupFailure.IsPresent -and
     -not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The newer-audit-schema startup-failure case is restricted to MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum Paper 1.21.6#48.'
+    throw 'The newer-audit-schema startup-failure case requires one of the supported SQL products and an explicitly pinned T21 platform endpoint.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1805,6 +1805,8 @@ try {
                     minecraftVersion=$script:platformTarget.minecraftVersion
                     build=$script:platformTarget.build
                     sha256=$serverSha256
+                    bytes=[long](Get-Item -LiteralPath $script:serverPath).Length
+                    path=$script:serverPath
                 }
                 candidate=[ordered]@{ version=$CandidateVersion; sha256=$script:candidateSha256 }
                 artifacts=[ordered]@{ acceptanceSha256=$acceptanceSha256; apiConsumerSha256=$apiConsumerSha256 }

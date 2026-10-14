@@ -6,7 +6,7 @@ function Test-T21NewerAuditSchemaStartupFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $PlatformEndpoint -ceq 'Minimum'
+    return $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
 }
 
 function Get-T21PlugDevCliDistManifestHash([object[]]$Files) {
