@@ -414,6 +414,42 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -RequiredV11DdlPermissionDeniedStartupFailure
 ```
 
+The bounded maximum Canvas `26.3#972` / MySQL `8.0.42` required-v11 denial cell passed E2. To reproduce it, use the T15-pinned Canvas artifact:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$canvasJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\canvas-26.3-972.jar').Path
+$env:SYNCMONEY_TEST_SERVER_JAR = $canvasJar
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint MaximumCanvas `
+  -DatabaseProduct MySQL `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
+The next ordered required-v11 denial cell is maximum Canvas `26.3#972` / MariaDB `12.3.3-MariaDB`:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$canvasJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\canvas-26.3-972.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
+  -PlatformEndpoint MaximumCanvas `
+  -DatabaseProduct MariaDB `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
 For maximum Paper `26.3#166` with PostgreSQL `18.1`, use the same pinned Paper artifact and select PostgreSQL. The PostgreSQL role and query evidence proves the non-owner DDL boundary; MySQL general-log capture is not used for PostgreSQL.
 
 ```powershell
