@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case supports MySQL, MariaDB, and PostgreSQL on minimum Paper 1.21.6#48 and maximum Paper 26.3#166 and minimum Folia 1.21.6#6 only.'
+    throw 'The required-v11-DDL-permission-failure case supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, and minimum Folia 1.21.6#6, plus MySQL on maximum Folia 26.2#7 only.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1192,7 +1192,7 @@ function Test-T21MySqlCreateWithoutAlterGrantSet(
 
 function Seed-T21RequiredV11DdlPermissionFailure {
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'The required-v11-DDL-permission-failure seed supports all three SQL dialects on minimum Paper 1.21.6#48, maximum Paper 26.3#166, and minimum Folia 1.21.6#6 only.'
+        throw 'The required-v11-DDL-permission-failure seed supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, and minimum Folia 1.21.6#6, plus MySQL on maximum Folia 26.2#7 only.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
