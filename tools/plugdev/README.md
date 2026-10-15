@@ -254,7 +254,7 @@ Use `-RequiredV11DdlPermissionDeniedStartupFailure` to seed an isolated audit sc
 
 For PostgreSQL, table alteration follows ownership rather than a MySQL-style `ALTER` grant. The isolated application role is not a superuser, database owner, audit-table owner, or member of the audit-table owner's role. The database and audit table remain owned by `postgres`; the application role receives database `CONNECT`, public-schema `USAGE` and `CREATE`, and audit-table `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. The structured role evidence must match its retained query log.
 
-The refreshed maximum-Paper/MySQL and maximum-Paper/MariaDB cells retain their isolated general-log event and verify that the candidate account's only ALTER statement is `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The strict event predicate binds the reported runtime SQL user and the isolated loopback origin `localhost [127.0.0.1]`; negative fixtures reject a different hostname or source IP. The runner enables general logging only for candidate startup, restores its previous `log_output` and disabled state after capture, and hashes the retained JSONL event with the report. The earlier minimum-Paper reports preserve their original evidence and do not include this SQL-statement capture. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. PostgreSQL reports verify the owner boundary and retained role/query evidence; MySQL/MariaDB maximum-Paper reports additionally capture the exact denied ALTER statement in their general logs. Minimum-Folia `1.21.6#6` E2 cells cover all three SQL products; MySQL and MariaDB logs record `ALTER command denied`, while PostgreSQL proves the ownership denial. None of the minimum-Folia reports retains a separate statement trace. Maximum-Folia `26.2#7` now has bounded MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` E2 evidence. The MySQL/MariaDB reports verify isolated-schema `CREATE` without `ALTER`; the MariaDB report records `ALTER command denied`, and neither retains a separate general-log statement. PostgreSQL confirms the application role is not an owner or superuser and records the ownership denial; no statement-level DDL trace was retained, so exact SQL remains UNKNOWN. Minimum Canvas `1.21.8#603` / MySQL `8.0.42` is the next selected cell; the target guard admits it and its E2 runtime is pending. Minimum-Canvas MariaDB/PostgreSQL, all maximum-Canvas cells, and supplemental current-stable Paper remain `NOT RUN` for this scenario. Startup creates an empty `players` table before the audit migration fails, so this is not whole-database atomic rollback evidence.
+The refreshed maximum-Paper/MySQL and maximum-Paper/MariaDB cells retain their isolated general-log event and verify that the candidate account's only ALTER statement is `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The strict event predicate binds the reported runtime SQL user and the isolated loopback origin `localhost [127.0.0.1]`; negative fixtures reject a different hostname or source IP. The runner enables general logging only for candidate startup, restores its previous `log_output` and disabled state after capture, and hashes the retained JSONL event with the report. The earlier minimum-Paper reports preserve their original evidence and do not include this SQL-statement capture. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. PostgreSQL reports verify the owner boundary and retained role/query evidence; MySQL/MariaDB maximum-Paper reports additionally capture the exact denied ALTER statement in their general logs. Minimum-Folia `1.21.6#6` E2 cells cover all three SQL products; MySQL and MariaDB logs record `ALTER command denied`, while PostgreSQL proves the ownership denial. None of the minimum-Folia reports retains a separate statement trace. Maximum-Folia `26.2#7` now has bounded MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` E2 evidence. The MySQL/MariaDB reports verify isolated-schema `CREATE` without `ALTER`; the MariaDB report records `ALTER command denied`, and neither retains a separate general-log statement. PostgreSQL confirms the application role is not an owner or superuser and records the ownership denial; no statement-level DDL trace was retained, so exact SQL remains UNKNOWN. Minimum Canvas `1.21.8#603` now has bounded required-v11 denial E2 evidence for MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1`, all `PASS_BOUNDED_SUBCASE`. The MariaDB report audit passed 57 assertions over 29 logs, including candidate build-manifest/log provenance; the PostgreSQL report audit passed 68 assertions over 37 logs and verified the non-owner application role. All three reports preserved main schema v1, audit schema v10, all 14 audit columns, the primary index, and the sentinel row. Each startup created an empty `players` table, so whole-database atomic rollback is not claimed; no report retained a statement-level DDL trace, so the exact attempted SQL remains `UNKNOWN`. The next ordered cell is maximum Canvas / MySQL. Other maximum-Canvas cells and supplemental current-stable Paper remain `NOT RUN`.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -361,7 +361,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 ```
 
 
-For the selected minimum Canvas `1.21.8#603` / MySQL `8.0.42` required-v11 denial cell, use the pinned Canvas artifact:
+To reproduce the completed minimum Canvas `1.21.8#603` / MySQL `8.0.42` required-v11 denial cell, use the pinned Canvas artifact:
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -375,6 +375,42 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MinimumCanvas `
   -DatabaseProduct MySQL `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
+For the bounded minimum Canvas `1.21.8#603` / MariaDB `12.3.3-MariaDB` required-v11 denial cell, pass the installed MariaDB binary directory:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$canvasJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\canvas-build.603.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
+  -PlatformEndpoint MinimumCanvas `
+  -DatabaseProduct MariaDB `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
+For the bounded minimum Canvas `1.21.8#603` / PostgreSQL `18.1` required-v11 denial cell, supply PostgreSQL 18 binaries:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$canvasJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\canvas-build.603.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $canvasJar `
+  -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
+  -PlatformEndpoint MinimumCanvas `
+  -DatabaseProduct PostgreSQL `
   -RequiredV11DdlPermissionDeniedStartupFailure
 ```
 

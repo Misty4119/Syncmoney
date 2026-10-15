@@ -860,16 +860,18 @@ try {
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas)) {
-        throw 'The v11 required-DDL failure gate must admit all three SQL products on minimum and maximum Paper and Folia, plus minimum-Canvas MySQL.'
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MinimumCanvas) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas)) {
+        throw 'The v11 required-DDL failure gate must admit all three SQL products on minimum and maximum Paper and Folia, plus all three products on minimum Canvas.'
     }
-    Write-Output 'PASS: admit the thirteen approved required-v11 product/endpoint combinations'
+    Write-Output 'PASS: admit the fifteen approved required-v11 product/endpoint combinations'
     $uncompletedV11Endpoints = @('MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
     $allV11Products = @('MySQL', 'MariaDB', 'PostgreSQL')
     foreach ($uncompletedEndpoint in $uncompletedV11Endpoints) {
         foreach ($databaseProduct in $allV11Products) {
             if ($uncompletedEndpoint -ceq 'MaximumFolia' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
-            if ($uncompletedEndpoint -ceq 'MinimumCanvas' -and $databaseProduct -ceq 'MySQL') { continue }
+            if ($uncompletedEndpoint -ceq 'MinimumCanvas' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
             if (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $uncompletedEndpoint) {
                 throw ('The required-v11 DDL failure target guard unexpectedly admitted ' + $databaseProduct + '/' + $uncompletedEndpoint)
             }
@@ -935,6 +937,18 @@ try {
         throw 'The complete minimum-Canvas MySQL v11 DDL-denial report was rejected.'
     }
     Write-Output 'PASS: accept a complete minimum-Canvas MySQL v11 DDL-denial report with the exact pinned runtime identity'
+    $minimumCanvasMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'MinimumCanvas'
+    if (-not (Test-T21StartupFailureReportFixture $minimumCanvasMariaDbDdlFailureReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint MinimumCanvas -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Canvas MariaDB v11 DDL-denial report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete minimum-Canvas MariaDB v11 DDL-denial report with the exact pinned runtime identity'
+    $minimumCanvasPostgreSqlDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'MinimumCanvas'
+    if (-not (Test-T21StartupFailureReportFixture $minimumCanvasPostgreSqlDdlFailureReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Canvas PostgreSQL v11 DDL-denial report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete minimum-Canvas PostgreSQL v11 DDL-denial report with the exact pinned runtime identity and non-owner app role'
     $maximumPaperMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumPaperMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'Maximum'
     if (-not (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
