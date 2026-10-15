@@ -533,6 +533,17 @@ try {
         $Report.logs[$LogRelativePath].bytes = [long]$logInfo.Length
         $Report.logs[$LogRelativePath].sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+    function Set-T21MySqlDeniedRequestIdDdlEvent([object]$Report, [object]$Event) {
+        $logRelativePath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
+        $logPath = Join-Path $Report.runDirectory $logRelativePath
+        $jsonLine = ConvertTo-Json -InputObject $Event -Depth 5 -Compress
+        [IO.File]::WriteAllText($logPath, $jsonLine + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $logPath
+        $Report.logs[$logRelativePath] = [ordered]@{
+            bytes = [long]$logInfo.Length
+            sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
     function Set-T21PostgreSqlPrivilegeFixtureEvidence([object]$Report) {
         $relativePath = 'logs\postgresql-audit-ddl-privileges.txt'
         $logPath = Join-Path $Report.runDirectory $relativePath
@@ -566,7 +577,7 @@ try {
         } else {
             New-T21MySqlStartupFailureReportFixture $databaseProduct $databaseVersion
         }
-        $v11RunRoot = Join-Path $testRoot ("v11-required-ddl-$($databaseProduct.ToLowerInvariant())")
+        $v11RunRoot = Join-Path $testRoot ("v11-required-ddl-$($databaseProduct.ToLowerInvariant())-$($platformEndpoint.ToLowerInvariant())")
         $v11LogsRoot = Join-Path $v11RunRoot 'logs'
         New-Item -ItemType Directory -Force -Path $v11LogsRoot | Out-Null
         foreach ($existingLog in Get-ChildItem -LiteralPath (Join-Path $testRoot 'logs') -File) {
@@ -787,6 +798,22 @@ try {
         } else {
             'ALTER command denied'
         }
+        if ($databaseProduct -ceq 'MySQL' -and $platformEndpoint -ceq 'Maximum') {
+            $requestIdDdlLogPath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
+            $requestIdDdlEvent = [ordered]@{
+                userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [127.0.0.1]'
+                commandType = 'Query'
+                argument = 'ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)'
+            }
+            $copy.deniedDdlEvidence = [ordered]@{
+                source = 'mysql.general_log'
+                databaseName = 'syncmoney_t21_a1b2c3d4'
+                runtimeUser = 'sm_t21_a1b2c3d4'
+                eventCount = 1
+                logPath = $requestIdDdlLogPath
+            }
+            Set-T21MySqlDeniedRequestIdDdlEvent $copy $requestIdDdlEvent
+        }
 
         $platformSoftware = switch ($endpoint.software) {
             'paper' { 'Paper' }
@@ -824,12 +851,15 @@ try {
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum)) {
-        throw 'The v11 required-DDL failure gate must admit minimum-Paper MySQL, MariaDB, and PostgreSQL only until additional runtime cells are verified.'
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentStable)) {
+        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum Paper and only MySQL on maximum Paper.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL, MariaDB, and PostgreSQL'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum-Paper all-dialect and maximum-Paper MySQL cells'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -837,6 +867,44 @@ try {
         throw 'The complete minimum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
     }
     Write-Output 'PASS: accept v11 DDL permission failure only with v10 schema/version preservation and observed privilege boundary'
+    $maximumPaperEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumPaperDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'Maximum'
+    if (-not (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete maximum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete maximum-Paper MySQL v11 DDL-denial report with the exact pinned runtime identity'
+    $maximumPaperDdlFailureReportMissingSqlEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumPaperDdlFailureReportMissingSqlEvidence.Remove('deniedDdlEvidence')
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReportMissingSqlEvidence $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL predicate accepted a generic ALTER-denied log without the denied SQL statement.'
+    }
+    Write-Output 'PASS: require retained SQL evidence for the maximum-Paper MySQL v11 ALTER denial'
+    $maximumRequestIdEvidencePath = Join-Path $maximumPaperDdlFailureReport.runDirectory 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
+    $maximumRequestIdEvidenceEvent = Get-Content -LiteralPath $maximumRequestIdEvidencePath -Raw | ConvertFrom-Json -AsHashtable
+    $maximumRequestIdEvidenceEvent.argument = 'ALTER TABLE syncmoney_audit_log ADD COLUMN sequence BIGINT'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL predicate accepted a denied ALTER for a column other than request_id.'
+    }
+    $maximumRequestIdEvidenceEvent.argument = 'ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    $maximumRequestIdEvidenceEvent.userHost = 'sm_t21_other[sm_t21_other] @ localhost [127.0.0.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL predicate accepted request_id DDL evidence from a different SQL account.'
+    }
+    $maximumRequestIdEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [127.0.0.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    Write-Output 'PASS: require the exact request_id ALTER event from the candidate SQL account'
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL report predicate accepted the minimum-Paper server SHA-256.'
+    }
+    Write-Output 'PASS: reject maximum-Paper MySQL v11 DDL-denial evidence with the minimum-Paper server SHA-256'
     $fixtureMariaDbHash = '*' + ('A' * 40)
     $rawMariaDbGrant = 'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1` IDENTIFIED BY PASSWORD ' + "'$fixtureMariaDbHash'"
     $safeMariaDbGrant = @(Protect-T21MariaDbGrantLines -GrantLines @($rawMariaDbGrant))
@@ -1704,6 +1772,10 @@ try {
         $runnerSource -notmatch 'function Seed-T21NewerAuditSchema' -or
         $runnerSource -notmatch 'function Seed-T21IncompleteV10AuditTable' -or
         $runnerSource -notmatch 'function Seed-T21RequiredV11DdlPermissionFailure' -or
+        $runnerSource -notmatch 'function Enable-T21MySqlGeneralLogCapture' -or
+        $runnerSource -notmatch 'function Get-T21MySqlDeniedRequestIdDdlEvidence' -or
+        $runnerSource -notmatch 'mysql\.general_log' -or
+        $runnerSource -notmatch 'deniedDdlEvidence=\$script:deniedDdlEvidence' -or
         $runnerSource -notmatch 'Test-T21PostgreSqlAuditOwnerBoundary' -or
         $runnerSource -notmatch 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION' -or
         $runnerSource -notmatch 'CREATE DATABASE \$script:databaseName OWNER postgres' -or
@@ -1750,6 +1822,8 @@ try {
         $startupValidatorSource -notmatch 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' -or
         $startupValidatorSource -notmatch 'RequiredV11DdlPermissionDenied' -or
         $startupValidatorSource -notmatch 'ALTER command denied' -or
+        $startupValidatorSource -notmatch 'function Test-T21MySqlDeniedRequestIdDdlEvent' -or
+        $startupValidatorSource -notmatch 'request_id' -or
         $startupValidatorSource -notmatch 'must be owner of table syncmoney_audit_log' -or
         $startupValidatorSource -notmatch 'Test-T21PostgreSqlAuditOwnerBoundary' -or
         $startupValidatorSource -notmatch 'T21-V03-SYNC-v11-audit-ddl-permission-failure') {

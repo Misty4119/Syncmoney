@@ -254,19 +254,19 @@ Use `-RequiredV11DdlPermissionDeniedStartupFailure` to seed an isolated audit sc
 
 For PostgreSQL, table alteration follows ownership rather than a MySQL-style `ALTER` grant. The isolated application role is not a superuser, database owner, audit-table owner, or member of the audit-table owner's role. The database and audit table remain owned by `postgres`; the application role receives database `CONNECT`, public-schema `USAGE` and `CREATE`, and audit-table `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. The structured role evidence must match its retained query log.
 
-The runner verifies that candidate startup fails on `request_id` DDL without advancing audit schema v10 or changing its columns, index, sentinel row, or the main version row. The bounded E2 matrix covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48`. Other endpoints in the user-pinned Paper `1.21.6#48–26.3#166`, Folia `1.21.6#6–26.2#7`, and Canvas `1.21.8#603–26.3#972` ranges remain `NOT RUN` for this scenario. Startup creates an empty `players` table before the audit migration fails, so this is not whole-database atomic rollback evidence.
+The refreshed maximum-Paper/MySQL cell retains the isolated MySQL `general_log` event and verifies that the candidate account's only ALTER statement is `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The runner turns general logging on only for candidate startup, restores its previous `log_output` and disabled state after capture, and hashes the retained JSONL event with the report. The earlier minimum-Paper reports preserve their original evidence and do not include this SQL-statement capture. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48`, plus refreshed MySQL `8.0.42` on maximum Paper `26.3#166`. Maximum-Paper MariaDB/PostgreSQL, all Folia/Canvas combinations, and supplemental current-stable Paper remain `NOT RUN` for this scenario. Startup creates an empty `players` table before the audit migration fails, so this is not whole-database atomic rollback evidence.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
-$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+$paperJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\paper-26.3-166.jar').Path
 pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
-  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
   -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
   -JavaHome $env:JAVA_HOME `
-  -PlatformEndpoint Minimum `
+  -PlatformEndpoint Maximum `
   -DatabaseProduct MySQL `
   -RequiredV11DdlPermissionDeniedStartupFailure
 ```

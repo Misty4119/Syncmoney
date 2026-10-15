@@ -32,7 +32,21 @@ function Test-T21RequiredV11DdlFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -ceq 'Minimum'
+    if ($DatabaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { return $false }
+    if ($PlatformEndpoint -ceq 'Minimum') { return $true }
+    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum'
+}
+
+function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
+    if ($null -eq $Event -or [string]::IsNullOrWhiteSpace($RuntimeUser) -or
+        -not (Test-T21ExactDictionaryFields $Event @('userHost', 'commandType', 'argument'))) { return $false }
+    $userHost = [string](Get-T21ObservedValue $Event 'userHost')
+    $expectedUserPrefix = $RuntimeUser + '[' + $RuntimeUser + '] @ '
+    $statement = [string](Get-T21ObservedValue $Event 'argument')
+    $requestIdDdlPattern = '(?i)^\s*ALTER\s+TABLE\s+`?syncmoney_audit_log`?\s+ADD\s+COLUMN\s+`?request_id`?\s+VARCHAR\s*\(\s*36\s*\)\s*;?\s*$'
+    return [string](Get-T21ObservedValue $Event 'commandType') -ceq 'Query' -and
+        $userHost.StartsWith($expectedUserPrefix, [StringComparison]::Ordinal) -and
+        $statement -match $requestIdDdlPattern
 }
 
 function Test-T21PostgreSqlAuditOwnerBoundary([object]$Privileges, [string]$DatabaseName, [string]$UserName) {
@@ -987,6 +1001,27 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                         }
                     }
                 }
+            }
+            if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum') {
+                $evidencePath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
+                $ddlEvidence = Get-T21ObservedValue $report 'deniedDdlEvidence'
+                $expectedEvidenceFields = @('source', 'databaseName', 'runtimeUser', 'eventCount', 'logPath')
+                $configuration = Get-T21ObservedValue $report 'configuration'
+                $reportedDatabase = [string](Get-T21ObservedValue $configuration 'databaseNameObserved')
+                $grantee = [string](Get-T21ObservedValue $privileges 'grantee')
+                $expectedRuntimeUser = if ($grantee -match '^([^@]+)@127\.0\.0\.1$') { $Matches[1] } else { '' }
+                if (-not (Test-T21ExactDictionaryFields $ddlEvidence $expectedEvidenceFields) -or
+                    (Get-T21ObservedValue $ddlEvidence 'source') -cne 'mysql.general_log' -or
+                    (Get-T21ObservedValue $ddlEvidence 'databaseName') -cne $reportedDatabase -or
+                    (Get-T21ObservedValue $ddlEvidence 'runtimeUser') -cne $expectedRuntimeUser -or
+                    -not (Test-T21IntegralNumber (Get-T21ObservedValue $ddlEvidence 'eventCount') 1 1) -or
+                    (Get-T21ObservedValue $ddlEvidence 'logPath') -cne $evidencePath -or
+                    -not $declaredLogPaths.Contains($evidencePath) -or
+                    $null -eq (Get-T21ObservedValue $logMap $evidencePath)) { return $false }
+                $eventLines = [IO.File]::ReadAllLines((Join-Path $runRoot $evidencePath), [Text.UTF8Encoding]::new($false))
+                if ($eventLines.Count -ne 1 -or [string]::IsNullOrWhiteSpace($eventLines[0])) { return $false }
+                $ddlEvent = ConvertFrom-Json -InputObject $eventLines[0] -AsHashtable -ErrorAction Stop
+                if (-not (Test-T21MySqlDeniedRequestIdDdlEvent $ddlEvent $expectedRuntimeUser)) { return $false }
             }
         }
 
