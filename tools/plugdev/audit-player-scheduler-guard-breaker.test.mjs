@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateGuardBreakerReport } from "./audit-player-scheduler-guard-breaker.mjs";
+import { canonicalTextSourceSha256, validateGuardBreakerReport } from "./audit-player-scheduler-guard-breaker.mjs";
 
 function reportFixture() {
   return {
@@ -45,6 +45,18 @@ function reportFixture() {
 
 test("accepts a bounded user-pinned Canvas guard/breaker report with graceful cleanup", () => {
   assert.equal(validateGuardBreakerReport(reportFixture()), true);
+});
+
+test("canonical source hashes ignore LF, CRLF, and mixed line endings", () => {
+  const lfBytes = Buffer.from("first line\nsecond line\n", "utf8");
+  const crlfBytes = Buffer.from("first line\r\nsecond line\r\n", "utf8");
+  const mixedBytes = Buffer.from("first line\r\nsecond line\n", "utf8");
+  const changedBytes = Buffer.from("first line\nchanged line\n", "utf8");
+  const expectedHash = canonicalTextSourceSha256(lfBytes);
+
+  assert.equal(canonicalTextSourceSha256(crlfBytes), expectedHash);
+  assert.equal(canonicalTextSourceSha256(mixedBytes), expectedHash);
+  assert.notEqual(canonicalTextSourceSha256(changedBytes), expectedHash);
 });
 
 test("rejects a report that substitutes a non-pinned endpoint", () => {

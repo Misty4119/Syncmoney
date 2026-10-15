@@ -80,6 +80,11 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+export function canonicalTextSourceSha256(bytes) {
+  const normalizedText = bytes.toString("utf8").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  return sha256(Buffer.from(normalizedText, "utf8"));
+}
+
 function isWithin(root, candidate) {
   return candidate.startsWith(`${root}${path.sep}`);
 }
@@ -101,7 +106,10 @@ function verifyHash(bytes, expected, label) {
 
 function verifyGitSourcePin(sourceCommit, relativePath, expectedSha256) {
   const bytes = execFileSync("git", ["-C", repositoryRoot, "show", `${sourceCommit}:${relativePath}`]);
-  return verifyHash(bytes, expectedSha256, `source ${relativePath} at ${sourceCommit}`);
+  const actualSha256 = canonicalTextSourceSha256(bytes);
+  requireCondition(actualSha256 === expectedSha256,
+    `source ${relativePath} at ${sourceCommit} canonical SHA-256 mismatch: expected ${expectedSha256}, observed ${actualSha256}`);
+  return actualSha256;
 }
 
 function runAudit() {

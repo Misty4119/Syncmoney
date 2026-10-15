@@ -262,6 +262,15 @@ function Invoke-Client([string]$scenario) {
     return [ordered]@{ exitCode = $exitCode; logPath = $logPath; logSha256 = (Get-FileHash $logPath -Algorithm SHA256).Hash.ToLowerInvariant(); lines = @($output | ForEach-Object { $_.ToString() }) }
 }
 
+function Get-CanonicalTextSourceSha256([string]$path) {
+    $sourceText = [IO.File]::ReadAllText($path)
+    $normalizedText = $sourceText.Replace("`r`n", "`n").Replace("`r", "`n")
+    $sourceBytes = [Text.UTF8Encoding]::new($false).GetBytes($normalizedText)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { return [Convert]::ToHexString($hasher.ComputeHash($sourceBytes)).ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+}
+
 function Assert-GuardOnlyProfile([bool]$expectCircuitBreaker) {
     $settingsPath = Join-Path $projectRoot '.plugdev\run\plugins\Syncmoney\config.yml'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { throw 'Prepared Syncmoney config is missing for the guard acceptance case.' }
@@ -737,12 +746,12 @@ plugins {
             candidateJarSha256 = $candidateSha
             acceptanceJarSha256 = (Get-FileHash $acceptanceJar -Algorithm SHA256).Hash.ToLowerInvariant()
             apiConsumerJarSha256 = (Get-FileHash $apiConsumerJar -Algorithm SHA256).Hash.ToLowerInvariant()
-            runnerSha256 = (Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            clientHelperSha256 = (Get-FileHash $clientScript -Algorithm SHA256).Hash.ToLowerInvariant()
-            assertionModuleSha256 = (Get-FileHash $assertionModule -Algorithm SHA256).Hash.ToLowerInvariant()
-            assertionTestSha256 = (Get-FileHash $assertionTest -Algorithm SHA256).Hash.ToLowerInvariant()
-            prepareScriptSha256 = (Get-FileHash $prepareScript -Algorithm SHA256).Hash.ToLowerInvariant()
-            acceptanceProbeSourceSha256 = (Get-FileHash (Join-Path $root 'src\acceptance\java\noietime\syncmoney\acceptance\AcceptanceProbe.java') -Algorithm SHA256).Hash.ToLowerInvariant()
+            runnerSha256 = Get-CanonicalTextSourceSha256 $PSCommandPath
+            clientHelperSha256 = Get-CanonicalTextSourceSha256 $clientScript
+            assertionModuleSha256 = Get-CanonicalTextSourceSha256 $assertionModule
+            assertionTestSha256 = Get-CanonicalTextSourceSha256 $assertionTest
+            prepareScriptSha256 = Get-CanonicalTextSourceSha256 $prepareScript
+            acceptanceProbeSourceSha256 = Get-CanonicalTextSourceSha256 (Join-Path $root 'src\acceptance\java\noietime\syncmoney\acceptance\AcceptanceProbe.java')
             localPlugDevCliSha256 = (Get-FileHash $plugDevCli -Algorithm SHA256).Hash.ToLowerInvariant()
         }
         isolation = [ordered]@{ runRoot = $runRoot; projectRoot = $projectRoot; plugDevHome = $plugDevHome; gradleUserHome = $gradleHome; redisData = $redisData; runMarker = $runMarker; gamePort = $gamePort; rconPort = $rconPort; redisPort = $redisPort; redisDatabase = 15; redisAof = $true; appendFsync = 'always'; mode = 'local_redis'; playerProtection = $Guard.IsPresent; circuitBreaker = $GuardWithCircuitBreaker.IsPresent; playerProtectionOnlyConfigSha256 = $script:guardConfigSha256 }
