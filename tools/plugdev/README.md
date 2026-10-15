@@ -254,7 +254,7 @@ Use `-RequiredV11DdlPermissionDeniedStartupFailure` to seed an isolated audit sc
 
 For PostgreSQL, table alteration follows ownership rather than a MySQL-style `ALTER` grant. The isolated application role is not a superuser, database owner, audit-table owner, or member of the audit-table owner's role. The database and audit table remain owned by `postgres`; the application role receives database `CONNECT`, public-schema `USAGE` and `CREATE`, and audit-table `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. The structured role evidence must match its retained query log.
 
-The refreshed maximum-Paper/MySQL and maximum-Paper/MariaDB cells retain their isolated general-log event and verify that the candidate account's only ALTER statement is `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The strict event predicate binds the reported runtime SQL user and the isolated loopback origin `localhost [127.0.0.1]`; negative fixtures reject a different hostname or source IP. The runner enables general logging only for candidate startup, restores its previous `log_output` and disabled state after capture, and hashes the retained JSONL event with the report. The earlier minimum-Paper reports preserve their original evidence and do not include this SQL-statement capture. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. PostgreSQL reports verify the owner boundary and retained role/query evidence; MySQL/MariaDB maximum-Paper reports additionally capture the exact denied ALTER statement in their general logs. Minimum-Folia `1.21.6#6` E2 cells now cover MySQL `8.0.42` and MariaDB `12.3.3-MariaDB`; both retained startup logs record `ALTER command denied` for `syncmoney_audit_log`, and both loopback grants were verified as isolated-schema `CREATE` without `ALTER`. Neither report retains a separate general-log statement. Minimum-Folia PostgreSQL, maximum-Folia, Canvas, and supplemental current-stable Paper remain `NOT RUN` for this scenario. Startup creates an empty `players` table before the audit migration fails, so this is not whole-database atomic rollback evidence.
+The refreshed maximum-Paper/MySQL and maximum-Paper/MariaDB cells retain their isolated general-log event and verify that the candidate account's only ALTER statement is `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The strict event predicate binds the reported runtime SQL user and the isolated loopback origin `localhost [127.0.0.1]`; negative fixtures reject a different hostname or source IP. The runner enables general logging only for candidate startup, restores its previous `log_output` and disabled state after capture, and hashes the retained JSONL event with the report. The earlier minimum-Paper reports preserve their original evidence and do not include this SQL-statement capture. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. PostgreSQL reports verify the owner boundary and retained role/query evidence; MySQL/MariaDB maximum-Paper reports additionally capture the exact denied ALTER statement in their general logs. Minimum-Folia `1.21.6#6` E2 cells now cover MySQL `8.0.42` and MariaDB `12.3.3-MariaDB`; both retained startup logs record `ALTER command denied` for `syncmoney_audit_log`, and both loopback grants were verified as isolated-schema `CREATE` without `ALTER`. Neither report retains a separate general-log statement. Minimum-Folia PostgreSQL now has bounded E2 evidence on Folia `1.21.6#6` / PostgreSQL `18.1`; that report proves the ownership denial and schema/sentinel preservation but does not retain a separate DDL statement trace. Maximum-Folia, Canvas, and supplemental current-stable Paper remain `NOT RUN` for this scenario. Startup creates an empty `players` table before the audit migration fails, so this is not whole-database atomic rollback evidence.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -305,6 +305,25 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -DatabaseProduct MariaDB `
   -RequiredV11DdlPermissionDeniedStartupFailure
 ```
+
+For the bounded minimum Folia `1.21.6#6` / PostgreSQL `18.1` required-v11 denial cell, provide the PostgreSQL 18 binary directory:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$foliaJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\folia-1.21.6-6.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $foliaJar `
+  -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
+  -PlatformEndpoint MinimumFolia `
+  -DatabaseProduct PostgreSQL `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
 
 For maximum Paper `26.3#166` with PostgreSQL `18.1`, use the same pinned Paper artifact and select PostgreSQL. The PostgreSQL role and query evidence proves the non-owner DDL boundary; MySQL general-log capture is not used for PostgreSQL.
 
