@@ -853,13 +853,16 @@ try {
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentStable)) {
-        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum Paper and MySQL/MariaDB on maximum Paper.'
+        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum and maximum Paper only.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum-Paper all-dialect and maximum-Paper MySQL/MariaDB cells'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to all three dialects on minimum and maximum Paper only'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -881,6 +884,18 @@ try {
         throw 'The complete maximum-Paper MariaDB v11 DDL-denial report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Paper MariaDB v11 DDL-denial report with the exact pinned runtime identity'
+    $maximumPaperPostgreSqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumPaperPostgreSqlDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'Maximum'
+    if (-not (Test-T21StartupFailureReportFixture $maximumPaperPostgreSqlDdlFailureReport $maximumPaperPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete maximum-Paper PostgreSQL v11 DDL-denial report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete maximum-Paper PostgreSQL v11 DDL-denial report with the exact pinned runtime identity'
+    if (Test-T21StartupFailureReportFixture $maximumPaperPostgreSqlDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper PostgreSQL v11 DDL-denial report accepted the minimum-Paper server SHA-256.'
+    }
+    Write-Output 'PASS: reject maximum-Paper PostgreSQL v11 DDL-denial evidence with the minimum-Paper server SHA-256'
     $maximumPaperMariaDbDdlFailureMissingEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperMariaDbDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $maximumPaperMariaDbDdlFailureMissingEvidence.Remove('deniedDdlEvidence')
     if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureMissingEvidence $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -901,6 +916,18 @@ try {
     if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
         throw 'The maximum-Paper MariaDB predicate accepted request_id DDL evidence from a different SQL account.'
+    }
+    $maximumPaperMariaDbEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ remote.example [203.0.113.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MariaDB predicate accepted request_id DDL evidence from an unexpected host and IP.'
+    }
+    $maximumPaperMariaDbEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [192.0.2.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MariaDB predicate accepted request_id DDL evidence with a non-loopback source IP.'
     }
     Write-Output 'PASS: require exact request_id ALTER event and candidate account for maximum-Paper MariaDB'
     $maximumPaperDdlFailureReportMissingSqlEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -925,6 +952,18 @@ try {
     if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
         throw 'The maximum-Paper MySQL predicate accepted request_id DDL evidence from a different SQL account.'
+    }
+    $maximumRequestIdEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ remote.example [203.0.113.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL predicate accepted request_id DDL evidence from an unexpected host and IP.'
+    }
+    $maximumRequestIdEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [192.0.2.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MySQL predicate accepted request_id DDL evidence with a non-loopback source IP.'
     }
     $maximumRequestIdEvidenceEvent.userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [127.0.0.1]'
     Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperDdlFailureReport $maximumRequestIdEvidenceEvent

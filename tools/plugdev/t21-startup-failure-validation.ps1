@@ -34,18 +34,18 @@ function Test-T21RequiredV11DdlFailureTarget(
 ) {
     if ($DatabaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { return $false }
     if ($PlatformEndpoint -ceq 'Minimum') { return $true }
-    return $DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum'
+    return $PlatformEndpoint -ceq 'Maximum'
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
     if ($null -eq $Event -or [string]::IsNullOrWhiteSpace($RuntimeUser) -or
         -not (Test-T21ExactDictionaryFields $Event @('userHost', 'commandType', 'argument'))) { return $false }
     $userHost = [string](Get-T21ObservedValue $Event 'userHost')
-    $expectedUserPrefix = $RuntimeUser + '[' + $RuntimeUser + '] @ '
+    $expectedUserHost = $RuntimeUser + '[' + $RuntimeUser + '] @ localhost [127.0.0.1]'
     $statement = [string](Get-T21ObservedValue $Event 'argument')
     $requestIdDdlPattern = '(?i)^\s*ALTER\s+TABLE\s+`?syncmoney_audit_log`?\s+ADD\s+COLUMN\s+`?request_id`?\s+VARCHAR\s*\(\s*36\s*\)\s*;?\s*$'
     return [string](Get-T21ObservedValue $Event 'commandType') -ceq 'Query' -and
-        $userHost.StartsWith($expectedUserPrefix, [StringComparison]::Ordinal) -and
+        $userHost -ceq $expectedUserHost -and
         $statement -match $requestIdDdlPattern
 }
 
