@@ -12,8 +12,8 @@ import {
 } from "./player-scheduler-lifecycle-assertions.mjs";
 
 const [scenario, protocolVersion, gamePortText, redisPortText, pauseMsText, redisCliPath, mineflayerRoot] = process.argv.slice(2);
-if (!["teleport", "logout", "cross-owner", "guard", "guard-pair", "guard-pair-breaker"].includes(scenario)) {
-  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard|guard-pair|guard-pair-breaker> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
+if (!["teleport", "logout", "cross-owner", "guard", "guard-pair", "guard-pair-breaker", "breaker-pair"].includes(scenario)) {
+  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard|guard-pair|guard-pair-breaker|breaker-pair> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
 }
 
 function readPort(value, name) {
@@ -45,9 +45,11 @@ function createAcceptanceBot(username) {
 
 const guardScenario = scenario === "guard";
 const guardPairScenario = ["guard-pair", "guard-pair-breaker"].includes(scenario);
-const bot = createAcceptanceBot(guardPairScenario ? "AcceptanceGuardA" : guardScenario ? "AcceptanceGuard" : "AcceptanceA");
+const globalBreakerPairScenario = scenario === "breaker-pair";
+const pairedOwnerScenario = guardPairScenario || globalBreakerPairScenario;
+const bot = createAcceptanceBot(pairedOwnerScenario ? "AcceptanceGuardA" : guardScenario ? "AcceptanceGuard" : "AcceptanceA");
 const otherBot = scenario === "cross-owner" ? createAcceptanceBot("AcceptanceB")
-  : guardPairScenario ? createAcceptanceBot("AcceptanceGuardB") : null;
+  : pairedOwnerScenario ? createAcceptanceBot("AcceptanceGuardB") : null;
 const spawnedPlayers = new Set();
 
 let finished = false;
@@ -60,6 +62,8 @@ let clientObservedNether = false;
 let serverReportedNetherArrival = false;
 const crossOwnerClientsPassed = new Set();
 let guardPairNoticeStage = 0;
+const globalBreakerPasses = new Map();
+const globalBreakerAcknowledgements = new Map();
 
 function observeCrossOwnerPass(activeBot, text) {
   if (scenario !== "cross-owner") return;
@@ -91,6 +95,43 @@ function observeGuardPairNotice(activeBot, text) {
   activeBot.chat(`/smaccept lifecycle guard-pair-notice-ack ${player}`);
   console.log(`BOT_GUARD_NOTICE_ACK_SENT stage=${stage} player=${player} uuid=${uuid}`);
   if (stage === 2) finish(0, "each entity owner received and acknowledged its own rate-limit notification in sequence");
+}
+
+function observeGlobalBreakerPass(activeBot, text) {
+  if (!globalBreakerPairScenario) return;
+  const pass = text.match(/T21_GLOBAL_BREAKER_PASS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
+  if (pass) {
+    const player = pass[1];
+    const uuid = pass[2].toLowerCase();
+    const clientUuid = String(activeBot.player?.uuid ?? activeBot.entity?.uuid ?? "").toLowerCase();
+    if (player !== activeBot.username || uuid !== clientUuid || globalBreakerPasses.has(player)) {
+      console.log(`BOT_GLOBAL_BREAKER_FAIL phase=proof-routing expected=${activeBot.username}:${clientUuid} received=${player}:${uuid}`);
+      finish(1, "global breaker completion did not match a unique receiving owner");
+      return;
+    }
+    globalBreakerPasses.set(player, uuid);
+    console.log(`BOT_GLOBAL_BREAKER_PASS player=${player} uuid=${uuid}`);
+    activeBot.chat(`/smaccept lifecycle breaker-pair-ack ${player}`);
+    console.log(`BOT_GLOBAL_BREAKER_ACK_SENT player=${player} uuid=${uuid}`);
+    return;
+  }
+
+  const acknowledgement = text.match(/T21_GLOBAL_BREAKER_ACK player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) recipient=(AcceptanceGuardA|AcceptanceGuardB)\b/i);
+  if (!acknowledgement) return;
+  const [, player, rawUuid, recipient] = acknowledgement;
+  const uuid = rawUuid.toLowerCase();
+  const clientUuid = String(activeBot.player?.uuid ?? activeBot.entity?.uuid ?? "").toLowerCase();
+  if (player !== activeBot.username || recipient !== activeBot.username || uuid !== clientUuid ||
+      globalBreakerAcknowledgements.has(player) || globalBreakerPasses.get(player) !== uuid) {
+    console.log(`BOT_GLOBAL_BREAKER_FAIL phase=ack-routing expected=${activeBot.username}:${clientUuid} received=${player}:${uuid} recipient=${recipient}`);
+    finish(1, "global breaker acknowledgement did not match the receiving owner");
+    return;
+  }
+  globalBreakerAcknowledgements.set(player, uuid);
+  console.log(`BOT_GLOBAL_BREAKER_ACK_PASS player=${player} uuid=${uuid} recipient=${recipient}`);
+  if (globalBreakerAcknowledgements.size === 2) {
+    finish(0, "both entity owners received and acknowledged their global breaker result");
+  }
 }
 
 function finish(code, reason) {
@@ -139,6 +180,7 @@ bot.on("message", (message) => {
   console.log(`BOT_CHAT ${text}`);
   observeCrossOwnerPass(bot, text);
   observeGuardPairNotice(bot, text);
+  observeGlobalBreakerPass(bot, text);
   if (guardScenario && text.includes("Transaction too fast, please wait a moment")) {
     console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS uuid=${bot.player?.uuid ?? bot.entity?.uuid} message=${text}`);
     finish(0, "client received the player-owner rate-limit notification");
@@ -173,6 +215,7 @@ if (otherBot) {
     console.log(`BOT_CHAT name=${otherBot.username} ${text}`);
     observeCrossOwnerPass(otherBot, text);
     observeGuardPairNotice(otherBot, text);
+    observeGlobalBreakerPass(otherBot, text);
   });
   otherBot.on("kicked", (reason) => {
     console.log(`BOT_KICKED name=${otherBot.username} ${JSON.stringify(reason)}`);
@@ -196,9 +239,10 @@ function onSpawn(activeBot) {
     }
     return;
   }
-  if (guardPairScenario) {
+  if (pairedOwnerScenario) {
     if (spawnedPlayers.has("AcceptanceGuardA") && spawnedPlayers.has("AcceptanceGuardB")) {
-      console.log("BOT_GUARD_CLIENTS_READY players=AcceptanceGuardA,AcceptanceGuardB");
+      if (guardPairScenario) console.log("BOT_GUARD_CLIENTS_READY players=AcceptanceGuardA,AcceptanceGuardB");
+      else console.log("BOT_GLOBAL_BREAKER_CLIENTS_READY players=AcceptanceGuardA,AcceptanceGuardB");
       bot.chat(`/smaccept lifecycle ${scenario} AcceptanceGuardB`);
       console.log(`BOT_COMMAND_SENT /smaccept lifecycle ${scenario} AcceptanceGuardB`);
     }

@@ -35,7 +35,7 @@ function compareVersionParts(left, right) {
 
 export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDATE_VERSION) {
   if (args.length > 6) {
-    throw new Error("Usage: node tools/plugdev/prepare.mjs <paper|folia|canvas> <minecraft-version> <local|local_redis|sync> <on|off> [candidate-version] [guard-on|guard-breaker-on]");
+    throw new Error("Usage: node tools/plugdev/prepare.mjs <paper|folia|canvas> <minecraft-version> <local|local_redis|sync> <on|off> [candidate-version] [guard-on|guard-breaker-on|breaker-only]");
   }
 
   const [software = "paper", minecraftVersion = "1.21.6", mode = "local", features = "off",
@@ -55,11 +55,11 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
   if (!["on", "off"].includes(features)) {
     throw new Error("Features must be on or off.");
   }
-  if (!["off", "guard-on", "guard-breaker-on"].includes(guardProfile)) {
-    throw new Error("Guard profile must be off, guard-on, or guard-breaker-on.");
+  if (!["off", "guard-on", "guard-breaker-on", "breaker-only"].includes(guardProfile)) {
+    throw new Error("Guard profile must be off, guard-on, guard-breaker-on, or breaker-only.");
   }
-  if (guardProfile === "guard-breaker-on" && software !== "canvas") {
-    throw new Error("The guard-breaker-on profile is only supported for Canvas.");
+  if (["guard-breaker-on", "breaker-only"].includes(guardProfile) && software !== "canvas") {
+    throw new Error(`The ${guardProfile} profile is only supported for Canvas.`);
   }
   if (!/^\d+\.\d+\.\d+(?:-(?:alpha|beta)\.\d+)?$/.test(candidateVersion)) {
     throw new Error("Candidate version must be a stable or alpha/beta semantic version.");
@@ -71,8 +71,10 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
     mode,
     features,
     candidateVersion,
-    playerProtection: guardProfile !== "off",
-    circuitBreakerEnabled: guardProfile === "guard-breaker-on",
+    playerProtection: ["guard-on", "guard-breaker-on"].includes(guardProfile),
+    circuitBreakerEnabled: ["guard-breaker-on", "breaker-only"].includes(guardProfile),
+    ...(guardProfile === "breaker-only" ? { maxTransactionsPerSecond: 5 } : {}),
+    ...(guardProfile === "guard-breaker-on" ? { maxTransactionsPerSecond: 100 } : {}),
   };
 }
 
@@ -105,7 +107,10 @@ export function createProfileConfig(options, env = process.env) {
 }
 
 export function createEconomySettings(defaultConfig, options, env = process.env) {
-  const { software, mode, features, playerProtection = false, circuitBreakerEnabled = false } = options;
+  const {
+    software, mode, features, playerProtection = false, circuitBreakerEnabled = false,
+    maxTransactionsPerSecond = 100,
+  } = options;
   const enabled = features === "on";
   const dbType = (env.SYNCMONEY_TEST_DB_TYPE ?? "postgresql").toLowerCase();
   if (!["mysql", "postgresql"].includes(dbType)) {
@@ -146,11 +151,11 @@ export function createEconomySettings(defaultConfig, options, env = process.env)
   settings["circuit-breaker"] = {
     ...settings["circuit-breaker"],
     enabled: enabled || circuitBreakerEnabled,
-    ...(circuitBreakerEnabled ? { "max-transactions-per-second": 100 } : {}),
+    ...(circuitBreakerEnabled ? { "max-transactions-per-second": maxTransactionsPerSecond } : {}),
     "player-protection": {
       ...settings["circuit-breaker"]?.["player-protection"],
       enabled: enabled || playerProtection,
-      ...(playerProtection ? {
+      ...(playerProtection || maxTransactionsPerSecond === 5 ? {
         "global-lock": {
           ...settings["circuit-breaker"]?.["player-protection"]?.["global-lock"],
           enabled: false,

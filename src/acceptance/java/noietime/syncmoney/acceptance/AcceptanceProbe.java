@@ -22,6 +22,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.UUID;
 
 /** Explicit RCON-triggered tests against an isolated development server, never production. */
@@ -32,6 +34,7 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
     private final java.util.concurrent.ConcurrentMap<UUID, String> expectedTeleportWorlds =
             new ConcurrentHashMap<>();
     private volatile GuardPairRun activeGuardPairRun;
+    private volatile GlobalBreakerPairRun activeGlobalBreakerPairRun;
 
     @Override public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
@@ -57,6 +60,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                     }
                     return true;
                 }
+                if (scenario.equalsIgnoreCase("breaker-pair-ack")) {
+                    if (sender instanceof org.bukkit.entity.Player player && args.length > 2) {
+                        acknowledgeGlobalBreakerPair(player, args[2]);
+                    } else {
+                        failGlobalBreakerPair("ack", "global breaker acknowledgement requires its receiving player");
+                    }
+                    return true;
+                }
                 if (scenario.equalsIgnoreCase("guard")) {
                     if (sender instanceof org.bukkit.entity.Player player) {
                         runGuardScenario(player);
@@ -78,6 +89,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                         runGuardPairScenario(player, args[2], true);
                     } else {
                         getLogger().warning("T21 guard-pair-breaker scenario requires AcceptanceGuardA and its peer name");
+                    }
+                    return true;
+                }
+                if (scenario.equalsIgnoreCase("breaker-pair")) {
+                    if (sender instanceof org.bukkit.entity.Player player && args.length > 2) {
+                        runGlobalBreakerPairScenario(player, args[2]);
+                    } else {
+                        getLogger().warning("T21 global breaker pair scenario requires AcceptanceGuardA and its peer name");
                     }
                     return true;
                 }
@@ -565,6 +584,268 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         });
     }
 
+    private void runGlobalBreakerPairScenario(
+            org.bukkit.entity.Player anchor, String otherPlayerName) {
+        if (!anchor.getName().equals("AcceptanceGuardA") || !otherPlayerName.equals("AcceptanceGuardB")) {
+            failGlobalBreakerPair("player-pair", "unexpected-acceptance-player-pair");
+            return;
+        }
+        getServer().getGlobalRegionScheduler().run(this, globalTask -> {
+            try {
+                var other = getServer().getPlayerExact(otherPlayerName);
+                require(other != null, "second breaker Acceptance player is online");
+                require(other != anchor, "global breaker participants are different entities");
+                Syncmoney plugin = (Syncmoney) getServer().getPluginManager().getPlugin("Syncmoney");
+                require(plugin != null && plugin.isEnabled(), "Syncmoney enabled for global breaker scenario");
+                var breakerManager = plugin.getBreakerManager();
+                require(breakerManager != null, "breaker manager initialized for global breaker scenario");
+                EconomicCircuitBreaker circuitBreaker = breakerManager.getCircuitBreaker();
+                require(circuitBreaker != null, "global circuit breaker initialized");
+                require(!circuitBreaker.isLocked(), "global circuit breaker starts unlocked");
+                require(breakerManager.getPlayerTransactionGuard() == null,
+                        "per-player transaction guard is disabled for global breaker scenario");
+                var config = plugin.getSyncmoneyConfig();
+                require(config.circuitBreaker().isCircuitBreakerEnabled(), "global circuit breaker config enabled");
+                require(config.circuitBreaker().getCircuitBreakerMaxTransactionsPerSecond() == 5,
+                        "global TPS threshold is five for the aggregate test");
+                require(!config.playerProtection().isPlayerProtectionEnabled(),
+                        "per-player protection config is disabled");
+                var registration = getServer().getServicesManager().getRegistration(Economy.class);
+                require(registration != null && registration.getPlugin() == plugin,
+                        "Vault provider registered for global breaker scenario");
+                Economy economy = registration.getProvider();
+                World overworld = getServer().getWorlds().stream()
+                        .filter(world -> world.getEnvironment() == World.Environment.NORMAL)
+                        .findFirst().orElseThrow(() -> new IllegalStateException("Overworld unavailable"));
+                GlobalBreakerPairRun pairRun = new GlobalBreakerPairRun(
+                        plugin, economy, circuitBreaker,
+                        "AcceptanceGuardA", "AcceptanceGuardB");
+                moveAndCaptureRegionLocation(other, overworld, "AcceptanceGuardB",
+                        new org.bukkit.Location(overworld, 16_384.5, 100, 16_384.5))
+                        .whenComplete((location, moveFailure) -> {
+                            if (moveFailure != null) {
+                                reportGlobalBreakerFailure("pair-separation", moveFailure);
+                                return;
+                            }
+                            try {
+                                if (activeGlobalBreakerPairRun != null) {
+                                    throw new IllegalStateException("another global breaker pair is awaiting acknowledgements");
+                                }
+                                activeGlobalBreakerPairRun = pairRun;
+                                dispatchGlobalBreakerParticipant(pairRun, anchor, other, pairRun.firstName);
+                                dispatchGlobalBreakerParticipant(pairRun, other, anchor, pairRun.secondName);
+                            } catch (Throwable failure) {
+                                reportGlobalBreakerFailure("pair-setup", failure);
+                            }
+                        });
+            } catch (Throwable failure) {
+                reportGlobalBreakerFailure("pair-start", failure);
+            }
+        });
+    }
+
+    private void dispatchGlobalBreakerParticipant(
+            GlobalBreakerPairRun pairRun, org.bukkit.entity.Player player,
+            org.bukkit.entity.Player peer, String expectedName) {
+        player.getScheduler().run(this, ownerTask -> {
+            try {
+                boolean selfOwned = Bukkit.isOwnedByCurrentRegion(player);
+                boolean peerOwned = Bukkit.isOwnedByCurrentRegion(peer);
+                require(player.getName().equals(expectedName), "global breaker callback is for " + expectedName);
+                require(selfOwned && !peerOwned,
+                        "global breaker callback is owned by " + expectedName + " and not by its peer");
+                UUID uuid = player.getUniqueId();
+                getServer().getAsyncScheduler().runNow(this, asyncTask -> {
+                    try {
+                        BigDecimal balanceBefore = awaitAccountReady(pairRun.plugin.getEconomyFacade(), uuid);
+                        player.getScheduler().run(this, entityTask -> {
+                            try {
+                                boolean owner = Bukkit.isOwnedByCurrentRegion(player);
+                                boolean otherOwned = Bukkit.isOwnedByCurrentRegion(peer);
+                                require(owner && !otherOwned,
+                                        "global breaker burst remains on its entity owner for " + expectedName);
+                                require(balanceBefore.compareTo(BigDecimal.ZERO) == 0,
+                                        "fresh isolated global breaker account starts at zero for " + expectedName);
+                                GlobalBreakerParticipant participant = new GlobalBreakerParticipant(
+                                        player, peer, expectedName, uuid, balanceBefore);
+                                if (pairRun.rememberParticipant(participant)) {
+                                    waitForGlobalBreakerWindow(pairRun);
+                                }
+                            } catch (Throwable failure) {
+                                reportGlobalBreakerFailure("account-ready-owner-" + expectedName, failure);
+                            }
+                        }, () -> failGlobalBreakerPair("retired-before-burst", expectedName));
+                    } catch (Throwable failure) {
+                        reportGlobalBreakerFailure("account-ready-" + expectedName, failure);
+                    }
+                });
+            } catch (Throwable failure) {
+                reportGlobalBreakerFailure("owner-dispatch-" + expectedName, failure);
+            }
+        }, () -> failGlobalBreakerPair("retired-before-owner", expectedName));
+    }
+
+    private void waitForGlobalBreakerWindow(GlobalBreakerPairRun pairRun) {
+        long now = System.currentTimeMillis();
+        long remainingMillis = 1_000L - Math.floorMod(now, 1_000L);
+        if (remainingMillis < 500L) {
+            getServer().getGlobalRegionScheduler().runDelayed(this,
+                    task -> waitForGlobalBreakerWindow(pairRun), 1L);
+            return;
+        }
+        pairRun.windowSecond = now / 1_000L;
+        dispatchGlobalBreakerBurst(pairRun, pairRun.firstName);
+        dispatchGlobalBreakerBurst(pairRun, pairRun.secondName);
+    }
+
+    private void dispatchGlobalBreakerBurst(GlobalBreakerPairRun pairRun, String playerName) {
+        GlobalBreakerParticipant participant = pairRun.participants.get(playerName);
+        if (participant == null) {
+            failGlobalBreakerPair("burst-dispatch", "participant-not-ready-" + playerName);
+            return;
+        }
+        participant.player.getScheduler().run(this, ownerTask -> {
+            try {
+                require(Bukkit.isOwnedByCurrentRegion(participant.player),
+                        "global breaker transactions run on " + playerName + " current entity owner");
+                require(!Bukkit.isOwnedByCurrentRegion(participant.peer),
+                        "global breaker transactions run outside the peer entity owner");
+                require(!pairRun.circuitBreaker.isLocked(),
+                        "global circuit breaker remains unlocked on " + playerName + " entity owner");
+                getLogger().info("T21_GLOBAL_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false"
+                        + " playerProtection=disabled maxTransactionsPerSecond=5 player=" + playerName);
+                StringBuilder outcomes = new StringBuilder(3);
+                java.util.List<Long> windowSeconds = new java.util.ArrayList<>(3);
+                int accepted = 0;
+                int rejected = 0;
+                for (int index = 0; index < 3; index++) {
+                    windowSeconds.add(System.currentTimeMillis() / 1_000L);
+                    EconomyResponse response = pairRun.economy.depositPlayer(participant.player, 1.00);
+                    if (response.type == EconomyResponse.ResponseType.SUCCESS) {
+                        accepted++;
+                        outcomes.append('S');
+                    } else if (response.type == EconomyResponse.ResponseType.FAILURE) {
+                        rejected++;
+                        outcomes.append('F');
+                    } else {
+                        outcomes.append('?');
+                    }
+                }
+                BigDecimal balanceAfter = BigDecimal.valueOf(pairRun.economy.getBalance(participant.player))
+                        .setScale(2, RoundingMode.HALF_UP);
+                require(accepted + rejected == 3 && outcomes.indexOf("?") < 0,
+                        "each global breaker owner receives three concrete Vault outcomes");
+                require(participant.balanceBefore.compareTo(BigDecimal.ZERO) == 0,
+                        "global breaker account begins with zero balance");
+                require(balanceAfter.compareTo(BigDecimal.valueOf(accepted)) == 0,
+                        "global breaker memory balance equals its accepted transaction count");
+                getLogger().info("T21_GLOBAL_BREAKER_OWNER player=" + playerName + " uuid=" + participant.uuid
+                        + " selfOwned=true otherOwned=false scheduler=entity");
+                getLogger().info("T21_GLOBAL_BREAKER_TRANSACTIONS player=" + playerName + " uuid=" + participant.uuid
+                        + " attempted=3 accepted=" + accepted + " rejected=" + rejected
+                        + " outcomes=" + outcomes + " windowSeconds="
+                        + String.join(",", windowSeconds.stream().map(String::valueOf).toList())
+                        + " before=0.00 after=" + balanceAfter.toPlainString());
+                GlobalBreakerTransactionResult result = new GlobalBreakerTransactionResult(
+                        accepted, rejected, outcomes.toString(), participant.balanceBefore, balanceAfter, windowSeconds);
+                if (pairRun.results.putIfAbsent(playerName, result) != null) {
+                    throw new IllegalStateException("duplicate global breaker result for " + playerName);
+                }
+                if (pairRun.results.size() == 2 && pairRun.aggregateFinished.compareAndSet(false, true)) {
+                    finishGlobalBreakerPair(pairRun);
+                }
+            } catch (Throwable failure) {
+                reportGlobalBreakerFailure("transactions-" + playerName, failure);
+            }
+        }, () -> failGlobalBreakerPair("retired-before-transactions", playerName));
+    }
+
+    private void finishGlobalBreakerPair(GlobalBreakerPairRun pairRun) {
+        try {
+            int accepted = 0;
+            int rejected = 0;
+            java.util.Set<Long> windowSeconds = new java.util.HashSet<>();
+            for (String playerName : java.util.List.of(pairRun.firstName, pairRun.secondName)) {
+                GlobalBreakerTransactionResult result = pairRun.results.get(playerName);
+                require(result != null, "global breaker result captured for " + playerName);
+                accepted += result.accepted;
+                rejected += result.rejected;
+                windowSeconds.addAll(result.windowSeconds);
+            }
+            require(accepted == 5 && rejected == 1,
+                    "global TPS threshold aggregates five successes and one rejection: " + accepted + "/" + rejected);
+            require(windowSeconds.size() == 1 && windowSeconds.contains(pairRun.windowSecond),
+                    "all six global attempts occur inside the same configured TPS second window");
+            require(!pairRun.circuitBreaker.isLocked(),
+                    "rate-limit rejection does not lock the global circuit breaker");
+            pairRun.aggregateAccepted = accepted;
+            pairRun.aggregateRejected = rejected;
+            sendGlobalBreakerCompletion(pairRun, pairRun.firstName);
+            sendGlobalBreakerCompletion(pairRun, pairRun.secondName);
+        } catch (Throwable failure) {
+            reportGlobalBreakerFailure("aggregate", failure);
+        }
+    }
+
+    private void sendGlobalBreakerCompletion(GlobalBreakerPairRun pairRun, String playerName) {
+        GlobalBreakerParticipant participant = pairRun.participants.get(playerName);
+        participant.player.getScheduler().run(this, task -> {
+            try {
+                require(Bukkit.isOwnedByCurrentRegion(participant.player),
+                        "global breaker completion is sent on its own entity owner");
+                require(participant.player.isOnline(), "global breaker participant remains online for ACK");
+                participant.player.sendMessage("T21_GLOBAL_BREAKER_PASS player=" + playerName
+                        + " uuid=" + participant.uuid);
+            } catch (Throwable failure) {
+                reportGlobalBreakerFailure("completion-" + playerName, failure);
+            }
+        }, () -> failGlobalBreakerPair("retired-before-completion", playerName));
+    }
+
+    private void acknowledgeGlobalBreakerPair(
+            org.bukkit.entity.Player sender, String recipientName) {
+        GlobalBreakerPairRun pairRun = activeGlobalBreakerPairRun;
+        UUID expectedUuid = pairRun == null ? null : pairRun.uuidFor(sender.getName());
+        if (expectedUuid == null || !sender.getName().equals(recipientName)
+                || !sender.getUniqueId().equals(expectedUuid)) {
+            failGlobalBreakerPair("ack", "unexpected-player-or-uuid");
+            return;
+        }
+        if (!pairRun.acknowledgements.add(sender.getName())) {
+            failGlobalBreakerPair("ack", "duplicate-acknowledgement-" + sender.getName());
+            return;
+        }
+        getLogger().info("T21_GLOBAL_BREAKER_ACK player=" + sender.getName() + " uuid=" + expectedUuid
+                + " recipient=" + recipientName);
+        String acknowledgementMarker = "T21_GLOBAL_BREAKER_ACK player=" + sender.getName()
+                + " uuid=" + expectedUuid + " recipient=" + recipientName;
+        sender.getScheduler().run(this, ownerTask -> {
+            if (!Bukkit.isOwnedByCurrentRegion(sender)) {
+                failGlobalBreakerPair("ack-owner", "acknowledgement-not-on-sender-owner");
+                return;
+            }
+            sender.sendMessage(acknowledgementMarker);
+        }, () -> failGlobalBreakerPair("ack-retired", sender.getName()));
+        if (pairRun.acknowledgements.size() == 2
+                && pairRun.acknowledgementsFinished.compareAndSet(false, true)) {
+            activeGlobalBreakerPairRun = null;
+            getLogger().info("T21_GLOBAL_BREAKER_PAIR_PASS players=" + pairRun.firstName + "," + pairRun.secondName
+                    + " attempts=6 accepted=" + pairRun.aggregateAccepted + " rejected=" + pairRun.aggregateRejected
+                    + " windowSecond=" + pairRun.windowSecond
+                    + " playerProtection=disabled circuitBreakerLocked=" + pairRun.circuitBreaker.isLocked());
+        }
+    }
+
+    private void failGlobalBreakerPair(String phase, String reason) {
+        activeGlobalBreakerPairRun = null;
+        getLogger().severe("T21_GLOBAL_BREAKER_FAIL phase=" + phase + " reason=" + reason);
+    }
+
+    private void reportGlobalBreakerFailure(String phase, Throwable failure) {
+        getLogger().log(java.util.logging.Level.SEVERE, "T21_GLOBAL_BREAKER_FAIL phase=" + phase, failure);
+        activeGlobalBreakerPairRun = null;
+    }
+
     private void acknowledgeGuardPairNotice(org.bukkit.entity.Player sender, String recipientName) {
         GuardPairRun pairRun = activeGuardPairRun;
         int stage = pairRun == null ? 0 : pairRun.expectedNoticeAckStage;
@@ -754,6 +1035,78 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             EconomyWriteQueue writeQueue,
             org.bukkit.Location teleportDestination,
             String teleportWorldName) {
+    }
+
+    private record GlobalBreakerTransactionResult(
+            int accepted,
+            int rejected,
+            String outcomes,
+            BigDecimal balanceBefore,
+            BigDecimal balanceAfter,
+            java.util.List<Long> windowSeconds) {
+    }
+
+    private static final class GlobalBreakerParticipant {
+        private final org.bukkit.entity.Player player;
+        private final org.bukkit.entity.Player peer;
+        private final String name;
+        private final UUID uuid;
+        private final BigDecimal balanceBefore;
+
+        private GlobalBreakerParticipant(
+                org.bukkit.entity.Player player,
+                org.bukkit.entity.Player peer,
+                String name,
+                UUID uuid,
+                BigDecimal balanceBefore) {
+            this.player = player;
+            this.peer = peer;
+            this.name = name;
+            this.uuid = uuid;
+            this.balanceBefore = balanceBefore;
+        }
+    }
+
+    private static final class GlobalBreakerPairRun {
+        private final Syncmoney plugin;
+        private final Economy economy;
+        private final EconomicCircuitBreaker circuitBreaker;
+        private final String firstName;
+        private final String secondName;
+        private final ConcurrentMap<String, GlobalBreakerParticipant> participants = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, GlobalBreakerTransactionResult> results = new ConcurrentHashMap<>();
+        private final java.util.Set<String> acknowledgements = ConcurrentHashMap.newKeySet();
+        private final AtomicBoolean burstStarted = new AtomicBoolean();
+        private final AtomicBoolean aggregateFinished = new AtomicBoolean();
+        private final AtomicBoolean acknowledgementsFinished = new AtomicBoolean();
+        private volatile long windowSecond = -1;
+        private volatile int aggregateAccepted = -1;
+        private volatile int aggregateRejected = -1;
+
+        private GlobalBreakerPairRun(
+                Syncmoney plugin,
+                Economy economy,
+                EconomicCircuitBreaker circuitBreaker,
+                String firstName,
+                String secondName) {
+            this.plugin = plugin;
+            this.economy = economy;
+            this.circuitBreaker = circuitBreaker;
+            this.firstName = firstName;
+            this.secondName = secondName;
+        }
+
+        private boolean rememberParticipant(GlobalBreakerParticipant participant) {
+            if (participants.putIfAbsent(participant.name, participant) != null) {
+                throw new IllegalStateException("duplicate global breaker participant: " + participant.name);
+            }
+            return participants.size() == 2 && burstStarted.compareAndSet(false, true);
+        }
+
+        private UUID uuidFor(String playerName) {
+            GlobalBreakerParticipant participant = participants.get(playerName);
+            return participant == null ? null : participant.uuid;
+        }
     }
 
     private static final class GuardPairRun {

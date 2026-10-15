@@ -541,6 +541,18 @@ foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
 
 This keeps `AcceptanceGuardA` and `AcceptanceGuardB` online, moves B 16,384 blocks, and runs each participant's six Vault deposits on that player's entity scheduler with both the player guard and global circuit breaker enabled. Each callback must report ownership of its own player and not its peer; each player's independent quota must produce `SSSSSF` and Redis `5.00/v5`. The test runs A first and waits for A's client to receive and acknowledge its rate-limit notice before it starts B. A notice delivered to the wrong client, a mismatched UUID, an out-of-order rejection/acknowledgement, or a missing acknowledgement fails the offline proof. This is a bounded two-owner quota observation only; it does not establish the wider Canvas owner/guard lifecycle matrix or Paper/Folia behavior.
 
+For the inverse Canvas combination, run the same isolated lifecycle harness with `-BreakerOnly` on the user-pinned minimum and maximum Canvas builds:
+
+```powershell
+foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
+  .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -BreakerOnly `
+    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
+}
+```
+
+This profile enables the global circuit breaker at five transactions per second and disables per-player protection and its global-lock monitor. The two distinct entity owners each submit three Vault deposits inside one observed rate-limit second. Acceptance requires five successes and one global circuit-breaker rate-limit rejection, an unlocked breaker, no player-guard rejection, server ACKs plus client-received ACKs matching each owner's UUID and recipient, and Redis balances/versions matching the successful deposits. A TPS rejection alone does not mean that the circuit breaker entered lockdown. This remains a bounded two-owner Canvas case; it does not establish the wider Canvas owner/guard lifecycle matrix or Paper/Folia behavior.
+
 After selecting the six endpoint reports, run `node tools/plugdev/audit-player-scheduler-lifecycle.mjs` to re-check their exact report hashes, teleport-future and player-specific logout evidence, Redis binary version, and stopped Redis data/AOF file hashes. The auditor writes a separate correction record and leaves historical report and audit bytes unchanged.
 
 For the Folia two-region scheduler gate, add `-CrossOwner` when running `run-player-scheduler-lifecycle.ps1`. The runner rejects this switch for Paper and Canvas before creating a run directory or starting services. It keeps offline `AcceptanceA` and `AcceptanceB` connected, moves B 16,384 blocks in the Overworld, and waits for acceptance-side entity-scheduler checks from both players. Each check must observe ownership of its own player and no ownership of the other player's chunk; each player's entity scheduler then sends that player a targeted completion marker, and the client run passes only after both clients receive their own marker. The offline verifier also checks that both location snapshots match, are at least 4,096 blocks apart, and belong to distinct chunks. It rejects duplicate or suffixed proof markers and any `T21_CROSS_OWNER_FAIL` line. Run this gate on the user-pinned minimum and maximum Folia builds. An absent owner result, retired player, canceled teleport, shared region, or malformed log remains a failure.

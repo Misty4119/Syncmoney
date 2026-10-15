@@ -268,7 +268,7 @@ test("guard acceptance is an isolated Canvas-only profile and records runtime ev
   assert.match(runner, /\[switch\]\$Guard/);
   assert.match(runner, /\[switch\]\$GuardWithCircuitBreaker/);
   assert.match(runner, /GuardWithCircuitBreaker\.IsPresent -and -not \$Guard\.IsPresent/);
-  assert.match(runner, /\(\$Guard\.IsPresent -or \$GuardWithCircuitBreaker\.IsPresent\) -and \$pin\.software -ne 'canvas'/);
+  assert.match(runner, /\(\$Guard\.IsPresent -or \$GuardWithCircuitBreaker\.IsPresent -or \$BreakerOnly\.IsPresent\) -and \$pin\.software -ne 'canvas'/);
   assert.match(runner, /\$guardClient = Invoke-Client 'guard-pair'/);
   assert.match(runner, /Invoke-Client 'guard-pair-breaker'/);
   assert.match(runner, /--has-guard-pair-runtime-proof-json/);
@@ -468,11 +468,11 @@ test("Canvas guard runner collects and validates the paired owner scenario", () 
     runner.indexOf("$notEstablished = @("),
     runner.indexOf("$script:result = [ordered]@{")
   );
-  assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} else \{\s*\$notEstablished \+= 'Canvas two-owner guard scenario was not run'/);
+  assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} elseif \(\$BreakerOnly\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner global rate-limit scenario'\s*\} else \{\s*\$notEstablished \+= 'Canvas two-owner guard scenario was not run'/);
   assert.match(probe, /runGuardTransactions\(\s*plugin, transactionGuard, economy, player, peer,/);
   const pairMethod = probe.slice(
     probe.indexOf("private void runGuardPairScenario"),
-    probe.indexOf("private CompletableFuture<Void> dispatchGuardParticipant"),
+    probe.indexOf("private void runGlobalBreakerPairScenario"),
   );
   const moveIndex = pairMethod.indexOf("moveAndCaptureRegionLocation");
   assert.ok(moveIndex >= 0);
@@ -498,4 +498,123 @@ test("normalizes namespaced Nether dimension identifiers", () => {
   assert.equal(isNetherDimension("minecraft:overworld"), false);
   assert.equal(isNetherDimension(-1), false);
   assert.equal(isNetherDimension(undefined), false);
+});
+
+test("Canvas global breaker proof aggregates two owners without player protection", () => {
+  const hasProof = lifecycleAssertions.hasGlobalBreakerPairRuntimeProof;
+  assert.equal(typeof hasProof, "function");
+
+  const uuidA = "35c93f74-c540-3b38-8093-b5cb3c2263be";
+  const uuidB = "aa8f2cb5-988d-3b71-84b0-bd7b8bf5b474";
+  const second = "1792174234";
+  const evidence = {
+    serverLines: [
+      `T21_GLOBAL_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=disabled maxTransactionsPerSecond=5 player=AcceptanceGuardA`,
+      `T21_GLOBAL_BREAKER_OWNER player=AcceptanceGuardA uuid=${uuidA} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GLOBAL_BREAKER_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} attempted=3 accepted=3 rejected=0 outcomes=SSS windowSeconds=${second},${second},${second} before=0.00 after=3.00`,
+      `T21_GLOBAL_BREAKER_ACK player=AcceptanceGuardA uuid=${uuidA} recipient=AcceptanceGuardA`,
+      `T21_GLOBAL_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=disabled maxTransactionsPerSecond=5 player=AcceptanceGuardB`,
+      `T21_GLOBAL_BREAKER_OWNER player=AcceptanceGuardB uuid=${uuidB} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GLOBAL_BREAKER_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} attempted=3 accepted=2 rejected=1 outcomes=SFS windowSeconds=${second},${second},${second} before=0.00 after=2.00`,
+      `T21_GLOBAL_BREAKER_ACK player=AcceptanceGuardB uuid=${uuidB} recipient=AcceptanceGuardB`,
+      `Deposit rejected by CircuitBreaker: Transaction frequency too high, please try again later for ${uuidB}`,
+      `CircuitBreaker: Transaction rate limit exceeded, blocking transaction to prevent desync (Count: 6, Source: VAULT_DEPOSIT)`,
+      `T21_GLOBAL_BREAKER_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB attempts=6 accepted=5 rejected=1 windowSecond=${second} playerProtection=disabled circuitBreakerLocked=false`,
+    ],
+    clientLines: [
+      `BOT_GLOBAL_BREAKER_PASS player=AcceptanceGuardA uuid=${uuidA}`,
+      `BOT_GLOBAL_BREAKER_PASS player=AcceptanceGuardB uuid=${uuidB}`,
+      `BOT_GLOBAL_BREAKER_ACK_PASS player=AcceptanceGuardA uuid=${uuidA} recipient=AcceptanceGuardA`,
+      `BOT_GLOBAL_BREAKER_ACK_PASS player=AcceptanceGuardB uuid=${uuidB} recipient=AcceptanceGuardB`,
+    ],
+    participants: [
+      { player: "AcceptanceGuardA", uuid: uuidA, redisBalance: "3.00", redisVersion: "3" },
+      { player: "AcceptanceGuardB", uuid: uuidB, redisBalance: "2.00", redisVersion: "2" },
+    ],
+  };
+
+  assert.equal(hasProof(evidence), true);
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("windowSeconds=")
+      ? line.replace(`windowSeconds=${second},${second},${second}`, `windowSeconds=${second},${Number(second) + 1},${second}`)
+      : line),
+  }), false, "all six attempts and the pass marker must use one global rate window");
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: [...evidence.serverLines, `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidA}`],
+  }), false, "a player-guard rejection must not be mistaken for the global rate limit");
+  assert.equal(hasProof({
+    ...evidence,
+    participants: evidence.participants.map((participant) => participant.player === "AcceptanceGuardB"
+      ? { ...participant, redisVersion: "3" }
+      : participant),
+  }), false, "each persisted version must equal the successful global-breaker admissions for that account");
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("T21_GLOBAL_BREAKER_STATE")
+      ? line.replace("playerProtection=disabled", "playerProtection=enabled")
+      : line),
+  }), false, "the tested profile must have per-player protection disabled");
+  assert.equal(hasProof({
+    ...evidence,
+    clientLines: [evidence.clientLines[0], evidence.clientLines[1].replace(uuidB, uuidA)],
+  }), false, "each client proof must match its entity owner's UUID");
+  assert.equal(hasProof({
+    ...evidence,
+    clientLines: evidence.clientLines.filter((line) => !line.includes("ACK_PASS player=AcceptanceGuardB")),
+  }), false, "both clients must report receiving their targeted acknowledgement");
+  assert.equal(hasProof({
+    ...evidence,
+    clientLines: [...evidence.clientLines, evidence.clientLines[3]],
+  }), false, "duplicate client acknowledgement evidence must not pass");
+  assert.equal(hasProof({
+    ...evidence,
+    clientLines: evidence.clientLines.map((line) => line.includes("ACK_PASS player=AcceptanceGuardB")
+      ? line.replace(uuidB, uuidA)
+      : line),
+  }), false, "each client acknowledgement UUID must match its entity owner");
+  assert.equal(hasProof({
+    ...evidence,
+    clientLines: evidence.clientLines.map((line) => line.includes("ACK_PASS player=AcceptanceGuardB")
+      ? line.replace("recipient=AcceptanceGuardB", "recipient=AcceptanceGuardA")
+      : line),
+  }), false, "each client acknowledgement must name its own recipient");
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.filter((line) => !line.includes("T21_GLOBAL_BREAKER_ACK player=AcceptanceGuardB")),
+  }), false, "both owner-targeted proofs must be acknowledged");
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("PAIR_PASS")
+      ? line.replace("accepted=5", "accepted=6")
+      : line),
+  }), false, "the global threshold must admit exactly five and reject exactly one");
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: [...evidence.serverLines, evidence.serverLines.find((line) => line.includes("rate limit exceeded"))],
+  }), false, "duplicate global rate-limit failures must not pass");
+});
+
+test("breaker-only Canvas runner wires its dedicated profile, client, and proof", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
+  const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
+  const prepare = readFileSync(new URL("./prepare.mjs", import.meta.url), "utf8");
+
+  assert.match(runner, /\[switch\]\$BreakerOnly/);
+  assert.match(runner, /breaker-only/);
+  assert.match(runner, /--has-global-breaker-pair-runtime-proof-json/);
+  assert.match(runner, /BOT_GLOBAL_BREAKER_\(\?:PASS\|ACK_PASS\|FAIL\)/);
+  assert.match(runner, /clientAcknowledgementLines = \$breakerClientAcknowledgementLines/);
+  assert.match(runner, /"breaker-only": \{ circuitBreaker: true, playerProtection: false, maxTransactions: 5 \}/);
+  assert.match(runner, /maxTransactionsPerSecond = if \(\$BreakerOnly\.IsPresent\) \{ 5 \}/);
+  assert.match(runner, /\$expectedMarker = "BREAKER_GUARD_PROFILE_PASS profile=\$profile mode=local_redis circuit-breaker=\$circuitBreakerState player-protection=\$playerProtectionState optional-modules=off"/);
+  assert.match(client, /breaker-pair/);
+  assert.match(client, /BOT_GLOBAL_BREAKER_PASS/);
+  assert.match(probe, /T21_GLOBAL_BREAKER_PAIR_PASS/);
+  assert.match(probe, /pairRun\.acknowledgementsFinished\.compareAndSet\(false, true\)/,
+    "concurrent owner acknowledgements may emit only one aggregate pass marker");
+  assert.match(probe, /breaker-pair-ack/);
+  assert.match(prepare, /breaker-only/);
 });

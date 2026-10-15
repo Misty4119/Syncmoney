@@ -300,6 +300,135 @@ export function hasGuardPairCircuitBreakerRuntimeProof(evidence) {
     [...players].every((player) => observedPlayers.has(player));
 }
 
+export function hasGlobalBreakerPairRuntimeProof(evidence) {
+  const players = ["AcceptanceGuardA", "AcceptanceGuardB"];
+  if (!evidence || !Array.isArray(evidence.serverLines) || !Array.isArray(evidence.clientLines) ||
+      !Array.isArray(evidence.participants) || evidence.participants.length !== players.length) return false;
+
+  const uuidPattern = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
+  const participantByName = new Map();
+  for (const participant of evidence.participants) {
+    if (!participant || !players.includes(participant.player) || participantByName.has(participant.player) ||
+        !new RegExp(`^${uuidPattern}$`, "i").test(participant.uuid ?? "") ||
+        !/^\d+\.\d{2}$/.test(participant.redisBalance ?? "") ||
+        !/^\d+$/.test(participant.redisVersion ?? "")) return false;
+    participantByName.set(participant.player, { ...participant, uuid: participant.uuid.toLowerCase() });
+  }
+  if (participantByName.size !== players.length ||
+      participantByName.get(players[0]).uuid === participantByName.get(players[1]).uuid) return false;
+
+  const owners = new Map();
+  const states = new Map();
+  const results = new Map();
+  const acknowledgements = new Map();
+  const rateRejects = [];
+  const rateLimitWarnings = [];
+  const rateWindows = new Set();
+  let passMarkers = 0;
+  let passWindow = null;
+
+  for (const rawLine of evidence.serverLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("T21_GLOBAL_BREAKER_FAIL") ||
+        /rejected by PlayerTransactionGuard:|Transaction too fast, please wait for/i.test(line)) return false;
+    if (line.includes("T21_GLOBAL_BREAKER_OWNER")) {
+      const owner = line.match(new RegExp(`^T21_GLOBAL_BREAKER_OWNER player=(AcceptanceGuardA|AcceptanceGuardB) uuid=${uuidPattern} selfOwned=true otherOwned=false scheduler=entity$`, "i"));
+      if ((line.match(/T21_GLOBAL_BREAKER_OWNER/g) ?? []).length !== 1 || !owner || owners.has(owner[1])) return false;
+      owners.set(owner[1], owner[2].toLowerCase());
+    }
+    if (line.includes("T21_GLOBAL_BREAKER_STATE")) {
+      const state = line.match(/^T21_GLOBAL_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=disabled maxTransactionsPerSecond=5 player=(AcceptanceGuardA|AcceptanceGuardB)$/i);
+      if ((line.match(/T21_GLOBAL_BREAKER_STATE/g) ?? []).length !== 1 || !state || states.has(state[1])) return false;
+      states.set(state[1], true);
+    }
+    if (line.includes("T21_GLOBAL_BREAKER_TRANSACTIONS")) {
+      const result = line.match(new RegExp(`^T21_GLOBAL_BREAKER_TRANSACTIONS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=${uuidPattern} attempted=3 accepted=(\\d+) rejected=(\\d+) outcomes=([SF]{3}) windowSeconds=(\\d+,\\d+,\\d+) before=0\\.00 after=(\\d+)\\.00$`, "i"));
+      if ((line.match(/T21_GLOBAL_BREAKER_TRANSACTIONS/g) ?? []).length !== 1 || !result || results.has(result[1])) return false;
+      const uuid = result[2].toLowerCase();
+      const accepted = Number(result[3]);
+      const rejected = Number(result[4]);
+      const outcomes = result[5].toUpperCase();
+      const windows = result[6].split(",");
+      const acceptedFromOutcomes = [...outcomes].filter((outcome) => outcome === "S").length;
+      const rejectedFromOutcomes = [...outcomes].filter((outcome) => outcome === "F").length;
+      if (accepted !== acceptedFromOutcomes || rejected !== rejectedFromOutcomes ||
+          accepted + rejected !== 3 || Number(result[7]) !== accepted ||
+          new Set(windows).size !== 1 || windows.some((window) => !/^\d+$/.test(window))) return false;
+      windows.forEach((window) => rateWindows.add(window));
+      results.set(result[1], { uuid, accepted, rejected, outcomes, windowSecond: windows[0] });
+    }
+    if (line.includes("T21_GLOBAL_BREAKER_ACK")) {
+      const ack = line.match(new RegExp(`^T21_GLOBAL_BREAKER_ACK player=(AcceptanceGuardA|AcceptanceGuardB) uuid=${uuidPattern} recipient=(AcceptanceGuardA|AcceptanceGuardB)$`, "i"));
+      if ((line.match(/T21_GLOBAL_BREAKER_ACK/g) ?? []).length !== 1 || !ack || acknowledgements.has(ack[1])) return false;
+      acknowledgements.set(ack[1], { uuid: ack[2].toLowerCase(), recipient: ack[3] });
+    }
+    if (line.includes("T21_GLOBAL_BREAKER_PAIR_PASS")) {
+      const pass = line.match(/^T21_GLOBAL_BREAKER_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB attempts=6 accepted=5 rejected=1 windowSecond=(\d+) playerProtection=disabled circuitBreakerLocked=false$/i);
+      if ((line.match(/T21_GLOBAL_BREAKER_PAIR_PASS/g) ?? []).length !== 1 || !pass) return false;
+      passMarkers += 1;
+      passWindow = pass[1];
+    }
+    if (line.includes("Deposit rejected by CircuitBreaker:")) {
+      const reject = line.match(new RegExp(`^Deposit rejected by CircuitBreaker: Transaction frequency too high, please try again later for ${uuidPattern}$`, "i"));
+      if ((line.match(/Deposit rejected by CircuitBreaker:/g) ?? []).length !== 1 || !reject) return false;
+      rateRejects.push(reject[1].toLowerCase());
+    }
+    if (line.includes("CircuitBreaker: Transaction rate limit exceeded")) {
+      if ((line.match(/CircuitBreaker: Transaction rate limit exceeded/g) ?? []).length !== 1 ||
+          !/\(Count: 6, Source: VAULT_DEPOSIT\)$/.test(line)) return false;
+      rateLimitWarnings.push(line);
+    }
+  }
+
+  if (owners.size !== players.length || states.size !== players.length || results.size !== players.length ||
+      acknowledgements.size !== players.length || passMarkers !== 1 || rateWindows.size !== 1 ||
+      passWindow !== [...rateWindows][0] || rateRejects.length !== 1 || rateLimitWarnings.length !== 1) return false;
+
+  let acceptedTotal = 0;
+  let rejectedTotal = 0;
+  for (const player of players) {
+    const uuid = participantByName.get(player).uuid;
+    const result = results.get(player);
+    const ack = acknowledgements.get(player);
+    const participant = participantByName.get(player);
+    const persistedAccepted = Number(participant.redisVersion);
+    const persistedBalance = Number(participant.redisBalance);
+    if (owners.get(player) !== uuid || result.uuid !== uuid || ack.uuid !== uuid || ack.recipient !== player ||
+        (result.rejected === 1 && rateRejects[0] !== uuid) ||
+        (result.rejected === 0 && rateRejects[0] === uuid) ||
+        persistedAccepted !== result.accepted || persistedBalance !== result.accepted) return false;
+    acceptedTotal += result.accepted;
+    rejectedTotal += result.rejected;
+  }
+  if (acceptedTotal !== 5 || rejectedTotal !== 1) return false;
+
+  if (evidence.clientLines.length !== players.length * 2) return false;
+  const clientProofs = new Map();
+  const clientAcknowledgements = new Map();
+  for (const rawLine of evidence.clientLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("BOT_GLOBAL_BREAKER_FAIL")) return false;
+    if (line.includes("BOT_GLOBAL_BREAKER_ACK_PASS")) {
+      const acknowledgement = line.match(new RegExp(`^BOT_GLOBAL_BREAKER_ACK_PASS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=${uuidPattern} recipient=(AcceptanceGuardA|AcceptanceGuardB)$`, "i"));
+      if ((line.match(/BOT_GLOBAL_BREAKER_ACK_PASS/g) ?? []).length !== 1 || !acknowledgement || clientAcknowledgements.has(acknowledgement[1])) return false;
+      clientAcknowledgements.set(acknowledgement[1], {
+        uuid: acknowledgement[2].toLowerCase(),
+        recipient: acknowledgement[3],
+      });
+      continue;
+    }
+    const client = line.match(new RegExp(`^BOT_GLOBAL_BREAKER_PASS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=${uuidPattern}$`, "i"));
+    if ((line.match(/BOT_GLOBAL_BREAKER_PASS/g) ?? []).length !== 1 || !client || clientProofs.has(client[1])) return false;
+    clientProofs.set(client[1], client[2].toLowerCase());
+  }
+  const result = players.every((player) => {
+    const uuid = participantByName.get(player).uuid;
+    const acknowledgement = clientAcknowledgements.get(player);
+    return clientProofs.get(player) === uuid && acknowledgement?.uuid === uuid && acknowledgement.recipient === player;
+  });
+  return result;
+}
+
 export function normalizedDimension(value) {
   return String(value ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
 }
@@ -379,6 +508,16 @@ if (process.argv[2] === "--has-guard-pair-circuit-breaker-runtime-proof-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasGuardPairCircuitBreakerRuntimeProof(evidence) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-global-breaker-pair-runtime-proof-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasGlobalBreakerPairRuntimeProof(evidence) ? "true" : "false");
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;
