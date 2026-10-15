@@ -858,15 +858,16 @@ try {
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MinimumFolia) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumFolia) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia)) {
-        throw 'The v11 required-DDL failure gate must admit all three SQL products on minimum and maximum Paper and minimum Folia, plus MySQL and MariaDB on maximum Folia only.'
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia)) {
+        throw 'The v11 required-DDL failure gate must admit all three SQL products on minimum and maximum Paper and minimum and maximum Folia.'
     }
-    Write-Output 'PASS: admit the eleven approved required-v11 product/endpoint combinations'
+    Write-Output 'PASS: admit the twelve approved required-v11 product/endpoint combinations'
     $uncompletedV11Endpoints = @('MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
     $allV11Products = @('MySQL', 'MariaDB', 'PostgreSQL')
     foreach ($uncompletedEndpoint in $uncompletedV11Endpoints) {
         foreach ($databaseProduct in $allV11Products) {
-            if ($uncompletedEndpoint -ceq 'MaximumFolia' -and $databaseProduct -in @('MySQL', 'MariaDB')) { continue }
+            if ($uncompletedEndpoint -ceq 'MaximumFolia' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
             if (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $uncompletedEndpoint) {
                 throw ('The required-v11 DDL failure target guard unexpectedly admitted ' + $databaseProduct + '/' + $uncompletedEndpoint)
             }
@@ -919,6 +920,12 @@ try {
         throw 'The complete maximum-Folia MariaDB v11-DDL permission-failure report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Folia MariaDB v11 DDL-denial report with the exact pinned runtime identity'
+    $maximumFoliaPostgreSqlDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'MaximumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $maximumFoliaPostgreSqlDdlFailureReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete maximum-Folia PostgreSQL v11-DDL permission-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete maximum-Folia PostgreSQL v11 DDL-denial report with the exact pinned runtime identity and non-owner app role'
     $maximumPaperMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumPaperMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'Maximum'
     if (-not (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
