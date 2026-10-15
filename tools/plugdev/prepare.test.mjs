@@ -223,3 +223,38 @@ test("guard-only profile enables per-player protection without enabling optional
   assert.equal(settings["web-admin"].enabled, false);
   assert.equal(settings["discord-webhook"].enabled, false);
 });
+
+test("Canvas guard-breaker profile enables both guards while keeping optional modules disabled", () => {
+  const options = validateOptions([
+    "canvas", "26.3", "local_redis", "off", "1.4.0-alpha.1", "guard-breaker-on",
+  ]);
+  const defaults = {
+    "config-version": 12,
+    redis: { enabled: false },
+    database: { enabled: false },
+    "circuit-breaker": {
+      enabled: false,
+      "max-transactions-per-second": 5,
+      "player-protection": { enabled: true, "global-lock": { enabled: true } },
+    },
+    "shadow-sync": { enabled: true },
+    audit: { enabled: true, cleanup: { enabled: true }, export: { enabled: true }, redis: { enabled: true } },
+    "transfer-guard": { enabled: true },
+    "web-admin": { enabled: true, server: {}, security: {}, web: {} },
+    "discord-webhook": { enabled: true },
+  };
+
+  const settings = createEconomySettings(defaults, options);
+
+  assert.equal(options.playerProtection, true);
+  assert.equal(options.circuitBreakerEnabled, true);
+  assert.equal(settings["circuit-breaker"].enabled, true);
+  assert.equal(settings["circuit-breaker"]["max-transactions-per-second"], 100);
+  assert.equal(settings["circuit-breaker"]["player-protection"].enabled, true);
+  assert.equal(settings["circuit-breaker"]["player-protection"]["global-lock"].enabled, false);
+  assert.equal(settings["shadow-sync"].enabled, false);
+  assert.equal(settings.audit.enabled, false);
+  assert.equal(settings["transfer-guard"].enabled, false);
+  assert.equal(settings["web-admin"].enabled, false);
+  assert.equal(settings["discord-webhook"].enabled, false);
+});

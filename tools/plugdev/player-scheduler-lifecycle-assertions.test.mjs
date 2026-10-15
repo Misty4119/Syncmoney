@@ -266,21 +266,30 @@ test("guard acceptance is an isolated Canvas-only profile and records runtime ev
   const prepare = readFileSync(new URL("./prepare.mjs", import.meta.url), "utf8");
 
   assert.match(runner, /\[switch\]\$Guard/);
-  assert.match(runner, /\$Guard\.IsPresent -and \$pin\.software -ne 'canvas'/);
+  assert.match(runner, /\[switch\]\$GuardWithCircuitBreaker/);
+  assert.match(runner, /GuardWithCircuitBreaker\.IsPresent -and -not \$Guard\.IsPresent/);
+  assert.match(runner, /\(\$Guard\.IsPresent -or \$GuardWithCircuitBreaker\.IsPresent\) -and \$pin\.software -ne 'canvas'/);
   assert.match(runner, /\$guardClient = Invoke-Client 'guard-pair'/);
+  assert.match(runner, /Invoke-Client 'guard-pair-breaker'/);
   assert.match(runner, /--has-guard-pair-runtime-proof-json/);
+  assert.match(runner, /--has-guard-pair-circuit-breaker-runtime-proof-json/);
   assert.match(runner, /guard-on/);
+  assert.match(runner, /guard-breaker-on/);
   assert.match(prepare, /player-protection/);
   assert.match(client, /AcceptanceGuardA/);
   assert.match(client, /AcceptanceGuardB/);
   assert.match(client, /guard-pair/);
+  assert.match(client, /guard-pair-breaker/);
+  assert.match(client, /bot\.chat\(`\/smaccept lifecycle \$\{scenario\} AcceptanceGuardB`\)/);
   assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS/);
   assert.match(client, /player=\$\{player\} uuid=\$\{uuid\}/);
   assert.match(probe, /Bukkit\.isOwnedByCurrentRegion\(player\)/);
+  assert.match(probe, /T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled/);
+  assert.match(probe, /guard-pair-breaker/);
   assert.match(probe, /T21_GUARD_TRANSACTIONS player=" \+ player\.getName\(\) \+ " uuid=/);
   assert.match(probe, /outcomes=/);
   assert.match(probe, /accepted=" \+ accepted \+ " rejected=" \+ rejected/);
-  assert.match(runner, /candidateSha -cne 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'/);
+  assert.match(runner, /candidateSha -cne '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662'/);
 });
 
 test("Canvas guard-pair proof requires two entity owners, independent quotas, notices, and persisted balances", () => {
@@ -355,6 +364,54 @@ test("Canvas guard-pair proof requires two entity owners, independent quotas, no
   }), false, "each player notification must match that player's owner UUID");
   assert.equal(hasGuardPairRuntimeProof({ ...evidence, serverLines: [...evidence.serverLines, "T21_GUARD_FAIL phase=transactions"] }), false);
   assert.equal(hasGuardPairRuntimeProof({ ...evidence, clientLines: [...evidence.clientLines, evidence.clientLines[0]] }), false);
+});
+
+test("Canvas breaker/guard proof requires both active managers and an unlocked global breaker", () => {
+  const hasProof = lifecycleAssertions.hasGuardPairCircuitBreakerRuntimeProof;
+  assert.equal(typeof hasProof, "function");
+
+  const uuidA = "35c93f74-c540-3b38-8093-b5cb3c2263be";
+  const uuidB = "aa8f2cb5-988d-3b71-84b0-bd7b8bf5b474";
+  const evidence = {
+    serverLines: [
+      "T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardA",
+      `T21_GUARD_OWNER player=AcceptanceGuardA uuid=${uuidA} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidA}`,
+      "T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardB",
+      `T21_GUARD_OWNER player=AcceptanceGuardB uuid=${uuidB} selfOwned=true otherOwned=false scheduler=entity`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidB}`,
+    ],
+    clientLines: [
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
+    ],
+    participants: [
+      { player: "AcceptanceGuardA", uuid: uuidA, redisBalance: "5.00", redisVersion: "5" },
+      { player: "AcceptanceGuardB", uuid: uuidB, redisBalance: "5.00", redisVersion: "5" },
+    ],
+  };
+
+  assert.equal(hasProof(evidence), true);
+  assert.equal(hasProof({ ...evidence, serverLines: evidence.serverLines.slice(1) }), false);
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("GUARD_BREAKER_STATE")
+      ? line.replace("circuitBreaker=enabled", "circuitBreaker=disabled")
+      : line),
+  }), false);
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("player=AcceptanceGuardB") && line.includes("GUARD_BREAKER_STATE")
+      ? line.replace("circuitBreakerLocked=false", "circuitBreakerLocked=true")
+      : line),
+  }), false);
+  assert.equal(hasProof({ ...evidence, serverLines: [...evidence.serverLines, evidence.serverLines[0]] }), false);
+  assert.equal(hasProof({
+    ...evidence,
+    serverLines: evidence.serverLines.filter((line) => !line.includes("player=AcceptanceGuardB") || !line.includes("GUARD_BREAKER_STATE")),
+  }), false, "each entity owner must observe the active, unlocked global breaker");
 });
 
 test("Canvas guard runner collects and validates the paired owner scenario", () => {

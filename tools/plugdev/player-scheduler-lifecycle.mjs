@@ -12,8 +12,8 @@ import {
 } from "./player-scheduler-lifecycle-assertions.mjs";
 
 const [scenario, protocolVersion, gamePortText, redisPortText, pauseMsText, redisCliPath, mineflayerRoot] = process.argv.slice(2);
-if (!["teleport", "logout", "cross-owner", "guard", "guard-pair"].includes(scenario)) {
-  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard|guard-pair> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
+if (!["teleport", "logout", "cross-owner", "guard", "guard-pair", "guard-pair-breaker"].includes(scenario)) {
+  throw new Error("Usage: node player-scheduler-lifecycle.mjs <teleport|logout|cross-owner|guard|guard-pair|guard-pair-breaker> <protocol-version> <game-port> <redis-port> <pause-ms> <redis-cli-path> <mineflayer-root>");
 }
 
 function readPort(value, name) {
@@ -44,7 +44,7 @@ function createAcceptanceBot(username) {
 }
 
 const guardScenario = scenario === "guard";
-const guardPairScenario = scenario === "guard-pair";
+const guardPairScenario = ["guard-pair", "guard-pair-breaker"].includes(scenario);
 const bot = createAcceptanceBot(guardPairScenario ? "AcceptanceGuardA" : guardScenario ? "AcceptanceGuard" : "AcceptanceA");
 const otherBot = scenario === "cross-owner" ? createAcceptanceBot("AcceptanceB")
   : guardPairScenario ? createAcceptanceBot("AcceptanceGuardB") : null;
@@ -191,8 +191,8 @@ function onSpawn(activeBot) {
   if (guardPairScenario) {
     if (spawnedPlayers.has("AcceptanceGuardA") && spawnedPlayers.has("AcceptanceGuardB")) {
       console.log("BOT_GUARD_CLIENTS_READY players=AcceptanceGuardA,AcceptanceGuardB");
-      bot.chat("/smaccept lifecycle guard-pair AcceptanceGuardB");
-      console.log("BOT_COMMAND_SENT /smaccept lifecycle guard-pair AcceptanceGuardB");
+      bot.chat(`/smaccept lifecycle ${scenario} AcceptanceGuardB`);
+      console.log(`BOT_COMMAND_SENT /smaccept lifecycle ${scenario} AcceptanceGuardB`);
     }
     return;
   }

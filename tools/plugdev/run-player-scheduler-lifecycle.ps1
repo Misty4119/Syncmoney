@@ -7,7 +7,8 @@ param(
     [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master',
     [int]$RedisPauseMilliseconds = 2500,
     [switch]$CrossOwner,
-    [switch]$Guard
+    [switch]$Guard,
+    [switch]$GuardWithCircuitBreaker
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,8 +27,11 @@ $pin = $pins[$Endpoint]
 if ($CrossOwner.IsPresent -and $pin.software -ne 'folia') {
     throw '-CrossOwner is only supported for Folia endpoints.'
 }
-if ($Guard.IsPresent -and $pin.software -ne 'canvas') {
-    throw '-Guard is only supported for Canvas endpoints.'
+if (($Guard.IsPresent -or $GuardWithCircuitBreaker.IsPresent) -and $pin.software -ne 'canvas') {
+    throw 'Guard acceptance cases are only supported for Canvas endpoints.'
+}
+if ($GuardWithCircuitBreaker.IsPresent -and -not $Guard.IsPresent) {
+    throw '-GuardWithCircuitBreaker must be combined with -Guard.'
 }
 if ($Guard.IsPresent -and $CrossOwner.IsPresent) {
     throw '-Guard and -CrossOwner select separate platform-specific cases and cannot be combined.'
@@ -49,7 +53,7 @@ foreach ($path in @($candidateJar, $acceptanceJar, $apiConsumerJar, $serverJar, 
 $serverSha = (Get-FileHash -LiteralPath $serverJar -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($serverSha -cne $pin.sha256) { throw "Exact server artifact hash mismatch: expected $($pin.sha256), observed $serverSha." }
 $candidateSha = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($candidateSha -cne 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452') {
+if ($candidateSha -cne '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662') {
     throw "Candidate artifact does not match the T21 source pin: $candidateSha"
 }
 
@@ -258,9 +262,9 @@ function Invoke-Client([string]$scenario) {
     return [ordered]@{ exitCode = $exitCode; logPath = $logPath; logSha256 = (Get-FileHash $logPath -Algorithm SHA256).Hash.ToLowerInvariant(); lines = @($output | ForEach-Object { $_.ToString() }) }
 }
 
-function Assert-GuardOnlyProfile {
+function Assert-GuardOnlyProfile([bool]$expectCircuitBreaker) {
     $settingsPath = Join-Path $projectRoot '.plugdev\run\plugins\Syncmoney\config.yml'
-    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { throw 'Prepared Syncmoney config is missing for the guard-only case.' }
+    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { throw 'Prepared Syncmoney config is missing for the guard acceptance case.' }
     $auditScript = Join-Path $logsRoot 'audit-guard-profile.cjs'
     @'
 const fs = require("node:fs");
@@ -268,11 +272,13 @@ const path = require("node:path");
 const { createRequire } = require("node:module");
 const yaml = createRequire(path.join(process.env.PLUGDEV_ROOT, "package.json"))("yaml");
 const config = yaml.parse(fs.readFileSync(process.argv[2], "utf8"));
+const expectCircuitBreaker = process.argv[3] === "true";
 const required = [
   [config.economy?.mode === "local_redis", "LOCAL_REDIS mode"],
   [config["db-enabled"] === false && config.database?.enabled === false, "SQL disabled"],
   [config["pubsub-enabled"] === true && config.redis?.enabled === true, "Redis enabled"],
-  [config["circuit-breaker"]?.enabled === false, "global circuit breaker disabled"],
+  [config["circuit-breaker"]?.enabled === expectCircuitBreaker, "global circuit breaker state"],
+  [!expectCircuitBreaker || config["circuit-breaker"]?.["max-transactions-per-second"] === 100, "global TPS threshold above owner quota"],
   [config["circuit-breaker"]?.["player-protection"]?.enabled === true, "per-player protection enabled"],
   [config["circuit-breaker"]?.["player-protection"]?.["global-lock"]?.enabled === false, "global lock monitor disabled"],
   [config["shadow-sync"]?.enabled === false, "Shadow Sync disabled"],
@@ -283,13 +289,19 @@ const required = [
 ];
 const failed = required.filter(([condition]) => !condition).map(([, name]) => name);
 if (failed.length) throw new Error(`Guard-only config failed: ${failed.join(", ")}`);
-console.log("GUARD_PROFILE_PASS mode=local_redis player-protection=on optional-modules=off");
+console.log(`GUARD_PROFILE_PASS mode=local_redis circuit-breaker=${expectCircuitBreaker ? "on" : "off"} player-protection=on optional-modules=off`);
 '@ | Set-Content -LiteralPath $auditScript -Encoding utf8
-    $output = @(& node $auditScript $settingsPath 2>&1)
+    $expectedCircuitBreaker = if ($expectCircuitBreaker) { 'true' } else { 'false' }
+    $expectedMarker = if ($expectCircuitBreaker) {
+        'GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=on optional-modules=off'
+    } else {
+        'GUARD_PROFILE_PASS mode=local_redis circuit-breaker=off player-protection=on optional-modules=off'
+    }
+    $output = @(& node $auditScript $settingsPath $expectedCircuitBreaker 2>&1)
     $exitCode = $LASTEXITCODE
     $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $logsRoot 'guard-profile-audit.txt') -Encoding utf8
-    if ($exitCode -ne 0 -or -not (($output | ForEach-Object { $_.ToString() }) -contains 'GUARD_PROFILE_PASS mode=local_redis player-protection=on optional-modules=off')) {
-        throw "Prepared config did not isolate the LOCAL_REDIS per-player guard: $($output -join ' ')"
+    if ($exitCode -ne 0 -or -not (($output | ForEach-Object { $_.ToString() }) -contains $expectedMarker)) {
+        throw "Prepared config did not isolate the requested LOCAL_REDIS guard profile: $($output -join ' ')"
     }
     return (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -567,13 +579,16 @@ plugins {
     Push-Location $projectRoot
     try {
         $prepareArguments = @($pin.software, $pin.version, 'local_redis', 'off', $candidateVersion)
-        if ($Guard.IsPresent) { $prepareArguments += 'guard-on' }
+        if ($Guard.IsPresent) {
+            $guardProfile = if ($GuardWithCircuitBreaker.IsPresent) { 'guard-breaker-on' } else { 'guard-on' }
+            $prepareArguments += $guardProfile
+        }
         $prepared = @(& node (Join-Path $projectRoot 'tools\plugdev\prepare.mjs') @prepareArguments 2>&1)
         $prepareExit = $LASTEXITCODE
     } finally { Pop-Location }
     $prepared | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $logsRoot 'prepare-profile.txt') -Encoding utf8
     if ($prepareExit -ne 0) { throw "Local PlugDev profile preparation exited $prepareExit." }
-    if ($Guard.IsPresent) { $script:guardConfigSha256 = Assert-GuardOnlyProfile }
+    if ($Guard.IsPresent) { $script:guardConfigSha256 = Assert-GuardOnlyProfile $GuardWithCircuitBreaker.IsPresent }
     Add-ServerRunIdentity
 
     $startExit = Invoke-PlugDev @('server', 'start', '--config', '.plugdev/profile.yml') 'server-start.txt'
@@ -596,7 +611,15 @@ plugins {
 
     $guardClient = $null
     if ($Guard.IsPresent) {
-        $guardClient = Invoke-Client 'guard-pair'
+        if ($GuardWithCircuitBreaker.IsPresent) {
+            $guardClientScenario = 'guard-pair-breaker'
+            $guardClient = Invoke-Client 'guard-pair-breaker'
+            $null = Wait-ServerLog 'T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardA' 30 'AcceptanceGuardA unlocked global breaker proof'
+            $null = Wait-ServerLog 'T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardB' 30 'AcceptanceGuardB unlocked global breaker proof'
+        } else {
+            $guardClientScenario = 'guard-pair'
+            $guardClient = Invoke-Client 'guard-pair'
+        }
         $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardA entity-owner guard outcome'
         $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardB entity-owner guard outcome'
         $null = Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired Canvas owner guard outcome'
@@ -655,7 +678,7 @@ plugins {
         $guardBalance = $guardParticipants[0].redisBalance
         $guardVersion = $guardParticipants[0].redisVersion
         $guardServerEvidenceLines = @($serverLines | Where-Object {
-            $_ -match 'T21_GUARD_(?:OWNER|TRANSACTIONS|FAIL)|Deposit rejected by PlayerTransactionGuard:'
+            $_ -match 'T21_GUARD_(?:OWNER|TRANSACTIONS|BREAKER_STATE|FAIL)|Deposit rejected by PlayerTransactionGuard:'
         })
         $guardClientEvidenceLines = @($guardClient.lines | Where-Object { $_ -match '^BOT_GUARD_(?:RATE_LIMIT_NOTICE_PASS|FAIL)' })
         $guardEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{
@@ -663,7 +686,12 @@ plugins {
             clientLines = @($guardClientEvidenceLines)
             participants = @($guardParticipants)
         }) -Compress
-        $guardEvidenceOutput = @(& node $assertionModule '--has-guard-pair-runtime-proof-json' $guardEvidenceJson 2>&1)
+        $guardProofFlag = if ($GuardWithCircuitBreaker.IsPresent) {
+            '--has-guard-pair-circuit-breaker-runtime-proof-json'
+        } else {
+            '--has-guard-pair-runtime-proof-json'
+        }
+        $guardEvidenceOutput = @(& node $assertionModule $guardProofFlag $guardEvidenceJson 2>&1)
         $guardEvidenceExit = $LASTEXITCODE
         $guardEvidenceResult = ($guardEvidenceOutput | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim()
         if ($guardEvidenceExit -ne 0 -or $guardEvidenceResult -cne 'true') {
@@ -673,6 +701,8 @@ plugins {
             ownerProofs = 2
             independentRateLimitRejections = 2
             playerNotifications = 2
+            circuitBreakerEnabled = $GuardWithCircuitBreaker.IsPresent
+            circuitBreakerUnlockedOnEachOwner = if ($GuardWithCircuitBreaker.IsPresent) { 2 } else { $null }
             participants = $guardParticipants
             ownerEvidenceLines = $guardServerEvidenceLines
             clientNotificationLines = $guardClientEvidenceLines
@@ -694,7 +724,11 @@ plugins {
         schemaVersion = 1
         status = 'PASS'
         evidenceLevel = 'E2_REAL_SERVER_AND_ISOLATED_REDIS'
-        task = if ($Guard.IsPresent) { 'T21 Canvas two-owner entity guard and player lifecycle scheduler subcase' } else { 'T21 player lifecycle scheduler subcase' }
+        task = if ($GuardWithCircuitBreaker.IsPresent) {
+            'T21 Canvas two-owner entity guard with global circuit breaker enabled and player lifecycle scheduler subcase'
+        } elseif ($Guard.IsPresent) {
+            'T21 Canvas two-owner entity guard and player lifecycle scheduler subcase'
+        } else { 'T21 player lifecycle scheduler subcase' }
         runId = $runId
         endpoint = [ordered]@{ label = $Endpoint; software = $pin.software; minecraftVersion = $pin.version; build = $pin.build; serverJar = $serverJar; serverJarSha256 = $serverSha }
         runtime = [ordered]@{ java = $javaVersion; node = (& node --version); plugDevVersion = $plugDevPackage.version; mineflayerVersion = $mineflayerPackage.version; redis = $redisServerVersion }
@@ -711,12 +745,12 @@ plugins {
             acceptanceProbeSourceSha256 = (Get-FileHash (Join-Path $root 'src\acceptance\java\noietime\syncmoney\acceptance\AcceptanceProbe.java') -Algorithm SHA256).Hash.ToLowerInvariant()
             localPlugDevCliSha256 = (Get-FileHash $plugDevCli -Algorithm SHA256).Hash.ToLowerInvariant()
         }
-        isolation = [ordered]@{ runRoot = $runRoot; projectRoot = $projectRoot; plugDevHome = $plugDevHome; gradleUserHome = $gradleHome; redisData = $redisData; runMarker = $runMarker; gamePort = $gamePort; rconPort = $rconPort; redisPort = $redisPort; redisDatabase = 15; redisAof = $true; appendFsync = 'always'; mode = 'local_redis'; playerProtection = $Guard.IsPresent; playerProtectionOnlyConfigSha256 = $script:guardConfigSha256 }
+        isolation = [ordered]@{ runRoot = $runRoot; projectRoot = $projectRoot; plugDevHome = $plugDevHome; gradleUserHome = $gradleHome; redisData = $redisData; runMarker = $runMarker; gamePort = $gamePort; rconPort = $rconPort; redisPort = $redisPort; redisDatabase = 15; redisAof = $true; appendFsync = 'always'; mode = 'local_redis'; playerProtection = $Guard.IsPresent; circuitBreaker = $GuardWithCircuitBreaker.IsPresent; playerProtectionOnlyConfigSha256 = $script:guardConfigSha256 }
         server = [ordered]@{ processId = $script:serverProcessId; normalStartExitCode = $startExit; normalStopExitCode = $script:normalServerStopExitCode; processExitVerified = $true; syncmoneyDisabledMarker = $true; logSha256 = (Get-FileHash (Join-Path $logsRoot 'server.log') -Algorithm SHA256).Hash.ToLowerInvariant() }
-        redis = [ordered]@{ processId = $script:redisProcessId; normalShutdownExitCode = $script:normalRedisStopExitCode; processExitCode = $script:redisExitCode; processExitVerified = $true; databaseSize = $redisDbSize; balanceKey = $balanceKey; balance = $redisBalance; versionKey = $versionKey; version = [int]$accountVersion; guardBalanceKey = $guardBalanceKey; guardBalance = $guardBalance; guardVersionKey = $guardVersionKey; guardVersion = if ($null -eq $guardVersion) { $null } else { [int]$guardVersion }; guardAccounts = $guardParticipants; files = $redisFiles }
+        redis = [ordered]@{ processId = $script:redisProcessId; normalShutdownExitCode = $script:normalRedisStopExitCode; processExitCode = $script:redisExitCode; processExitVerified = $true; logSha256 = (Get-FileHash (Join-Path $logsRoot 'redis-server.log') -Algorithm SHA256).Hash.ToLowerInvariant(); databaseSize = $redisDbSize; balanceKey = $balanceKey; balance = $redisBalance; versionKey = $versionKey; version = [int]$accountVersion; guardBalanceKey = $guardBalanceKey; guardBalance = $guardBalance; guardVersionKey = $guardVersionKey; guardVersion = if ($null -eq $guardVersion) { $null } else { [int]$guardVersion }; guardAccounts = $guardParticipants; files = $redisFiles }
         client = [ordered]@{
             crossOwner = if ($null -eq $crossOwnerClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $crossOwnerClient.exitCode; logSha256 = $crossOwnerClient.logSha256 } }
-            guard = if ($null -eq $guardClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $guardClient.exitCode; logSha256 = $guardClient.logSha256 } }
+            guard = if ($null -eq $guardClient) { $null } else { [ordered]@{ scenario = $guardClientScenario; protocol = $pin.version; exitCode = $guardClient.exitCode; logSha256 = $guardClient.logSha256 } }
             teleport = [ordered]@{ protocol = $pin.version; exitCode = $teleport.exitCode; logSha256 = $teleport.logSha256; observedNetherDimension = $true }
             logout = [ordered]@{ protocol = $pin.version; exitCode = $logout.exitCode; logSha256 = $logout.logSha256; expectedKickReason = 'T15 accepted-write logout scenario'; clientObservedExpectedKickPacket = $scenarioEvidence.clientObservedExpectedKickPacket; clientObservedExpectedLogoutAbort = $scenarioEvidence.clientObservedExpectedLogoutAbort; exactServerKickReasonVerified = $scenarioEvidence.exactServerKickReasonVerified }
         }

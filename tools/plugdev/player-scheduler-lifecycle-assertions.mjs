@@ -244,6 +244,26 @@ export function hasGuardPairRuntimeProof(evidence) {
   });
 }
 
+export function hasGuardPairCircuitBreakerRuntimeProof(evidence) {
+  if (!hasGuardPairRuntimeProof(evidence)) return false;
+
+  const players = new Set(["AcceptanceGuardA", "AcceptanceGuardB"]);
+  const observedPlayers = new Set();
+  let stateMarkers = 0;
+  for (const rawLine of evidence.serverLines) {
+    const line = String(rawLine ?? "");
+    if (line.includes("T21_GUARD_BREAKER_FAIL")) return false;
+    if (!line.includes("T21_GUARD_BREAKER_STATE")) continue;
+    stateMarkers += 1;
+    const state = line.match(/\bT21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=(AcceptanceGuardA|AcceptanceGuardB)\s*$/i);
+    if ((line.match(/T21_GUARD_BREAKER_STATE/g) ?? []).length !== 1 || !state || observedPlayers.has(state[1])) return false;
+    observedPlayers.add(state[1]);
+  }
+
+  return stateMarkers === players.size && observedPlayers.size === players.size &&
+    [...players].every((player) => observedPlayers.has(player));
+}
+
 export function normalizedDimension(value) {
   return String(value ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
 }
@@ -313,6 +333,16 @@ if (process.argv[2] === "--has-guard-pair-runtime-proof-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasGuardPairRuntimeProof(evidence) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-guard-pair-circuit-breaker-runtime-proof-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasGuardPairCircuitBreakerRuntimeProof(evidence) ? "true" : "false");
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;

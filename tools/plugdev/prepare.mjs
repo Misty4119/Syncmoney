@@ -35,7 +35,7 @@ function compareVersionParts(left, right) {
 
 export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDATE_VERSION) {
   if (args.length > 6) {
-    throw new Error("Usage: node tools/plugdev/prepare.mjs <paper|folia|canvas> <minecraft-version> <local|local_redis|sync> <on|off> [candidate-version] [guard-on]");
+    throw new Error("Usage: node tools/plugdev/prepare.mjs <paper|folia|canvas> <minecraft-version> <local|local_redis|sync> <on|off> [candidate-version] [guard-on|guard-breaker-on]");
   }
 
   const [software = "paper", minecraftVersion = "1.21.6", mode = "local", features = "off",
@@ -55,14 +55,25 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
   if (!["on", "off"].includes(features)) {
     throw new Error("Features must be on or off.");
   }
-  if (!["off", "guard-on"].includes(guardProfile)) {
-    throw new Error("Guard profile must be off or guard-on.");
+  if (!["off", "guard-on", "guard-breaker-on"].includes(guardProfile)) {
+    throw new Error("Guard profile must be off, guard-on, or guard-breaker-on.");
+  }
+  if (guardProfile === "guard-breaker-on" && software !== "canvas") {
+    throw new Error("The guard-breaker-on profile is only supported for Canvas.");
   }
   if (!/^\d+\.\d+\.\d+(?:-(?:alpha|beta)\.\d+)?$/.test(candidateVersion)) {
     throw new Error("Candidate version must be a stable or alpha/beta semantic version.");
   }
 
-  return { software, minecraftVersion, mode, features, candidateVersion, playerProtection: guardProfile === "guard-on" };
+  return {
+    software,
+    minecraftVersion,
+    mode,
+    features,
+    candidateVersion,
+    playerProtection: guardProfile !== "off",
+    circuitBreakerEnabled: guardProfile === "guard-breaker-on",
+  };
 }
 
 export function createProfileConfig(options, env = process.env) {
@@ -94,7 +105,7 @@ export function createProfileConfig(options, env = process.env) {
 }
 
 export function createEconomySettings(defaultConfig, options, env = process.env) {
-  const { software, mode, features, playerProtection = false } = options;
+  const { software, mode, features, playerProtection = false, circuitBreakerEnabled = false } = options;
   const enabled = features === "on";
   const dbType = (env.SYNCMONEY_TEST_DB_TYPE ?? "postgresql").toLowerCase();
   if (!["mysql", "postgresql"].includes(dbType)) {
@@ -134,7 +145,8 @@ export function createEconomySettings(defaultConfig, options, env = process.env)
   settings.economy = { ...settings.economy, mode };
   settings["circuit-breaker"] = {
     ...settings["circuit-breaker"],
-    enabled,
+    enabled: enabled || circuitBreakerEnabled,
+    ...(circuitBreakerEnabled ? { "max-transactions-per-second": 100 } : {}),
     "player-protection": {
       ...settings["circuit-breaker"]?.["player-protection"],
       enabled: enabled || playerProtection,
