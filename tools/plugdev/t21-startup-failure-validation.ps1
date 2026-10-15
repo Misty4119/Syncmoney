@@ -37,7 +37,7 @@ function Test-T21RequiredV11DdlFailureTarget(
     if ($PlatformEndpoint -ceq 'MinimumFolia') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -ceq 'MaximumFolia') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -ceq 'MinimumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
-    if ($PlatformEndpoint -ceq 'MaximumCanvas') { return $DatabaseProduct -ceq 'MySQL' }
+    if ($PlatformEndpoint -ceq 'MaximumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB') }
     return $PlatformEndpoint -ceq 'Maximum'
 }
 

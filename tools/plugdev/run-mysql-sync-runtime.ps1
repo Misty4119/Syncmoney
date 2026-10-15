@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, minimum Folia 1.21.6#6, and maximum Folia 26.2#7, plus all three SQL products on minimum Canvas 1.21.8#603 and MySQL on maximum Canvas 26.3#972.'
+    throw 'The required-v11-DDL-permission-failure case supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, minimum Folia 1.21.6#6, and maximum Folia 26.2#7, plus all three SQL products on minimum Canvas 1.21.8#603 and MySQL or MariaDB on maximum Canvas 26.3#972.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1192,7 +1192,7 @@ function Test-T21MySqlCreateWithoutAlterGrantSet(
 
 function Seed-T21RequiredV11DdlPermissionFailure {
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'The required-v11-DDL-permission-failure seed supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, minimum Folia 1.21.6#6, and maximum Folia 26.2#7, plus all three SQL products on minimum Canvas 1.21.8#603 and MySQL on maximum Canvas 26.3#972.'
+        throw 'The required-v11-DDL-permission-failure seed supports all three SQL products on minimum Paper 1.21.6#48, maximum Paper 26.3#166, minimum Folia 1.21.6#6, and maximum Folia 26.2#7, plus all three SQL products on minimum Canvas 1.21.8#603 and MySQL or MariaDB on maximum Canvas 26.3#972.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
