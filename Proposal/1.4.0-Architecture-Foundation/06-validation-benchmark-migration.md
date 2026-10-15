@@ -388,6 +388,20 @@ Focused command `gradlew.bat :syncmoney-bukkit:test --tests noietime.syncmoney.s
 
 Independent targeted review found no actionable issue and confirmed the mode/SQL writer branches. Evidence limit: LOCAL_REDIS proves required-backend constructor wiring and shared-SQL omission only; it does not establish Redis connection success or exercise the real CacheManager script/scheduler path. No real Redis, Paper, Folia, or Canvas runtime was exercised. This closes only these local backend-off E1 cells. Initialization/close-failure, remaining T21 mode/resource/runtime gates, and licensed CMI remain open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
 
+### T21 V05 — initialization rollback and close-failure continuation (2026-10-16)
+
+**Result: PASS_BOUNDED_E1** for generic initialization-owner cleanup. `PluginInitializationManagerTest` injects an initialization failure in the economy stage after storage initialization and verifies that later listener initialization does not run, the failed economy stage and storage owner are closed in reverse order, and the manager remains uninitialized. Its shutdown case injects a close exception in the economy owner and confirms storage cleanup still runs. `ShutdownStepRunnerTest` separately injects an `AssertionError` in the audit cleanup action and confirms the later storage action still runs.
+
+Validation used Java `25.0.4+7-LTS-189` and Gradle `9.8.0`:
+
+```powershell
+./gradlew.bat :syncmoney-bukkit:test --tests noietime.syncmoney.initialization.PluginInitializationManagerTest --tests noietime.syncmoney.initialization.ShutdownStepRunnerTest --rerun-tasks --no-daemon --console=plain
+```
+
+The command exited 0 with 18/18 actionable tasks; the two selected JUnit classes passed 3/3 tests with zero failures, errors, or skips. The retained identity-bound build log `build/reports/foundation/T21-v05-init-close-failure/focused-java25-test-identity-bound.log` is 4,110 bytes / SHA-256 `f582f025468388c6250690196056962d5679cf57d5bb9917f657334c0fb2bfb6`; it records `JAVA_HOME`, `java -version`, Gradle wrapper version and JVM, the focused test output, and exit 0. `PluginInitializationManagerTest.xml` is 30,745 bytes / SHA-256 `e3853742aaa1456a1d31b4a22d0a94b298dd6f6fd050714a5ffa05456abcb999`; `ShutdownStepRunnerTest.xml` is 10,046 bytes / SHA-256 `269ea9ae89e275af39906d6ea5fd7e64159ec1e3c7f262d952b7b2cebf142455`. Production source pins are `PluginInitializationManager.java` `52671722e5802f465cae3dd02ee818c6df46ef0214a0ace210708d14e048c004` and `ShutdownStepRunner.java` `70fe3cf798fc780253d91e653d518059fed4cd1d17c632d52422e08e4f568b4b`; test source pins are `PluginInitializationManagerTest.java` `3e815c23a5724f194d7218f037deec162e711592014effcbf7ff39badff15760` and `ShutdownStepRunnerTest.java` `5cd1ff5e9ff64b22983d65890ec68c706992afa784fa149acac4a6dfab8afe68`.
+
+This is local E1 evidence for the generic initialization/shutdown coordinators. It does not inject failures into every concrete module/resource owner, prove a real Paper/Folia/Canvas startup-failure path, or close all V05 failure-stage combinations. No production source, public API, config, SQL/Redis schema, recovery format, or product contract changed. The remaining runtime/resource matrix and licensed CMI acceptance stay open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
+
 ## B00 — Benchmark profiles與command合同
 
 As of 2026-10-09, T19 implements these Gradle tasks and runner CLI in `:syncmoney-benchmarks`; use the commands below only when the required hash-bound baseline pilot and endpoint configuration are available.
