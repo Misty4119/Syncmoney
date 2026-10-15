@@ -533,6 +533,16 @@ try {
         $Report.logs[$LogRelativePath].bytes = [long]$logInfo.Length
         $Report.logs[$LogRelativePath].sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+    function Set-T21PostgreSqlPrivilegeFixtureEvidence([object]$Report) {
+        $relativePath = 'logs\postgresql-audit-ddl-privileges.txt'
+        $logPath = Join-Path $Report.runDirectory $relativePath
+        [IO.File]::WriteAllText($logPath, [string]$Report.databaseDdlPrivileges.evidenceJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        $logInfo = Get-Item -LiteralPath $logPath
+        $Report.logs[$relativePath] = [ordered]@{
+            bytes = [long]$logInfo.Length
+            sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
     function Set-T21MySqlAuditRowsFixtureJson([object]$Report, [string]$RowsJson) {
         $Report.schemaStateBefore.auditRowsJson = $RowsJson
         $Report.schemaStateAfter.auditRowsJson = $RowsJson
@@ -551,7 +561,11 @@ try {
         [string]$platformEndpoint = 'Minimum'
     ) {
         $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
-        $copy = New-T21MySqlStartupFailureReportFixture $databaseProduct $databaseVersion
+        $copy = if ($databaseProduct -ceq 'PostgreSQL') {
+            ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+        } else {
+            New-T21MySqlStartupFailureReportFixture $databaseProduct $databaseVersion
+        }
         $v11RunRoot = Join-Path $testRoot ("v11-required-ddl-$($databaseProduct.ToLowerInvariant())")
         $v11LogsRoot = Join-Path $v11RunRoot 'logs'
         New-Item -ItemType Directory -Force -Path $v11LogsRoot | Out-Null
@@ -580,6 +594,7 @@ try {
         }
         $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
         $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
+        if ($databaseProduct -ceq 'PostgreSQL') { $copy.configuration.databaseType = 'postgresql' }
         $copy.task = 'T21-V03-SYNC-v11-audit-ddl-permission-failure'
         $mariaDbAuthentication = if ($databaseProduct -ceq 'MariaDB') { " IDENTIFIED BY PASSWORD '<redacted>'" } else { '' }
         $grantLines127 = @(
@@ -590,25 +605,76 @@ try {
             ('GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`localhost`' + $mariaDbAuthentication)
             'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`localhost`'
         )
-        $copy.databaseDdlPrivileges = [ordered]@{
-            product = $databaseProduct
-            grantee = 'sm_t21_a1b2c3d4@127.0.0.1'
-            grants = $grantLines127
-            localGrants = $grantLinesLocal
-            alterGranted = $false
-            createGranted = $true
-            verifiedBeforeStartup = $true
-        }
-        foreach ($grantLog in @(
-            [ordered]@{ path='logs\runtime-user-grants-127.txt'; lines=$grantLines127 }
-            [ordered]@{ path='logs\runtime-user-grants-local.txt'; lines=$grantLinesLocal }
-        )) {
-            $grantLogPath = Join-Path $v11RunRoot $grantLog.path
-            [IO.File]::WriteAllLines($grantLogPath, [string[]]$grantLog.lines, [Text.UTF8Encoding]::new($false))
-            $grantLogInfo = Get-Item -LiteralPath $grantLogPath
-            $copy.logs[$grantLog.path] = [ordered]@{
-                bytes = [long]$grantLogInfo.Length
-                sha256 = (Get-FileHash -LiteralPath $grantLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($databaseProduct -ceq 'PostgreSQL') {
+            $postgresPrivileges = [ordered]@{
+                databaseName = 'syncmoney_t21_a1b2c3d4'
+                databaseOwner = 'postgres'
+                schemaName = 'public'
+                schemaOwner = 'pg_database_owner'
+                grantee = 'sm_t21_a1b2c3d4'
+                roleSuperuser = $false
+                roleMemberOfAuditOwner = $false
+                auditTableOwner = 'postgres'
+                databaseConnectGranted = $true
+                schemaUsageGranted = $true
+                schemaCreateGranted = $true
+                tableSelectGranted = $true
+                tableInsertGranted = $true
+                tableUpdateGranted = $true
+                tableDeleteGranted = $true
+            }
+            $postgresEvidenceJson = ConvertTo-Json -InputObject $postgresPrivileges -Depth 5 -Compress
+            $copy.databaseDdlPrivileges = [ordered]@{
+                product = 'PostgreSQL'
+                grantee = 'sm_t21_a1b2c3d4'
+                databaseName = 'syncmoney_t21_a1b2c3d4'
+                schemaName = 'public'
+                databaseOwner = 'postgres'
+                schemaOwner = 'pg_database_owner'
+                auditTableOwner = 'postgres'
+                roleSuperuser = $false
+                roleMemberOfAuditOwner = $false
+                databaseConnectGranted = $true
+                schemaUsageGranted = $true
+                schemaCreateGranted = $true
+                tableSelectGranted = $true
+                tableInsertGranted = $true
+                tableUpdateGranted = $true
+                tableDeleteGranted = $true
+                tableOwnedByGrantee = $false
+                alterAllowed = $false
+                createGranted = $true
+                verifiedBeforeStartup = $true
+                evidenceJson = $postgresEvidenceJson
+            }
+            $postgresPrivilegeLogPath = Join-Path $v11RunRoot 'logs\postgresql-audit-ddl-privileges.txt'
+            [IO.File]::WriteAllText($postgresPrivilegeLogPath, $postgresEvidenceJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+            $postgresPrivilegeLog = Get-Item -LiteralPath $postgresPrivilegeLogPath
+            $copy.logs['logs\postgresql-audit-ddl-privileges.txt'] = [ordered]@{
+                bytes = [long]$postgresPrivilegeLog.Length
+                sha256 = (Get-FileHash -LiteralPath $postgresPrivilegeLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        } else {
+            $copy.databaseDdlPrivileges = [ordered]@{
+                product = $databaseProduct
+                grantee = 'sm_t21_a1b2c3d4@127.0.0.1'
+                grants = $grantLines127
+                localGrants = $grantLinesLocal
+                alterGranted = $false
+                createGranted = $true
+                verifiedBeforeStartup = $true
+            }
+            foreach ($grantLog in @(
+                [ordered]@{ path='logs\runtime-user-grants-127.txt'; lines=$grantLines127 }
+                [ordered]@{ path='logs\runtime-user-grants-local.txt'; lines=$grantLinesLocal }
+            )) {
+                $grantLogPath = Join-Path $v11RunRoot $grantLog.path
+                [IO.File]::WriteAllLines($grantLogPath, [string[]]$grantLog.lines, [Text.UTF8Encoding]::new($false))
+                $grantLogInfo = Get-Item -LiteralPath $grantLogPath
+                $copy.logs[$grantLog.path] = [ordered]@{
+                    bytes = [long]$grantLogInfo.Length
+                    sha256 = (Get-FileHash -LiteralPath $grantLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
             }
         }
         $copy.schemaStateBefore.mainVersion = 1
@@ -626,19 +692,82 @@ try {
 
         $v10Columns = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
             'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
-        $allColumns = @(ConvertFrom-Json -InputObject ([string]$copy.schemaStateBefore.auditColumnsJson) -AsHashtable -ErrorAction Stop)
-        $columnRows = @($allColumns | Where-Object { [string]$_['column_name'] -cin $v10Columns })
-        for ($index = 0; $index -lt $columnRows.Count; $index++) { $columnRows[$index].ordinal_position = $index + 1 }
-        $columnJson = ConvertTo-Json -InputObject ([object[]]$columnRows) -Depth 10 -Compress
+        if ($databaseProduct -ceq 'PostgreSQL') {
+            $postgresColumnFields = @(
+                'table_catalog', 'table_schema', 'table_name', 'column_name', 'ordinal_position', 'column_default', 'is_nullable', 'data_type',
+                'character_maximum_length', 'character_octet_length', 'numeric_precision', 'numeric_precision_radix', 'numeric_scale',
+                'datetime_precision', 'interval_type', 'interval_precision', 'character_set_catalog', 'character_set_schema', 'character_set_name',
+                'collation_catalog', 'collation_schema', 'collation_name', 'domain_catalog', 'domain_schema', 'domain_name', 'udt_catalog',
+                'udt_schema', 'udt_name', 'scope_catalog', 'scope_schema', 'scope_name', 'maximum_cardinality', 'dtd_identifier',
+                'is_self_referencing', 'is_identity', 'identity_generation', 'identity_start', 'identity_increment', 'identity_maximum',
+                'identity_minimum', 'identity_cycle', 'is_generated', 'generation_expression', 'is_updatable'
+            )
+            $postgresColumnDefinitions = [ordered]@{
+                id = @{ dataType='character varying'; length=36; nullable='NO'; udt='varchar' }
+                timestamp = @{ dataType='bigint'; precision=64; radix=2; scale=0; nullable='NO'; udt='int8' }
+                type = @{ dataType='character varying'; length=20; nullable='NO'; udt='varchar' }
+                player_uuid = @{ dataType='character varying'; length=36; nullable='NO'; udt='varchar' }
+                player_name = @{ dataType='character varying'; length=16; nullable='YES'; udt='varchar' }
+                amount = @{ dataType='numeric'; precision=20; radix=10; scale=2; nullable='NO'; udt='numeric' }
+                balance_after = @{ dataType='numeric'; precision=20; radix=10; scale=2; nullable='NO'; udt='numeric' }
+                source = @{ dataType='character varying'; length=30; nullable='NO'; udt='varchar' }
+                server = @{ dataType='character varying'; length=50; nullable='NO'; udt='varchar' }
+                target_uuid = @{ dataType='character varying'; length=36; nullable='YES'; udt='varchar' }
+                target_name = @{ dataType='character varying'; length=16; nullable='YES'; udt='varchar' }
+                reason = @{ dataType='character varying'; length=255; nullable='YES'; udt='varchar' }
+                merged_count = @{ dataType='integer'; precision=32; radix=2; scale=0; nullable='YES'; default='1'; udt='int4' }
+                t21_sentinel = @{ dataType='text'; nullable='NO'; udt='text' }
+            }
+            $columnRows = @(
+                for ($index = 0; $index -lt $v10Columns.Count; $index++) {
+                    $columnName = $v10Columns[$index]
+                    $definition = $postgresColumnDefinitions[$columnName]
+                    $column = [ordered]@{}
+                    foreach ($field in $postgresColumnFields) { $column[$field] = $null }
+                    $column.table_catalog = 'syncmoney_t21_a1b2c3d4'
+                    $column.table_schema = 'public'
+                    $column.table_name = 'syncmoney_audit_log'
+                    $column.column_name = $columnName
+                    $column.ordinal_position = $index + 1
+                    $column.column_default = if ($definition.ContainsKey('default')) { $definition.default } else { $null }
+                    $column.is_nullable = $definition.nullable
+                    $column.data_type = $definition.dataType
+                    if ($definition.ContainsKey('length')) {
+                        $column.character_maximum_length = $definition.length
+                        $column.character_octet_length = $definition.length * 4
+                    }
+                    if ($definition.ContainsKey('precision')) {
+                        $column.numeric_precision = $definition.precision
+                        $column.numeric_precision_radix = $definition.radix
+                        $column.numeric_scale = $definition.scale
+                    }
+                    $column.udt_name = $definition.udt
+                    $column.is_identity = 'NO'
+                    $column.is_generated = 'NEVER'
+                    $column.is_updatable = 'YES'
+                    [pscustomobject]$column
+                }
+            )
+            $columnJson = ConvertTo-Json -InputObject ([object[]]$columnRows) -Depth 10 -Compress
+        } else {
+            $allColumns = @(ConvertFrom-Json -InputObject ([string]$copy.schemaStateBefore.auditColumnsJson) -AsHashtable -ErrorAction Stop)
+            $columnRows = @($allColumns | Where-Object { [string]$_['column_name'] -cin $v10Columns })
+            for ($index = 0; $index -lt $columnRows.Count; $index++) { $columnRows[$index].ordinal_position = $index + 1 }
+            $columnJson = ConvertTo-Json -InputObject ([object[]]$columnRows) -Depth 10 -Compress
+        }
         $copy.schemaStateBefore.auditColumnsJson = $columnJson
         $copy.schemaStateAfter.auditColumnsJson = $columnJson
-        $indexJson = ConvertTo-Json -InputObject @([ordered]@{
-            name = 'PRIMARY'
-            nonUnique = 0
-            indexType = 'BTREE'
-            visibility = 'YES'
-            columns = @([ordered]@{ position = 1; columnName = 'id'; direction = 'A'; subPart = $null })
-        }) -Depth 10 -Compress
+        $indexJson = if ($databaseProduct -ceq 'PostgreSQL') {
+            '[{"name":"syncmoney_audit_log_pkey","definition":"CREATE UNIQUE INDEX syncmoney_audit_log_pkey ON public.syncmoney_audit_log USING btree (id)"}]'
+        } else {
+            ConvertTo-Json -InputObject @([ordered]@{
+                name = 'PRIMARY'
+                nonUnique = 0
+                indexType = 'BTREE'
+                visibility = 'YES'
+                columns = @([ordered]@{ position = 1; columnName = 'id'; direction = 'A'; subPart = $null })
+            }) -Depth 10 -Compress
+        }
         $copy.schemaStateBefore.auditIndexesJson = $indexJson
         $copy.schemaStateAfter.auditIndexesJson = $indexJson
         $rowJson = '[{"id":"00000000-0000-0000-0000-000000000330","timestamp":1791936000000,"type":"DEPOSIT","player_uuid":"00000000-0000-0000-0000-000000000330","player_name":"T21Fixture","amount":1.25,"balance_after":99.99,"source":"TEST","server":"t21-v11-ddl-permission","target_uuid":null,"target_name":null,"reason":"v10 preservation sentinel","merged_count":1,"t21_sentinel":"t21-v10-preservation-sentinel"}]'
@@ -653,7 +782,11 @@ try {
         }
         $copy.startupObservation.expectedFailure = 'required-v11-audit-ddl-permission-failure'
         $copy.startupObservation.failureMessage = 'Failed audit schema migration to version 11; version metadata was not advanced past 10'
-        $copy.startupObservation.failureDetailMarker = 'ALTER command denied'
+        $copy.startupObservation.failureDetailMarker = if ($databaseProduct -ceq 'PostgreSQL') {
+            'must be owner of table syncmoney_audit_log'
+        } else {
+            'ALTER command denied'
+        }
 
         $platformSoftware = switch ($endpoint.software) {
             'paper' { 'Paper' }
@@ -668,7 +801,11 @@ try {
             '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 10, target 11'
             '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
             'java.lang.IllegalStateException: Failed audit schema migration to version 11; version metadata was not advanced past 10'
-            "Caused by: java.sql.SQLException: ALTER command denied to user 'sm_t21_fixture'@'127.0.0.1' for table 'syncmoney_audit_log'"
+            $(if ($databaseProduct -ceq 'PostgreSQL') {
+                'Caused by: org.postgresql.util.PSQLException: ERROR: must be owner of table syncmoney_audit_log'
+            } else {
+                "Caused by: java.sql.SQLException: ALTER command denied to user 'sm_t21_fixture'@'127.0.0.1' for table 'syncmoney_audit_log'"
+            })
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
             '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
@@ -686,12 +823,13 @@ try {
 
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum)) {
-        throw 'The v11 required-DDL failure gate must admit minimum-Paper MySQL and MariaDB only until additional runtime cells are verified.'
+        throw 'The v11 required-DDL failure gate must admit minimum-Paper MySQL, MariaDB, and PostgreSQL only until additional runtime cells are verified.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL and MariaDB'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL, MariaDB, and PostgreSQL'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -756,6 +894,67 @@ try {
         throw 'The minimum-Paper MariaDB v11-DDL predicate accepted a MySQL product label.'
     }
     Write-Output 'PASS: reject MariaDB v11 DDL denial evidence with a MySQL product label'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    if (-not (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Paper PostgreSQL 18.1 required-v11-DDL owner-boundary report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Paper PostgreSQL 18.1 v11 DDL denial with a non-owner app role and preserved v10 state'
+    $postgresDdlFailureReport.databaseDdlPrivileges.roleSuperuser = $true
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL owner-boundary predicate accepted a superuser app role.'
+    }
+    Write-Output 'PASS: reject a PostgreSQL DDL-denial report whose app role is a superuser'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresDdlFailureReport.databaseDdlPrivileges.roleMemberOfAuditOwner = $true
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL owner-boundary predicate accepted membership in the audit-table owner role.'
+    }
+    Write-Output 'PASS: reject PostgreSQL DDL-denial evidence when the app inherits audit-table ownership'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresDdlFailureReport.databaseDdlPrivileges.schemaCreateGranted = $false
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL owner-boundary predicate accepted a role that cannot create the startup-created players table.'
+    }
+    Write-Output 'PASS: require PostgreSQL schema CREATE for startup while the audit table remains owner-protected'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresDdlFailureReport.databaseDdlPrivileges.tableOwnedByGrantee = $true
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL owner-boundary predicate accepted an app role that owns the audit table.'
+    }
+    Write-Output 'PASS: reject PostgreSQL v11 DDL evidence when the application role owns the audit table'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresDdlFailureReport.databaseDdlPrivileges.tableDeleteGranted = $false
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL owner-boundary predicate accepted evidence missing the required app-table DML privileges.'
+    }
+    Write-Output 'PASS: require app-table DML access separately from PostgreSQL DDL ownership'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresEvidenceJson = [string]$postgresDdlFailureReport.databaseDdlPrivileges.evidenceJson
+    $duplicateEvidenceJson = $postgresEvidenceJson.Replace('"databaseOwner":"postgres"', '"databaseOwner":"sm_t21_a1b2c3d4","databaseOwner":"postgres"', [StringComparison]::Ordinal)
+    $postgresDdlFailureReport.databaseDdlPrivileges.evidenceJson = $duplicateEvidenceJson
+    Set-T21PostgreSqlPrivilegeFixtureEvidence $postgresDdlFailureReport
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL privilege-evidence predicate accepted duplicate JSON properties.'
+    }
+    Write-Output 'PASS: reject duplicate properties in PostgreSQL DDL-owner evidence even when the hashed log agrees'
+    $postgresDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1'
+    $postgresPrivilegeLog = Join-Path $postgresDdlFailureReport.runDirectory 'logs\postgresql-audit-ddl-privileges.txt'
+    [IO.File]::WriteAllText($postgresPrivilegeLog, '{"databaseOwner":"app"}' + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    $postgresPrivilegeLogInfo = Get-Item -LiteralPath $postgresPrivilegeLog
+    $postgresDdlFailureReport.logs['logs\postgresql-audit-ddl-privileges.txt'].bytes = [long]$postgresPrivilegeLogInfo.Length
+    $postgresDdlFailureReport.logs['logs\postgresql-audit-ddl-privileges.txt'].sha256 = (Get-FileHash -LiteralPath $postgresPrivilegeLog -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (Test-T21StartupFailureReportFixture $postgresDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The PostgreSQL DDL-owner report accepted privilege fields that disagreed with its retained query log.'
+    }
+    Write-Output 'PASS: bind structured PostgreSQL owner privileges to the retained database query log'
     $jsonNumericField = ConvertFrom-Json -InputObject '1.25' -ErrorAction Stop
     if (-not (Test-T21JsonNumber $jsonNumericField) -or
         (Test-T21JsonNumber '1.25') -or
@@ -1505,6 +1704,12 @@ try {
         $runnerSource -notmatch 'function Seed-T21NewerAuditSchema' -or
         $runnerSource -notmatch 'function Seed-T21IncompleteV10AuditTable' -or
         $runnerSource -notmatch 'function Seed-T21RequiredV11DdlPermissionFailure' -or
+        $runnerSource -notmatch 'Test-T21PostgreSqlAuditOwnerBoundary' -or
+        $runnerSource -notmatch 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION' -or
+        $runnerSource -notmatch 'CREATE DATABASE \$script:databaseName OWNER postgres' -or
+        $runnerSource -notmatch 'GRANT USAGE, CREATE ON SCHEMA public TO \$script:databaseUser' -or
+        $runnerSource -notmatch 'pg_has_role' -or
+        $runnerSource -notmatch 'postgresql-audit-ddl-privileges' -or
         $runnerSource -notmatch 'REVOKE ALTER ON' -or
         $runnerSource -notmatch 'SHOW GRANTS FOR' -or
         $runnerSource -notmatch 'RedactMariaDbGrantOutput' -or
@@ -1529,7 +1734,7 @@ try {
         throw 'The runner must seed the incomplete v10 audit table before starting the candidate plugin.'
     }
     if ($requiredDdlSeedIndex -lt 0 -or $startupFailureIndex -le $requiredDdlSeedIndex) {
-        throw 'The runner must revoke and verify the app user ALTER privilege before starting the candidate plugin.'
+        throw 'The runner must establish and verify the dialect-specific DDL-denial boundary before starting the candidate plugin.'
     }
     $targetGuardIndex = $runnerSource.IndexOf('Test-T21IncompleteAuditTableStartupFailureTarget', [StringComparison]::Ordinal)
     $runtimePathResolutionIndex = $runnerSource.IndexOf('$script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path', [StringComparison]::Ordinal)
@@ -1545,6 +1750,8 @@ try {
         $startupValidatorSource -notmatch 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' -or
         $startupValidatorSource -notmatch 'RequiredV11DdlPermissionDenied' -or
         $startupValidatorSource -notmatch 'ALTER command denied' -or
+        $startupValidatorSource -notmatch 'must be owner of table syncmoney_audit_log' -or
+        $startupValidatorSource -notmatch 'Test-T21PostgreSqlAuditOwnerBoundary' -or
         $startupValidatorSource -notmatch 'T21-V03-SYNC-v11-audit-ddl-permission-failure') {
         throw 'The startup-failure report predicate does not verify the incomplete-v10-audit-table case.'
     }

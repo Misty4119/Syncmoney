@@ -32,7 +32,84 @@ function Test-T21RequiredV11DdlFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Minimum'
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -ceq 'Minimum'
+}
+
+function Test-T21PostgreSqlAuditOwnerBoundary([object]$Privileges, [string]$DatabaseName, [string]$UserName) {
+    $expectedFields = @(
+        'product', 'grantee', 'databaseName', 'schemaName', 'databaseOwner', 'schemaOwner', 'auditTableOwner',
+        'roleSuperuser', 'roleMemberOfAuditOwner', 'databaseConnectGranted', 'schemaUsageGranted',
+        'schemaCreateGranted', 'tableSelectGranted', 'tableInsertGranted', 'tableUpdateGranted',
+        'tableDeleteGranted', 'tableOwnedByGrantee', 'alterAllowed', 'createGranted', 'verifiedBeforeStartup',
+        'evidenceJson'
+    )
+    if (-not (Test-T21ExactDictionaryFields $Privileges $expectedFields) -or
+        (Get-T21ObservedValue $Privileges 'product') -cne 'PostgreSQL' -or
+        (Get-T21ObservedValue $Privileges 'grantee') -cne $UserName -or
+        (Get-T21ObservedValue $Privileges 'databaseName') -cne $DatabaseName -or
+        (Get-T21ObservedValue $Privileges 'schemaName') -cne 'public' -or
+        (Get-T21ObservedValue $Privileges 'databaseOwner') -cne 'postgres' -or
+        (Get-T21ObservedValue $Privileges 'auditTableOwner') -cne 'postgres' -or
+        [string]::IsNullOrWhiteSpace([string](Get-T21ObservedValue $Privileges 'schemaOwner')) -or
+        (Get-T21ObservedValue $Privileges 'schemaOwner') -ceq $UserName -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'roleSuperuser') $false) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'roleMemberOfAuditOwner') $false) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'databaseConnectGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'schemaUsageGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'schemaCreateGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'tableSelectGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'tableInsertGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'tableUpdateGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'tableDeleteGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'tableOwnedByGrantee') $false) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'alterAllowed') $false) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'createGranted') $true) -or
+        -not (Test-T21ObservedBoolean (Get-T21ObservedValue $Privileges 'verifiedBeforeStartup') $true)) { return $false }
+
+    $evidenceJson = Get-T21ObservedValue $Privileges 'evidenceJson'
+    if ($evidenceJson -isnot [string] -or [string]::IsNullOrWhiteSpace($evidenceJson)) { return $false }
+    $expectedEvidenceFields = @(
+        'databaseName', 'databaseOwner', 'schemaName', 'schemaOwner', 'grantee', 'roleSuperuser',
+        'roleMemberOfAuditOwner', 'auditTableOwner', 'databaseConnectGranted', 'schemaUsageGranted',
+        'schemaCreateGranted', 'tableSelectGranted', 'tableInsertGranted', 'tableUpdateGranted', 'tableDeleteGranted'
+    )
+    try {
+        $document = [System.Text.Json.JsonDocument]::Parse([string]$evidenceJson)
+        try {
+            if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $false }
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($property in $document.RootElement.EnumerateObject()) {
+                if (-not $seen.Add($property.Name)) { return $false }
+            }
+            if ($seen.Count -ne $expectedEvidenceFields.Count -or
+                @($expectedEvidenceFields | Where-Object { -not $seen.Contains($_) }).Count -ne 0) { return $false }
+        } finally { $document.Dispose() }
+        $evidence = ConvertFrom-Json -InputObject ([string]$evidenceJson) -AsHashtable -ErrorAction Stop
+        foreach ($field in $expectedEvidenceFields) {
+            $reportedValue = Get-T21ObservedValue $Privileges $field
+            if ($null -eq $reportedValue) {
+                if ($field -ceq 'grantee') { $reportedValue = Get-T21ObservedValue $Privileges 'grantee' }
+                elseif ($field -ceq 'databaseName') { $reportedValue = Get-T21ObservedValue $Privileges 'databaseName' }
+                elseif ($field -ceq 'schemaName') { $reportedValue = Get-T21ObservedValue $Privileges 'schemaName' }
+                elseif ($field -ceq 'databaseOwner') { $reportedValue = Get-T21ObservedValue $Privileges 'databaseOwner' }
+                elseif ($field -ceq 'schemaOwner') { $reportedValue = Get-T21ObservedValue $Privileges 'schemaOwner' }
+                elseif ($field -ceq 'auditTableOwner') { $reportedValue = Get-T21ObservedValue $Privileges 'auditTableOwner' }
+                elseif ($field -ceq 'roleSuperuser' -or $field -ceq 'roleMemberOfAuditOwner' -or
+                    $field -ceq 'databaseConnectGranted' -or $field -ceq 'schemaUsageGranted' -or
+                    $field -ceq 'schemaCreateGranted' -or $field -ceq 'tableSelectGranted' -or
+                    $field -ceq 'tableInsertGranted' -or $field -ceq 'tableUpdateGranted' -or $field -ceq 'tableDeleteGranted') {
+                    $reportedValue = Get-T21ObservedValue $Privileges $field
+                }
+            }
+            if ($field -in @('roleSuperuser', 'roleMemberOfAuditOwner', 'databaseConnectGranted', 'schemaUsageGranted',
+                    'schemaCreateGranted', 'tableSelectGranted', 'tableInsertGranted', 'tableUpdateGranted', 'tableDeleteGranted')) {
+                if (-not (Test-T21ObservedBoolean (Get-T21ObservedValue $evidence $field) ([bool]$reportedValue))) { return $false }
+            } elseif ((Get-T21ObservedValue $evidence $field) -cne [string]$reportedValue) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
@@ -393,7 +470,10 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
         $expectedFailureDetailMarker = switch ($FailureScenario) {
             'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
-            'RequiredV11DdlPermissionDenied' { 'ALTER command denied' }
+            'RequiredV11DdlPermissionDenied' {
+                if ($DatabaseProduct -ceq 'PostgreSQL') { 'must be owner of table syncmoney_audit_log' }
+                else { 'ALTER command denied' }
+            }
             default { $null }
         }
         if ((Get-T21ObservedValue $startup 'stage') -cne 'candidate-startup-failure' -or
@@ -696,22 +776,33 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             $observedDatabaseName = [string](Get-T21ObservedValue $configuration 'databaseNameObserved')
             $databaseMatch = [regex]::Match($databaseName, '^syncmoney_t21_(?<suffix>[a-f0-9]{8})$')
             $grantee = [string](Get-T21ObservedValue $privileges 'grantee')
-            $granteeMatch = [regex]::Match($grantee, '^sm_t21_(?<suffix>[a-f0-9]{8})@127\.0\.0\.1$')
+            $expectedGranteePattern = if ($DatabaseProduct -ceq 'PostgreSQL') {
+                '^sm_t21_(?<suffix>[a-f0-9]{8})$'
+            } else {
+                '^sm_t21_(?<suffix>[a-f0-9]{8})@127\.0\.0\.1$'
+            }
+            $granteeMatch = [regex]::Match($grantee, $expectedGranteePattern)
             $expectedUser = if ($databaseMatch.Success) { 'sm_t21_' + $databaseMatch.Groups['suffix'].Value } else { '' }
-            $grants127 = @(Get-T21ObservedValue $privileges 'grants')
-            $grantsLocal = @(Get-T21ObservedValue $privileges 'localGrants')
-            $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $databaseName $expectedUser '127.0.0.1' $DatabaseProduct
-            $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $databaseName $expectedUser 'localhost' $DatabaseProduct
-            if (-not (Test-T21ExactDictionaryFields $privileges @('product', 'grantee', 'grants', 'localGrants', 'alterGranted', 'createGranted', 'verifiedBeforeStartup')) -or
-                (Get-T21ObservedValue $privileges 'product') -cne $DatabaseProduct -or
-                -not $databaseMatch.Success -or -not $granteeMatch.Success -or
+            $expectedGrantee = if ($DatabaseProduct -ceq 'PostgreSQL') { $expectedUser } else { $expectedUser + '@127.0.0.1' }
+            if (-not $databaseMatch.Success -or -not $granteeMatch.Success -or
                 $observedDatabaseName -cne $databaseName -or
                 $granteeMatch.Groups['suffix'].Value -cne $databaseMatch.Groups['suffix'].Value -or
-                $grantee -cne ($expectedUser + '@127.0.0.1') -or
-                -not $validGrants127 -or -not $validGrantsLocal -or
-                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'alterGranted') $false) -or
-                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'createGranted') $true) -or
-                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'verifiedBeforeStartup') $true)) { return $false }
+                $grantee -cne $expectedGrantee) { return $false }
+
+            if ($DatabaseProduct -ceq 'PostgreSQL') {
+                if (-not (Test-T21PostgreSqlAuditOwnerBoundary $privileges $databaseName $expectedUser)) { return $false }
+            } else {
+                $grants127 = @(Get-T21ObservedValue $privileges 'grants')
+                $grantsLocal = @(Get-T21ObservedValue $privileges 'localGrants')
+                $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $databaseName $expectedUser '127.0.0.1' $DatabaseProduct
+                $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $databaseName $expectedUser 'localhost' $DatabaseProduct
+                if (-not (Test-T21ExactDictionaryFields $privileges @('product', 'grantee', 'grants', 'localGrants', 'alterGranted', 'createGranted', 'verifiedBeforeStartup')) -or
+                    (Get-T21ObservedValue $privileges 'product') -cne $DatabaseProduct -or
+                    -not $validGrants127 -or -not $validGrantsLocal -or
+                    -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'alterGranted') $false) -or
+                    -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'createGranted') $true) -or
+                    -not (Test-T21ObservedBoolean (Get-T21ObservedValue $privileges 'verifiedBeforeStartup') $true)) { return $false }
+            }
         }
         $resourceCleanup = Get-T21ObservedValue $report 'resourceCleanup'
         $sqlOtherConnections = Get-T21ObservedValue $resourceCleanup 'sqlOtherConnections'
@@ -864,22 +955,36 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
 
         if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
             $privileges = Get-T21ObservedValue $report 'databaseDdlPrivileges'
-            $grantLogPaths = [ordered]@{
-                grants = 'logs\runtime-user-grants-127.txt'
-                localGrants = 'logs\runtime-user-grants-local.txt'
-            }
-            foreach ($grantField in $grantLogPaths.Keys) {
-                $grantLogPath = [string]$grantLogPaths[$grantField]
-                if (-not $declaredLogPaths.Contains($grantLogPath) -or
-                    $null -eq (Get-T21ObservedValue $logMap $grantLogPath)) { return $false }
+            if ($DatabaseProduct -ceq 'PostgreSQL') {
+                $privilegeLogPath = 'logs\postgresql-audit-ddl-privileges.txt'
+                if (-not $declaredLogPaths.Contains($privilegeLogPath) -or
+                    $null -eq (Get-T21ObservedValue $logMap $privilegeLogPath)) { return $false }
+                $reportedEvidenceJson = Get-T21ObservedValue $privileges 'evidenceJson'
+                $rawEvidenceJson = [IO.File]::ReadAllText((Join-Path $runRoot $privilegeLogPath), [Text.UTF8Encoding]::new($false)).Trim()
+                $configuration = Get-T21ObservedValue $report 'configuration'
+                if ($reportedEvidenceJson -isnot [string] -or
+                    -not [string]::Equals([string]$reportedEvidenceJson, $rawEvidenceJson, [StringComparison]::Ordinal) -or
+                    -not (Test-T21PostgreSqlAuditOwnerBoundary $privileges ([string](Get-T21ObservedValue $configuration 'databaseName')) ([string](Get-T21ObservedValue $privileges 'grantee')))) {
+                    return $false
+                }
+            } else {
+                $grantLogPaths = [ordered]@{
+                    grants = 'logs\runtime-user-grants-127.txt'
+                    localGrants = 'logs\runtime-user-grants-local.txt'
+                }
+                foreach ($grantField in $grantLogPaths.Keys) {
+                    $grantLogPath = [string]$grantLogPaths[$grantField]
+                    if (-not $declaredLogPaths.Contains($grantLogPath) -or
+                        $null -eq (Get-T21ObservedValue $logMap $grantLogPath)) { return $false }
 
-                $reportedGrantLines = @(Get-T21ObservedValue $privileges $grantField)
-                $rawGrantLines = [IO.File]::ReadAllLines((Join-Path $runRoot $grantLogPath), [Text.UTF8Encoding]::new($false))
-                if ($reportedGrantLines.Count -ne $rawGrantLines.Count) { return $false }
-                for ($lineIndex = 0; $lineIndex -lt $rawGrantLines.Count; $lineIndex++) {
-                    if ($reportedGrantLines[$lineIndex] -isnot [string] -or
-                        -not [string]::Equals([string]$reportedGrantLines[$lineIndex], $rawGrantLines[$lineIndex], [StringComparison]::Ordinal)) {
-                        return $false
+                    $reportedGrantLines = @(Get-T21ObservedValue $privileges $grantField)
+                    $rawGrantLines = [IO.File]::ReadAllLines((Join-Path $runRoot $grantLogPath), [Text.UTF8Encoding]::new($false))
+                    if ($reportedGrantLines.Count -ne $rawGrantLines.Count) { return $false }
+                    for ($lineIndex = 0; $lineIndex -lt $rawGrantLines.Count; $lineIndex++) {
+                        if ($reportedGrantLines[$lineIndex] -isnot [string] -or
+                            -not [string]::Equals([string]$reportedGrantLines[$lineIndex], $rawGrantLines[$lineIndex], [StringComparison]::Ordinal)) {
+                            return $false
+                        }
                     }
                 }
             }
@@ -915,9 +1020,14 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                     'Required v10 audit columns are missing:')
             }
             default {
+                $ddlFailureMarker = if ($DatabaseProduct -ceq 'PostgreSQL') {
+                    'must be owner of table syncmoney_audit_log'
+                } else {
+                    'ALTER command denied'
+                }
                 @('Syncmoney audit schema version: current 10, target 11',
                     'Failed audit schema migration to version 11; version metadata was not advanced past 10',
-                    'ALTER command denied')
+                    $ddlFailureMarker)
             }
         }
         foreach ($requiredMarker in @(

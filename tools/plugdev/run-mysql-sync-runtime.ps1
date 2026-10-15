@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case currently supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on pinned minimum Paper 1.21.6#48.'
+    throw 'The required-v11-DDL-permission-failure case currently supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on pinned minimum Paper 1.21.6#48.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -356,14 +356,18 @@ function Invoke-MySqlAdmin([string[]]$arguments, [string]$label, [switch]$allowE
     }
 }
 
-function Invoke-PostgresQuery([string]$sql, [string]$label, [switch]$asRoot) {
+function Invoke-PostgresQuery([string]$sql, [string]$label, [switch]$asRoot, [string]$Database = '') {
     $previousPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
     $logPath = Join-Path $script:logsRoot ($label + '.txt')
     try {
         $env:PGPASSWORD = $script:databasePassword
         $user = if ($asRoot) { 'postgres' } else { $script:databaseUser }
-        $database = if ($asRoot) { 'postgres' } else { $script:databaseName }
-        $arguments = @('-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', [string]$script:mysqlPort, '-U', $user, '-d', $database)
+        $databaseName = if ([string]::IsNullOrWhiteSpace($Database)) {
+            if ($asRoot) { 'postgres' } else { $script:databaseName }
+        } else {
+            $Database
+        }
+        $arguments = @('-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', [string]$script:mysqlPort, '-U', $user, '-d', $databaseName)
         $output = @($sql | & $script:mysqlClient @arguments 2>&1)
         $exitCode = $LASTEXITCODE
         $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $logPath -Encoding utf8
@@ -1184,8 +1188,8 @@ function Test-T21MySqlCreateWithoutAlterGrantSet(
 }
 
 function Seed-T21RequiredV11DdlPermissionFailure {
-    if ($script:databaseProduct -notin @('MySQL', 'MariaDB') -or $PlatformEndpoint -cne 'Minimum') {
-        throw 'The required-v11-DDL-permission-failure seed is currently limited to minimum-Paper MySQL or MariaDB.'
+    if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL') -or $PlatformEndpoint -cne 'Minimum') {
+        throw 'The required-v11-DDL-permission-failure seed is currently limited to minimum-Paper MySQL, MariaDB, or PostgreSQL.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1224,30 +1228,88 @@ INSERT INTO syncmoney_audit_log (
     't21-v10-preservation-sentinel'
 );
 '@
-    $null = Invoke-MySqlQuery $ddl 'seed-v11-audit-ddl-permission-failure'
+    if ($script:databaseProduct -ceq 'PostgreSQL') {
+        $null = Invoke-PostgresQuery $ddl 'seed-v11-audit-ddl-permission-failure' -asRoot -Database $script:databaseName
+        $null = Invoke-PostgresQuery "GRANT SELECT, INSERT, UPDATE, DELETE ON syncmoney_schema_version, syncmoney_audit_log TO $script:databaseUser;" `
+            'grant-postgresql-v11-audit-dml' -asRoot -Database $script:databaseName
+        $privilegeSql = @"
+SELECT json_build_object(
+    'databaseName', current_database(),
+    'databaseOwner', pg_get_userbyid(d.datdba),
+    'schemaName', n.nspname,
+    'schemaOwner', pg_get_userbyid(n.nspowner),
+    'grantee', r.rolname,
+    'roleSuperuser', r.rolsuper,
+    'roleMemberOfAuditOwner', pg_has_role(r.oid, c.relowner, 'MEMBER'),
+    'auditTableOwner', pg_get_userbyid(c.relowner),
+    'databaseConnectGranted', has_database_privilege(r.oid, d.oid, 'CONNECT'),
+    'schemaUsageGranted', has_schema_privilege(r.oid, n.oid, 'USAGE'),
+    'schemaCreateGranted', has_schema_privilege(r.oid, n.oid, 'CREATE'),
+    'tableSelectGranted', has_table_privilege(r.oid, c.oid, 'SELECT'),
+    'tableInsertGranted', has_table_privilege(r.oid, c.oid, 'INSERT'),
+    'tableUpdateGranted', has_table_privilege(r.oid, c.oid, 'UPDATE'),
+    'tableDeleteGranted', has_table_privilege(r.oid, c.oid, 'DELETE'))::text
+FROM pg_database AS d
+JOIN pg_roles AS r ON r.rolname = '$script:databaseUser'
+JOIN pg_namespace AS n ON n.nspname = 'public'
+JOIN pg_class AS c ON c.relnamespace = n.oid AND c.relname = 'syncmoney_audit_log' AND c.relkind = 'r'
+WHERE d.datname = current_database();
+"@
+        $privilegeRows = @(Invoke-PostgresQuery $privilegeSql 'postgresql-audit-ddl-privileges' -asRoot -Database $script:databaseName)
+        if ($privilegeRows.Count -ne 1) { throw 'PostgreSQL returned no unique app-role audit-table ownership evidence.' }
+        $evidenceJson = $privilegeRows[0].Trim()
+        $evidence = ConvertFrom-Json -InputObject $evidenceJson -AsHashtable -ErrorAction Stop
+        $script:databaseDdlPrivileges = [ordered]@{
+            product = 'PostgreSQL'
+            grantee = [string]$evidence.grantee
+            databaseName = [string]$evidence.databaseName
+            schemaName = [string]$evidence.schemaName
+            databaseOwner = [string]$evidence.databaseOwner
+            schemaOwner = [string]$evidence.schemaOwner
+            auditTableOwner = [string]$evidence.auditTableOwner
+            roleSuperuser = [bool]$evidence.roleSuperuser
+            roleMemberOfAuditOwner = [bool]$evidence.roleMemberOfAuditOwner
+            databaseConnectGranted = [bool]$evidence.databaseConnectGranted
+            schemaUsageGranted = [bool]$evidence.schemaUsageGranted
+            schemaCreateGranted = [bool]$evidence.schemaCreateGranted
+            tableSelectGranted = [bool]$evidence.tableSelectGranted
+            tableInsertGranted = [bool]$evidence.tableInsertGranted
+            tableUpdateGranted = [bool]$evidence.tableUpdateGranted
+            tableDeleteGranted = [bool]$evidence.tableDeleteGranted
+            tableOwnedByGrantee = [string]$evidence.auditTableOwner -ceq [string]$evidence.grantee
+            alterAllowed = [bool]$evidence.roleSuperuser -or
+                ([string]$evidence.auditTableOwner -ceq [string]$evidence.grantee) -or [bool]$evidence.roleMemberOfAuditOwner
+            createGranted = [bool]$evidence.schemaCreateGranted
+            verifiedBeforeStartup = $true
+            evidenceJson = $evidenceJson
+        }
+        if (-not (Test-T21PostgreSqlAuditOwnerBoundary $script:databaseDdlPrivileges $script:databaseName $script:databaseUser)) {
+            throw 'PostgreSQL role, schema, or audit-table owner metadata did not establish the expected v11 DDL denial boundary.'
+        }
+    } else {
+        $null = Invoke-MySqlQuery $ddl 'seed-v11-audit-ddl-permission-failure'
 
-    $revokeAlter = "REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'127.0.0.1'; REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
-    $null = Invoke-MySqlQuery $revokeAlter 'revoke-runtime-user-alter' -asRoot
-    $grants127 = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'127.0.0.1';" 'runtime-user-grants-127' -asRoot)
-    $grantsLocal = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'localhost';" 'runtime-user-grants-local' -asRoot)
-    if ($grants127.Count -eq 0 -or $grantsLocal.Count -eq 0) {
-        throw "$($script:databaseProduct) returned no application-user grant evidence after the v11 DDL privilege setup."
-    }
-    $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $script:databaseName $script:databaseUser '127.0.0.1' $script:databaseProduct
-    $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $script:databaseName $script:databaseUser 'localhost' $script:databaseProduct
-    if (-not $validGrants127 -or -not $validGrantsLocal) {
-        throw "$($script:databaseProduct) SHOW GRANTS did not establish the expected schema-scoped CREATE-without-ALTER privilege boundary for each runtime account host."
-    }
-    $alterGranted = $false
-    $createGranted = $true
-    $script:databaseDdlPrivileges = [ordered]@{
-        product = $script:databaseProduct
-        grantee = "$($script:databaseUser)@127.0.0.1"
-        grants = [string[]]$grants127
-        localGrants = [string[]]$grantsLocal
-        alterGranted = [bool]$alterGranted
-        createGranted = [bool]$createGranted
-        verifiedBeforeStartup = $true
+        $revokeAlter = "REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'127.0.0.1'; REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
+        $null = Invoke-MySqlQuery $revokeAlter 'revoke-runtime-user-alter' -asRoot
+        $grants127 = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'127.0.0.1';" 'runtime-user-grants-127' -asRoot)
+        $grantsLocal = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'localhost';" 'runtime-user-grants-local' -asRoot)
+        if ($grants127.Count -eq 0 -or $grantsLocal.Count -eq 0) {
+            throw "$($script:databaseProduct) returned no application-user grant evidence after the v11 DDL privilege setup."
+        }
+        $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $script:databaseName $script:databaseUser '127.0.0.1' $script:databaseProduct
+        $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $script:databaseName $script:databaseUser 'localhost' $script:databaseProduct
+        if (-not $validGrants127 -or -not $validGrantsLocal) {
+            throw "$($script:databaseProduct) SHOW GRANTS did not establish the expected schema-scoped CREATE-without-ALTER privilege boundary for each runtime account host."
+        }
+        $script:databaseDdlPrivileges = [ordered]@{
+            product = $script:databaseProduct
+            grantee = "$($script:databaseUser)@127.0.0.1"
+            grants = [string[]]$grants127
+            localGrants = [string[]]$grantsLocal
+            alterGranted = $false
+            createGranted = $true
+            verifiedBeforeStartup = $true
+        }
     }
 
     $state = Get-T21StartupFailureSchemaState
@@ -1264,8 +1326,9 @@ INSERT INTO syncmoney_audit_log (
         $columnNames.Count -ne $expectedColumns.Count -or
         @($expectedColumns | Where-Object { $_ -cnotin $columnNames }).Count -ne 0 -or
         @($columnNames | Where-Object { $_ -in @('request_id', 'sequence') }).Count -ne 0 -or
-        $indexes.Count -ne 1 -or $indexes[0].name -cne 'PRIMARY') {
-        throw 'The isolated MySQL database did not retain the exact pre-start v10 schema, privilege boundary, and data fixture.'
+        $indexes.Count -ne 1 -or
+        $indexes[0].name -cne $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'syncmoney_audit_log_pkey' } else { 'PRIMARY' })) {
+        throw "The isolated $script:databaseProduct database did not retain the exact pre-start v10 schema, privilege boundary, and data fixture."
     }
     if ($rows.Count -ne 1 -or -not (Test-T21RequiredV11AuditSentinelRow $rows[0])) {
         throw 'The isolated MySQL database did not retain the exact seeded v10 audit row before candidate startup.'
@@ -1312,7 +1375,10 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     }
     $failureDetailMarker = switch ($FailureScenario) {
         'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
-        'RequiredV11DdlPermissionDenied' { 'ALTER command denied' }
+        'RequiredV11DdlPermissionDenied' {
+            if ($script:databaseProduct -ceq 'PostgreSQL') { 'must be owner of table syncmoney_audit_log' }
+            else { 'ALTER command denied' }
+        }
         default { $null }
     }
     $sqlPoolShutdownObserved = $fullLog -match '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
@@ -1811,8 +1877,18 @@ try {
             throw "Isolated PostgreSQL server returned unexpected version '$($mysqlVersion -join ',')'."
         }
         $script:report.postgresql.serverVersion = $mysqlVersion[0].Trim()
-        $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser LOGIN PASSWORD '$script:databasePassword';" 'postgresql-create-isolated-role' -asRoot
-        $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER $script:databaseUser;" 'postgresql-create-isolated-database' -asRoot
+        if ($script:requiredV11DdlPermissionDeniedStartupFailure) {
+            $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser WITH LOGIN PASSWORD '$script:databasePassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;" `
+                'postgresql-create-isolated-role' -asRoot
+            $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER postgres;" 'postgresql-create-isolated-database' -asRoot
+            $null = Invoke-PostgresQuery "REVOKE CONNECT ON DATABASE $script:databaseName FROM PUBLIC; GRANT CONNECT ON DATABASE $script:databaseName TO $script:databaseUser;" `
+                'postgresql-grant-isolated-database-connect' -asRoot
+            $null = Invoke-PostgresQuery "REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO $script:databaseUser;" `
+                'postgresql-v11-schema-create-grant' -asRoot -Database $script:databaseName
+        } else {
+            $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser LOGIN PASSWORD '$script:databasePassword';" 'postgresql-create-isolated-role' -asRoot
+            $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER $script:databaseUser;" 'postgresql-create-isolated-database' -asRoot
+        }
     } else {
     $mysqlInitLog = Join-Path $script:logsRoot ($script:databaseProduct.ToLowerInvariant() + '-initialize.stdout.txt')
     $mysqlHome = Split-Path -Parent $script:mysqlBinPath
