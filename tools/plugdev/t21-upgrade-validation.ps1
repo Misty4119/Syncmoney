@@ -201,6 +201,64 @@ function Get-T21ObservedValue([object]$observation, [string]$name) {
     return $property.Value
 }
 
+function Test-T21M04RuntimeArtifactCopy(
+    [object]$sourceArtifact,
+    [object]$runtimeArtifact,
+    [string]$sourceName,
+    [string]$expectedSourcePath,
+    [string]$runtimeName,
+    [string]$expectedRuntimePath
+) {
+    if ($null -eq $sourceArtifact -or $null -eq $runtimeArtifact -or
+        [string](Get-T21ObservedValue $sourceArtifact 'name') -cne $sourceName -or
+        [string](Get-T21ObservedValue $sourceArtifact 'path') -cne $expectedSourcePath -or
+        [string](Get-T21ObservedValue $runtimeArtifact 'name') -cne $runtimeName -or
+        [string](Get-T21ObservedValue $runtimeArtifact 'path') -cne $expectedRuntimePath) {
+        return $false
+    }
+
+    $sourceBytes = 0L
+    $runtimeBytes = 0L
+    if (-not [long]::TryParse([string](Get-T21ObservedValue $sourceArtifact 'bytes'), [ref]$sourceBytes) -or
+        -not [long]::TryParse([string](Get-T21ObservedValue $runtimeArtifact 'bytes'), [ref]$runtimeBytes) -or
+        $sourceBytes -le 0 -or $sourceBytes -ne $runtimeBytes) {
+        return $false
+    }
+
+    $sourceSha256 = [string](Get-T21ObservedValue $sourceArtifact 'sha256')
+    $runtimeSha256 = [string](Get-T21ObservedValue $runtimeArtifact 'sha256')
+    return $sourceSha256 -match '^[a-f0-9]{64}$' -and $runtimeSha256 -ceq $sourceSha256
+}
+
+function Test-T21M04StageRecordChronology([object[]]$stageRecords) {
+    $expected = @(
+        [ordered]@{ stage = 'baseline-1.3.2'; kind = 'start' },
+        [ordered]@{ stage = 'baseline-1.3.2'; kind = 'stop' },
+        [ordered]@{ stage = 'upgrade-1.4'; kind = 'start' },
+        [ordered]@{ stage = 'upgrade-1.4'; kind = 'stop' },
+        [ordered]@{ stage = 'rollback-1.3.2'; kind = 'start' },
+        [ordered]@{ stage = 'rollback-1.3.2'; kind = 'stop' }
+    )
+    if ($stageRecords.Count -ne $expected.Count) { return $false }
+
+    for ($index = 0; $index -lt $expected.Count; $index++) {
+        $record = $stageRecords[$index]
+        if ($null -eq $record -or
+            [string](Get-T21ObservedValue $record 'stage') -cne [string]$expected[$index].stage) {
+            return $false
+        }
+        $hasStartExit = $null -ne (Get-T21ObservedValue $record 'startExitCode')
+        $hasStopExit = $null -ne (Get-T21ObservedValue $record 'stopExitCode')
+        if ($expected[$index].kind -ceq 'start') {
+            if (-not $hasStartExit -or $hasStopExit) { return $false }
+        } elseif ($hasStartExit -or -not $hasStopExit) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Test-T21PathsEqual([string]$actual, [string]$expected) {
     if ([string]::IsNullOrWhiteSpace($actual) -or [string]::IsNullOrWhiteSpace($expected)) { return $false }
     try {

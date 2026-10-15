@@ -162,6 +162,8 @@ tools/plugdev/*
 !tools/plugdev/player-scheduler-lifecycle-assertions.mjs
 !tools/plugdev/player-scheduler-lifecycle-assertions.test.mjs
 !tools/plugdev/audit-player-scheduler-lifecycle.mjs
+!tools/plugdev/t21-upgrade-cycle-audit.ps1
+!tools/plugdev/run-upgrade-cycle.test.ps1
 plugdev.yml
 
 # Accidental archive/JAR extraction and scratch output

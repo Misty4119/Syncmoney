@@ -208,7 +208,7 @@ test("guard-only profile enables per-player protection independently on Canvas a
     "discord-webhook": { enabled: true },
   };
 
-  for (const [software, version] of [["canvas", "26.3"], ["folia", "26.2"]]) {
+  for (const [software, version] of [["paper", "1.21.6"], ["canvas", "26.3"], ["folia", "26.2"]]) {
     const options = validateOptions([
       software, version, "local_redis", "off", "1.4.0-alpha.1", "guard-on",
     ]);

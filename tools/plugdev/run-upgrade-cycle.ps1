@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$BaselineSourceCommit,
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Parameter(Mandatory = $true)][string]$JavaHome,
-    [string]$CandidateVersion = '1.4.0-alpha.1'
+    [string]$CandidateVersion = '1.4.0-alpha.1',
+    [ValidateSet('off', 'guard-on')][string]$GuardProfile = 'off'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +18,7 @@ Set-StrictMode -Version Latest
 $environmentNames = @(
     'JAVA_HOME', 'Path', 'PLUGDEV_ROOT', 'PLUGDEV_HOME', 'GRADLE_USER_HOME',
     'SYNCMONEY_TEST_SERVER_JAR', 'SYNCMONEY_CANDIDATE_VERSION', 'T21_RUN_MARKER',
-    'T21_CANDIDATE_SHA256', 'T21_BASELINE_SHA256'
+    'T21_CANDIDATE_SHA256', 'T21_BASELINE_SHA256', 'T21_GUARD_PROFILE'
 )
 $script:originalEnvironment = [ordered]@{}
 foreach ($environmentName in $environmentNames) {
@@ -39,6 +40,170 @@ function Assert-NoReparsePointAncestors([string]$path) {
     }
 }
 
+function Get-PlugDevDistManifest {
+    $distRoot = Join-Path $plugDevRootPath 'packages\cli\dist'
+    if (-not (Test-Path -LiteralPath $distRoot -PathType Container)) {
+        throw "Local PlugDev CLI distribution directory not found: $distRoot"
+    }
+    Assert-NoReparsePointAncestors $distRoot
+    $files = @(Get-ChildItem -LiteralPath $distRoot -File -Recurse -Force | Sort-Object FullName)
+    if ($files.Count -eq 0) { throw "Local PlugDev CLI distribution is empty: $distRoot" }
+    return @($files | ForEach-Object {
+        Assert-NoReparsePointAncestors $_.FullName
+        [ordered]@{
+            path = $_.FullName.Substring($distRoot.Length + 1).Replace('\', '/')
+            bytes = [long]$_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+}
+
+function Get-ManifestSha256([object[]]$manifest) {
+    $json = ConvertTo-Json -InputObject @($manifest) -Depth 5 -Compress
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($json))
+        return [BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+function Assert-PlugDevDistributionPinned([string]$stage) {
+    $observed = @(Get-PlugDevDistManifest)
+    $observedDigest = Get-ManifestSha256 $observed
+    if ($observedDigest -ne $plugDevDistSha256) {
+        throw "PlugDev CLI distribution changed before/during ${stage}; expected $plugDevDistSha256, observed $observedDigest."
+    }
+}
+
+function Invoke-VerifiedPlugDevCli([string[]]$arguments, [string]$logPath, [string]$stage) {
+    Assert-PlugDevDistributionPinned "$stage invocation"
+    Assert-StagedArtifactsPinned "$stage invocation"
+    & node $cli @arguments *> $logPath
+    $exitCode = $LASTEXITCODE
+    if ($stage -ceq 'baseline-1.3.2 start' -and $exitCode -eq 0) {
+        Register-VaultUnlockedArtifacts
+    }
+    Assert-PlugDevDistributionPinned "$stage completion"
+    Assert-StagedArtifactsPinned "$stage completion"
+    return $exitCode
+}
+
+function Assert-StagedArtifactsPinned([string]$stage) {
+    foreach ($entry in $artifactManifest) {
+        $relativePath = ([string]$entry.path).Replace('/', '\')
+        $path = [IO.Path]::GetFullPath((Join-Path $runRoot $relativePath))
+        $runRootPrefix = $runRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if (-not $path.StartsWith($runRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Staged artifact path escapes the run directory during ${stage}: $($entry.path)"
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Staged artifact is missing during ${stage}: $($entry.path)"
+        }
+        Assert-NoReparsePointAncestors $path
+        $item = Get-Item -LiteralPath $path
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([long]$item.Length -ne [long]$entry.bytes -or $hash -ne [string]$entry.sha256) {
+            throw "Staged artifact changed during ${stage}: $($entry.path)"
+        }
+    }
+}
+
+function Register-VaultUnlockedArtifacts {
+    $dependencyName = 'TNE-VaultUnlocked-2.20.2.jar'
+    $cachePath = Join-Path $env:PLUGDEV_HOME (Join-Path 'deps' $dependencyName)
+    $runtimePath = Join-Path $runRoot (Join-Path '.plugdev\run\plugins' $dependencyName)
+    foreach ($path in @($cachePath, $runtimePath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "VaultUnlocked 2.20.2 artifact is missing after the baseline server start: $path"
+        }
+        Assert-NoReparsePointAncestors $path
+    }
+
+    $cacheItem = Get-Item -LiteralPath $cachePath
+    $runtimeItem = Get-Item -LiteralPath $runtimePath
+    $cacheSha256 = (Get-FileHash -LiteralPath $cachePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $runtimeSha256 = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([long]$cacheItem.Length -ne [long]$runtimeItem.Length -or $cacheSha256 -ne $runtimeSha256) {
+        throw "VaultUnlocked 2.20.2 runtime JAR differs from the PlugDev dependency cache: cache=$cacheSha256 runtime=$runtimeSha256."
+    }
+
+    $script:vaultUnlockedPluginSha256 = $runtimeSha256
+    $script:vaultUnlockedPluginBytes = [long]$runtimeItem.Length
+    $script:artifactManifest += @(
+        [ordered]@{ name = 'vault-unlocked-cache'; path = '.plugdev-home/deps/TNE-VaultUnlocked-2.20.2.jar'; bytes = [long]$cacheItem.Length; sha256 = $cacheSha256 },
+        [ordered]@{ name = 'vault-unlocked-runtime'; path = '.plugdev/run/plugins/TNE-VaultUnlocked-2.20.2.jar'; bytes = [long]$runtimeItem.Length; sha256 = $runtimeSha256 }
+    )
+}
+
+function Register-RuntimeHarnessArtifacts {
+    $copies = @(
+        [ordered]@{
+            name = 'acceptance-runtime'
+            stagedPath = $acceptanceRunJar
+            relativePath = '.plugdev/run/plugins/SyncmoneyAcceptance.jar'
+            expectedSha256 = $acceptanceJarSha256
+        },
+        [ordered]@{
+            name = 'api-consumer-runtime'
+            stagedPath = $apiConsumerRunJar
+            relativePath = '.plugdev/run/plugins/SyncmoneyApiConsumer.jar'
+            expectedSha256 = $apiConsumerJarSha256
+        }
+    )
+
+    foreach ($copy in $copies) {
+        $runtimePath = Join-Path $runRoot ([string]$copy.relativePath -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+            throw "Prepared runtime harness artifact is missing: $($copy.relativePath)"
+        }
+        Assert-NoReparsePointAncestors $runtimePath
+        $stagedItem = Get-Item -LiteralPath $copy.stagedPath
+        $runtimeItem = Get-Item -LiteralPath $runtimePath
+        $runtimeSha256 = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([long]$runtimeItem.Length -ne [long]$stagedItem.Length -or
+            [long]$runtimeItem.Length -le 0 -or
+            $runtimeSha256 -ne [string]$copy.expectedSha256) {
+            throw "Prepared runtime harness artifact differs from its staged build artifact: $($copy.relativePath)."
+        }
+        $script:artifactManifest += [ordered]@{
+            name = [string]$copy.name
+            path = [string]$copy.relativePath
+            bytes = [long]$runtimeItem.Length
+            sha256 = $runtimeSha256
+        }
+    }
+}
+
+function Assert-RunInputsUnchanged {
+    foreach ($pin in @(
+        [ordered]@{ path = $runnerSourcePath; expected = $runnerSourceSha256; name = 'runner source' },
+        [ordered]@{ path = $prepareSourcePath; expected = $prepareSourceSha256; name = 'prepare source' },
+        [ordered]@{ path = $prepareTestSourcePath; expected = $prepareTestSourceSha256; name = 'prepare test source' },
+        [ordered]@{ path = $validationSourcePath; expected = $validationSourceSha256; name = 'shared validation source' },
+        [ordered]@{ path = $auditSourcePath; expected = $auditSourceSha256; name = 'offline auditor source' }
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$pin.expected) -or -not (Test-Path -LiteralPath $pin.path -PathType Leaf)) {
+            throw "Pinned $($pin.name) is unavailable at report emission."
+        }
+        $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne [string]$pin.expected) {
+            throw "Pinned $($pin.name) changed during the M04 run: expected $($pin.expected), observed $actual."
+        }
+    }
+    Assert-PlugDevDistributionPinned 'report emission'
+    Assert-StagedArtifactsPinned 'report emission'
+    $finalCommit = (& git -C $plugDevRootPath rev-parse HEAD 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $finalCommit -ne $plugDevCommit) {
+        throw "The local PlugDev commit changed during the M04 run: expected $plugDevCommit, observed '$finalCommit'."
+    }
+    $finalStatus = @(& git -C $plugDevRootPath status --porcelain=v1 --untracked-files=all 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $finalStatus.Count -ne 0) {
+        throw 'The local PlugDev checkout became dirty during the M04 run.'
+    }
+}
+
 if ($MinecraftVersion -notmatch '^\d{1,3}\.\d{1,3}(?:\.\d{1,3})?$') {
     throw "Invalid Minecraft version '$MinecraftVersion'; expected a numeric version such as 1.21.6 or 26.3."
 }
@@ -51,19 +216,32 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $reportsRoot = [IO.Path]::GetFullPath((Join-Path $root 'build\reports\foundation\T21-upgrade-cycles'))
 Assert-NoReparsePointAncestors $root
 Assert-NoReparsePointAncestors $reportsRoot
+$runnerSourcePath = (Resolve-Path -LiteralPath $PSCommandPath).Path
+$runnerSourceSha256 = (Get-FileHash -LiteralPath $runnerSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$prepareSourcePath = Join-Path $root 'tools\plugdev\prepare.mjs'
+$prepareSourceSha256 = (Get-FileHash -LiteralPath $prepareSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$prepareTestSourcePath = Join-Path $root 'tools\plugdev\prepare.test.mjs'
+$prepareTestSourceSha256 = (Get-FileHash -LiteralPath $prepareTestSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$validationSourcePath = Join-Path $root 'tools\plugdev\t21-upgrade-validation.ps1'
+$validationSourceSha256 = (Get-FileHash -LiteralPath $validationSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$auditSourcePath = Join-Path $root 'tools\plugdev\t21-upgrade-cycle-audit.ps1'
+if (-not (Test-Path -LiteralPath $auditSourcePath -PathType Leaf)) {
+    throw "T21 M04 requires the offline auditor before report creation: $auditSourcePath"
+}
+$auditSourceSha256 = (Get-FileHash -LiteralPath $auditSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if (-not (Test-Path -LiteralPath $reportsRoot -PathType Container)) {
     New-Item -ItemType Directory -Force -Path $reportsRoot -ErrorAction Stop | Out-Null
     Assert-NoReparsePointAncestors $reportsRoot
 }
-$serverJarPath = (Resolve-Path -LiteralPath $ServerJar).Path
-$serverSha256 = (Get-FileHash -LiteralPath $serverJarPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($serverSha256 -ne $ExpectedServerSha256.ToLowerInvariant()) {
-    throw "Server artifact SHA-256 mismatch: expected $($ExpectedServerSha256.ToLowerInvariant()), observed $serverSha256."
+$serverJarSourcePath = (Resolve-Path -LiteralPath $ServerJar).Path
+$serverSourceSha256 = (Get-FileHash -LiteralPath $serverJarSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($serverSourceSha256 -ne $ExpectedServerSha256.ToLowerInvariant()) {
+    throw "Server artifact SHA-256 mismatch: expected $($ExpectedServerSha256.ToLowerInvariant()), observed $serverSourceSha256."
 }
 $baselineJarPath = (Resolve-Path -LiteralPath $BaselinePluginJar).Path
-$baselineSha256 = (Get-FileHash -LiteralPath $baselineJarPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($baselineSha256 -ne $ExpectedBaselinePluginSha256.ToLowerInvariant()) {
-    throw "Baseline plugin SHA-256 mismatch: expected $($ExpectedBaselinePluginSha256.ToLowerInvariant()), observed $baselineSha256."
+$baselineSourceSha256 = (Get-FileHash -LiteralPath $baselineJarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($baselineSourceSha256 -ne $ExpectedBaselinePluginSha256.ToLowerInvariant()) {
+    throw "Baseline plugin SHA-256 mismatch: expected $($ExpectedBaselinePluginSha256.ToLowerInvariant()), observed $baselineSourceSha256."
 }
 $baselineSourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $baselineJarPath))
 $actualBaselineSourceCommit = (& git -C $baselineSourceRoot rev-parse HEAD 2>$null | Out-String).Trim()
@@ -80,6 +258,9 @@ foreach ($required in @($candidateJar, $acceptanceJar, $apiConsumerJar)) {
         throw "Required candidate/acceptance artifact is missing: $required"
     }
 }
+$candidateSourceSha256 = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$acceptanceSourceSha256 = (Get-FileHash -LiteralPath $acceptanceJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$apiConsumerSourceSha256 = (Get-FileHash -LiteralPath $apiConsumerJar -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $javaHomePath = (Resolve-Path -LiteralPath $JavaHome).Path
 $java = Join-Path $javaHomePath 'bin\java.exe'
@@ -91,6 +272,19 @@ if ($javaBanner -notmatch 'version "25(?:\.|"|\+)') {
 $plugDevRootPath = (Resolve-Path -LiteralPath $PlugDevRoot).Path
 $cli = Join-Path $plugDevRootPath 'packages\cli\dist\cli.js'
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { throw "Local PlugDev CLI not found: $cli" }
+$plugDevWorkingTreeStatus = @(& git -C $plugDevRootPath status --porcelain=v1 --untracked-files=all 2>$null)
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the local PlugDev checkout status.' }
+if ($plugDevWorkingTreeStatus.Count -ne 0) {
+    throw "Refusing a dirty local PlugDev checkout; resolve or preserve its changes before running: $($plugDevWorkingTreeStatus -join '; ')"
+}
+$plugDevCommit = (& git -C $plugDevRootPath rev-parse HEAD 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $plugDevCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'Could not resolve the local PlugDev source commit.'
+}
+$plugDevDistManifest = @(Get-PlugDevDistManifest)
+$plugDevDistSha256 = Get-ManifestSha256 $plugDevDistManifest
+$plugDevCliSha256 = [string](@($plugDevDistManifest | Where-Object path -eq 'cli.js')[0].sha256)
+if ($plugDevCliSha256 -notmatch '^[a-f0-9]{64}$') { throw 'The PlugDev CLI distribution manifest does not contain cli.js.' }
 $sqliteCommand = Get-Command sqlite3.exe, sqlite3 -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -eq $sqliteCommand -or $sqliteCommand.CommandType -ne 'Application') {
     throw 'T21 M04 requires the local sqlite3 command-line tool to seed and inspect the disposable historical database.'
@@ -110,7 +304,7 @@ if (Test-Path -LiteralPath $runRoot) { throw "Refusing to reuse an existing isol
 $logs = Join-Path $runRoot 'logs'
 New-Item -ItemType Directory -Path $runRoot -ErrorAction Stop | Out-Null
 Assert-NoReparsePointAncestors $runRoot
-New-Item -ItemType Directory -Force -Path $logs, (Join-Path $runRoot 'gradle'), (Join-Path $runRoot 'tools\plugdev'), (Join-Path $runRoot 'src\main\resources'), (Join-Path $runRoot 'build\libs'), (Join-Path $runRoot 'build\acceptance'), (Join-Path $runRoot '.plugdev-home'), (Join-Path $runRoot '.gradle-user-home') | Out-Null
+New-Item -ItemType Directory -Force -Path $logs, (Join-Path $runRoot 'inputs'), (Join-Path $runRoot 'gradle'), (Join-Path $runRoot 'tools\plugdev'), (Join-Path $runRoot 'src\main\resources'), (Join-Path $runRoot 'build\libs'), (Join-Path $runRoot 'build\acceptance'), (Join-Path $runRoot '.plugdev-home'), (Join-Path $runRoot '.gradle-user-home') | Out-Null
 foreach ($name in @('build.gradle', 'settings.gradle', 'gradlew.bat')) {
     Copy-Item -LiteralPath (Join-Path $root $name) -Destination (Join-Path $runRoot $name)
 }
@@ -143,10 +337,48 @@ Copy-Item -LiteralPath (Join-Path $root 'tools\plugdev\prepare.mjs') -Destinatio
 foreach ($name in @('config.yml', 'plugin.yml')) {
     Copy-Item -LiteralPath (Join-Path $root "src\main\resources\$name") -Destination (Join-Path $runRoot "src\main\resources\$name")
 }
-Copy-Item -LiteralPath $candidateJar -Destination (Join-Path $runRoot "build\libs\Syncmoney-$CandidateVersion.jar")
-Copy-Item -LiteralPath $baselineJarPath -Destination (Join-Path $runRoot 'build\libs\Syncmoney-1.3.2.jar')
-Copy-Item -LiteralPath $acceptanceJar -Destination (Join-Path $runRoot 'build\acceptance\SyncmoneyAcceptance.jar')
-Copy-Item -LiteralPath $apiConsumerJar -Destination (Join-Path $runRoot 'build\acceptance\SyncmoneyApiConsumer.jar')
+$stagedServerJarPath = Join-Path $runRoot (Join-Path 'inputs' ([IO.Path]::GetFileName($serverJarSourcePath)))
+$candidateRunJar = Join-Path $runRoot "build\libs\Syncmoney-$CandidateVersion.jar"
+$baselineRunJar = Join-Path $runRoot 'build\libs\Syncmoney-1.3.2.jar'
+$acceptanceRunJar = Join-Path $runRoot 'build\acceptance\SyncmoneyAcceptance.jar'
+$apiConsumerRunJar = Join-Path $runRoot 'build\acceptance\SyncmoneyApiConsumer.jar'
+Copy-Item -LiteralPath $serverJarSourcePath -Destination $stagedServerJarPath
+Copy-Item -LiteralPath $candidateJar -Destination $candidateRunJar
+Copy-Item -LiteralPath $baselineJarPath -Destination $baselineRunJar
+Copy-Item -LiteralPath $acceptanceJar -Destination $acceptanceRunJar
+Copy-Item -LiteralPath $apiConsumerJar -Destination $apiConsumerRunJar
+
+$serverSha256 = (Get-FileHash -LiteralPath $stagedServerJarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$candidateSha256 = (Get-FileHash -LiteralPath $candidateRunJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$baselineSha256 = (Get-FileHash -LiteralPath $baselineRunJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$acceptanceJarSha256 = (Get-FileHash -LiteralPath $acceptanceRunJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$apiConsumerJarSha256 = (Get-FileHash -LiteralPath $apiConsumerRunJar -Algorithm SHA256).Hash.ToLowerInvariant()
+$script:vaultUnlockedPluginSha256 = $null
+$script:vaultUnlockedPluginBytes = $null
+if ($serverSha256 -ne $ExpectedServerSha256.ToLowerInvariant() -or $serverSha256 -ne $serverSourceSha256) {
+    throw "Staged server artifact SHA-256 mismatch: expected $($ExpectedServerSha256.ToLowerInvariant()), source $serverSourceSha256, staged $serverSha256."
+}
+if ($baselineSha256 -ne $ExpectedBaselinePluginSha256.ToLowerInvariant() -or $baselineSha256 -ne $baselineSourceSha256) {
+    throw "Staged baseline plugin SHA-256 mismatch: expected $($ExpectedBaselinePluginSha256.ToLowerInvariant()), source $baselineSourceSha256, staged $baselineSha256."
+}
+if ($candidateSha256 -ne $candidateSourceSha256 -or
+    $acceptanceJarSha256 -ne $acceptanceSourceSha256 -or
+    $apiConsumerJarSha256 -ne $apiConsumerSourceSha256) {
+    throw 'A staged candidate or acceptance artifact differs from the source file captured before copying.'
+}
+$script:artifactManifest = @(
+    [ordered]@{ name = 'server'; path = "inputs/$([IO.Path]::GetFileName($serverJarSourcePath))"; bytes = [long](Get-Item -LiteralPath $stagedServerJarPath).Length; sha256 = $serverSha256 },
+    [ordered]@{ name = 'candidate'; path = "build/libs/Syncmoney-$CandidateVersion.jar"; bytes = [long](Get-Item -LiteralPath $candidateRunJar).Length; sha256 = $candidateSha256 },
+    [ordered]@{ name = 'baseline'; path = 'build/libs/Syncmoney-1.3.2.jar'; bytes = [long](Get-Item -LiteralPath $baselineRunJar).Length; sha256 = $baselineSha256 },
+    [ordered]@{ name = 'acceptance'; path = 'build/acceptance/SyncmoneyAcceptance.jar'; bytes = [long](Get-Item -LiteralPath $acceptanceRunJar).Length; sha256 = $acceptanceJarSha256 },
+    [ordered]@{ name = 'api-consumer'; path = 'build/acceptance/SyncmoneyApiConsumer.jar'; bytes = [long](Get-Item -LiteralPath $apiConsumerRunJar).Length; sha256 = $apiConsumerJarSha256 }
+)
+$serverJarPath = $stagedServerJarPath
+$stagedPreparePath = Join-Path $runRoot 'tools\plugdev\prepare.mjs'
+$stagedPrepareSha256 = (Get-FileHash -LiteralPath $stagedPreparePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($stagedPrepareSha256 -ne $prepareSourceSha256) {
+    throw "Staged prepare script SHA-256 mismatch: source $prepareSourceSha256, staged $stagedPrepareSha256."
+}
 
 $profileEditor = Join-Path $runRoot 'edit-profile.cjs'
 @'
@@ -167,7 +399,56 @@ function readConfig() {
   if (config?.["t21-synthetic-operator-fixture"]?.customValue !== "preserve-through-upgrade") {
     throw new Error("Synthetic operator config fixture was not preserved.");
   }
-  return { configSchema: config["config-version"], sqliteConfigPath: config.economy.local["sqlite-path"], operatorFixturePreserved: true };
+  const guardProfile = process.env.T21_GUARD_PROFILE ?? "off";
+  const expectedPlayerProtection = guardProfile === "guard-on";
+  const observedProfile = {
+    mode: config?.economy?.mode,
+    redisEnabled: config?.redis?.enabled,
+    databaseEnabled: config?.database?.enabled,
+    dbEnabled: config?.["db-enabled"],
+    pubsubEnabled: config?.["pubsub-enabled"],
+    circuitBreakerEnabled: config?.["circuit-breaker"]?.enabled,
+    playerProtectionEnabled: config?.["circuit-breaker"]?.["player-protection"]?.enabled,
+    globalLockEnabled: config?.["circuit-breaker"]?.["player-protection"]?.["global-lock"]?.enabled,
+    shadowSyncEnabled: config?.["shadow-sync"]?.enabled,
+    auditEnabled: config?.audit?.enabled,
+    auditRedisEnabled: config?.audit?.redis?.enabled,
+    auditCleanupEnabled: config?.audit?.cleanup?.enabled,
+    auditExportEnabled: config?.audit?.export?.enabled,
+    transferGuardEnabled: config?.["transfer-guard"]?.enabled,
+    webAdminEnabled: config?.["web-admin"]?.enabled,
+    discordWebhookEnabled: config?.["discord-webhook"]?.enabled
+  };
+  const expectedProfile = {
+    mode: "local",
+    redisEnabled: false,
+    databaseEnabled: false,
+    dbEnabled: false,
+    pubsubEnabled: false,
+    circuitBreakerEnabled: false,
+    playerProtectionEnabled: expectedPlayerProtection,
+    globalLockEnabled: false,
+    shadowSyncEnabled: false,
+    auditEnabled: false,
+    auditRedisEnabled: false,
+    auditCleanupEnabled: false,
+    auditExportEnabled: false,
+    transferGuardEnabled: false,
+    webAdminEnabled: false,
+    discordWebhookEnabled: false
+  };
+  for (const [key, expected] of Object.entries(expectedProfile)) {
+    if (observedProfile[key] !== expected) {
+      throw new Error(`Unexpected ${guardProfile} runtime profile field ${key}: expected ${expected}, observed ${observedProfile[key]}`);
+    }
+  }
+  return {
+    configSchema: config["config-version"],
+    sqliteConfigPath: config.economy.local["sqlite-path"],
+    operatorFixturePreserved: true,
+    guardProfile,
+    observedProfile
+  };
 }
 if (action === "seed-config") {
   const config = yaml.parse(fs.readFileSync(configPath, "utf8"));
@@ -217,7 +498,14 @@ function Invoke-ProfileEditor([string]$action, [string[]]$arguments = @()) {
     if ($action -eq 'seed-config' -or $action -eq 'assert-config') {
         $jsonText = ($editorOutput | ForEach-Object { $_.ToString() }) -join "`n"
         $observation = $jsonText | ConvertFrom-Json
-        $script:configObservations.Add([ordered]@{ stage = $script:currentStage; configSchema = $observation.configSchema; sqliteConfigPath = $observation.sqliteConfigPath; operatorFixturePreserved = $observation.operatorFixturePreserved })
+        $script:configObservations.Add([ordered]@{
+            stage = $script:currentStage
+            configSchema = $observation.configSchema
+            sqliteConfigPath = $observation.sqliteConfigPath
+            operatorFixturePreserved = $observation.operatorFixturePreserved
+            guardProfile = $observation.guardProfile
+            observedProfile = $observation.observedProfile
+        })
         return $observation
     }
 }
@@ -403,10 +691,17 @@ function Start-UpgradeServer([string]$jarPattern, [string]$pluginVersion, [strin
     $script:serverMayExist = $true
     Invoke-ProfileEditor 'set-plugin' @($jarPattern, $pluginVersion)
     $startOutput = Join-Path $logs "$stage-start.txt"
-    & node $cli server start --config .plugdev\profile.yml *> $startOutput
-    $startExit = $LASTEXITCODE
+    $startExit = Invoke-VerifiedPlugDevCli -Arguments @('server', 'start', '--config', '.plugdev\profile.yml') -LogPath $startOutput -Stage "$stage start"
     if ($startExit -ne 0) {
         throw "PlugDev start for $stage exited $startExit; owned-process cleanup will run in finally; see $startOutput."
+    }
+    $runtimeServerLog = Join-Path $runRoot '.plugdev\run\logs\latest.log'
+    if (-not (Test-Path -LiteralPath $runtimeServerLog -PathType Leaf)) {
+        throw "Expected server log missing after start for ${stage}: $runtimeServerLog"
+    }
+    $vaultLoadMarkers = @(Select-String -LiteralPath $runtimeServerLog -Pattern 'Vault \(2\.20\.2\)')
+    if ($vaultLoadMarkers.Count -ne 1) {
+        throw "Expected exactly one loaded VaultUnlocked 2.20.2 marker for ${stage}; found $($vaultLoadMarkers.Count)."
     }
     Invoke-UpgradeCommand 'smaccept version' "$stage-version-check"
     Wait-ServerMarker "T21_VERSION_PASS expected=$pluginVersion actual=$pluginVersion"
@@ -422,8 +717,8 @@ function Start-UpgradeServer([string]$jarPattern, [string]$pluginVersion, [strin
 function Invoke-UpgradeCommand([string]$command, [string]$stage) {
     $script:currentStage = $stage
     $commandOutput = Join-Path $logs "$stage-command.txt"
-    & node $cli server command $command *> $commandOutput
-    if ($LASTEXITCODE -ne 0) { throw "RCON command for $stage exited $LASTEXITCODE; see $commandOutput." }
+    $commandExit = Invoke-VerifiedPlugDevCli -Arguments @('server', 'command', $command) -LogPath $commandOutput -Stage $stage
+    if ($commandExit -ne 0) { throw "RCON command for $stage exited $commandExit; see $commandOutput." }
 }
 
 function Stop-UpgradeServer([string]$stage) {
@@ -435,8 +730,7 @@ function Stop-UpgradeServer([string]$stage) {
     if ($ownedSessionProcesses.Count -ne 1) {
         throw "Refusing RCON stop: session PID is not the uniquely marked process owned by this run."
     }
-    & node $cli server command stop *> $stopOutput
-    $stopExit = $LASTEXITCODE
+    $stopExit = Invoke-VerifiedPlugDevCli -Arguments @('server', 'command', 'stop') -LogPath $stopOutput -Stage "$stage stop"
     if ($stopExit -ne 0) { throw "PlugDev RCON stop for $stage exited $stopExit; see $stopOutput." }
     $forced = $false
     try {
@@ -465,16 +759,19 @@ try {
     $env:PLUGDEV_ROOT = $plugDevRootPath
     $env:PLUGDEV_HOME = Join-Path $runRoot '.plugdev-home'
     $env:GRADLE_USER_HOME = Join-Path $runRoot '.gradle-user-home'
-    $env:SYNCMONEY_TEST_SERVER_JAR = $serverJarPath
+    $env:SYNCMONEY_TEST_SERVER_JAR = $stagedServerJarPath
     $env:SYNCMONEY_CANDIDATE_VERSION = $CandidateVersion
     $env:T21_RUN_MARKER = $runRoot
-    $env:T21_CANDIDATE_SHA256 = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
+    $env:T21_GUARD_PROFILE = $GuardProfile
+    $env:T21_CANDIDATE_SHA256 = $candidateSha256
     $env:T21_BASELINE_SHA256 = $baselineSha256
 
     Push-Location $runRoot
     $script:locationPushed = $true
-    & node tools\plugdev\prepare.mjs $Project $MinecraftVersion local off $CandidateVersion *> (Join-Path $logs 'prepare.txt')
+    & node tools\plugdev\prepare.mjs $Project $MinecraftVersion local off $CandidateVersion $GuardProfile *> (Join-Path $logs 'prepare.txt')
     if ($LASTEXITCODE -ne 0) { throw "prepare.mjs exited $LASTEXITCODE; see $logs\prepare.txt." }
+    Register-RuntimeHarnessArtifacts
+    Assert-StagedArtifactsPinned 'runtime harness preparation'
     $null = Invoke-ProfileEditor 'seed-config'
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $databasePath) | Out-Null
@@ -505,6 +802,7 @@ try {
     Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=1337.25 expected-b=765.50'
     $null = Invoke-ProfileEditor 'assert-config'
     Stop-UpgradeServer 'rollback-1.3.2'
+    $null = Invoke-ProfileEditor 'assert-config'
     $null = Assert-LegacySqliteState '1337.25' '765.50' '1.3.2 rollback stop'
 } catch {
     $script:failureMessage = $_.Exception.Message
@@ -517,8 +815,7 @@ try {
                 $ownedSessionProcesses = @(Get-SessionOwnedProcesses $session)
                 if ($ownedSessionProcesses.Count -eq 1) {
                     $cleanupLog = Join-Path $logs 'finally-stop.txt'
-                    & node $cli server command stop *> $cleanupLog
-                    $stopExit = $LASTEXITCODE
+                    $stopExit = Invoke-VerifiedPlugDevCli -Arguments @('server', 'command', 'stop') -LogPath $cleanupLog -Stage 'failure cleanup stop'
                     $script:cleanupEvents.Add([ordered]@{ stage = $script:currentStage; action = 'owned-session-rcon-stop'; exitCode = $stopExit })
                 } elseif (@(Get-RunOwnedServerProcesses).Count -eq 0) {
                     $script:cleanupEvents.Add([ordered]@{ stage = $script:currentStage; action = 'no-run-owned-process-to-stop'; verified = $true })
@@ -569,23 +866,72 @@ try {
         $script:cleanupEvents.Add([ordered]@{ stage = $script:currentStage; action = 'gradle-daemon-cleanup-failed'; verified = $false })
     }
     if ($script:locationPushed) { Pop-Location }
+    try {
+        Assert-RunInputsUnchanged
+    } catch {
+        if ($null -eq $script:failureMessage) { $script:failureMessage = $_.Exception.Message }
+        else { $script:failureMessage = "$script:failureMessage; $($_.Exception.Message)" }
+    }
     $result = [ordered]@{
-        task = 'T21 M04 historical LOCAL SQLite upgrade and normal-drain rollback cycle'
+        task = 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle'
+        runtimeProfile = [ordered]@{
+            mode = 'local'
+            features = 'off'
+            guardProfile = $GuardProfile
+            redisEnabled = $false
+            sharedSqlEnabled = $false
+            optionalModulesEnabled = $false
+            circuitBreakerEnabled = $false
+            playerProtectionEnabled = ($GuardProfile -eq 'guard-on')
+            globalLockEnabled = $false
+        }
         status = if ($null -eq $script:failureMessage -and $null -eq $script:cleanupFailure) { 'PASS' } else { 'FAIL' }
         platform = $Project
         minecraftVersion = $MinecraftVersion
         buildNumber = $BuildNumber
         serverArtifact = [IO.Path]::GetFileName($serverJarPath)
         serverSha256 = $serverSha256
+        expectedServerSha256 = $ExpectedServerSha256.ToLowerInvariant()
         java = $javaBanner.Trim()
         sqlite3 = $sqliteVersion
         baselinePlugin = '1.3.2'
         baselinePluginSha256 = $baselineSha256
+        expectedBaselinePluginSha256 = $ExpectedBaselinePluginSha256.ToLowerInvariant()
         baselineSourceCommit = $actualBaselineSourceCommit
         candidatePlugin = $CandidateVersion
-        candidatePluginSha256 = $env:T21_CANDIDATE_SHA256
+        candidatePluginSha256 = $candidateSha256
+        candidatePluginBytes = [long](Get-Item -LiteralPath $candidateRunJar).Length
+        vaultUnlockedDependencyVersion = '2.20.2'
+        vaultUnlockedPluginSha256 = $script:vaultUnlockedPluginSha256
+        vaultUnlockedPluginBytes = $script:vaultUnlockedPluginBytes
+        acceptanceJarSha256 = $acceptanceJarSha256
+        apiConsumerJarSha256 = $apiConsumerJarSha256
         fixtureSha256 = $fixtureSha256
         sqlitePath = $databaseRelativePath
+        artifactManifest = @($script:artifactManifest)
+        sourcePins = [ordered]@{
+            runnerSha256 = $runnerSourceSha256
+            prepareSha256 = $prepareSourceSha256
+            prepareStagedSha256 = $stagedPrepareSha256
+            prepareTestSha256 = $prepareTestSourceSha256
+            validationSha256 = $validationSourceSha256
+            offlineAuditorSha256 = $auditSourceSha256
+            plugDevRoot = $plugDevRootPath
+            plugDevCommit = $plugDevCommit
+            plugDevCliSha256 = $plugDevCliSha256
+            plugDevDistSha256 = $plugDevDistSha256
+            plugDevDistManifest = @($plugDevDistManifest)
+        }
+        logManifest = @(
+            Get-ChildItem -LiteralPath $logs -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
+                Assert-NoReparsePointAncestors $_.FullName
+                [ordered]@{
+                    path = $_.FullName.Substring($logs.Length + 1).Replace('\', '/')
+                    bytes = $_.Length
+                    sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+            }
+        )
         isolatedHomes = [ordered]@{ plugDev = $env:PLUGDEV_HOME; gradle = $env:GRADLE_USER_HOME }
         configObservations = @($script:configObservations)
         sqliteObservations = @($script:sqliteObservations)

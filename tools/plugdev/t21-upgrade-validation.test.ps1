@@ -315,6 +315,128 @@ if (Test-T21StageObservationCoverage $mislabeledShutdownObservations @('node-a',
 }
 Write-Output 'PASS: reject contaminated shutdown stage labels'
 
+$m04StageRecords = @(
+    [ordered]@{ stage = 'baseline-1.3.2'; startExitCode = 0 },
+    [ordered]@{ stage = 'baseline-1.3.2'; stopExitCode = 0 },
+    [ordered]@{ stage = 'upgrade-1.4'; startExitCode = 0 },
+    [ordered]@{ stage = 'upgrade-1.4'; stopExitCode = 0 },
+    [ordered]@{ stage = 'rollback-1.3.2'; startExitCode = 0 },
+    [ordered]@{ stage = 'rollback-1.3.2'; stopExitCode = 0 }
+)
+if (-not (Test-T21M04StageRecordChronology $m04StageRecords)) {
+    throw 'The exact baseline, candidate-upgrade, and rollback start/stop sequence was rejected.'
+}
+Write-Output 'PASS: accept M04 baseline, upgrade, and rollback start/stop chronology'
+
+$reorderedM04StageRecords = @($m04StageRecords)
+$temporaryStageRecord = $reorderedM04StageRecords[0]
+$reorderedM04StageRecords[0] = $reorderedM04StageRecords[1]
+$reorderedM04StageRecords[1] = $temporaryStageRecord
+if (Test-T21M04StageRecordChronology $reorderedM04StageRecords) {
+    throw 'M04 stage records reordered to stop baseline before it starts were accepted.'
+}
+Write-Output 'PASS: reject reordered M04 lifecycle stage records'
+
+$incompleteM04StageRecords = @($m04StageRecords | Select-Object -Skip 1)
+if (Test-T21M04StageRecordChronology $incompleteM04StageRecords) {
+    throw 'M04 chronology without the baseline start record was accepted.'
+}
+Write-Output 'PASS: reject incomplete M04 lifecycle chronology'
+
+$acceptanceBuildArtifact = [ordered]@{
+    name = 'acceptance'
+    path = 'build/acceptance/SyncmoneyAcceptance.jar'
+    bytes = 4096L
+    sha256 = ('a' * 64)
+}
+$acceptanceRuntimeArtifact = [ordered]@{
+    name = 'acceptance-runtime'
+    path = '.plugdev/run/plugins/SyncmoneyAcceptance.jar'
+    bytes = 4096L
+    sha256 = ('a' * 64)
+}
+if (-not (Test-T21M04RuntimeArtifactCopy $acceptanceBuildArtifact $acceptanceRuntimeArtifact 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar')) {
+    throw 'An exact M04 Acceptance runtime copy was rejected.'
+}
+Write-Output 'PASS: accept an M04 runtime harness copy matching its staged artifact'
+
+$apiConsumerBuildArtifact = [ordered]@{
+    name = 'api-consumer'
+    path = 'build/acceptance/SyncmoneyApiConsumer.jar'
+    bytes = 8192L
+    sha256 = ('b' * 64)
+}
+$apiConsumerRuntimeArtifact = [ordered]@{
+    name = 'api-consumer-runtime'
+    path = '.plugdev/run/plugins/SyncmoneyApiConsumer.jar'
+    bytes = 8192L
+    sha256 = ('b' * 64)
+}
+if (-not (Test-T21M04RuntimeArtifactCopy $apiConsumerBuildArtifact $apiConsumerRuntimeArtifact 'api-consumer' 'build/acceptance/SyncmoneyApiConsumer.jar' 'api-consumer-runtime' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar')) {
+    throw 'An exact M04 API consumer runtime copy was rejected.'
+}
+Write-Output 'PASS: accept an M04 API consumer runtime copy matching its staged artifact'
+
+$mismatchedAcceptanceRuntime = [ordered]@{
+    name = 'acceptance-runtime'
+    path = '.plugdev/run/plugins/SyncmoneyAcceptance.jar'
+    bytes = 4096L
+    sha256 = ('c' * 64)
+}
+if (Test-T21M04RuntimeArtifactCopy $acceptanceBuildArtifact $mismatchedAcceptanceRuntime 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar') {
+    throw 'M04 accepted an Acceptance runtime copy with a mismatched SHA-256.'
+}
+Write-Output 'PASS: reject an M04 runtime harness copy with a mismatched SHA-256'
+
+$undersizedAcceptanceRuntime = [ordered]@{
+    name = 'acceptance-runtime'
+    path = '.plugdev/run/plugins/SyncmoneyAcceptance.jar'
+    bytes = 4095L
+    sha256 = ('a' * 64)
+}
+if (Test-T21M04RuntimeArtifactCopy $acceptanceBuildArtifact $undersizedAcceptanceRuntime 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar') {
+    throw 'M04 accepted an Acceptance runtime copy with a mismatched byte count.'
+}
+Write-Output 'PASS: reject an M04 runtime harness copy with a mismatched byte count'
+
+$mispathedApiConsumerRuntime = [ordered]@{
+    name = 'api-consumer-runtime'
+    path = '.plugdev/run/plugins/UnexpectedApiConsumer.jar'
+    bytes = 8192L
+    sha256 = ('b' * 64)
+}
+if (Test-T21M04RuntimeArtifactCopy $apiConsumerBuildArtifact $mispathedApiConsumerRuntime 'api-consumer' 'build/acceptance/SyncmoneyApiConsumer.jar' 'api-consumer-runtime' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar') {
+    throw 'M04 accepted an API consumer runtime copy at an unexpected path.'
+}
+Write-Output 'PASS: reject an M04 runtime harness copy at an unexpected path'
+
+if (Test-T21M04RuntimeArtifactCopy $acceptanceBuildArtifact $null 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar') {
+    throw 'M04 accepted a missing Acceptance runtime artifact.'
+}
+Write-Output 'PASS: reject a missing M04 runtime harness artifact'
+
+$mispathedAcceptanceBuildArtifact = [ordered]@{
+    name = 'acceptance'
+    path = '.plugdev/run/plugins/SyncmoneyAcceptance.jar'
+    bytes = 4096L
+    sha256 = ('a' * 64)
+}
+if (Test-T21M04RuntimeArtifactCopy $mispathedAcceptanceBuildArtifact $acceptanceRuntimeArtifact 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar') {
+    throw 'M04 accepted the Acceptance runtime path as the staged build artifact path.'
+}
+Write-Output 'PASS: reject an Acceptance artifact source path that aliases its runtime copy'
+
+$mispathedApiConsumerBuildArtifact = [ordered]@{
+    name = 'api-consumer'
+    path = '.plugdev/run/plugins/SyncmoneyApiConsumer.jar'
+    bytes = 8192L
+    sha256 = ('b' * 64)
+}
+if (Test-T21M04RuntimeArtifactCopy $mispathedApiConsumerBuildArtifact $apiConsumerRuntimeArtifact 'api-consumer' 'build/acceptance/SyncmoneyApiConsumer.jar' 'api-consumer-runtime' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar') {
+    throw 'M04 accepted the API consumer runtime path as the staged build artifact path.'
+}
+Write-Output 'PASS: reject an API consumer source path that aliases its runtime copy'
+
 $misassignedStageObservation = @($runtimeObservations | ForEach-Object {
     if ($_.stage -ceq 'rollback-1.3.2-node-2') {
         [ordered]@{ serverName = 'node-a'; stage = $_.stage }
@@ -1925,6 +2047,134 @@ if ($runnerSource -notmatch 'Get-T21PlatformEndpoint -PlatformEndpoint \$Platfor
     throw 'The runner must select an exact user-pinned platform endpoint and report schema-4 platform-owned stage logs.'
 }
 Write-Output 'PASS: preserve and report stage-specific platform logs under schema 4'
+
+$upgradeCycleRunnerPath = Join-Path $PSScriptRoot 'run-upgrade-cycle.ps1'
+$upgradeCycleTokens = $null
+$upgradeCycleParseErrors = $null
+$null = [System.Management.Automation.Language.Parser]::ParseFile($upgradeCycleRunnerPath, [ref]$upgradeCycleTokens, [ref]$upgradeCycleParseErrors)
+if ($upgradeCycleParseErrors.Count -gt 0) {
+    $details = @($upgradeCycleParseErrors | ForEach-Object { '{0}: {1}' -f $_.Extent.StartLineNumber, $_.Message }) -join '; '
+    throw "The M04 LOCAL upgrade-cycle runner has PowerShell parse errors: $details"
+}
+Write-Output 'PASS: parse the M04 LOCAL upgrade-cycle runner'
+
+$upgradeCycleSource = [IO.File]::ReadAllText($upgradeCycleRunnerPath)
+$configObservationCalls = [regex]::Matches($upgradeCycleSource, "Invoke-ProfileEditor '(?:seed-config|assert-config)'").Count
+if ($configObservationCalls -ne 6) {
+    throw "The M04 guard profile must record all six expected config observations; found $configObservationCalls."
+}
+$directPlugDevCliCalls = [regex]::Matches($upgradeCycleSource, '(?m)^\s*&\s+node\s+\$cli\b').Count
+$verifiedPlugDevCliCallSites = [regex]::Matches($upgradeCycleSource, '(?m)^\s*(?:\$\w+\s*=\s*)?Invoke-VerifiedPlugDevCli\s+-Arguments\s+@\(').Count
+if ($directPlugDevCliCalls -ne 1 -or $verifiedPlugDevCliCallSites -ne 4 -or
+    $upgradeCycleSource -notmatch 'Assert-PlugDevDistributionPinned "\$stage invocation"' -or
+    $upgradeCycleSource -notmatch 'Assert-PlugDevDistributionPinned "\$stage completion"' -or
+    $upgradeCycleSource -notmatch 'Get-ChildItem -LiteralPath \$distRoot -File -Recurse -Force' -or
+    $upgradeCycleSource -notmatch 'Get-ChildItem -LiteralPath \$logs -File -Recurse -Force') {
+    throw 'Every M04 PlugDev CLI invocation must pin the complete distribution, including hidden files, and each log manifest must include hidden logs.'
+}
+Write-Output 'PASS: pin the complete local PlugDev CLI distribution around every invocation'
+
+if (-not $upgradeCycleSource.Contains(".Replace('\', '/')") -or
+    -not $upgradeCycleSource.Contains(".Replace('/', '\')") -or
+    $upgradeCycleSource -notmatch 'plugDevDistManifest\s*=\s*@\(\$plugDevDistManifest\)' -or
+    $upgradeCycleSource -notmatch 'plugDevDistSha256\s*=\s*\$plugDevDistSha256') {
+    throw 'M04 must normalize and report every PlugDev distribution path and its manifest digest.'
+}
+Write-Output 'PASS: normalize and report the PlugDev distribution manifest'
+
+if ($upgradeCycleSource -notmatch 'Copy-Item -LiteralPath \$serverJarSourcePath -Destination \$stagedServerJarPath' -or
+    $upgradeCycleSource -notmatch 'Copy-Item -LiteralPath \$candidateJar -Destination \$candidateRunJar' -or
+    $upgradeCycleSource -notmatch 'Copy-Item -LiteralPath \$baselineJarPath -Destination \$baselineRunJar' -or
+    $upgradeCycleSource -notmatch 'Copy-Item -LiteralPath \$acceptanceJar -Destination \$acceptanceRunJar' -or
+    $upgradeCycleSource -notmatch 'Copy-Item -LiteralPath \$apiConsumerJar -Destination \$apiConsumerRunJar' -or
+    $upgradeCycleSource -notmatch '\$env:SYNCMONEY_TEST_SERVER_JAR\s*=\s*\$stagedServerJarPath' -or
+    $upgradeCycleSource -notmatch 'artifactManifest\s*=\s*@\(\$script:artifactManifest\)' -or
+    $upgradeCycleSource -notmatch 'expectedServerSha256\s*=\s*\$ExpectedServerSha256\.ToLowerInvariant\(\)' -or
+    $upgradeCycleSource -notmatch 'expectedBaselinePluginSha256\s*=\s*\$ExpectedBaselinePluginSha256\.ToLowerInvariant\(\)' -or
+    $upgradeCycleSource -notmatch 'plugDevDistManifest\s*=\s*@\(\$plugDevDistManifest\)' -or
+    $upgradeCycleSource -notmatch 'function Register-VaultUnlockedArtifacts' -or
+    $upgradeCycleSource -notmatch 'Register-VaultUnlockedArtifacts' -or
+    $upgradeCycleSource -notmatch 'name = ''vault-unlocked-cache''' -or
+    $upgradeCycleSource -notmatch 'name = ''vault-unlocked-runtime''' -or
+    $upgradeCycleSource -notmatch 'vaultUnlockedDependencyVersion = ''2\.20\.2''' -or
+    $upgradeCycleSource -notmatch 'vaultUnlockedPluginSha256 = \$script:vaultUnlockedPluginSha256' -or
+    $upgradeCycleSource -notmatch 'function Register-RuntimeHarnessArtifacts' -or
+    $upgradeCycleSource -notmatch "name = 'acceptance-runtime'" -or
+    $upgradeCycleSource -notmatch "name = 'api-consumer-runtime'" -or
+    $upgradeCycleSource -notmatch "relativePath = '\.plugdev/run/plugins/SyncmoneyAcceptance\.jar'" -or
+    $upgradeCycleSource -notmatch "relativePath = '\.plugdev/run/plugins/SyncmoneyApiConsumer\.jar'" -or
+    $upgradeCycleSource -notmatch "Assert-StagedArtifactsPinned 'runtime harness preparation'" -or
+    -not $upgradeCycleSource.Contains('Vault \(2\.20\.2\)') -or
+    $upgradeCycleSource -notmatch 'function Assert-RunInputsUnchanged' -or
+    $upgradeCycleSource -notmatch 'Assert-RunInputsUnchanged' -or
+    $upgradeCycleSource -notmatch 'Assert-StagedArtifactsPinned "\$stage invocation"' -or
+    $upgradeCycleSource -notmatch 'Assert-StagedArtifactsPinned "\$stage completion"') {
+    throw 'M04 must launch the staged server artifact, pin every staged JAR, and include the staged manifest in its result.'
+}
+Write-Output 'PASS: run and report isolated, SHA-256-pinned M04 artifacts'
+
+$upgradeCycleAuditPath = Join-Path $PSScriptRoot 't21-upgrade-cycle-audit.ps1'
+if (-not (Test-Path -LiteralPath $upgradeCycleAuditPath -PathType Leaf)) {
+    throw 'The M04 LOCAL upgrade-cycle report requires a reusable offline artifact and log auditor.'
+}
+$upgradeCycleAuditTokens = $null
+$upgradeCycleAuditParseErrors = $null
+$null = [System.Management.Automation.Language.Parser]::ParseFile($upgradeCycleAuditPath, [ref]$upgradeCycleAuditTokens, [ref]$upgradeCycleAuditParseErrors)
+if ($upgradeCycleAuditParseErrors.Count -gt 0) {
+    $details = @($upgradeCycleAuditParseErrors | ForEach-Object { '{0}: {1}' -f $_.Extent.StartLineNumber, $_.Message }) -join '; '
+    throw "The M04 offline report auditor has PowerShell parse errors: $details"
+}
+$upgradeCycleAuditSource = [IO.File]::ReadAllText($upgradeCycleAuditPath)
+$expectedM04DatabasePath = 'expectedDatabaseRelativePath = ''.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'''
+$m04DatabasePathBinding = 'Assert-Equal ''report SQLite path matches M04 runtime fixture'' $expectedDatabaseRelativePath ([string]$report.sqlitePath)'
+$expectedM04StartPins = @(
+    '[ordered]@{ stage = ''baseline-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' }',
+    '[ordered]@{ stage = ''upgrade-1.4''; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = ''PASS'' }',
+    '[ordered]@{ stage = ''rollback-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' }'
+)
+if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
+    $upgradeCycleAuditSource -notmatch "'acceptance-runtime'" -or
+    $upgradeCycleAuditSource -notmatch "'api-consumer-runtime'" -or
+    $upgradeCycleAuditSource -notmatch 'Test-T21M04RuntimeArtifactCopy' -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'Acceptance staged build artifact path' 'build/acceptance/SyncmoneyAcceptance.jar'") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'API consumer staged build artifact path' 'build/acceptance/SyncmoneyApiConsumer.jar'") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'Acceptance runtime artifact path' '.plugdev/run/plugins/SyncmoneyAcceptance.jar'") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'API consumer runtime artifact path' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar'") -or
+    $upgradeCycleAuditSource -notmatch 'vault-unlocked-cache' -or
+    $upgradeCycleAuditSource -notmatch 'vault-unlocked-runtime' -or
+    $upgradeCycleAuditSource -notmatch 'vaultUnlockedPluginSha256' -or
+    $upgradeCycleAuditSource -notmatch 'vaultUnlockedDependencyVersion' -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'VaultUnlocked cache and runtime hashes match'") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'VaultUnlocked loaded artifact path' '.plugdev/run/plugins/TNE-VaultUnlocked-2.20.2.jar'") -or
+    -not $upgradeCycleAuditSource.Contains('Vault \(2\.20\.2\)') -or
+    $upgradeCycleAuditSource -notmatch 'plugDevDistManifest' -or
+    $upgradeCycleAuditSource -notmatch 'logManifest' -or
+    $upgradeCycleAuditSource -notmatch 'Get-FileHash' -or
+    $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$distRoot -File -Recurse -Force' -or
+    $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$logsRoot -File -Recurse -Force' -or
+    $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$runRoot -File -Recurse -Filter ''recovery-v1\.jsonl'' -Force' -or
+    -not $upgradeCycleAuditSource.Contains($expectedM04DatabasePath) -or
+    -not $upgradeCycleAuditSource.Contains($m04DatabasePathBinding) -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'complete stage record count' '6' ([string]`$stageRecords.Count)") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'invalid stage record shape count' '0' ([string]`$invalidStageRecords.Count)") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-True 'baseline, upgrade, and rollback stage chronology' (Test-T21M04StageRecordChronology `$stageRecords)") -or
+    $upgradeCycleAuditSource -notmatch 'validationSha256' -or
+    $upgradeCycleAuditSource -notmatch '\$expectedStartRecords\s*=\s*@\(' -or
+    $upgradeCycleAuditSource -notmatch 'start record count for \$\(\$expectedStart\.stage\)' -or
+    $upgradeCycleAuditSource -notmatch 'stop record count for \$stage' -or
+    $upgradeCycleAuditSource -notmatch 'API consumer marker for \$\(\$expectedStart\.stage\)' -or
+    -not $upgradeCycleAuditSource.Contains('$upgradeStartRecords = @($startRecords | Where-Object { [string]$_.stage -ceq ''upgrade-1.4'' -and [string]$_.pluginVersion -ceq [string]$report.candidatePlugin })') -or
+    -not $upgradeCycleAuditSource.Contains('Assert-Equal ''candidate API consumer classloader marker'' ''PASS'' ([string]$upgradeStartRecords[0].apiClassLoader)') -or
+    -not $upgradeCycleAuditSource.Contains('API CLASSLOADER PASS provider=Syncmoney') -or
+    -not $upgradeCycleAuditSource.Contains('T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50')) {
+    throw 'The reusable M04 offline auditor must independently rehash copied artifacts, PlugDev distribution files, and retained logs.'
+}
+foreach ($expectedPin in $expectedM04StartPins) {
+    if (-not $upgradeCycleAuditSource.Contains($expectedPin)) {
+        throw "The M04 offline auditor must bind its lifecycle to the expected stage/version pair: $expectedPin"
+    }
+}
+Write-Output 'PASS: parse the M04 offline artifact and log auditor'
 
 Write-Output 'T21 runner validation tests PASS'
 }
