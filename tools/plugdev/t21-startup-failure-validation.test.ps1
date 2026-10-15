@@ -854,15 +854,17 @@ try {
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MinimumFolia) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumFolia) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentStable)) {
-        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum and maximum Paper only.'
+        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum and maximum Paper plus minimum-Folia MySQL and MariaDB only.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to all three dialects on minimum and maximum Paper only'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to all three dialects on minimum and maximum Paper plus minimum-Folia MySQL and MariaDB only'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -877,6 +879,19 @@ try {
         throw 'The complete maximum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Paper MySQL v11 DDL-denial report with the exact pinned runtime identity'
+    $minimumFoliaEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumFolia
+    $minimumFoliaDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'MinimumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $minimumFoliaDdlFailureReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Folia MySQL v11 DDL-denial report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete minimum-Folia MySQL v11 DDL-denial report with the exact pinned runtime identity'
+    $minimumFoliaMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'MinimumFolia'
+    if (-not (Test-T21StartupFailureReportFixture $minimumFoliaMariaDbDdlFailureReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint MinimumFolia -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Folia MariaDB v11-DDL permission-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete minimum-Folia MariaDB v11 DDL-denial report with the exact pinned runtime identity'
     $maximumPaperMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumPaperMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'Maximum'
     if (-not (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
