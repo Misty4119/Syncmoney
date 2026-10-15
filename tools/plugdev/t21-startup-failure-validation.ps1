@@ -34,7 +34,7 @@ function Test-T21RequiredV11DdlFailureTarget(
 ) {
     if ($DatabaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { return $false }
     if ($PlatformEndpoint -ceq 'Minimum') { return $true }
-    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum'
+    return $DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum'
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
@@ -1002,7 +1002,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                     }
                 }
             }
-            if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum') {
+            if ($DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
                 $evidencePath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
                 $ddlEvidence = Get-T21ObservedValue $report 'deniedDdlEvidence'
                 $expectedEvidenceFields = @('source', 'databaseName', 'runtimeUser', 'eventCount', 'logPath')

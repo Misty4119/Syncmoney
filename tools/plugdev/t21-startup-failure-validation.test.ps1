@@ -798,7 +798,7 @@ try {
         } else {
             'ALTER command denied'
         }
-        if ($databaseProduct -ceq 'MySQL' -and $platformEndpoint -ceq 'Maximum') {
+        if ($databaseProduct -in @('MySQL', 'MariaDB') -and $platformEndpoint -ceq 'Maximum') {
             $requestIdDdlLogPath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
             $requestIdDdlEvent = [ordered]@{
                 userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [127.0.0.1]'
@@ -852,14 +852,14 @@ try {
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
         -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentStable)) {
-        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum Paper and only MySQL on maximum Paper.'
+        throw 'The v11 required-DDL failure gate must admit all three dialects on minimum Paper and MySQL/MariaDB on maximum Paper.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum-Paper all-dialect and maximum-Paper MySQL cells'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum-Paper all-dialect and maximum-Paper MySQL/MariaDB cells'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -874,6 +874,35 @@ try {
         throw 'The complete maximum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Paper MySQL v11 DDL-denial report with the exact pinned runtime identity'
+    $maximumPaperMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumPaperMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'Maximum'
+    if (-not (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete maximum-Paper MariaDB v11 DDL-denial report was rejected.'
+    }
+    Write-Output 'PASS: accept a complete maximum-Paper MariaDB v11 DDL-denial report with the exact pinned runtime identity'
+    $maximumPaperMariaDbDdlFailureMissingEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperMariaDbDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumPaperMariaDbDdlFailureMissingEvidence.Remove('deniedDdlEvidence')
+    if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureMissingEvidence $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MariaDB predicate accepted a generic ALTER-denied log without the denied SQL statement.'
+    }
+    $maximumPaperMariaDbEvidencePath = Join-Path $maximumPaperMariaDbDdlFailureReport.runDirectory 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
+    $maximumPaperMariaDbEvidenceEvent = Get-Content -LiteralPath $maximumPaperMariaDbEvidencePath -Raw | ConvertFrom-Json -AsHashtable
+    $maximumPaperMariaDbEvidenceEvent.argument = 'ALTER TABLE syncmoney_audit_log ADD COLUMN sequence BIGINT'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MariaDB predicate accepted a denied ALTER for a column other than request_id.'
+    }
+    $maximumPaperMariaDbEvidenceEvent.argument = 'ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)'
+    $maximumPaperMariaDbEvidenceEvent.userHost = 'sm_t21_other[sm_t21_other] @ localhost [127.0.0.1]'
+    Set-T21MySqlDeniedRequestIdDdlEvent $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEvidenceEvent
+    if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper MariaDB predicate accepted request_id DDL evidence from a different SQL account.'
+    }
+    Write-Output 'PASS: require exact request_id ALTER event and candidate account for maximum-Paper MariaDB'
     $maximumPaperDdlFailureReportMissingSqlEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $maximumPaperDdlFailureReportMissingSqlEvidence.Remove('deniedDdlEvidence')
     if (Test-T21StartupFailureReportFixture $maximumPaperDdlFailureReportMissingSqlEvidence $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1814,6 +1843,20 @@ try {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
     Write-Output 'PASS: seed the newer schema before the expected-failure platform start and validate its report'
+
+    $generalLogEnableStart = $runnerSource.IndexOf('function Enable-T21MySqlGeneralLogCapture', [StringComparison]::Ordinal)
+    if ($generalLogEnableStart -lt 0) { throw 'The runner must expose the isolated general-log capture function.' }
+    $generalLogRestoreFlag = $runnerSource.IndexOf('$script:mysqlGeneralLogRestoreRequired = $true', $generalLogEnableStart, [StringComparison]::Ordinal)
+    $generalLogFirstMutation = $runnerSource.IndexOf("SET GLOBAL log_output = 'TABLE'", $generalLogEnableStart, [StringComparison]::Ordinal)
+    $outerFinallyStart = $runnerSource.LastIndexOf('} finally {', [StringComparison]::Ordinal)
+    $restoreBeforePlatformStop = $runnerSource.IndexOf('try { Disable-T21MySqlGeneralLogCapture }', $outerFinallyStart, [StringComparison]::Ordinal)
+    $platformStopAfterRestore = $runnerSource.IndexOf('Stop-RunOwnedServerAfterFailure', $outerFinallyStart, [StringComparison]::Ordinal)
+    if ($generalLogEnableStart -lt 0 -or $generalLogRestoreFlag -le $generalLogEnableStart -or
+        $generalLogFirstMutation -le $generalLogRestoreFlag -or $outerFinallyStart -lt 0 -or
+        $restoreBeforePlatformStop -lt $outerFinallyStart -or $platformStopAfterRestore -le $restoreBeforePlatformStop) {
+        throw 'General-log restoration must be armed before the first setting change and attempted before platform shutdown.'
+    }
+    Write-Output 'PASS: restore general-log state after partial enablement and before platform shutdown'
 
     $startupValidatorSource = Get-Content -LiteralPath $validatorPath -Raw
     if ($startupValidatorSource -notmatch 'FailureScenario' -or

@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case supports MySQL, MariaDB, and PostgreSQL on minimum Paper, plus MySQL only on maximum Paper 26.3#166.'
+    throw 'The required-v11-DDL-permission-failure case supports MySQL, MariaDB, and PostgreSQL on minimum Paper, plus MySQL and MariaDB on maximum Paper 26.3#166.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -64,7 +64,7 @@ $script:schemaStateBefore = $null
 $script:schemaStateAfter = $null
 $script:databaseDdlPrivileges = $null
 $script:resourceCleanupObservation = $null
-$script:mysqlGeneralLogCaptureEnabled = $false
+$script:mysqlGeneralLogRestoreRequired = $false
 $script:mysqlGeneralLogOutputBefore = $null
 $script:deniedDdlEvidence = $null
 $startupFailureModeCount = 0
@@ -1192,7 +1192,7 @@ function Test-T21MySqlCreateWithoutAlterGrantSet(
 
 function Seed-T21RequiredV11DdlPermissionFailure {
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'The required-v11-DDL-permission-failure seed supports all three SQL dialects on minimum Paper and MySQL only on maximum Paper.'
+        throw 'The required-v11-DDL-permission-failure seed supports all three SQL dialects on minimum Paper and MySQL/MariaDB on maximum Paper.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1340,9 +1340,9 @@ WHERE d.datname = current_database();
 }
 
 function Enable-T21MySqlGeneralLogCapture {
-    if ($script:databaseProduct -cne 'MySQL' -or -not $script:requiredV11DdlPermissionDeniedStartupFailure -or
+    if ($script:databaseProduct -notin @('MySQL', 'MariaDB') -or -not $script:requiredV11DdlPermissionDeniedStartupFailure -or
         $PlatformEndpoint -cne 'Maximum') {
-        throw 'MySQL general-log capture is scoped to the maximum-Paper required-v11-DDL denial cell.'
+        throw 'MySQL/MariaDB general-log capture is scoped to the maximum-Paper required-v11-DDL denial cell.'
     }
     $stateRows = @(Invoke-MySqlQuery 'SELECT CONCAT(UPPER(@@GLOBAL.general_log), ''|'', UPPER(@@GLOBAL.log_output));' 'mysql-ddl-general-log-state-before' -asRoot)
     if ($stateRows.Count -ne 1) { throw 'Could not read the isolated MySQL general-log state before candidate startup.' }
@@ -1352,9 +1352,9 @@ function Enable-T21MySqlGeneralLogCapture {
         throw 'The isolated MySQL server has an unexpected general-log state before candidate startup.'
     }
     $script:mysqlGeneralLogOutputBefore = $stateParts[1]
+    $script:mysqlGeneralLogRestoreRequired = $true
     $null = Invoke-MySqlQuery "SET GLOBAL log_output = 'TABLE';" 'mysql-ddl-general-log-table-enable' -asRoot
     $null = Invoke-MySqlQuery 'SET GLOBAL general_log = ON;' 'mysql-ddl-general-log-enable' -asRoot
-    $script:mysqlGeneralLogCaptureEnabled = $true
     $verifiedRows = @(Invoke-MySqlQuery 'SELECT CONCAT(UPPER(@@GLOBAL.general_log), ''|'', UPPER(@@GLOBAL.log_output));' 'mysql-ddl-general-log-state-enabled' -asRoot)
     if ($verifiedRows.Count -ne 1 -or $verifiedRows[0].Trim() -notmatch '^(ON|1)\|TABLE$') {
         throw 'The isolated MySQL general log was not enabled with TABLE output before candidate startup.'
@@ -1362,7 +1362,7 @@ function Enable-T21MySqlGeneralLogCapture {
 }
 
 function Disable-T21MySqlGeneralLogCapture {
-    if (-not $script:mysqlGeneralLogCaptureEnabled) { return }
+    if (-not $script:mysqlGeneralLogRestoreRequired) { return }
     if ($script:mysqlGeneralLogOutputBefore -notmatch '^(FILE|TABLE|FILE,TABLE|TABLE,FILE)$') {
         throw 'Refusing to restore an unrecognized MySQL general-log output value.'
     }
@@ -1372,13 +1372,13 @@ function Disable-T21MySqlGeneralLogCapture {
     if ($verifiedRows.Count -ne 1 -or $verifiedRows[0].Trim() -notmatch ('^(OFF|0)\|' + [regex]::Escape($script:mysqlGeneralLogOutputBefore) + '$')) {
         throw 'The isolated MySQL general-log settings were not restored after evidence capture.'
     }
-    $script:mysqlGeneralLogCaptureEnabled = $false
+    $script:mysqlGeneralLogRestoreRequired = $false
 }
 
 function Get-T21MySqlDeniedRequestIdDdlEvidence {
-    if (-not $script:mysqlGeneralLogCaptureEnabled -or $script:databaseProduct -cne 'MySQL' -or
+    if (-not $script:mysqlGeneralLogRestoreRequired -or $script:databaseProduct -notin @('MySQL', 'MariaDB') -or
         $PlatformEndpoint -cne 'Maximum') {
-        throw 'The maximum-Paper MySQL denied-request_id evidence capture was not initialized.'
+        throw 'The maximum-Paper MySQL/MariaDB denied-request_id evidence capture was not initialized.'
     }
     try {
         $query = @"
@@ -1404,11 +1404,11 @@ ORDER BY event_time;
             logPath = $evidencePath
         }
         if ($eventLines.Count -ne 1 -or [string]::IsNullOrWhiteSpace($eventLines[0])) {
-            throw "Expected one MySQL ALTER event from the candidate account; observed $($eventLines.Count)."
+            throw "Expected one MySQL/MariaDB ALTER event from the candidate account; observed $($eventLines.Count)."
         }
         $event = ConvertFrom-Json -InputObject $eventLines[0] -AsHashtable -ErrorAction Stop
         if (-not (Test-T21MySqlDeniedRequestIdDdlEvent $event $script:databaseUser)) {
-            throw 'The captured MySQL ALTER event did not identify the exact audit request_id DDL from the candidate SQL account.'
+            throw 'The captured MySQL/MariaDB ALTER event did not identify the exact audit request_id DDL from the candidate SQL account.'
         }
     } finally {
         Disable-T21MySqlGeneralLogCapture
@@ -1481,7 +1481,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
     $pluginPin = Get-PinnedSyncmoneyPlugin $CandidateVersion $script:candidateSha256
     if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied' -and
-        $script:databaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum') {
+        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
         $script:deniedDdlEvidence = Get-T21MySqlDeniedRequestIdDdlEvidence
     }
     $processes = @(Get-T21ServerProcesses)
@@ -2017,7 +2017,7 @@ try {
         $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure
     }
     if ($script:requiredV11DdlPermissionDeniedStartupFailure -and
-        $script:databaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Maximum') {
+        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
         Enable-T21MySqlGeneralLogCapture
     }
 
@@ -2160,10 +2160,10 @@ try {
     $script:failure = $_.Exception.ToString()
     [Console]::Error.WriteLine("T21 $script:databaseProduct runtime case failed: $($script:failure)")
 } finally {
+    try { Disable-T21MySqlGeneralLogCapture } catch { $script:cleanupFailures.Add("MySQL general-log cleanup failed: $($_.Exception.Message)") }
     try {
         if (@(Get-T21ServerProcesses).Count -gt 0) { Stop-RunOwnedServerAfterFailure }
     } catch { $script:cleanupFailures.Add("Platform cleanup check failed: $($_.Exception.Message)") }
-    try { Disable-T21MySqlGeneralLogCapture } catch { $script:cleanupFailures.Add("MySQL general-log cleanup failed: $($_.Exception.Message)") }
     try { Stop-MySqlBackend } catch { $script:cleanupFailures.Add("MySQL cleanup failed: $($_.Exception.Message)") }
     try { Stop-RedisBackend } catch { $script:cleanupFailures.Add("Redis cleanup failed: $($_.Exception.Message)") }
     try { $script:report.gradleDaemonCleanup = Stop-T21RunOwnedGradleDaemons } catch {
