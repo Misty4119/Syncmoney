@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case currently supports only MySQL 8.0.42 on pinned minimum Paper 1.21.6#48.'
+    throw 'The required-v11-DDL-permission-failure case currently supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on pinned minimum Paper 1.21.6#48.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -236,14 +236,30 @@ function Wait-ServerLogMarker([string]$pattern, [string]$failurePattern, [int]$a
     throw "Timed out waiting for server log marker '$pattern'."
 }
 
-function Invoke-LoggedCommand([string]$executable, [string[]]$arguments, [string]$label, [string]$logPath, [switch]$allowExitOne) {
+function Invoke-LoggedCommand(
+    [string]$executable,
+    [string[]]$arguments,
+    [string]$label,
+    [string]$logPath,
+    [switch]$allowExitOne,
+    [switch]$RedactMariaDbGrantOutput
+) {
     $output = @(& $executable @arguments 2>&1)
     $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $logPath -Encoding utf8
+    $outputLines = @($output | ForEach-Object { $_.ToString() })
+    if ($RedactMariaDbGrantOutput) {
+        $executeArguments = @($arguments | Where-Object { $_ -match '^--execute=' })
+        if ($script:databaseProduct -cne 'MariaDB' -or $executeArguments.Count -ne 1 -or
+            $executeArguments[0] -notmatch '^--execute=\s*SHOW\s+GRANTS\b') {
+            throw 'MariaDB grant-output redaction was requested outside a MariaDB SHOW GRANTS query; output was discarded before logging.'
+        }
+        $outputLines = @(Protect-T21MariaDbGrantLines -GrantLines ([string[]]$outputLines))
+    }
+    $outputLines | Set-Content -LiteralPath $logPath -Encoding utf8
     if ($exitCode -ne 0 -and -not ($allowExitOne -and $exitCode -eq 1)) {
         throw "$label exited $exitCode; see $logPath."
     }
-    return [pscustomobject]@{ exitCode = [int]$exitCode; output = ($output -join "`n").Trim(); logPath = $logPath }
+    return [pscustomobject]@{ exitCode = [int]$exitCode; output = ($outputLines -join "`n").Trim(); logPath = $logPath }
 }
 
 function Invoke-PostgresStart([string]$executable, [string[]]$arguments, [string]$label, [string]$logPath, [int]$timeoutSeconds = 60) {
@@ -321,7 +337,8 @@ function Invoke-MySqlQuery([string]$sql, [string]$label, [switch]$asRoot) {
         $arguments = @('--no-defaults') + (Get-MySqlLoopbackClientArgs) + @('--protocol=TCP', '--host=127.0.0.1', "--port=$script:mysqlPort", "--user=$(if ($asRoot) { 'root' } else { $script:databaseUser })")
         if (-not $asRoot) { $arguments += "--database=$script:databaseName" }
         $arguments += @('--batch', '--skip-column-names', '--raw', "--execute=$sql")
-        $result = Invoke-LoggedCommand $script:mysqlClient $arguments $label $logPath
+        $redactMariaDbGrantOutput = $script:databaseProduct -ceq 'MariaDB' -and $sql -match '^\s*SHOW\s+GRANTS\b'
+        $result = Invoke-LoggedCommand $script:mysqlClient $arguments $label $logPath -RedactMariaDbGrantOutput:$redactMariaDbGrantOutput
         return @($result.output -split "`r?`n" | Where-Object { $_.Length -gt 0 })
     } finally {
         [Environment]::SetEnvironmentVariable('MYSQL_PWD', $previousPassword, 'Process')
@@ -1113,7 +1130,13 @@ INSERT INTO syncmoney_audit_log (id) VALUES ('00000000-0000-0000-0000-0000000003
     return $state
 }
 
-function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]$DatabaseName, [string]$UserName, [string]$HostName) {
+function Test-T21MySqlCreateWithoutAlterGrantSet(
+    [string[]]$GrantLines,
+    [string]$DatabaseName,
+    [string]$UserName,
+    [string]$HostName,
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL'
+) {
     if ($null -eq $GrantLines -or $GrantLines.Count -ne 2 -or
         [string]::IsNullOrWhiteSpace($DatabaseName) -or [string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($HostName)) {
         return $false
@@ -1124,6 +1147,18 @@ function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]
     $schemaGrantCount = 0
     foreach ($grantLine in $GrantLines) {
         if ($grantLine -isnot [string] -or [string]::IsNullOrWhiteSpace($grantLine)) { return $false }
+        $hasAuthenticationSuffix = $false
+        if ($grantLine -match '(?i)IDENTIFIED\s+BY\s+PASSWORD\b') {
+            if ($DatabaseProduct -cne 'MariaDB') { return $false }
+            $authenticationSuffixMatch = [regex]::Match(
+                $grantLine,
+                "^(?<base>\s*GRANT\s+USAGE\s+ON\s+\*\.\*\s+TO\s+\x60[^\x60]+\x60@\x60[^\x60]+\x60)\s+IDENTIFIED\s+BY\s+PASSWORD\s+'<redacted>'\s*$",
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase
+            )
+            if (-not $authenticationSuffixMatch.Success) { return $false }
+            $grantLine = $authenticationSuffixMatch.Groups['base'].Value
+            $hasAuthenticationSuffix = $true
+        }
         $grantMatch = [regex]::Match($grantLine, $grantPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if (-not $grantMatch.Success -or
             $grantMatch.Groups['user'].Value -cne $UserName -or
@@ -1140,7 +1175,7 @@ function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]
             continue
         }
 
-        if ($grantMatch.Groups['schema'].Value -cne $DatabaseName -or
+        if ($hasAuthenticationSuffix -or $grantMatch.Groups['schema'].Value -cne $DatabaseName -or
             'ALTER' -in $privilegeNames -or 'CREATE' -notin $privilegeNames) { return $false }
         $schemaGrantCount++
     }
@@ -1149,8 +1184,8 @@ function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]
 }
 
 function Seed-T21RequiredV11DdlPermissionFailure {
-    if ($script:databaseProduct -cne 'MySQL' -or $PlatformEndpoint -cne 'Minimum') {
-        throw 'The required-v11-DDL-permission-failure seed is currently limited to minimum-Paper MySQL.'
+    if ($script:databaseProduct -notin @('MySQL', 'MariaDB') -or $PlatformEndpoint -cne 'Minimum') {
+        throw 'The required-v11-DDL-permission-failure seed is currently limited to minimum-Paper MySQL or MariaDB.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1196,17 +1231,17 @@ INSERT INTO syncmoney_audit_log (
     $grants127 = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'127.0.0.1';" 'runtime-user-grants-127' -asRoot)
     $grantsLocal = @(Invoke-MySqlQuery "SHOW GRANTS FOR '$($script:databaseUser)'@'localhost';" 'runtime-user-grants-local' -asRoot)
     if ($grants127.Count -eq 0 -or $grantsLocal.Count -eq 0) {
-        throw 'MySQL returned no application-user grant evidence after the v11 DDL privilege setup.'
+        throw "$($script:databaseProduct) returned no application-user grant evidence after the v11 DDL privilege setup."
     }
-    $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $script:databaseName $script:databaseUser '127.0.0.1'
-    $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $script:databaseName $script:databaseUser 'localhost'
+    $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $script:databaseName $script:databaseUser '127.0.0.1' $script:databaseProduct
+    $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $script:databaseName $script:databaseUser 'localhost' $script:databaseProduct
     if (-not $validGrants127 -or -not $validGrantsLocal) {
-        throw 'MySQL SHOW GRANTS did not establish the expected schema-scoped CREATE-without-ALTER privilege boundary for each runtime account host.'
+        throw "$($script:databaseProduct) SHOW GRANTS did not establish the expected schema-scoped CREATE-without-ALTER privilege boundary for each runtime account host."
     }
     $alterGranted = $false
     $createGranted = $true
     $script:databaseDdlPrivileges = [ordered]@{
-        product = 'MySQL'
+        product = $script:databaseProduct
         grantee = "$($script:databaseUser)@127.0.0.1"
         grants = [string[]]$grants127
         localGrants = [string[]]$grantsLocal

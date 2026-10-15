@@ -545,10 +545,14 @@ try {
             sha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash.ToLowerInvariant()
         }
     }
-    function New-T21MySqlRequiredV11DdlFailureReportFixture([string]$platformEndpoint = 'Minimum') {
+    function New-T21RequiredV11DdlFailureReportFixture(
+        [string]$databaseProduct = 'MySQL',
+        [string]$databaseVersion = '8.0.42',
+        [string]$platformEndpoint = 'Minimum'
+    ) {
         $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $platformEndpoint
-        $copy = New-T21MySqlStartupFailureReportFixture 'MySQL' '8.0.42'
-        $v11RunRoot = Join-Path $testRoot 'v11-required-ddl'
+        $copy = New-T21MySqlStartupFailureReportFixture $databaseProduct $databaseVersion
+        $v11RunRoot = Join-Path $testRoot ("v11-required-ddl-$($databaseProduct.ToLowerInvariant())")
         $v11LogsRoot = Join-Path $v11RunRoot 'logs'
         New-Item -ItemType Directory -Force -Path $v11LogsRoot | Out-Null
         foreach ($existingLog in Get-ChildItem -LiteralPath (Join-Path $testRoot 'logs') -File) {
@@ -577,16 +581,17 @@ try {
         $copy.configuration.databaseName = 'syncmoney_t21_a1b2c3d4'
         $copy.configuration.databaseNameObserved = 'syncmoney_t21_a1b2c3d4'
         $copy.task = 'T21-V03-SYNC-v11-audit-ddl-permission-failure'
+        $mariaDbAuthentication = if ($databaseProduct -ceq 'MariaDB') { " IDENTIFIED BY PASSWORD '<redacted>'" } else { '' }
         $grantLines127 = @(
-            'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
+            ('GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`' + $mariaDbAuthentication)
             'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
         )
         $grantLinesLocal = @(
-            'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`localhost`'
+            ('GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`localhost`' + $mariaDbAuthentication)
             'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`localhost`'
         )
         $copy.databaseDdlPrivileges = [ordered]@{
-            product = 'MySQL'
+            product = $databaseProduct
             grantee = 'sm_t21_a1b2c3d4@127.0.0.1'
             grants = $grantLines127
             localGrants = $grantLinesLocal
@@ -680,18 +685,77 @@ try {
     }
 
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) -or
-        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
+        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
+        (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
         (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum)) {
-        throw 'The v11 required-DDL failure gate must admit only minimum-Paper MySQL until additional runtime cells are verified.'
+        throw 'The v11 required-DDL failure gate must admit minimum-Paper MySQL and MariaDB only until additional runtime cells are verified.'
     }
-    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL'
+    Write-Output 'PASS: constrain required-v11-DDL-denied runtime evidence to minimum Paper / MySQL and MariaDB'
 
-    $ddlFailureReport = New-T21MySqlRequiredV11DdlFailureReportFixture
+    $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
         throw 'The complete minimum-Paper MySQL required-v11-DDL permission-failure report was rejected.'
     }
     Write-Output 'PASS: accept v11 DDL permission failure only with v10 schema/version preservation and observed privilege boundary'
+    $fixtureMariaDbHash = '*' + ('A' * 40)
+    $rawMariaDbGrant = 'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1` IDENTIFIED BY PASSWORD ' + "'$fixtureMariaDbHash'"
+    $safeMariaDbGrant = @(Protect-T21MariaDbGrantLines -GrantLines @($rawMariaDbGrant))
+    if ($safeMariaDbGrant.Count -ne 1 -or
+        $safeMariaDbGrant[0] -cne 'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1` IDENTIFIED BY PASSWORD ''<redacted>''' -or
+        $safeMariaDbGrant[0].Contains($fixtureMariaDbHash)) {
+        throw 'MariaDB SHOW GRANTS redaction must preserve the account/grant while removing its authentication hash.'
+    }
+    Write-Output 'PASS: redact MariaDB SHOW GRANTS authentication hashes before retaining logs'
+    $mariaDbGrantSet = @(
+        $safeMariaDbGrant[0]
+        'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, EXECUTE, TRIGGER, DELETE HISTORY, SHOW CREATE ROUTINE ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
+    )
+    if (-not (Test-T21MySqlCreateWithoutAlterGrantSet $mariaDbGrantSet 'syncmoney_t21_a1b2c3d4' 'sm_t21_a1b2c3d4' '127.0.0.1' 'MariaDB')) {
+        throw 'The MariaDB grant predicate rejected the redacted global authentication suffix or dialect-specific schema privileges.'
+    }
+    $schemaGrantWithAuthentication = [string[]]@(
+        'GRANT USAGE ON *.* TO `sm_t21_a1b2c3d4`@`127.0.0.1`'
+        ('GRANT SELECT, INSERT, CREATE ON `syncmoney_t21_a1b2c3d4`.* TO `sm_t21_a1b2c3d4`@`127.0.0.1` IDENTIFIED BY PASSWORD ''<redacted>''')
+    )
+    if ((Test-T21MySqlCreateWithoutAlterGrantSet $schemaGrantWithAuthentication 'syncmoney_t21_a1b2c3d4' 'sm_t21_a1b2c3d4' '127.0.0.1' 'MariaDB') -or
+        (Test-T21MySqlCreateWithoutAlterGrantSet $mariaDbGrantSet 'syncmoney_t21_a1b2c3d4' 'sm_t21_a1b2c3d4' '127.0.0.1' 'MySQL')) {
+        throw 'The grant predicate accepted an authentication suffix on a schema grant or for MySQL.'
+    }
+    Write-Output 'PASS: allow the redacted authentication suffix only on MariaDB global USAGE grants'
+    $malformedMariaDbGrantRejected = $false
+    $malformedMariaDbGrantError = $null
+    try {
+        $unknownFormatHash = 'NOT-A-MARIA-DB-HASH'
+        $null = Protect-T21MariaDbGrantLines -GrantLines @("GRANT USAGE ON *.* TO ``sm_t21_a1b2c3d4``@``127.0.0.1`` IDENTIFIED BY PASSWORD '$unknownFormatHash'")
+    } catch {
+        $malformedMariaDbGrantRejected = $true
+        $malformedMariaDbGrantError = $_.Exception.Message
+    }
+    if (-not $malformedMariaDbGrantRejected -or $malformedMariaDbGrantError.Contains($unknownFormatHash)) {
+        throw 'MariaDB grant redaction must reject unrecognized authentication formats without exposing their value in the error.'
+    }
+    $unrelatedMariaDbGrantRejected = $false
+    try {
+        $null = Protect-T21MariaDbGrantLines -GrantLines @("GRANT SELECT ON ``syncmoney_t21_a1b2c3d4``.* TO ``sm_t21_a1b2c3d4``@``127.0.0.1`` IDENTIFIED BY PASSWORD '$fixtureMariaDbHash'")
+    } catch {
+        $unrelatedMariaDbGrantRejected = $true
+    }
+    if (-not $unrelatedMariaDbGrantRejected) { throw 'MariaDB grant redaction must reject authentication clauses outside the observed global USAGE line.' }
+    Write-Output 'PASS: reject unknown or unrelated MariaDB SHOW GRANTS authentication clauses without exposing them'
+    $mariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB'
+    if (-not (Test-T21StartupFailureReportFixture $mariaDbDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
+        throw 'The complete minimum-Paper MariaDB 12.3.3 required-v11-DDL permission-failure report was rejected.'
+    }
+    Write-Output 'PASS: accept minimum-Paper MariaDB 12.3.3 v11 DDL denial with exact product and v10 preservation'
+    $mariaDbDdlFailureReport.databaseDdlPrivileges.product = 'MySQL'
+    if (Test-T21StartupFailureReportFixture $mariaDbDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The minimum-Paper MariaDB v11-DDL predicate accepted a MySQL product label.'
+    }
+    Write-Output 'PASS: reject MariaDB v11 DDL denial evidence with a MySQL product label'
     $jsonNumericField = ConvertFrom-Json -InputObject '1.25' -ErrorAction Stop
     if (-not (Test-T21JsonNumber $jsonNumericField) -or
         (Test-T21JsonNumber '1.25') -or
@@ -1443,6 +1507,9 @@ try {
         $runnerSource -notmatch 'function Seed-T21RequiredV11DdlPermissionFailure' -or
         $runnerSource -notmatch 'REVOKE ALTER ON' -or
         $runnerSource -notmatch 'SHOW GRANTS FOR' -or
+        $runnerSource -notmatch 'RedactMariaDbGrantOutput' -or
+        $runnerSource -notmatch 'Protect-T21MariaDbGrantLines' -or
+        $runnerSource -notmatch '(?s)function Invoke-LoggedCommand.*?Protect-T21MariaDbGrantLines.*?Set-Content' -or
         $runnerSource -notmatch 'function Start-T21ServerExpectingAuditSchemaFailure' -or
         $runnerSource -notmatch 'Test-T21NewerAuditSchemaStartupFailureReport' -or
         $runnerSource -notmatch 'Get-T21PlugDevCliDistManifest' -or

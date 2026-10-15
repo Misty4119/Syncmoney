@@ -32,7 +32,7 @@ function Test-T21RequiredV11DdlFailureTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Minimum'
+    return $DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Minimum'
 }
 
 function Test-T21ExactDictionaryFields([object]$Value, [string[]]$ExpectedFields) {
@@ -137,7 +137,35 @@ function Test-T21RequiredV11AuditSentinelRow([object]$Row) {
     return $true
 }
 
-function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]$DatabaseName, [string]$UserName, [string]$HostName) {
+function Protect-T21MariaDbGrantLines([string[]]$GrantLines) {
+    if ($null -eq $GrantLines) { return @() }
+    $safeLines = [Collections.Generic.List[string]]::new()
+    $authenticationClausePattern = '(?i)IDENTIFIED\s+BY\s+PASSWORD\b'
+    $observedMariaDbGrantPattern = "^(?<prefix>\s*GRANT\s+USAGE\s+ON\s+\*\.\*\s+TO\s+(?:\x60[^\x60\r\n]+\x60|'[^'\r\n]+')\s*@\s*(?:\x60[^\x60\r\n]+\x60|'[^'\r\n]+')\s+IDENTIFIED\s+BY\s+PASSWORD\s+)'(?<hash>\*[0-9a-fA-F]{40})'(?<suffix>\s*)$"
+    foreach ($line in $GrantLines) {
+        if ($line -isnot [string]) {
+            throw 'MariaDB SHOW GRANTS returned a non-text line; output was discarded before logging.'
+        }
+        if ($line -notmatch $authenticationClausePattern) {
+            $safeLines.Add($line)
+            continue
+        }
+        $match = [regex]::Match($line, $observedMariaDbGrantPattern)
+        if (-not $match.Success) {
+            throw 'MariaDB SHOW GRANTS returned an unrecognized authentication clause; output was discarded before logging.'
+        }
+        $safeLines.Add($match.Groups['prefix'].Value + "'<redacted>'" + $match.Groups['suffix'].Value)
+    }
+    return $safeLines.ToArray()
+}
+
+function Test-T21MySqlCreateWithoutAlterGrantSet(
+    [string[]]$GrantLines,
+    [string]$DatabaseName,
+    [string]$UserName,
+    [string]$HostName,
+    [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL'
+) {
     if ($null -eq $GrantLines -or $GrantLines.Count -ne 2 -or
         [string]::IsNullOrWhiteSpace($DatabaseName) -or [string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($HostName)) {
         return $false
@@ -148,6 +176,18 @@ function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]
     $schemaGrantCount = 0
     foreach ($grantLine in $GrantLines) {
         if ($grantLine -isnot [string] -or [string]::IsNullOrWhiteSpace($grantLine)) { return $false }
+        $hasAuthenticationSuffix = $false
+        if ($grantLine -match '(?i)IDENTIFIED\s+BY\s+PASSWORD\b') {
+            if ($DatabaseProduct -cne 'MariaDB') { return $false }
+            $authenticationSuffixMatch = [regex]::Match(
+                $grantLine,
+                "^(?<base>\s*GRANT\s+USAGE\s+ON\s+\*\.\*\s+TO\s+\x60[^\x60]+\x60@\x60[^\x60]+\x60)\s+IDENTIFIED\s+BY\s+PASSWORD\s+'<redacted>'\s*$",
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase
+            )
+            if (-not $authenticationSuffixMatch.Success) { return $false }
+            $grantLine = $authenticationSuffixMatch.Groups['base'].Value
+            $hasAuthenticationSuffix = $true
+        }
         $grantMatch = [regex]::Match($grantLine, $grantPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if (-not $grantMatch.Success -or
             $grantMatch.Groups['user'].Value -cne $UserName -or
@@ -164,7 +204,7 @@ function Test-T21MySqlCreateWithoutAlterGrantSet([string[]]$GrantLines, [string]
             continue
         }
 
-        if ($grantMatch.Groups['schema'].Value -cne $DatabaseName -or
+        if ($hasAuthenticationSuffix -or $grantMatch.Groups['schema'].Value -cne $DatabaseName -or
             'ALTER' -in $privilegeNames -or 'CREATE' -notin $privilegeNames) { return $false }
         $schemaGrantCount++
     }
@@ -660,10 +700,10 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             $expectedUser = if ($databaseMatch.Success) { 'sm_t21_' + $databaseMatch.Groups['suffix'].Value } else { '' }
             $grants127 = @(Get-T21ObservedValue $privileges 'grants')
             $grantsLocal = @(Get-T21ObservedValue $privileges 'localGrants')
-            $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $databaseName $expectedUser '127.0.0.1'
-            $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $databaseName $expectedUser 'localhost'
+            $validGrants127 = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grants127) $databaseName $expectedUser '127.0.0.1' $DatabaseProduct
+            $validGrantsLocal = Test-T21MySqlCreateWithoutAlterGrantSet ([string[]]$grantsLocal) $databaseName $expectedUser 'localhost' $DatabaseProduct
             if (-not (Test-T21ExactDictionaryFields $privileges @('product', 'grantee', 'grants', 'localGrants', 'alterGranted', 'createGranted', 'verifiedBeforeStartup')) -or
-                (Get-T21ObservedValue $privileges 'product') -cne 'MySQL' -or
+                (Get-T21ObservedValue $privileges 'product') -cne $DatabaseProduct -or
                 -not $databaseMatch.Success -or -not $granteeMatch.Success -or
                 $observedDatabaseName -cne $databaseName -or
                 $granteeMatch.Groups['suffix'].Value -cne $databaseMatch.Groups['suffix'].Value -or
