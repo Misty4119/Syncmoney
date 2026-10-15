@@ -201,6 +201,8 @@ export function hasGuardPairRuntimeProof(evidence) {
   const ownerByName = new Map();
   const transactionsByName = new Map();
   const warningUuids = new Set();
+  const orderedGuardEvents = [];
+  const noticeAcks = new Map();
   for (const rawLine of evidence.serverLines) {
     const line = String(rawLine ?? "");
     if (line.includes("T21_GUARD_FAIL")) return false;
@@ -211,6 +213,7 @@ export function hasGuardPairRuntimeProof(evidence) {
       const warningUuid = warning[1].toLowerCase();
       if (warningUuids.has(warningUuid)) return false;
       warningUuids.add(warningUuid);
+      orderedGuardEvents.push({ type: "rejection", uuid: warningUuid });
     }
     if (line.includes("T21_GUARD_OWNER")) {
       const owner = line.match(/\bT21_GUARD_OWNER player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) selfOwned=true otherOwned=false scheduler=entity\s*$/i);
@@ -220,27 +223,60 @@ export function hasGuardPairRuntimeProof(evidence) {
     if (line.includes("T21_GUARD_TRANSACTIONS")) {
       const transaction = line.match(/\bT21_GUARD_TRANSACTIONS player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) accepted=5 rejected=1 outcomes=([SF]{6}) before=0\.00 after=5\.00\s*$/i);
       if ((line.match(/T21_GUARD_TRANSACTIONS/g) ?? []).length !== 1 || !transaction || transactionsByName.has(transaction[1]) || transaction[3] !== "SSSSSF") return false;
-      transactionsByName.set(transaction[1], transaction[2].toLowerCase());
+      const uuid = transaction[2].toLowerCase();
+      transactionsByName.set(transaction[1], uuid);
+      orderedGuardEvents.push({ type: "transaction", player: transaction[1], uuid });
+    }
+    if (line.includes("T21_GUARD_NOTICE_ACK")) {
+      const ack = line.match(/\bT21_GUARD_NOTICE_ACK stage=([12]) player=(AcceptanceGuardA|AcceptanceGuardB) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) recipient=(AcceptanceGuardA|AcceptanceGuardB)\s*$/i);
+      if ((line.match(/T21_GUARD_NOTICE_ACK/g) ?? []).length !== 1 || !ack || noticeAcks.has(Number(ack[1]))) return false;
+      const entry = {
+        stage: Number(ack[1]),
+        player: ack[2],
+        uuid: ack[3].toLowerCase(),
+        recipient: ack[4],
+      };
+      noticeAcks.set(entry.stage, entry);
+      orderedGuardEvents.push({ type: "ack", ...entry });
     }
   }
   if (ownerByName.size !== players.length || transactionsByName.size !== players.length || warningUuids.size !== players.length) return false;
 
   const noticesByName = new Map();
+  const noticeOrder = [];
   for (const rawLine of evidence.clientLines) {
     const line = String(rawLine ?? "");
     if (line.includes("BOT_GUARD_FAIL")) return false;
     if (line.includes("BOT_GUARD_RATE_LIMIT_NOTICE_PASS")) {
-      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+player=(AcceptanceGuardA|AcceptanceGuardB)\s+uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
-      if ((line.match(/BOT_GUARD_RATE_LIMIT_NOTICE_PASS/g) ?? []).length !== 1 || !notice || noticesByName.has(notice[1])) return false;
-      noticesByName.set(notice[1], notice[2].toLowerCase());
+      const notice = line.match(/^\s*BOT_GUARD_RATE_LIMIT_NOTICE_PASS\s+stage=([12])\s+player=(AcceptanceGuardA|AcceptanceGuardB)\s+uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+message=.*Transaction too fast, please wait a moment.*\s*$/i);
+      if ((line.match(/BOT_GUARD_RATE_LIMIT_NOTICE_PASS/g) ?? []).length !== 1 || !notice || noticesByName.has(notice[2])) return false;
+      const entry = { stage: Number(notice[1]), player: notice[2], uuid: notice[3].toLowerCase() };
+      if (entry.stage !== noticeOrder.length + 1 || entry.player !== players[entry.stage - 1]) return false;
+      noticesByName.set(entry.player, entry.uuid);
+      noticeOrder.push(entry);
     }
   }
-  if (noticesByName.size !== players.length) return false;
+  if (noticesByName.size !== players.length || noticeAcks.size !== players.length) return false;
 
-  return players.every((player) => {
+  const participantA = participantByName.get(players[0]);
+  const participantB = participantByName.get(players[1]);
+  const expectedEvents = [
+    { type: "rejection", uuid: participantA.uuid },
+    { type: "transaction", player: players[0], uuid: participantA.uuid },
+    { type: "ack", stage: 1, player: players[0], uuid: participantA.uuid, recipient: players[0] },
+    { type: "rejection", uuid: participantB.uuid },
+    { type: "transaction", player: players[1], uuid: participantB.uuid },
+    { type: "ack", stage: 2, player: players[1], uuid: participantB.uuid, recipient: players[1] },
+  ];
+  if (JSON.stringify(orderedGuardEvents) !== JSON.stringify(expectedEvents)) return false;
+
+  return players.every((player, index) => {
     const uuid = participantByName.get(player).uuid;
+    const notice = noticeOrder[index];
+    const ack = noticeAcks.get(index + 1);
     return ownerByName.get(player) === uuid && transactionsByName.get(player) === uuid &&
-      noticesByName.get(player) === uuid && warningUuids.has(uuid);
+      noticesByName.get(player) === uuid && notice.player === player && notice.uuid === uuid &&
+      ack.player === player && ack.uuid === uuid && ack.recipient === player;
   });
 }
 

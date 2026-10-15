@@ -59,7 +59,7 @@ let logoutTransportAbort = false;
 let clientObservedNether = false;
 let serverReportedNetherArrival = false;
 const crossOwnerClientsPassed = new Set();
-const guardPairNotices = new Set();
+let guardPairNoticeStage = 0;
 
 function observeCrossOwnerPass(activeBot, text) {
   if (scenario !== "cross-owner") return;
@@ -78,11 +78,19 @@ function observeGuardPairNotice(activeBot, text) {
     finish(1, "rate-limit notice came from an unidentified guard participant");
     return;
   }
-  console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=${player} uuid=${uuid} message=${text}`);
-  guardPairNotices.add(player);
-  if (guardPairNotices.has("AcceptanceGuardA") && guardPairNotices.has("AcceptanceGuardB")) {
-    finish(0, "both entity owners received their own rate-limit notification");
+  const expectedPlayer = guardPairNoticeStage === 0 ? "AcceptanceGuardA"
+    : guardPairNoticeStage === 1 ? "AcceptanceGuardB" : null;
+  if (player !== expectedPlayer) {
+    console.log(`BOT_GUARD_FAIL phase=notice-routing stage=${guardPairNoticeStage + 1} expected=${expectedPlayer ?? "none"} received=${player}`);
+    finish(1, "rate-limit notice reached a player other than the owner under test");
+    return;
   }
+  const stage = guardPairNoticeStage + 1;
+  console.log(`BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=${stage} player=${player} uuid=${uuid} message=${text}`);
+  guardPairNoticeStage += 1;
+  activeBot.chat(`/smaccept lifecycle guard-pair-notice-ack ${player}`);
+  console.log(`BOT_GUARD_NOTICE_ACK_SENT stage=${stage} player=${player} uuid=${uuid}`);
+  if (stage === 2) finish(0, "each entity owner received and acknowledged its own rate-limit notification in sequence");
 }
 
 function finish(code, reason) {

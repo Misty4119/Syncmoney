@@ -533,13 +533,13 @@ For the bounded Canvas player-guard case, run the same harness with `-Guard` on 
 
 ```powershell
 foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
-  .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -Guard `
+  .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -Guard -GuardWithCircuitBreaker `
     -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
     -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
 }
 ```
 
-This keeps `AcceptanceGuardA` and `AcceptanceGuardB` online, moves B 16,384 blocks, and runs each participant's six Vault deposits on that player's entity scheduler. Each callback must report ownership of its own player and not its peer; each player's independent quota must produce `SSSSSF`, a targeted player notice, and Redis `5.00/v5`. The offline proof requires canonical UUIDs and exactly one rejection warning per participant. This is a bounded two-owner quota observation only; it does not establish the wider Canvas owner/guard lifecycle matrix or Paper/Folia behavior.
+This keeps `AcceptanceGuardA` and `AcceptanceGuardB` online, moves B 16,384 blocks, and runs each participant's six Vault deposits on that player's entity scheduler with both the player guard and global circuit breaker enabled. Each callback must report ownership of its own player and not its peer; each player's independent quota must produce `SSSSSF` and Redis `5.00/v5`. The test runs A first and waits for A's client to receive and acknowledge its rate-limit notice before it starts B. A notice delivered to the wrong client, a mismatched UUID, an out-of-order rejection/acknowledgement, or a missing acknowledgement fails the offline proof. This is a bounded two-owner quota observation only; it does not establish the wider Canvas owner/guard lifecycle matrix or Paper/Folia behavior.
 
 After selecting the six endpoint reports, run `node tools/plugdev/audit-player-scheduler-lifecycle.mjs` to re-check their exact report hashes, teleport-future and player-specific logout evidence, Redis binary version, and stopped Redis data/AOF file hashes. The auditor writes a separate correction record and leaves historical report and audit bytes unchanged.
 

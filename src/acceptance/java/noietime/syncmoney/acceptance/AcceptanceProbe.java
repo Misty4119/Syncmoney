@@ -31,6 +31,7 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
     private static final UUID LEGACY_SQLITE_ACCOUNT_B = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private final java.util.concurrent.ConcurrentMap<UUID, String> expectedTeleportWorlds =
             new ConcurrentHashMap<>();
+    private volatile GuardPairRun activeGuardPairRun;
 
     @Override public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
@@ -48,6 +49,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                     return true;
                 }
                 String scenario = args[1];
+                if (scenario.equalsIgnoreCase("guard-pair-notice-ack")) {
+                    if (sender instanceof org.bukkit.entity.Player player && args.length > 2) {
+                        acknowledgeGuardPairNotice(player, args[2]);
+                    } else {
+                        failGuardPairRun("notice-ack", "notice acknowledgement requires its receiving player");
+                    }
+                    return true;
+                }
                 if (scenario.equalsIgnoreCase("guard")) {
                     if (sender instanceof org.bukkit.entity.Player player) {
                         runGuardScenario(player);
@@ -525,6 +534,10 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 World overworld = getServer().getWorlds().stream()
                         .filter(world -> world.getEnvironment() == World.Environment.NORMAL)
                         .findFirst().orElseThrow(() -> new IllegalStateException("Overworld unavailable"));
+                GuardPairRun pairRun = new GuardPairRun(
+                        plugin, transactionGuard, economy, anchor, other,
+                        "AcceptanceGuardA", "AcceptanceGuardB",
+                        requireCircuitBreaker ? circuitBreaker : null);
                 moveAndCaptureRegionLocation(other, overworld, "AcceptanceGuardB",
                         new org.bukkit.Location(overworld, 16_384.5, 100, 16_384.5))
                         .whenComplete((location, moveFailure) -> {
@@ -533,18 +546,14 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                                 return;
                             }
                             try {
-                                CompletableFuture<Void> first = dispatchGuardParticipant(
+                                if (activeGuardPairRun != null) {
+                                    throw new IllegalStateException("another guard-pair run is awaiting a notice acknowledgement");
+                                }
+                                activeGuardPairRun = pairRun;
+                                dispatchGuardParticipant(
                                         plugin, transactionGuard, economy, anchor, other, "AcceptanceGuardA",
-                                        requireCircuitBreaker ? circuitBreaker : null);
-                                CompletableFuture<Void> second = dispatchGuardParticipant(
-                                        plugin, transactionGuard, economy, other, anchor, "AcceptanceGuardB",
-                                        requireCircuitBreaker ? circuitBreaker : null);
-                                CompletableFuture.allOf(first, second).whenComplete((ignored, failure) -> {
-                                    if (failure != null) {
-                                        reportGuardFailure("pair-transactions", failure);
-                                    } else {
-                                        getLogger().info("T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB");
-                                    }
+                                        pairRun.circuitBreaker, pairRun).whenComplete((ignored, failure) -> {
+                                    if (failure != null) reportGuardFailure("pair-transactions-A", failure);
                                 });
                             } catch (Throwable failure) {
                                 reportGuardFailure("pair-setup", failure);
@@ -556,10 +565,43 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
         });
     }
 
+    private void acknowledgeGuardPairNotice(org.bukkit.entity.Player sender, String recipientName) {
+        GuardPairRun pairRun = activeGuardPairRun;
+        int stage = pairRun == null ? 0 : pairRun.expectedNoticeAckStage;
+        String expectedName = pairRun == null ? null : pairRun.expectedPlayerName(stage);
+        UUID expectedUuid = pairRun == null ? null : pairRun.expectedPlayerUuid(stage);
+        if (expectedName == null || expectedUuid == null || !sender.getName().equals(expectedName)
+                || !recipientName.equals(expectedName) || !sender.getUniqueId().equals(expectedUuid)) {
+            failGuardPairRun("notice-ack", "unexpected player or stage in rate-limit notice acknowledgement");
+            return;
+        }
+
+        getLogger().info("T21_GUARD_NOTICE_ACK stage=" + stage + " player=" + expectedName
+                + " uuid=" + expectedUuid + " recipient=" + sender.getName());
+        if (stage == 1) {
+            pairRun.expectedNoticeAckStage = 2;
+            dispatchGuardParticipant(
+                    pairRun.plugin, pairRun.transactionGuard, pairRun.economy,
+                    pairRun.second, pairRun.first, pairRun.secondName, pairRun.circuitBreaker, pairRun)
+                    .whenComplete((ignored, failure) -> {
+                        if (failure != null) reportGuardFailure("pair-transactions-B", failure);
+                    });
+        } else {
+            activeGuardPairRun = null;
+            getLogger().info("T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB");
+        }
+    }
+
+    private void failGuardPairRun(String phase, String reason) {
+        activeGuardPairRun = null;
+        getLogger().severe("T21_GUARD_FAIL phase=" + phase + " reason=" + reason);
+    }
+
     private CompletableFuture<Void> dispatchGuardParticipant(
             Syncmoney plugin, PlayerTransactionGuard transactionGuard, Economy economy,
             org.bukkit.entity.Player player,
-            org.bukkit.entity.Player peer, String expectedName, EconomicCircuitBreaker circuitBreaker) {
+            org.bukkit.entity.Player peer, String expectedName, EconomicCircuitBreaker circuitBreaker,
+            GuardPairRun pairRun) {
         var completed = new CompletableFuture<Void>();
         player.getScheduler().run(this, ownerTask -> {
             try {
@@ -569,6 +611,7 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 require(selfOwned && !peerOwned,
                         "guard callback is owned by " + expectedName + " and not by its peer");
                 UUID uuid = player.getUniqueId();
+                pairRun.rememberIdentity(expectedName, uuid);
                 getServer().getAsyncScheduler().runNow(this, asyncTask -> {
                     try {
                         BigDecimal balanceBefore = awaitAccountReady(plugin.getEconomyFacade(), uuid);
@@ -711,6 +754,53 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             EconomyWriteQueue writeQueue,
             org.bukkit.Location teleportDestination,
             String teleportWorldName) {
+    }
+
+    private static final class GuardPairRun {
+        private final Syncmoney plugin;
+        private final PlayerTransactionGuard transactionGuard;
+        private final Economy economy;
+        private final org.bukkit.entity.Player first;
+        private final org.bukkit.entity.Player second;
+        private final String firstName;
+        private final String secondName;
+        private final EconomicCircuitBreaker circuitBreaker;
+        private volatile int expectedNoticeAckStage = 1;
+        private volatile UUID firstUuid;
+        private volatile UUID secondUuid;
+
+        private GuardPairRun(
+                Syncmoney plugin,
+                PlayerTransactionGuard transactionGuard,
+                Economy economy,
+                org.bukkit.entity.Player first,
+                org.bukkit.entity.Player second,
+                String firstName,
+                String secondName,
+                EconomicCircuitBreaker circuitBreaker) {
+            this.plugin = plugin;
+            this.transactionGuard = transactionGuard;
+            this.economy = economy;
+            this.first = first;
+            this.second = second;
+            this.firstName = firstName;
+            this.secondName = secondName;
+            this.circuitBreaker = circuitBreaker;
+        }
+
+        private void rememberIdentity(String playerName, UUID uuid) {
+            if (firstName.equals(playerName)) firstUuid = uuid;
+            else if (secondName.equals(playerName)) secondUuid = uuid;
+            else throw new IllegalArgumentException("Unexpected guard-pair identity: " + playerName);
+        }
+
+        private String expectedPlayerName(int stage) {
+            return stage == 1 ? firstName : stage == 2 ? secondName : null;
+        }
+
+        private UUID expectedPlayerUuid(int stage) {
+            return stage == 1 ? firstUuid : stage == 2 ? secondUuid : null;
+        }
     }
 
     private void runVersionChecks(String command) {

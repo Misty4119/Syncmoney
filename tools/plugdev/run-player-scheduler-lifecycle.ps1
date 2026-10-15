@@ -687,7 +687,7 @@ plugins {
         $guardBalance = $guardParticipants[0].redisBalance
         $guardVersion = $guardParticipants[0].redisVersion
         $guardServerEvidenceLines = @($serverLines | Where-Object {
-            $_ -match 'T21_GUARD_(?:OWNER|TRANSACTIONS|BREAKER_STATE|FAIL)|Deposit rejected by PlayerTransactionGuard:'
+            $_ -match 'T21_GUARD_(?:OWNER|TRANSACTIONS|BREAKER_STATE|NOTICE_ACK|FAIL)|Deposit rejected by PlayerTransactionGuard:'
         })
         $guardClientEvidenceLines = @($guardClient.lines | Where-Object { $_ -match '^BOT_GUARD_(?:RATE_LIMIT_NOTICE_PASS|FAIL)' })
         $guardEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{

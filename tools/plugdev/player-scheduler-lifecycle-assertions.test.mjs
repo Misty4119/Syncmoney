@@ -301,15 +301,17 @@ test("Canvas guard-pair proof requires two entity owners, independent quotas, no
   const evidence = {
     serverLines: [
       `T21_GUARD_OWNER player=AcceptanceGuardA uuid=${uuidA} selfOwned=true otherOwned=false scheduler=entity`,
-      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
       `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidA}`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `T21_GUARD_NOTICE_ACK stage=1 player=AcceptanceGuardA uuid=${uuidA} recipient=AcceptanceGuardA`,
       `T21_GUARD_OWNER player=AcceptanceGuardB uuid=${uuidB} selfOwned=true otherOwned=false scheduler=entity`,
-      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
       `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidB}`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `T21_GUARD_NOTICE_ACK stage=2 player=AcceptanceGuardB uuid=${uuidB} recipient=AcceptanceGuardB`,
     ],
     clientLines: [
-      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
-      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=1 player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=2 player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
     ],
     participants: [
       { player: "AcceptanceGuardA", uuid: uuidA, redisBalance: "5.00", redisVersion: "5" },
@@ -362,6 +364,26 @@ test("Canvas guard-pair proof requires two entity owners, independent quotas, no
     ...evidence,
     clientLines: evidence.clientLines.map((line) => line.replace(uuidB, uuidA)),
   }), false, "each player notification must match that player's owner UUID");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    clientLines: [
+      evidence.clientLines[0].replace(`player=AcceptanceGuardA uuid=${uuidA}`, `player=AcceptanceGuardB uuid=${uuidB}`),
+      evidence.clientLines[1],
+    ],
+  }), false, "the first rejection notice must be observed by its owner before the peer is exercised");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: evidence.serverLines.map((line) => line.includes("recipient=AcceptanceGuardA")
+      ? line.replace("recipient=AcceptanceGuardA", "recipient=AcceptanceGuardB")
+      : line),
+  }), false, "server acknowledgement must be issued by the owner that received the notice");
+  assert.equal(hasGuardPairRuntimeProof({
+    ...evidence,
+    serverLines: [
+      ...evidence.serverLines.filter((line) => !line.includes("T21_GUARD_NOTICE_ACK stage=1")),
+      evidence.serverLines.find((line) => line.includes("T21_GUARD_NOTICE_ACK stage=1")),
+    ],
+  }), false, "the peer rejection cannot precede the first owner's notice acknowledgement");
   assert.equal(hasGuardPairRuntimeProof({ ...evidence, serverLines: [...evidence.serverLines, "T21_GUARD_FAIL phase=transactions"] }), false);
   assert.equal(hasGuardPairRuntimeProof({ ...evidence, clientLines: [...evidence.clientLines, evidence.clientLines[0]] }), false);
 });
@@ -376,16 +398,18 @@ test("Canvas breaker/guard proof requires both active managers and an unlocked g
     serverLines: [
       "T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardA",
       `T21_GUARD_OWNER player=AcceptanceGuardA uuid=${uuidA} selfOwned=true otherOwned=false scheduler=entity`,
-      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
       `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidA}`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=${uuidA} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `T21_GUARD_NOTICE_ACK stage=1 player=AcceptanceGuardA uuid=${uuidA} recipient=AcceptanceGuardA`,
       "T21_GUARD_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=enabled player=AcceptanceGuardB",
       `T21_GUARD_OWNER player=AcceptanceGuardB uuid=${uuidB} selfOwned=true otherOwned=false scheduler=entity`,
-      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
       `Deposit rejected by PlayerTransactionGuard: Transaction too fast, please wait for ${uuidB}`,
+      `T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=${uuidB} accepted=5 rejected=1 outcomes=SSSSSF before=0.00 after=5.00`,
+      `T21_GUARD_NOTICE_ACK stage=2 player=AcceptanceGuardB uuid=${uuidB} recipient=AcceptanceGuardB`,
     ],
     clientLines: [
-      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
-      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=1 player=AcceptanceGuardA uuid=${uuidA} message=Transaction too fast, please wait a moment`,
+      `BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=2 player=AcceptanceGuardB uuid=${uuidB} message=Transaction too fast, please wait a moment`,
     ],
     participants: [
       { player: "AcceptanceGuardA", uuid: uuidA, redisBalance: "5.00", redisVersion: "5" },
@@ -427,9 +451,19 @@ test("Canvas guard runner collects and validates the paired owner scenario", () 
   assert.match(runner, /guard-pair/);
   assert.match(client, /AcceptanceGuardA/);
   assert.match(client, /AcceptanceGuardB/);
-  assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS player=\$\{player\}/);
+  assert.match(client, /BOT_GUARD_RATE_LIMIT_NOTICE_PASS stage=\$\{stage\} player=\$\{player\}/);
   assert.match(probe, /T21_GUARD_OWNER player=" \+ player\.getName\(\)/);
   assert.match(probe, /require\(!otherOwned, "guard transactions run outside the peer entity owner"\)/);
+  assert.match(probe, /T21_GUARD_NOTICE_ACK stage=/);
+  assert.match(probe, /guard-pair-notice-ack/);
+  const acknowledgementMethod = probe.slice(
+    probe.indexOf("private void acknowledgeGuardPairNotice"),
+    probe.indexOf("private void failGuardPairRun"),
+  );
+  assert.doesNotMatch(acknowledgementMethod, /pairRun\.(?:first|second)\.get(?:Name|UniqueId)\(\)/,
+    "a wrong-owner acknowledgement must not read another player's entity");
+  assert.match(probe, /pairRun\.rememberIdentity\(expectedName, uuid\)/,
+    "participant identity is captured on that player's entity owner before acknowledgement");
   const notEstablished = runner.slice(
     runner.indexOf("$notEstablished = @("),
     runner.indexOf("$script:result = [ordered]@{")
