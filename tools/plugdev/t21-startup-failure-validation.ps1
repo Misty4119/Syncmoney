@@ -24,7 +24,8 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
         return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')
     }
 
-    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia')
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia')
 }
 
 function Test-T21RequiredV11DdlFailureTarget(

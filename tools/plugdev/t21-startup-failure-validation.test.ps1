@@ -345,6 +345,8 @@ try {
                 $true
             } elseif ($endpointName -ceq 'MaximumCanvas') {
                 $true
+            } elseif ($endpointName -ceq 'CurrentStable') {
+                $true
             } else {
                 $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
             }
@@ -354,21 +356,29 @@ try {
             }
         }
     }
-    Write-Output 'PASS: allow incomplete-v10 targets on pinned Paper, Folia, and Canvas endpoints across all SQL dialects'
+    Write-Output 'PASS: allow incomplete-v10 targets on pinned Paper, Folia, and Canvas endpoints plus current-stable Paper across all SQL dialects'
 
-    $expectedIncompleteV10Diagnostic = 'The incomplete-v10-audit-table startup-failure case supports MySQL, MariaDB, or PostgreSQL on minimum/maximum Paper, minimum/maximum Folia, and minimum/maximum Canvas; current-stable Paper and unpinned endpoints are not supported.'
-    $actualIncompleteV10Diagnostic = $null
+    $unsupportedIncompleteV10EndpointRejected = $false
+    try {
+        [void](Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint 'Unpinned')
+    } catch {
+        $unsupportedIncompleteV10EndpointRejected = $true
+    }
+    if (-not $unsupportedIncompleteV10EndpointRejected) { throw 'The incomplete-v10 startup-failure target guard accepted an endpoint outside the pinned platform set.' }
+    Write-Output 'PASS: reject an unpinned endpoint for the incomplete-v10 startup-failure case'
+
+    $currentStablePathResolutionObserved = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentStable `
             -IncompleteV10AuditTableStartupFailure
     } catch {
-        $actualIncompleteV10Diagnostic = $_.Exception.Message
+        $currentStablePathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
     }
-    if ($actualIncompleteV10Diagnostic -cne $expectedIncompleteV10Diagnostic) {
-        throw "The unsupported PostgreSQL / CurrentStable diagnostic was '$actualIncompleteV10Diagnostic'; expected '$expectedIncompleteV10Diagnostic'."
+    if (-not $currentStablePathResolutionObserved) {
+        throw 'The current-stable Paper incomplete-v10 target was rejected before resolving the intentionally missing server JAR.'
     }
-    Write-Output 'PASS: reject the current-stable endpoint with a diagnostic that names the supported pinned-endpoint matrix'
+    Write-Output 'PASS: accept the current-stable Paper incomplete-v10 target before external resources are resolved'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -1495,6 +1505,28 @@ try {
         throw 'The maximum-Canvas PostgreSQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
     }
     Write-Output 'PASS: reject maximum-Canvas PostgreSQL incomplete-v10 evidence with a mismatched runtime build'
+
+    $currentStableIncompleteEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentStable
+    $currentStableMySqlIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'CurrentStable'
+    if (-not (Test-T21StartupFailureReportFixture $currentStableMySqlIncompleteReport $currentStableIncompleteEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentStable -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete current-stable Paper MySQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept current-stable Paper MySQL incomplete-v10 failure with the exact pinned runtime identity'
+
+    $currentStableMariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB' 'CurrentStable'
+    if (-not (Test-T21StartupFailureReportFixture $currentStableMariaDbIncompleteReport $currentStableIncompleteEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint CurrentStable -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete current-stable Paper MariaDB incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept current-stable Paper MariaDB incomplete-v10 failure with the exact pinned runtime identity'
+
+    $currentStablePostgreSqlIncompleteReport = New-T21PostgreSqlIncompleteAuditReportFixture 'CurrentStable'
+    if (-not (Test-T21StartupFailureReportFixture $currentStablePostgreSqlIncompleteReport $currentStableIncompleteEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentStable -FailureScenario IncompleteV10AuditTable)) {
+        throw 'The complete current-stable Paper PostgreSQL incomplete-v10 audit-table failure report was rejected.'
+    }
+    Write-Output 'PASS: accept current-stable Paper PostgreSQL incomplete-v10 failure with the exact pinned runtime identity'
 
     $minimumCanvasMariaDbIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB' 'MinimumCanvas'
     if (-not (Test-T21StartupFailureReportFixture $minimumCanvasMariaDbIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
