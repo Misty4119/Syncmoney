@@ -18,14 +18,14 @@
 - 禁止尚未確認receipt的memory optimistic revision進sharedSQL；event/codecs不可把version二次GET與balance拼湊。
 - 每task先讀implementation/callers/tests；既有問題先reproducer再小修，移動檔案時不混無關semantic changes。
 - Main/API/legacyreturnFQCN保持；API不relocate、不在consumer shade；testkit不進runtime。
-- 以下新class/method為候選；未出現於repo不代表遺失實作。先以證據核准必要type，不把檔案清單當必建framework。
+- 以下新class/method為候選；未出現於repo不代表遺失實作。先以證據核準必要type，不把檔案清單當必建framework。
 - 實作時commit依當時使用者授權；本計畫不要求現在建立任何commit。未授權publish不能自行Central/GitHub release。
 
 ## Review Focus
 
 冷帳戶不可假0覆蓋；拒絕第二腿不可丟funds；sentunknown不可盲retry；logout/eviction不可丟accepted；舊SQLwriter/CMIclock不得偽稱monotonic。分別由T01/T04、T02/T07、T06/T08、T03/T15、T05/T13/T21負責。
 
-## 工作目錄与未来文件图
+## 工作目錄與未來文件圖
 
 命令一律從repository root執行，唯frontend命令使用 `pnpm --dir syncmoney-web`。資料夾搬移前src路徑如現況；T12/T14後使用下表destination，不能同FQCN兩份source同時編譯。
 
@@ -35,7 +35,7 @@
 | purecore state | `syncmoney-core/src/main/java/noietime/syncmoney/core/{AccountSnapshot,AccountStateStore,MoneyRules,MutationOutcome,MutationCommand,MutationEnvelope,TransferEnvelope,DefaultEconomyEngine}.java` |
 | core ports | `syncmoney-core/src/main/java/noietime/syncmoney/core/port/{WriteAdmission,AdmissionToken,AccountLoader,PersistencePort,ReplicationPort,TransactionPolicy,TransactionObserver,RuntimeCounters}.java` |
 | protocol | `syncmoney-protocol/src/main/java/noietime/syncmoney/protocol/{RedisKeys,RedisChannels,LegacyBalanceMessage,LegacyCmiMessage,LegacyProtocolCodec,ProtocolCapabilities}.java`、`src/main/resources/lua/` |
-| storage | `syncmoney-storage/src/main/java/noietime/syncmoney/storage/`保持既有storage FQCN；candidate（ADR-07必要性核准後） `persistence/{PersistedAccount,JdbcSnapshotRepository,LocalSnapshotRepository,RecoverySpool}.java`；`LocalEconomyHandler`舊FQCNwrapper留bukkit |
+| storage | `syncmoney-storage/src/main/java/noietime/syncmoney/storage/`保持既有storage FQCN；candidate（ADR-07必要性核準後） `persistence/{PersistedAccount,JdbcSnapshotRepository,LocalSnapshotRepository,RecoverySpool}.java`；`LocalEconomyHandler`舊FQCNwrapper留bukkit |
 | sync | `syncmoney-sync/src/main/java/noietime/syncmoney/replication/{RedisReplicationAdapter,RequestExecutionState}.java`；receipt/ConfirmedAccount是core port DTO，既有`sync`有Bukkit依賴者wrapper留bukkit |
 | platform | `syncmoney-bukkit/src/main/java/noietime/syncmoney/`保留main/context/legacy class；new `adapter/{AsyncAccountLoader,BukkitApiProvider,LocalPersistenceWorker,BukkitTransactionHooks}.java` |
 | tests/fixtures | `syncmoney-testkit/src/testFixtures/java/noietime/syncmoney/testkit/`、`src/testFixtures/resources/compat/1.3.2/` |
@@ -56,7 +56,7 @@ Minimal scaffold只建settings include、必要build/dependency/test source與ta
 | T05 | syncmoney-storage scaffold與必要integrationTest owner | 不搬全部StorageManager／platform lifecycle |
 | T06 | syncmoney-sync scaffold、必要integrationTest；早期Lua仍用既有canonical資源 | 不提前T10 protocol搬移、T14 assembly |
 | T10 | syncmoney-protocol完整protocol提取／測試 | 消除早期Lua引用重複，保留原JAR路徑 |
-| T11 | syncmoney-api、check/test/javadoc/sourcesJar與provider candidate | ADR-03已核准read-only scope；不在此task發布artifact |
+| T11 | syncmoney-api、check/test/javadoc/sourcesJar與provider candidate | ADR-03已核準read-only scope；不在此task發布artifact |
 | T12 | complete core extraction、core verifyArchitecture | 只提取已選interface與state；沒有caller不建type |
 | T14 | syncmoney-bukkit、final DAG/assembly、root aliases、verifyArchitecture/verifyPackaging | 保證單JAR與reflection/resource identity |
 | T17 | syncmoney-testkit java-test-fixtures與共享helper | 前置task可用local fixtures，不等待generic framework |
@@ -77,7 +77,7 @@ Minimal scaffold只建settings include、必要build/dependency/test source與ta
 | T06 | NOT_SENT／明確REJECTED／SENT_UNKNOWN可區分；unknown禁止blind ADD | typed outcome或exception、op marker、版本2script候選；新marker/TTL需ADR證明必要 |
 | T07 | failed/rejectedtransfer無funds loss、durable補償或零單腿、雙帳戶lockorder | paired envelope/state machine/paired SQL方案以reproducer與backend證據選，不必全面替代pipeline |
 | T08 | read不先clear、confirmed step重試不重做money、普通shutdown保留pending | 新spool/checkpoint可以採；若擴格式才migration/rollback fixture |
-| T12 | core不依platform/Redis/JDBC、ports不反向依adapters | 冻結只限該task已選最小interface，不一次產生全部candidate類 |
+| T12 | core不依platform/Redis/JDBC、ports不反向依adapters | 凍結只限該task已選最小interface，不一次產生全部candidate類 |
 
 T03/T05/T06選定的immutable DTO與ports住core，sync/storage只實作；JDK Clock足夠。每task在開始修改前將 exact signature、path、owner與consumer列於Interfaces/update log，review後才實作；不得建立無caller的新type。設計證據不足時提交ADR-07，不把candidate改名為Required便開工。
 
@@ -94,7 +94,7 @@ T01與T02–T08/T15目前標[P0-CANDIDATE]：它們是triage/最小修復工作�
 - T13：P1 existing owner/freshness/echo保留與adapter提取；global clock/version redesign P2／跨wire domain P3；確認money問題才P0。
 - T16：P1 backend/SSE/auth與已知安全例外；完整WebSocket P3。
 - T17：P1必要shared fixtures，不要求全部fake framework先完成；額外generic simulation P2。
-- T19：P1 baseline/report；p99/alloc/throughput review可核准例外，不是可凌駕correctness的hard gate。
+- T19：P1 baseline/report；p99/alloc/throughput review可核準例外，不是可淩駕correctness的hard gate。
 - T20：P3 optional，不加入release critical path。Public mutation與其idempotency全面contract同P3，不能借T11進SDK。
 
 ## Current task／progress routing
@@ -108,7 +108,7 @@ T01與T02–T08/T15目前標[P0-CANDIDATE]：它們是triage/最小修復工作�
 
 2026-10-09 T18 closure: commit `5880a4d`; Java 25.0.4 / Gradle 9.8.0 `:syncmoney-api:check nmcpZipAggregation` passed, Central bundle validation and offline consumer compile passed, Python publisher suite passed 16/16 plus three repeated concurrency-lock runs, disposable GPG fixture passed, and two final independent reviews found no actionable findings. No Central upload or GitHub Actions run occurred; account-level and publication gates remain T23. T19 is COMPLETE (2026-10-12) as the required Redis/SQL benchmark/report task: the unchanged 60-row open-loop matrix passed, the runner exited 0 after BUILD SUCCESSFUL, every row passed its correctness and per-account Redis/SQL parity/cleanup gates, and independent post-exit checks found Redis DB 0 and `syncmoney_t19.players` empty. The matrix recorded 30,141,888 offered, 29,231,843 accepted and persisted, and 910,045 bounded-runner admission rejects; no authority rejection, ambiguity, quarantine, version conflict, or money invariant failure occurred. Summary SHA-256 is `bbc4cc36ed4fc4b674b4f18dab5436f205781afdbed0ca774155e4f6f96fede0`; 06 records full evidence and performance limits. Independent full-matrix review passed; its sole P2 finding was the stale planning status. The targeted post-update documentation re-review found no remaining status/checklist contradiction. T21 is the current critical-path task; the user-confirmed Paper/Folia/Canvas endpoints remain targets, not compatibility claims. T22 retains final release performance disposition; T20 remains optional P3.
 
-**T21 current step (2026-10-15):** M04, M06, M08–M12 and the documented bounded M01–M03 SYNC upgrade/rollback subcases have passing evidence in 06; M05's legacy SQL read/rollback matrix is complete for 21 backend×endpoint combinations: MySQL 8.0.42, MariaDB 12.3.3-MariaDB, and PostgreSQL 18.1 on all six user-pinned Paper/Folia/Canvas minimum and maximum endpoints, plus supplemental Paper 26.3#178. Each legacy-data report has an offline audit; focused validators passed 46/46 and 156/156. The six-endpoint audit-enabled report set uses source `bc93b9722ec387c861cf365a2608c524bcf42c76` / JAR SHA-256 `f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452`; supplemental current-stable Paper `26.3#178` M01–M03 with audit enabled passed on source `6b6bdb296713ff72ac0339d1a831f98b21d4aca9` / JAR SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662` (64 offline-audit assertions / 44 runtime logs). Each of the six pinned endpoint report-specific audits passed 64 assertions over 44 hashed logs; the independent aggregate audit rechecked those 264 logs. SQL audit rows increased for both disposable accounts after candidate writes and remained through 1.3.2 rollback. SQL audit and Redis hybrid-audit owners were enabled and drained with zero buffered/queued, in-flight, retry, dead-letter, dropped, and late-rejected work. The earlier disabled-owner refresh remains historical evidence for commit `403fad3a932ceb48e02d14a986f61d79059d0769` / JAR `4c6e2d7637520330a4989971d054904553928299b5f1aa8d4d117697014d2e47`. These are bounded observations, not blanket compatibility or live mixed-version guarantees. Licensed CMI runtime remains **BLOCKED / NOT RUN** because no authorized CMI JAR is available. T21 remains IN_PROGRESS: production fleet-wide producer quiescence, remaining mode/resource/backend/schema-migration/failure cells, broader Folia lifecycle and CMI callback-retirement cases, and the wider Canvas owner/guard lifecycle matrix beyond the bounded two-owner quota case remains open. User-pinned endpoints remain Paper 1.21.6#48–26.3#166, Folia 1.21.6#6–26.2#7, and Canvas 1.21.8#603–26.3#972; supplemental Paper 26.3#178 does not change the user-pinned range. Exact reports, hashes, and evidence limits are in 06. The incomplete-v10 startup-failure fixture has bounded E2 evidence on minimum and maximum user-pinned Paper and Folia across all three SQL dialects, minimum and maximum Canvas across all three SQL dialects (18/18 pinned endpoint/backend failure cells). The target guard admits all six pinned endpoints with all three SQL dialects for this incomplete-v10 scenario; supplemental current-stable Paper and unpinned endpoints remain rejected. The MySQL, MariaDB, and PostgreSQL maximum-Canvas reports each passed their strict report predicates and report-specific offline log/artifact/source audits; see 06 for hashes and limits. The incomplete-v10 endpoint/backend matrix validator passed 85/85 at its recorded checkpoint, shared T21 validation passed 156/156, and six PowerShell files parsed without errors. No Java/product source, public contract, SQL schema, or recovery format changed; Java/Gradle tests are NOT RUN for this harness/evidence-only subcase. The incomplete-v10 endpoint/backend failure submatrix is complete (18/18). Required-v11 audit DDL-denial evidence covers minimum and maximum Paper across all three SQL dialects plus all three dialects on minimum Folia, including the completed minimum-Folia/PostgreSQL subcase recorded below; maximum Folia/MySQL now has bounded E2 evidence; maximum-Folia/MariaDB and PostgreSQL, Canvas combinations, and supplemental current-stable Paper remain open / NOT RUN. 2026-10-15 T21 required-v11 DDL-denial duplicate-property repair and E2 refresh: the checkpoint report is `mysql-sync-minimum-paper-20261015-065613-16d4c19ea4e947469ececf2d1cb603ed/result.json` (SHA-256 `fe1dff8f34c52b1d2401a6ece4d983e3a23b5ee751044d2cf3a2f0403794f633`). Reports `064227` and `065042` carried PASS_BOUNDED_SUBCASE fields but are superseded: their raw validator accepted duplicate JSON money properties because parsed dictionaries collapsed keys and `JsonElement.GetProperty` returned the later token. A test-first `amount:1.26,amount:1.25` fixture reproduced the false accept; the final raw validator rejects duplicate, missing, extra, and case-mismatched fields, and compares exact coefficient/exponent values. The focused gate passed 105 assertions, shared T21 validation passed 156/156, six-script PowerShell parsing passed, and independent code/evidence review found no remaining issue. The fresh minimum Paper `1.21.6#48` / MySQL `8.0.42` E2 report passed the exact bounded startup-failure predicates; the report-specific offline audit verified all 28/28 log hashes and normal cleanup. Startup created an empty `players` table, so whole-database atomic rollback is not claimed. Java/Gradle product tests are NOT RUN because only PlugDev validation tooling and planning evidence changed. The minimum-Paper/MySQL cell remains bounded evidence; maximum-Paper MySQL and MariaDB now both have direct general-log witnesses for the exact request_id ALTER and strict offline audits. Next selected cell: minimum Folia 1.21.6#6 / MySQL 8.0.42. T21 remains IN_PROGRESS; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and non-mandatory; licensed CMI remains BLOCKED / NOT RUN. Exact commands, pins, test/audit logs, review, and limits are in 06.
+**T21 current step (2026-10-15):** M04, M06, M08–M12 and the documented bounded M01–M03 SYNC upgrade/rollback subcases have passing evidence in 06; M05's legacy SQL read/rollback matrix is complete for 21 backend×endpoint combinations: MySQL 8.0.42, MariaDB 12.3.3-MariaDB, and PostgreSQL 18.1 on all six user-pinned Paper/Folia/Canvas minimum and maximum endpoints, plus supplemental Paper 26.3#178. Each legacy-data report has an offline audit; focused validators passed 46/46 and 156/156. The six-endpoint audit-enabled report set uses source `bc93b9722ec387c861cf365a2608c524bcf42c76` / JAR SHA-256 `f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452`; supplemental current-stable Paper `26.3#178` M01–M03 with audit enabled passed on source `6b6bdb296713ff72ac0339d1a831f98b21d4aca9` / JAR SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662` (64 offline-audit assertions / 44 runtime logs). Each of the six pinned endpoint report-specific audits passed 64 assertions over 44 hashed logs; the independent aggregate audit rechecked those 264 logs. SQL audit rows increased for both disposable accounts after candidate writes and remained through 1.3.2 rollback. SQL audit and Redis hybrid-audit owners were enabled and drained with zero buffered/queued, in-flight, retry, dead-letter, dropped, and late-rejected work. The earlier disabled-owner refresh remains historical evidence for commit `403fad3a932ceb48e02d14a986f61d79059d0769` / JAR `4c6e2d7637520330a4989971d054904553928299b5f1aa8d4d117697014d2e47`. These are bounded observations, not blanket compatibility or live mixed-version guarantees. Licensed CMI runtime remains **BLOCKED / NOT RUN** because no authorized CMI JAR is available. T21 remains IN_PROGRESS: production fleet-wide producer quiescence, remaining mode/resource/backend/schema-migration/failure cells, broader Folia lifecycle and CMI callback-retirement cases, and the wider Canvas owner/guard lifecycle matrix beyond the bounded two-owner quota case remains open. User-pinned endpoints remain Paper 1.21.6#48–26.3#166, Folia 1.21.6#6–26.2#7, and Canvas 1.21.8#603–26.3#972; supplemental Paper 26.3#178 does not change the user-pinned range. Exact reports, hashes, and evidence limits are in 06. The incomplete-v10 startup-failure fixture has bounded E2 evidence on minimum and maximum user-pinned Paper and Folia across all three SQL dialects, minimum and maximum Canvas across all three SQL dialects (18/18 pinned endpoint/backend failure cells). The target guard admits all six pinned endpoints with all three SQL dialects for this incomplete-v10 scenario; supplemental current-stable Paper and unpinned endpoints remain rejected. The MySQL, MariaDB, and PostgreSQL maximum-Canvas reports each passed their strict report predicates and report-specific offline log/artifact/source audits; see 06 for hashes and limits. The incomplete-v10 endpoint/backend matrix validator passed 85/85 at its recorded checkpoint, shared T21 validation passed 156/156, and six PowerShell files parsed without errors. No Java/product source, public contract, SQL schema, or recovery format changed; Java/Gradle tests are NOT RUN for this harness/evidence-only subcase. The incomplete-v10 endpoint/backend failure submatrix is complete (18/18). Required-v11 audit DDL-denial evidence covers minimum and maximum Paper across all three SQL dialects plus all three dialects on minimum Folia, including the completed minimum-Folia/PostgreSQL subcase recorded below; maximum-Folia/MySQL and MariaDB now have bounded E2 evidence; maximum-Folia/PostgreSQL, Canvas combinations, and supplemental current-stable Paper remain open / NOT RUN. 2026-10-15 T21 required-v11 DDL-denial duplicate-property repair and E2 refresh: the checkpoint report is `mysql-sync-minimum-paper-20261015-065613-16d4c19ea4e947469ececf2d1cb603ed/result.json` (SHA-256 `fe1dff8f34c52b1d2401a6ece4d983e3a23b5ee751044d2cf3a2f0403794f633`). Reports `064227` and `065042` carried PASS_BOUNDED_SUBCASE fields but are superseded: their raw validator accepted duplicate JSON money properties because parsed dictionaries collapsed keys and `JsonElement.GetProperty` returned the later token. A test-first `amount:1.26,amount:1.25` fixture reproduced the false accept; the final raw validator rejects duplicate, missing, extra, and case-mismatched fields, and compares exact coefficient/exponent values. The focused gate passed 105 assertions, shared T21 validation passed 156/156, six-script PowerShell parsing passed, and independent code/evidence review found no remaining issue. The fresh minimum Paper `1.21.6#48` / MySQL `8.0.42` E2 report passed the exact bounded startup-failure predicates; the report-specific offline audit verified all 28/28 log hashes and normal cleanup. Startup created an empty `players` table, so whole-database atomic rollback is not claimed. Java/Gradle product tests are NOT RUN because only PlugDev validation tooling and planning evidence changed. The minimum-Paper/MySQL cell remains bounded evidence; maximum-Paper MySQL and MariaDB now both have direct general-log witnesses for the exact request_id ALTER and strict offline audits. Next selected cell: minimum Folia 1.21.6#6 / MySQL 8.0.42. T21 remains IN_PROGRESS; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and non-mandatory; licensed CMI remains BLOCKED / NOT RUN. Exact commands, pins, test/audit logs, review, and limits are in 06.
 
 2026-10-15 T21 minimum-Folia predicate review repair and E2 refresh: independent review found the startup-failure predicate did not require `runtimeIdentity.runtimeVersion`, despite the shared validator and actual runtime identity carrying it. The predicate now requires it to equal the pinned Minecraft version; all-endpoint newer-schema and incomplete-v10 fixtures populate it, and minimum-Folia fixtures reject a mismatched or missing value. The first minimum-Folia/MySQL runtime report is superseded because it predates this predicate repair. The fresh source-pinned E2 runtime, 26/26-log offline audit, validator runs (71/71 startup-failure; 156/156 shared), parser result (4 files, zero errors), source/artifact hashes, evidence limit, and clean targeted re-review are recorded in 06. T21 remains IN_PROGRESS; next selected cell is minimum Folia `1.21.6#6` / MariaDB `12.3.3-MariaDB`.
 
@@ -188,13 +188,13 @@ This is one single-node Paper bounded subcase and does not close M01–M03 or T2
 
 每task固定四步：寫具體 failing/reproducer tests → 用指定command驗證失敗原因 → 最小修改或搬移 → 同command與requiredgate驗證成功。對candidate先triage，只有必要repair才寫code；DISPROVED附反證，INCONCLUSIVE/DEFERRED記review與後續。不能寫「適當測試」代替以下assertions。不存在futuretask時先建立task，不能把測試skip作綠燈。task輸出report含sourceSHA/command/results/changedfiles/remainingrisk。
 
-實作開始可啟用依明確DAG的agents：一人ownerstate/receipt，一人compatfixture，一人platform，一人review；interface相關T03–T07順序交付。未知需求先讀現有code，發現無法滿足非blocking+finality時記ADR並停dependenttask，继续獨立fixture。
+實作開始可啟用依明確DAG的agents：一人ownerstate/receipt，一人compatfixture，一人platform，一人review；interface相關T03–T07順序交付。未知需求先讀現有code，發現無法滿足非blocking+finality時記ADR並停dependenttask，繼續獨立fixture。
 
 ### T00 [P1] — Freeze現況與真正release baseline
 
 **Required references:** 04§4；01/02/03中與manifest相應節；06 V00。其餘只在新證據需要時擴讀。
 
-**Depends:** 無。**Files:** create `syncmoney-testkit/src/testFixtures/resources/compat/1.3.2/manifest.md`（初期尚未module可先fixture目录）；future dev report於ignored `build/reports/foundation/`。
+**Depends:** 無。**Files:** create `syncmoney-testkit/src/testFixtures/resources/compat/1.3.2/manifest.md`（初期尚未module可先fixture目錄）；future dev report於ignored `build/reports/foundation/`。
 
 **Interfaces:** consumes git/tag/artifacts；produces baselineSHA、descriptor/signature/key/Lua/config/SQLmanifest。不要將真userDB/config抄進fixtures。
 
@@ -226,18 +226,18 @@ This is one single-node Paper bounded subcase and does not close M01–M03 or T2
 
 **Depends:** T00、T00A。**Files:** root `src/test/java/noietime/syncmoney/economy/{TransactionWriterOutcomeTest,TransferCompensationTest,ConsumerFailureSemanticsTest,QueueAdmissionFailureTest,MemoryPendingStateTest,TransferOrchestratorGuardWindowTest}.java`；extend existingVault/ConfigMerger/SQL/CMI tests。
 
-**Interfaces:** consumes现有facade/event/queue与barrier-controlledfakes；produces 08 Evidence register逐項triage/closure、MoneySafety regression清單與issue級priority；不是實作新engine。
+**Interfaces:** consumes現有facade/event/queue與barrier-controlledfakes；produces 08 Evidence register逐項triage/closure、MoneySafety regression清單與issue級priority；不是實作新engine。
 
-- [x] `withdrawConcurrentRejectionDoesNotEmitSuccess`：A读version后B耗盡，Ainsufficient，assertA=-1/noAevent/noextraBalance/version。
+- [x] `withdrawConcurrentRejectionDoesNotEmitSuccess`：A讀version後B耗盡，Ainsufficient，assertA=-1/noAevent/noextraBalance/version。
 - [x] `receiverCancellationRestoresDurableSender`：sender100 receiver0 amount10 receivercancel，drain/reload assert100/0、total100。
-- [x] `negativeWithdrawalFallbackDoesNotCredit`：delta=-10 current100，Rediswritefail，assert不出现110；`setFallbackUsesAbsoluteTarget` target40不按delta推算。
-- [x] `postRedisFailureDoesNotApplyTwice`：commitRedis后DBthrow/retry assertdelta一次；fullqueue+overflowunwritable assertnoacceptedmutation。
-- [x] `coldVaultDoesNotOverwriteOfflineExistingAccount`、`pendingStateSurvivesEviction`、`pluginPreEventOnceWithAttribution`；record现况legitimate与bug分开。
+- [x] `negativeWithdrawalFallbackDoesNotCredit`：delta=-10 current100，Rediswritefail，assert不出現110；`setFallbackUsesAbsoluteTarget` target40不按delta推算。
+- [x] `postRedisFailureDoesNotApplyTwice`：commitRedis後DBthrow/retry assertdelta一次；fullqueue+overflowunwritable assertnoacceptedmutation。
+- [x] `coldVaultDoesNotOverwriteOfflineExistingAccount`、`pendingStateSurvivesEviction`、`pluginPreEventOnceWithAttribution`；record現況legitimate與bug分開。
 - [x] Separate static-review candidate: `TransferOrchestrator` calls receiver `deposit` before `checkAndLockReceiverForTransfer`；以barrier-controlled interleaving暫停於deposit commit後、lock apply前，嘗試receiver withdraw，記錄結果、caller/mode及guard contract。未證明funds invariant violation前不得標P0。
-- [x] Run `./gradlew.bat test --tests '*OutcomeTest' --tests '*CompensationTest' --tests '*FailureSemanticsTest' --tests '*AdmissionFailureTest' --tests '*PendingStateTest' --tests '*TransferOrchestratorGuardWindowTest'`。Expected依fixture與實際行為判定，不預設所有risk必fail；已正確者附反證。不得修改断言以保护bug。
+- [x] Run `./gradlew.bat test --tests '*OutcomeTest' --tests '*CompensationTest' --tests '*FailureSemanticsTest' --tests '*AdmissionFailureTest' --tests '*PendingStateTest' --tests '*TransferOrchestratorGuardWindowTest'`。Expected依fixture與實際行為判定，不預設所有risk必fail；已正確者附反證。不得修改斷言以保護bug。
 - [x] 更新08 Evidence register：每疑點CONFIRMED／DISPROVED／INCONCLUSIVE／DEFERRED、proof adequacy、priority、owner、minimal repair或next evidence、release impact；沒有再現不得寫confirmed P0。Exit：全數有triage與review，未解決項有後續，不能把NOT_RUN填PASS。
 
-### T02 [P0-CANDIDATE] — 明确mutation结果、fallback与一次事件
+### T02 [P0-CANDIDATE] — 明確mutation結果、fallback與一次事件
 
 **Status:** COMPLETE (2026-10-05) — ADR-07 minimum repair scope implemented in `f1dd716`, independently reviewed, and verified by scoped gates plus the minimum-Paper PlugDev smoke; remaining P0 fixes stay with their assigned owners. T02 owns E01 and E04 mandatory correctness fixes plus E07's existing P1 gate/attribution fix. E02 remains owned by T07; E03 by T03; E05 by T06/T08; E06 by T03/T15. E08 remains INCONCLUSIVE / P0-CANDIDATE and is not a mandatory correctness fix. This approval authorizes no new engine, recovery format, or public contract. **Required references:** 04§5/10/11/21；01 E01/E04/E07；08 ADR-07。其餘只在新證據需要時擴讀。
 
@@ -245,24 +245,24 @@ This is one single-node Paper bounded subcase and does not close M01–M03 or T2
 
 **Interfaces:** No new type or public signature. `TransactionWriter.withdraw` records this invocation's accepted mutation inside `compute`; plugin attribution uses the existing event `reason` field; `EconomyEvent` retains its current signed-delta and absolute-balance fields. The consumer holds accepted work while shared Redis is known degraded and resumes after recovery.
 
-- [x] 先断言insufficient/concurrent/policyreject无successpost、无queuedelta、无versionadvance；plugin wrapper一个pre/post/completion且attribution保留。
+- [x] 先斷言insufficient/concurrent/policyreject無successpost、無queuedelta、無versionadvance；plugin wrapper一個pre/post/completion且attribution保留。
 - [x] 單獨修outcome判定，移除snapshotversion作為success推論；consumer不根據EventSource重解釋金額；已accepted ADD保留signed delta、SET使用absolute target並等Redis authority恢復。
-- [x] shared/synchronized authority不可用時拒絕新writes並保留已accepted work；不以SQL fallback建立新authority。保留既有`allow-in-degraded`设置语义、不改默认；migration note記錄1.3.2相容行為差異與non-durable boundary。
+- [x] shared/synchronized authority不可用時拒絕新writes並保留已accepted work；不以SQL fallback建立新authority。保留既有`allow-in-degraded`設置語義、不改默認；migration note記錄1.3.2相容行為差異與non-durable boundary。
 - [x] Scoped root T02 gate `./gradlew.bat :test --rerun-tasks --tests '*MutationOutcomeTest' --tests '*ConsumerFailureSemanticsTest.degradedRedisRetainsSignedWithdrawalUntilRecovery' --tests '*ConsumerFailureSemanticsTest.degradedRedisUsesAbsoluteSetAfterRecovery' --tests '*TransactionWriterOutcomeTest'` — 6 tests, 0 failures/errors/skips, exit 0. Extra `ConsumerShutdownTest` smoke also passed 1/1. `test` (without `:`) applies these class filters to the PAPI subproject, which has no matching tests. E05/E08 methods remain outside this gate under their approved owners; E08 is non-mandatory.
 - [x] Final T02 focused gate, including Redis transport/degraded-state and startup-lockdown regressions: 14 tests, 0 failures/errors/skips, exit 0; final command and per-suite counts are in 06.
 
-### T03 [P0-CANDIDATE] — 非阻塞容量reservation与pendingownership
+### T03 [P0-CANDIDATE] — 非阻塞容量reservation與pendingownership
 
 **Required references:** 04§5/17/21；05 internal candidates T03；06 V01。其餘只在新證據需要時擴讀。
 
 **Depends:** T02。**Files:** coreportWriteAdmission/AdmissionToken、`BoundedWriteAdmission`、`AccountStateStore`；modifyqueue/writer/MemoryStateManager；test `AdmissionReservationTest`。
 
-**Interfaces:** 候選 `tryReserve(int)`、commit/close，或既有queue等效容量控制；producers立即返，worker允许poll等待。T01/ADR-07選最小方案後記exact signatures，不預先freeze新框架。
+**Interfaces:** 候選 `tryReserve(int)`、commit/close，或既有queue等效容量控制；producers立即返，worker允許poll等待。T01/ADR-07選最小方案後記exact signatures，不預先freeze新框架。
 
-- [x] capacity2：reserve2后第三笔empty，memoryunchanged；release未commit后可重新reserve；重复close无double-release；committedrelease仅由workercompletion。
-- [x] barrier：producerreserve后worker不能提前处理未commitenvelope；fullqueue无offerWithTimeout/Redis/filesystem。policythrows/reservationcancel不泄漏。
+- [x] capacity2：reserve2後第三筆empty，memoryunchanged；release未commit後可重新reserve；重覆close無double-release；committedrelease僅由workercompletion。
+- [x] barrier：producerreserve後worker不能提前處理未commitenvelope；fullqueue無offerWithTimeout/Redis/filesystem。policythrows/reservationcancel不泄漏。
 - [x] activepending禁止expire/capacityevict；remoteequal/older返回notapplied；forceupdate只放明確maintenance lock路徑。
-- [x] Root `:test` admission/pending/consumer regression通过。未建立 `:syncmoney-core` Gradle scaffold：本task是既有實作的最小修復；新增module/scaffold不是correctness fix所需，會擴大ADR-07核准範圍。Exit：implementation callers無timed offer；oldest accepted age遍歷未完成reservation及in-flight/retry ownership。
+- [x] Root `:test` admission/pending/consumer regression通過。未建立 `:syncmoney-core` Gradle scaffold：本task是既有實作的最小修復；新增module/scaffold不是correctness fix所需，會擴大ADR-07核準範圍。Exit：implementation callers無timed offer；oldest accepted age遍歷未完成reservation及in-flight/retry ownership。
 
 ### T04 [P0-CANDIDATE] — Async cold loading與LOCAL persistence
 
@@ -301,7 +301,7 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 - [x] Latest minimum Paper PlugDev warm acceptance: Paper `1.21.6-48-main@4d854e6`, Java `25.0.4+7-LTS-189`, Syncmoney candidate SHA above, VaultUnlocked `2.20.2` SHA-256 `BD9E7A31F1B2D31A591497174887EEA7AE7E632C6B179DA13E4F0AD732DE2DF7`; `ACCEPTANCE PASS ... mode=LOCAL ... total=1520.00`.
 - [x] Real-server V04 cold behavior and minimum Paper acceptance: Paper `1.21.6-48-main@4d854e6` on Java `25.0.4+7-LTS-189` logged `ACCEPTANCE PASS ... mode=LOCAL ... total=1520.00`; after graceful stop/restart it logged `ACCEPTANCE READ cold-vault-a=NaN cold-vault-b=NaN a=1000.00 b=520.00`. Syncmoney JAR SHA-256 `11e7cbdf7041f598fabdff70c0775f3abf8d9ab32539aabcb15846392875f146`; VaultUnlocked `2.20.2`, SHA-256 `BD9E7A31F1B2D31A591497174887EEA7AE7E632C6B179DA13E4F0AD732DE2DF7`. Paper `/version` update checker logged upstream 404; startup logs establish the exact server build. External plugin matrix, live Redis/SQL latency, Folia/Canvas, forced-kill/power-loss remain NOT RUN.
 
-### T05 [P0-CANDIDATE] — Atomic receipt与SQL stale protection
+### T05 [P0-CANDIDATE] — Atomic receipt與SQL stale protection
 
 **Required references:** 04§10/11；02 SQL/receipt事實；06 V01/V02。其餘只在新證據需要時擴讀。
 
@@ -309,10 +309,10 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Interfaces:** authority回傳balance/version同一結果，禁止laterGETversion拼配；receipt(operationId,Listconfirmedaccounts)、PersistencePort.persist只是候選signature，不綁死class model。
 
-- [x] Rediswrite返回balance90/version7，随后其他writer变v8；本receipt仍90/7；publishSQL同时用90/7。
-- [x] dialectfixturesv41后v40不覆写；v41同balance重复safe；v41异balance标conflict；batchrollback保持所有之前行。
-- [x] 以PostgreSQL、MySQL、MariaDB真实backend测条件upsert，不只mockSQLstring；SQLite保留REALformat但no stalewrite。
-- [x] `./gradlew.bat :test --rerun-tasks --tests '*ReceiptPairingTest' --tests '*SqlMonotonicSnapshotTest'` 与 `:syncmoney-storage:integrationTest --rerun-tasks`。old1.3writer仍能regress的负向fixture保留mixedlimitation。
+- [x] Rediswrite返回balance90/version7，隨後其他writer變v8；本receipt仍90/7；publishSQL同時用90/7。
+- [x] dialectfixturesv41後v40不覆寫；v41同balance重覆safe；v41異balance標conflict；batchrollback保持所有之前行。
+- [x] 以PostgreSQL、MySQL、MariaDB真實backend測條件upsert，不只mockSQLstring；SQLite保留REALformat但no stalewrite。
+- [x] `./gradlew.bat :test --rerun-tasks --tests '*ReceiptPairingTest' --tests '*SqlMonotonicSnapshotTest'` 與 `:syncmoney-storage:integrationTest --rerun-tasks`。old1.3writer仍能regress的負向fixture保留mixedlimitation。
 ### T05 execution record — 2026-10-07
 
 - Status: COMPLETE; first dependency-ready task after T04. Baseline branch `linco/syncmoney-1.4.0-architecture-foundation-t00`, HEAD `b540cc6` before T05 changes.
@@ -356,21 +356,21 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 - NOT RUN at task start: real Redis two-node consumer transfer, LOCAL SQLite pair rollback, shared-SQL pair stale/reconcile behavior, lost-response through paired consumer, and post-receipt SQL failure. These remain T07 acceptance items.
 
 
-### T06 [P0-CANDIDATE] — Redis错误原子边界、结果去重与不确定执行
+### T06 [P0-CANDIDATE] — Redis錯誤原子邊界、結果去重與不確定執行
 
 **Required references:** 04§9/11/21；02 Lua；06 V01；08 ADR-07。其餘只在新證據需要時擴讀。
 
-**Depends:** T05。**Files:** RedisReplicationAdapter、RequestExecutionState、protocolLua候选脚本；test `RedisMutationSafetyIT/RedisExecutionAmbiguityIT`。
+**Depends:** T05。**Files:** RedisReplicationAdapter、RequestExecutionState、protocolLua候選腳本；test `RedisMutationSafetyIT/RedisExecutionAmbiguityIT`。
 
 **Interfaces:** 固定可區分未送出／執行未知／已確認的failure semantics與成對結果；apply/receipt、RequestExecutionState及dedupkey `syncmoney:op:<requestId>`是候選，若採用則按T06/ADR-07約束，不強制新增此model。
 
-- [x] add/set/transfer正常returns与legacy兼容；missing/unknownfields由T10codec负责。scriptwrongtype任一key/versionoverflow/invalidmoney都第一mutation前拒绝，无senderdebit。Coverage: 20 isolated Redis mutation-safety cases; see 06 T06.
-- [x] 同UUIDtransferreject、insufficientnoeffect；`SCRIPT FLUSH`後add/set/transfer统一NOSCRIPTreload。Coverage: Redis subprocess tests include all three scripts and `/pay` lazy/NOSCRIPT reload.
-- [x] Redis已commit但response丢失時，沒有可確認receipt就保持`SENT_UNKNOWN`並quarantine queue event；不盲目重做delta。未新增 operation marker，因此不宣稱 exactly-once；剛生成`NOT_SENT`可首次提交。
+- [x] add/set/transfer正常returns與legacy兼容；missing/unknownfields由T10codec負責。scriptwrongtype任一key/versionoverflow/invalidmoney都第一mutation前拒絕，無senderdebit。Coverage: 20 isolated Redis mutation-safety cases; see 06 T06.
+- [x] 同UUIDtransferreject、insufficientnoeffect；`SCRIPT FLUSH`後add/set/transfer統一NOSCRIPTreload。Coverage: Redis subprocess tests include all three scripts and `/pay` lazy/NOSCRIPT reload.
+- [x] Redis已commit但response丟失時，沒有可確認receipt就保持`SENT_UNKNOWN`並quarantine queue event；不盲目重做delta。未新增 operation marker，因此不宣稱 exactly-once；剛生成`NOT_SENT`可首次提交。
 - [x] No operation marker selected; TTL/eviction/restart marker claims are N/A. Unknown-result quarantine is verified within the running process. T08 owns durable quarantine/recovery; no cross-restart durability claim.
 - [x] `./gradlew.bat :syncmoney-sync:integrationTest --rerun-tasks` — 27 tests, 0 failures/errors/skips; exit 0. This distinguishes preflight rejection from ambiguous runtime failure and makes no exactly-once claim.
 
-### T07 [P0-CANDIDATE] — 成对transfer及authority拒绝重建
+### T07 [P0-CANDIDATE] — 成對transfer及authority拒絕重建
 
 **Required references:** 04§5/10/11；01 E02；06 V01；08 ADR-07。其餘只在新證據需要時擴讀。
 
@@ -378,13 +378,13 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Interfaces:** required為雙腿拒絕零effect、可確認的成對結果／補償；pairenvelope/slot與SQL pair transaction屬ADR-07候選。SYNC authority確認與legacy local acceptance分開；選型後記exact interface，不強制替代全pipeline。
 
-- [x] 先两侧policy与READY/sufficient检查，再UUID稳定顺序短criticalsectionpairmutation+reservationcommit；receivercancel时两侧balance/version/queue都不变。Root transfer fixtures pass。
-- [x] failurebetweenlegs、localSQLrollback、Redisdefinitiveinsufficient、lostresponse、postreceiptSQLfailure各test；补偿不能只memory、不能不可识别重加delta。Root T07 focused gate covers these local failure paths.
-- [x] 两node同cache100各withdraw80，Redis拒绝一笔时pendingprovisional按confirmedbase重建且告警，不能出现credit180；同account其他pending按顺序revalidate，ambiguous→UNAVAILABLE。Redis subprocess integration passes.
+- [x] 先兩側policy與READY/sufficient檢查，再UUID穩定順序短criticalsectionpairmutation+reservationcommit；receivercancel時兩側balance/version/queue都不變。Root transfer fixtures pass。
+- [x] failurebetweenlegs、localSQLrollback、Redisdefinitiveinsufficient、lostresponse、postreceiptSQLfailure各test；補償不能只memory、不能不可識別重加delta。Root T07 focused gate covers these local failure paths.
+- [x] 兩node同cache100各withdraw80，Redis拒絕一筆時pendingprovisional按confirmedbase重建且告警，不能出現credit180；同account其他pending按順序revalidate，ambiguous→UNAVAILABLE。Redis subprocess integration passes.
 - [x] SQL pair persistence uses one transaction/savepoint; both legs are checked before stale/conflict classification, and an equal-version balance conflict rolls back the pair without overwriting a newer row. SQLite regressions and the isolated PostgreSQL 18.1 / MySQL 8.0.42 / MariaDB 12.3.3 gate passed; see 06 T07.
 - [x] Transfer-focused root gate: 84/84; root regression: 355/355; Redis integration: 28/28; SQL real-backend integration: 1/1; PAPI: 5/5; preview packaging passed. Independent funds and boundary reviews have no remaining finding. Public transfer API remains DEFER.
 
-### T08 [P0-CANDIDATE] — Recovery格式、checkpoint与drain
+### T08 [P0-CANDIDATE] — Recovery格式、checkpoint與drain
 
 **Required references:** 04§21；01 E05/E08；06 M03；08 ADR-07/ADR-15。其餘只在新證據需要時擴讀。
 
@@ -404,12 +404,12 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Depends:** T00,T08。**Files:** ConfigMerger/ConfigReloadPolicy/ConfigManager、SchemaManager/DatabaseManager；tests `ConfigUpgradeFailureTest/SchemaMigrationFailureIT`。
 
-**Interfaces:** migrationcandidatevalidated+backup+replace，实际表 `syncmoney_schema_version` identities独立。
+**Interfaces:** migrationcandidatevalidated+backup+replace，實際表 `syncmoney_schema_version` identities獨立。
 
-- [ ] schema12没有missingkeys仍保持12；旧schema加keys后才更新版本；未知customkey和值保留；re-run不改变语义、不重复覆盖backup。
-- [ ] backup失败不继续write，newbackup含uniqueUTC/UUID；tempwrite/replacefail原档完整；yamlcomments行为记录（原merger重写不保证comments，不能偷承诺byteidentical）；没有修改必要时不重写。
-- [ ] DDL失败version不advance、新er schema不可被startupensure改写、mainid1/audit11独立；configrestartrequiredcandidate不halfapply。
-- [ ] `./gradlew.bat test --tests '*ConfigUpgradeFailureTest' --tests '*SchemaMigrationFailureIT' --tests '*ConfigReloadPolicyTest'`。Exit：无新key留config12，无rename/removal。
+- [ ] schema12沒有missingkeys仍保持12；舊schema加keys後才更新版本；未知customkey和值保留；re-run不改變語義、不重覆覆蓋backup。
+- [ ] backup失敗不繼續write，newbackup含uniqueUTC/UUID；tempwrite/replacefail原檔完整；yamlcomments行為記錄（原merger重寫不保證comments，不能偷承諾byteidentical）；沒有修改必要時不重寫。
+- [ ] DDL失敗version不advance、新er schema不可被startupensure改寫、mainid1/audit11獨立；configrestartrequiredcandidate不halfapply。
+- [ ] `./gradlew.bat test --tests '*ConfigUpgradeFailureTest' --tests '*SchemaMigrationFailureIT' --tests '*ConfigReloadPolicyTest'`。Exit：無新key留config12，無rename/removal。
 
 ### T10 [P1] — Protocol module與legacywrapper
 
@@ -417,9 +417,9 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Depends:** T06,T09。**Files:** protocolbuild.gradle/RedisKeys/Channels/Legacy*Codec、legacyPubSubMessage/MessageKeys/PubSubChannels wrappers；fixturesprotocolJSON/Lua。
 
-**Interfaces:** `LegacyProtocolCodec.decodeBalance(String): Optional<LegacyBalanceMessage>`、`encodeBalance(LegacyBalanceMessage): String`，CMI同样；`RedisKeys.balance(UUID)/version(UUID)`返回原literal。
+**Interfaces:** `LegacyProtocolCodec.decodeBalance(String): Optional<LegacyBalanceMessage>`、`encodeBalance(LegacyBalanceMessage): String`，CMI同樣；`RedisKeys.balance(UUID)/version(UUID)`返回原literal。
 
-- [x] oldrealcodec→newdecode、newencode→olddecode雙向；nullableomitted、amount0.0、unknownenum、long>2^53、scientificnotation、badUUID/bigpayload等明確assert。实际 1.3.2 JAR 与新 codec 已在 JDK 25 互读，并保留超過 2^53 的 long。
+- [x] oldrealcodec→newdecode、newencode→olddecode雙向；nullableomitted、amount0.0、unknownenum、long>2^53、scientificnotation、badUUID/bigpayload等明確assert。實際 1.3.2 JAR 與新 codec 已在 JDK 25 互讀，並保留超過 2^53 的 long。
 - [x] 不新增requiredprotocolVersion；absent=1；numericdoublefields保留。Legacywrappersbinarysignature不變。
 - [x] Lua一份canonicalprocess到`lua/*.lua`且舊loaderpath沒變；byte/semanticgoldens區分提取與T06fix。
 - [x] `./gradlew.bat :syncmoney-protocol:test`，dependencies禁止Bukkit/Jedis/JDBC/CMI。Exit：codec明確自帶library不依賴PaperGson。
@@ -443,17 +443,17 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Required references:** 04§5/6/7；05 internal candidates；06 V00。其餘只在新證據需要時擴讀。
 
-**Depends:** 經ADR-07確認的T03–T10 interface；T11僅read DTO已選部分，不依未成熟mutationAPI。**Files:** coremodule全部state/policy/admission/money；legacyfacade/wrappers留bukkit未来root；`settings.gradle/build.gradle`。
+**Depends:** 經ADR-07確認的T03–T10 interface；T11僅read DTO已選部分，不依未成熟mutationAPI。**Files:** coremodule全部state/policy/admission/money；legacyfacade/wrappers留bukkit未來root；`settings.gradle/build.gradle`。
 
-**Interfaces:**使用已核准最小internal contract，不建立無caller的candidate types；core depends api、JDK。
+**Interfaces:**使用已核準最小internal contract，不建立無caller的candidate types；core depends api、JDK。
 
 **Interfaces/update log (2026-10-09, before implementation):** `syncmoney-core` owns `core.state.AccountState(BigDecimal balance, long version, long lastAccessTime)`, `core.state.AccountStateStore` (UUID keyed account snapshots, atomic map operations, and stable UUID ordered `lockAccounts`/`tryLockAccount` lease), `core.money.MoneyPolicy` (existing HALF_UP scale-2 normalization and balance bound), and `core.admission.WriteAdmission` (`tryAcquire`, timed `acquire`, idempotent lease close). Consumers are the existing `MemoryStateManager`, `EconomyFacade`, `TransactionWriter`, `TransferOrchestrator`, `EconomyWriteQueue`, and compatibility `NumericUtil`/`Constants`; these existing owners remain responsible for adapters, event/recovery policy, logging, and lifecycle. `EconomyFacade.EconomyState`, `TransferContext`, and `PendingRollback` retain their existing nested public binary shape; state manager maps core snapshots internally and converts only at the legacy public accessor. No new Redis, SQL, CMI, public SDK, or persistence contract is introduced. Ruling: extract the small pure primitives used by the current engine and keep adapter-heavy reconciliation in its Bukkit owner; cost if wrong: state policy may remain less centralized than a future core-only engine, but this avoids moving third-party lifecycle/storage semantics or breaking legacy record descriptors during this task.
 
-- [x] 先tests验证core可无Paper/Jedis/JDBC运行，同normalization`1.005→1.01`与invariantcases。
-- [x] 将state/engine搬core；Plugin/logger/clock/scheduler/event改注入JDKClock、policy/observer，core不newexecutors或findPlugin。
-- [x] 旧 `EconomyFacade.EconomyState/TransferContext/PendingRollback` wrapperbinaryshape保留（core不引用wrapper），legacygettersdelegate。
-- [x] `./gradlew.bat :syncmoney-core:test :syncmoney-core:verifyArchitecture`。FutureverifyArchitecture定义为resolveddependency+bytecodeforbiddenrefs，失败输出完整edge/path。
-- [x] Exit：无cycle、无platform/infrastructuralimports，tests不靠root implementation穿透module。
+- [x] 先tests驗證core可無Paper/Jedis/JDBC運行，同normalization`1.005→1.01`與invariantcases。
+- [x] 將state/engine搬core；Plugin/logger/clock/scheduler/event改注入JDKClock、policy/observer，core不newexecutors或findPlugin。
+- [x] 舊 `EconomyFacade.EconomyState/TransferContext/PendingRollback` wrapperbinaryshape保留（core不引用wrapper），legacygettersdelegate。
+- [x] `./gradlew.bat :syncmoney-core:test :syncmoney-core:verifyArchitecture`。FutureverifyArchitecture定義為resolveddependency+bytecodeforbiddenrefs，失敗輸出完整edge/path。
+- [x] Exit：無cycle、無platform/infrastructuralimports，tests不靠root implementation穿透module。
 
 ### T12 completion — 2026-10-09
 
@@ -466,20 +466,20 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 - Independent architecture and state/concurrency reviews found no actionable findings; both were source-only and ran no tests.
 - NOT RUN: PlugDev/Paper runtime acceptance for this extraction, Folia, Canvas, and live external consumer coverage. No such runtime claim is made.
 - Next dependency-ready task: T13. No new ADR or product-contract change was required.
-### T13 [P1] — CMI安全freshness與clock异常
+### T13 [P1] — CMI安全freshness與clock異常
 
 **Required references:** 04§11/12；02 CMI；06 V05；08 ADR-07。其餘只在新證據需要時擴讀。
 
 **Depends:** T10,T12。**Files:** platformCMIEconomyHandler/CMIPubsubHandler/CMIApi/CMIVersioning；Redispairedmirroradapter；test `CmiClockCompatibilityTest/CmiOwnerFreshnessTest`。
 
-**Interfaces:**port传UUID+amount+legacyversion，playerlookup/CMIcall只Bukkitadapter；Clock注入。
+**Interfaces:**port傳UUID+amount+legacyversion，playerlookup/CMIcall只Bukkitadapter；Clock注入。
 **Interfaces/update log (2026-10-09, before implementation):** preserve the existing public `CMIVersioning.generateVersion(AtomicLong)` and the legacy numeric CMI version field. Add only package-private `CMIVersioning.generateVersion(AtomicLong, Clock)` and `CMIPubsubHandler(Syncmoney, SyncmoneyConfig, RedisManager, CMIApi, CMIEconomyHandler, Clock)` test seams while retaining both existing public constructors. `CMIPubsubHandler` remains the owner of the bounded per-account inbound watermark and dispatches CMI mutations only through the entity scheduler; callback freshness is checked before mutation and inbound application retains outbound-echo suppression. Keep platform code in its existing root location until T14's assembly task; do not create an unused port or duplicate source FQCN. No Redis key, wire field, global sequence, or persistence contract is selected. Clock rollback, skew, restart/counter wrap, and TTL expiry are characterized before deciding whether to retain P2 deferral; a synthetic failure alone does not establish a live CMI money defect.
 
 **Interfaces/update log (2026-10-09, paired mirror ruling):** `noietime.syncmoney.sync.CMIRedisMirror` is the shared internal adapter used by join reconciliation and inbound/outbound CMI mirror writes. `read(UUID): Optional<Snapshot>` issues one MGET for the existing balance/version keys; missing, partial, malformed, degraded, or failed reads return empty and skip reconciliation. `write(UUID, BigDecimal, long)` issues one MSET for those same keys. It adds no SDK/API package, Redis key, wire field, sequencing, or compare-and-set behavior. See ADR-16.
 
 - [x] 必測clock rollback/skew/counterwrap/restart相等version、TTL expiry、long精度並記錄現況；wire維持legacy欄位，不改為RedisINCR。local clock rejection、同version conflict policy、跨節點全域排序仍是P2，不因合成clock結果直接改behavior。
 - [x] entity callback排入後新state到達時拒絕舊callback；retired/offline不觸碰CMI；inbound echo不發第二消息。
-- [x] CMI join reconcile 以MGET取得一致的既有balance/version snapshot；inbound/outbound以MSET寫同一pair。旧CMI writer及相同/較舊legacy版本仍無CAS排序保障，維持P2；不宣稱global monotonic。
+- [x] CMI join reconcile 以MGET取得一致的既有balance/version snapshot；inbound/outbound以MSET寫同一pair。舊CMI writer及相同/較舊legacy版本仍無CAS排序保障，維持P2；不宣稱global monotonic。
 - [x] JDK 25.0.4 / Gradle 9.8.0 root focused suite 18/18；完整root suite 466/466；`shadowJar`及既有public JVM descriptor檢查通過。完整命令與限制記於06。
 - [ ] **V05 licensed CMI acceptance: BLOCKED.** Syncmoney worktree與本機PlugDev均未找到授權CMI JAR；不得下載未授權JAR或以mock稱為runtime PASS。T13 task status為BLOCKED，直到提供授權runtime與版本後重跑V05。
 
@@ -493,7 +493,7 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 - E07 remains P1. E08 remains INCONCLUSIVE / P0-CANDIDATE and outside mandatory correctness scope.
 - T13 code and required local evidence are committed in `6aa85fc` (implementation/tests) and `64a2b42` (documentation); overall T13 remains **BLOCKED by V05**. Sequencing ruling (2026-10-09): T14's `Depends` field requires T13's necessary CMI contract and assembly prerequisites, not live CMI acceptance. ADR-16, E1 pair/clock/freshness evidence, preserved public JVM descriptors, and the source-location handoff satisfy that bounded dependency. Start T14 while retaining V05 as NOT RUN/BLOCKED; this does not establish real CMI compatibility or waive the later T21/release gate. Cost if wrong: assembly could reveal an additional CMI runtime incompatibility, but no runtime claim or release may pass on this evidence alone.
 
-### T14 [P1] — Assembly模块、root aliases与legacycompat
+### T14 [P1] — Assembly模塊、root aliases與legacycompat
 
 **Status:** COMPLETE (2026-10-09, implementation commit `a0e7e7b`). T13 V05 remains an independent BLOCKED / NOT RUN live-integration gate; this task does not claim CMI runtime acceptance.
 
@@ -502,13 +502,13 @@ Shared-mode shutdown follow-up (commit `8326daa`): `EconomyEventConsumer.shutdow
 
 **Depends:** T12；T13必要CMI contract與搬移相關段須完成，但不等待P2 global clock redesign。**Files:**各modulebuild.gradle/settings、rootassembly、bukkitsources、CIcoveragepaths、embeddedJavafilepathscript；compiledlegacyfixtures。
 
-**Interfaces:**root `test`聚合各moduletests、`shadowJar`输出`build/libs/Syncmoney-${version}.jar`、`acceptanceJar`仍`build/acceptance/SyncmoneyAcceptance.jar`、`preparePlugdev`仍`build/plugdev/Syncmoney.jar`。
+**Interfaces:**root `test`聚合各moduletests、`shadowJar`輸出`build/libs/Syncmoney-${version}.jar`、`acceptanceJar`仍`build/acceptance/SyncmoneyAcceptance.jar`、`preparePlugdev`仍`build/plugdev/Syncmoney.jar`。
 
 - [x] 先archive/resource/classesmanifesttest防duplicates/missing；移source根但保留FQCN/descriptor/resource/datafolder。
-- [x] storage/sync分cleanadapter移；Bukkit依赖的managers/CMI仍bukkit。保留frontend目录、canonicalresources，更新sync-embedded-web.mjs Java目标至bukkit path。
-- [x] coverage聚合旧CI需路径同步；ServerprovidedAdventure/Vault/CMI不shade；SQLitenative/JDBCservice和JSONshading可用；API只有一份且不relocate。
-- [x] 既有binaryconsumer与reflection/PAPIcrosspair通过；APIchecker比较自alpha冻结signature，legacy另外compare1.3.2artifact。
-- [x] `./gradlew.bat test :syncmoney-sync:integrationTest :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport verifyArchitecture verifyPackaging preparePlugdev --rerun-tasks --no-daemon --console=plain`。Exit：singleJAR，无testkit/bench/probe混入。
+- [x] storage/sync分cleanadapter移；Bukkit依賴的managers/CMI仍bukkit。保留frontend目錄、canonicalresources，更新sync-embedded-web.mjs Java目標至bukkit path。
+- [x] coverage聚合舊CI需路徑同步；ServerprovidedAdventure/Vault/CMI不shade；SQLitenative/JDBCservice和JSONshading可用；API只有一份且不relocate。
+- [x] 既有binaryconsumer與reflection/PAPIcrosspair通過；APIchecker比較自alpha凍結signature，legacy另外compare1.3.2artifact。
+- [x] `./gradlew.bat test :syncmoney-sync:integrationTest :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport verifyArchitecture verifyPackaging preparePlugdev --rerun-tasks --no-daemon --console=plain`。Exit：singleJAR，無testkit/bench/probe混入。
 
 T14 execution record (2026-10-09, preflight): T12 complete; T13 required mirror-pair contract and source movement complete, with licensed-runtime V05 retained as a separate BLOCKED T21/release gate. Before-assembly manifest is preserved under ignored build/reports/foundation/T14-before-assembly-manifest.txt; it is the current checkout's default-version artifact, not the released 1.3.2 binary. Source inventory found 220 root production Java files and 92 root tests. Resources stay canonical at root per 04 §7. The minimum extraction keeps Bukkit-bound managers in syncmoney-bukkit, moves DbWriteQueue to storage and pure PubSubMessage/CMIVersioning to sync, and preserves all FQCNs and root task/artifact aliases.
 T14 closure (2026-10-09): implementation commit `a0e7e7b1bd42b205b6bafe2dd197a3f007d92aa8`. The new `syncmoney-bukkit` module owns platform/runtime Java and tests while canonical resources and root aliases remain stable. `DbWriteQueue` is in storage; `PubSubMessage` and `CMIVersioning` are in sync; public package names/descriptors are preserved. `verifyArchitecture` checks resolved compile/runtime project and external-dependency boundaries across production modules. The sync Redis integration source set has only test-scoped storage/Bukkit/Hikari/Vault dependencies. No ADR or public product contract changed.
@@ -519,7 +519,7 @@ T14 closure (2026-10-09): implementation commit `a0e7e7b1bd42b205b6bafe2dd197a3f
 - Initial independent assembly review found `verifyArchitecture` did not validate resolved dependencies across all modules; the gate was extended and passed in the final matrix. Targeted independent re-review found no critical or important remaining issue. `git diff --check` passed before commit.
 - NOT RUN: T14-specific Paper/PlugDev server launch, Folia, Canvas, live SQL/Redis fleet, and licensed CMI runtime. Licensed CMI remains BLOCKED under V05 and is a T21/release gate; no CMI runtime acceptance is claimed. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and outside mandatory correctness scope.
 
-### T15 [P0-CANDIDATE] — Lifecycle、disabled与entityownership
+### T15 [P0-CANDIDATE] — Lifecycle、disabled與entityownership
 
 **Status:** COMPLETE (2026-10-09, final scheduler repair). T14 is complete; T13 licensed CMI V05 remains an independent T21/release gate and is not waived by T15.
 
@@ -527,12 +527,12 @@ T14 closure (2026-10-09): implementation commit `a0e7e7b1bd42b205b6bafe2dd197a3f
 
 **Depends:** T14。**Files:** Syncmoney/PluginInitializationManager/serviceowners/playerlisteners/transferguard；test `LifecycleFailureMatrixTest/AcceptedWriteLogoutTest`。
 
-**Interfaces:**ownerstart/stopProducers/drain/close明确；sameguardinstance；sync inboundstop与outboundclose分开。
+**Interfaces:**ownerstart/stopProducers/drain/close明確；sameguardinstance；sync inboundstop與outboundclose分開。
 
-- [x] 每initstagefail→已创建handles逆序关且各异常独立；disabledfeatureszeroexecutor/schema/folder/http/subscriptions；perplayerguard独立globalbreaker。
-- [x] logout/teleportdeadline只cleartracking不移queue；livecallbackretirement取消；globalcollectionsnapshot后entitydispatch、teleportAsync保cause/destination。
+- [x] 每initstagefail→已創建handles逆序關且各異常獨立；disabledfeatureszeroexecutor/schema/folder/http/subscriptions；perplayerguard獨立globalbreaker。
+- [x] logout/teleportdeadline只cleartracking不移queue；livecallbackretirement取消；globalcollectionsnapshot後entitydispatch、teleportAsync保cause/destination。
 - [x] producerstop後newAPI/Vaultreject；queue/retry/drain時DB/Redis/audit仍live；closeauditthrow不阻storageclose。
-- [x] unitmatrix＋06 realPaper/Folia/Canvasoff/on；minimum Paper network logout/deferred teleport。Exit：所有ownercloseattempt记录，无跨regionwait。
+- [x] unitmatrix＋06 realPaper/Folia/Canvasoff/on；minimum Paper network logout/deferred teleport。Exit：所有ownercloseattempt記錄，無跨regionwait。
 
 T15 preflight (2026-10-09, source SHA `a0e7e7b1bd42b205b6bafe2dd197a3f007d92aa8`): tracked worktree was clean on `linco/syncmoney-1.4.0-architecture-foundation-t00`. Source review found missing per-owner disable isolation; economy provider unregister/quiescence before drain; cancellation/fencing for delayed Vault and VaultUnlocked registration; unregistering event handlers before persistence drain; and retained cancellation handles for version refresh/cache cleanup schedules. These gaps are closed in this task with owner-scoped shutdown steps, provider/listener/task lifecycle fences, and focused regression tests. `EconomyWriteQueue.closeAdmission()` remains the accepted-write boundary and preserves pre-close reservations.
 
@@ -556,7 +556,7 @@ T15 final closure (2026-10-09): the final scheduler review finding was fixed in 
 T16 closure (2026-10-09): ADR-05 was preserved. Independent contract/security review findings were repaired and targeted re-reviews found no remaining actionable issue. No public API, config/schema, REST/SSE path or envelope, Redis/SQL wire, or recovery format was added. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and outside mandatory correctness scope.
 
 NOT RUN: a T16-specific PlugDev/Paper/Folia/Canvas Web Admin runtime acceptance and frontend build:embedded. No frontend source/assets changed. These results establish local automated behavior only.
-### T17 [P1] — Testkit整合與真实backendhelpers
+### T17 [P1] — Testkit整合與真實backendhelpers
 
 **Required references:** 04§19；06 V01/V02；需實作的fake port契約。其餘只在新證據需要時擴讀。
 
@@ -564,11 +564,11 @@ NOT RUN: a T16-specific PlugDev/Paper/Folia/Canvas Web Admin runtime acceptance 
 **Status:** COMPLETE (2026-10-09; implementation commit `26e0fb7`).
 **Preflight ruling (2026-10-09):** T12 explicitly retained only caller-backed core primitives and rejected unused candidate types; current `syncmoney-core` has no account-repository or replication interfaces. Keep the fake port contract in the `syncmoney-testkit` test-fixture variant and validate its version/error/idempotency behavior against existing storage/Redis semantics, without adding production core ports or runtime dependencies. Cost if wrong: test-only contracts could drift from a later production port; mitigate with reusable conformance tests against available real adapters.
 
-**Interfaces:**fake实现coreports，controls `failBeforeCommit/failAfterCommit/dropResponse/deliverDuplicate/deliverOutOfOrder/retireEntity`；JDKClock可ManualClock subclass。
+**Interfaces:**fake實現coreports，controls `failBeforeCommit/failAfterCommit/dropResponse/deliverDuplicate/deliverOutOfOrder/retireEntity`；JDKClock可ManualClock subclass。
 
-- [x] fake版本与realcontract不一致时contracttestsfail；unconditionalMapputfake不合格。
-- [x] sharedfixtures来源actual1.3.2、knownIDs/syntheticdb、no secret；各module仅testImplementation(testFixtures(...))。
-- [x] `./gradlew.bat :syncmoney-testkit:test verifyPackaging`；真Redis/MySQL/MariaDB/PostgreSQL/SQLitehelpers仅disposables。
+- [x] fake版本與realcontract不一致時contracttestsfail；unconditionalMapputfake不合格。
+- [x] sharedfixtures來源actual1.3.2、knownIDs/syntheticdb、no secret；各module僅testImplementation(testFixtures(...))。
+- [x] `./gradlew.bat :syncmoney-testkit:test verifyPackaging`；真Redis/MySQL/MariaDB/PostgreSQL/SQLitehelpers僅disposables。
 - [x] Exit：productionruntime不含testkit，concurrencetests不用Thread.sleep猜timing。
 
 T17 closure (2026-10-09): the shared test-fixture module and required disposable helpers are complete. Fresh JDK 25.0.4 / Gradle 9.8.0 validation passed: testkit 13/13, core 10/10, protocol 15/15, storage unit 8/8, Redis integration 29/29, the SQLite legacy-schema integration 1/1, `verifyArchitecture`, and `verifyPackaging`; zero failures/errors/skips in those passing selections. Both independent contract and dependency-boundary reviews found no actionable remaining finding. Full commands, results, limits, and the unconfigured SQL backend gate are recorded in 06 T17 evidence. Live PostgreSQL/MySQL/MariaDB integration remains NOT RUN because the three test URLs are absent; the accidental class-wide selector failed its explicit environment precondition before opening a backend connection. The method-scoped SQLite case passed. No production API, runtime dependency, SQL schema, Redis wire, or recovery format was added. Next in the listed task order is T18; T19 is also dependency-ready now that T17 is complete.
@@ -577,7 +577,7 @@ T17 closure (2026-10-09): the shared test-fixture module and required disposable
 
 **Required references:** 04§16；07§2；08 ADR-02/03/06。其餘只在新證據需要時擴讀。
 
-**Depends:** T11 candidate、T14 packaging；ADR-03 scope核准才freeze。**Files:** 08 ADR-06選型紀錄；所選tool configuration、API Gradle publication、release workflow與測試。
+**Depends:** T11 candidate、T14 packaging；ADR-03 scope核準才freeze。**Files:** 08 ADR-06選型紀錄；所選tool configuration、API Gradle publication、release workflow與測試。
 **Interfaces:** confirmed namespace/Org；local stage/bundle/checksum輸出契約固定，tool task名由ADR決定並提供明確CI mapping。不要求三個publisher全部進project。
 
 - [x] 比較JReleaser、maintained Gradle Central solution、custom Portal API：查當前maintenance/security、Java25/Gradle9.8.0、sign/POM/source/Javadoc、stage validation、publish gate、timeout/status/resume/hash、CI configuration與成本；選nmcp本地aggregation＋受限Portal client。無Portal secret dry-run由本地fixture完成。
@@ -692,9 +692,9 @@ Performance interpretation caveat: independent review found the synthetic curren
 
 **Depends:** T14＋測量所需test fixtures（T17相關部分）；不等待Central T18。**Files:** benchmarks Gradle/JMH/runner/profiles；futuretestreportignored。
 
-**Interfaces:**`benchmarkJar`输出runner、`runBaselineComparison -PbaselineCheckout=<verified isolated path>`；profiles+resultJSONmetadata schema见06。
+**Interfaces:**`benchmarkJar`輸出runner、`runBaselineComparison -PbaselineCheckout=<verified isolated path>`；profiles+resultJSONmetadata schema見06。
 
-- [x] baselineharness对旧facade采用test-timeadapter且保留真实checks；不能把oldasyncoperation当newcommittedlatency来比。
+- [x] baselineharness對舊facade采用test-timeadapter且保留真實checks；不能把oldasyncoperation當newcommittedlatency來比。
 - [x] JMH balance/deposit/withdraw/set/transfer/queue/codec/message-apply and current-only Queue/ProtocolCodec/MessageApply/SQLite snapshot suites; capacity and data reset stay outside measured operations.
 - [x] Fresh schema-2 Redis/SQL baseline macro pilot r4 accepted as calibration input against the verified disposable backends; receipt and provenance are recorded in 06.
 - [x] Ran the checked-in 60-scenario open-loop matrix against the verified disposable Redis/SQL backends; all 60 unique tuples passed report, sample, correctness, drain, cleanup, and independent empty-backend gates (full evidence in 06).
@@ -704,23 +704,23 @@ Performance interpretation caveat: independent review found the synthetic curren
 - [x] Independently confirmed macro-pilot and open-loop report schema, source/profile/environment provenance, money/version checks, drain, cleanup, and post-run backend emptiness before accepting the results.
 - [x] Exit: recorded observed results without prefilled benefit claims and calibrated the benchmark from the accepted baseline pilot; final release performance disposition stays with T22.
 
-### T20 [P3] — Optionaloptimization实验（可SKIP）
+### T20 [P3] — Optionaloptimization實驗（可SKIP）
 
 **Required references:** 04§17/26；06 B00；08 ADR-07/08。其餘只在新證據需要時擴讀。
 
 **Depends:** T19。**Files:** isolatedqueue/batchingcandidate、decisionADR，不更改publicAPI/wire。
 
-**Interfaces:**与WriteAdmission同contract。
+**Interfaces:**與WriteAdmission同contract。
 
-- [ ] 仅profile瓶颈才比较currentvsarray/AgronaMPSC；checkproducerroles、claimabort、CPUidle、fairness、samecorrectnesssuite。
-- [ ] 收益不足/尾延迟allocation退化则丢candidate、记录DEFER，T21仍可继续。
-- [ ] Exit：Agrona不因task存在必须dependency；objectpool/busyspin/Aeron不进stable默认。
+- [ ] 僅profile瓶頸才比較currentvsarray/AgronaMPSC；checkproducerroles、claimabort、CPUidle、fairness、samecorrectnesssuite。
+- [ ] 收益不足/尾延遲allocation退化則丟candidate、記錄DEFER，T21仍可繼續。
+- [ ] Exit：Agrona不因task存在必須dependency；objectpool/busyspin/Aeron不進stable默認。
 
-### T21 [P1] — Upgrade、downgrade与mixed矩阵
+### T21 [P1] — Upgrade、downgrade與mixed矩陣
 
 **Required references:** 04§13/14/15；06 V03/M00–M12；08 ADR-01/04/07。其餘只在新證據需要時擴讀。
 
-**Depends:** 必要T09/T13/T14/T15/T16與已確認P0；T19 performance review支線獨立，可並行。T20與未批准redesign不是前置。**Files:** PlugDevfutureupgradehelper、syntheticfixtures、operatorrunbookdocs两語。
+**Depends:** 必要T09/T13/T14/T15/T16與已確認P0；T19 performance review支線獨立，可並行。T20與未批準redesign不是前置。**Files:** PlugDevfutureupgradehelper、syntheticfixtures、operatorrunbookdocs兩語。
 
 **Interfaces:**06 M00–M12；resultsseparatestatic/wire/live/fault/skip。
 
@@ -797,39 +797,39 @@ The immediately preceding runner attempt `build/reports/foundation/T21-quiesced-
 
 Fresh Java `25.0.4+7-LTS-189` / Gradle `9.8.0` full validation passed with 53/53 actionable tasks executed using `& .\\gradlew.bat '-PreleaseVersion=1.4.0-alpha.1' test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar --rerun-tasks --no-daemon --console=plain`. The five targeted shutdown classes passed 42/42 with zero failures, errors, or skips. PlugDev `run-quiesced-network-upgrade.test.ps1`, `t21-upgrade-validation.test.ps1` (156/156), `recovery-spool-validator.test.ps1`, and `run-sync-upgrade-cleanup.test.ps1` passed. An earlier unquoted PowerShell invocation split the Gradle property and failed task selection before tests started; the quoted invocation above is the passing run. The runtime fixture had audit and hybridAudit disabled, so enabled-owner runtime behavior remains E1-only and NOT RUN at E2. Other five endpoints with this candidate, fleet-wide producer fencing, remaining mode/backend/schema/failure/lifecycle cells, and licensed CMI remain open or BLOCKED / NOT RUN. T21 remains IN_PROGRESS.
 
-### T22 [P1] — Alpha/Beta准备与APIfreeze
+### T22 [P1] — Alpha/Beta準備與APIfreeze
 
-**Required references:** 04§24/29；06 release gate；08核准狀態。其餘只在新證據需要時擴讀。
+**Required references:** 04§24/29；06 release gate；08核準狀態。其餘只在新證據需要時擴讀。
 
-**Depends:** T21、T11核准read contract、T18核准publisher/local staging dry-run、T19報告或documented performance exception；相關ADR核准。**Files:** changelog/docs/README metadatafuture、APIsignaturebaseline、releasecandidatehashes。
+**Depends:** T21、T11核準read contract、T18核準publisher/local staging dry-run、T19報告或documented performance exception；相關ADR核準。**Files:** changelog/docs/README metadatafuture、APIsignaturebaseline、releasecandidatehashes。
 
-- [ ] 执行04§24alpha/betacriteria，不confirmedblocker带入经济负载。
-- [ ] 显式tagalpha/beta测试property，不commit自动alpha版本；若Centralpreview要不可变uniqueversion与protectedgate。
-- [ ] Freezebinary/API consumer，docs英繁中同步；稳定1.4metadata只稳定releasePR更新。
-- [ ] Exit：maintainer可reviewconcretereport，未执行publication不标published。
+- [ ] 執行04§24alpha/betacriteria，不confirmedblocker帶入經濟負載。
+- [ ] 顯式tagalpha/beta測試property，不commit自動alpha版本；若Centralpreview要不可變uniqueversion與protectedgate。
+- [ ] Freezebinary/API consumer，docs英繁中同步；穩定1.4metadata只穩定releasePR更新。
+- [ ] Exit：maintainer可reviewconcretereport，未執行publication不標published。
 
-### T23 [P1] — Central与多channelrelease（需當時授權）
+### T23 [P1] — Central與多channelrelease（需當時授權）
 
-**Required references:** 04§16/24；T18核准輸出；08 ADR-06。其餘只在新證據需要時擴讀。
+**Required references:** 04§16/24；T18核準輸出；08 ADR-06。其餘只在新證據需要時擴讀。
 
-**Depends:** T22、T18核准工具＋namespace/credentials/protectedapproval。**Files:** releaseworkflow最终、deployment/checksumrecorddeveloperignored。
+**Depends:** T22、T18核準工具＋namespace/credentials/protectedapproval。**Files:** releaseworkflow最終、deployment/checksumrecorddeveloperignored。
 
 - [ ] Publication前重查08 Publication policy revalidation並記日期/官方來源/分類/資格；不明或不符則BLOCKED。
-- [ ] Build/test所有artifact，webmirror既有先发布步骤维持；stableproduction-releaseenvironment审核。
-- [ ] 依T18核准工具stage→VALIDATED→authenticatedstagingconsumer→protected最终publish→PUBLISHED→publicmavenCentralconsumer（expiry/backoffbounded）；USER_MANAGED可行，其他mode須證明等效approval boundary。
-- [ ] Core/PAPIrelease与web/sourcehash一致；任一channel失败用记录resume，同GAVdifferentbytes立即stop，不能删除Central当rollback。
-- [ ] Exit：SDKsource/Javadoc/POM签名完整、GitHubartifactnames、metadata一致、下载后的actualJARruntimecheck。
+- [ ] Build/test所有artifact，webmirror既有先發布步驟維持；stableproduction-releaseenvironment審核。
+- [ ] 依T18核準工具stage→VALIDATED→authenticatedstagingconsumer→protected最終publish→PUBLISHED→publicmavenCentralconsumer（expiry/backoffbounded）；USER_MANAGED可行，其他mode須證明等效approval boundary。
+- [ ] Core/PAPIrelease與web/sourcehash一致；任一channel失敗用記錄resume，同GAVdifferentbytes立即stop，不能刪除Central當rollback。
+- [ ] Exit：SDKsource/Javadoc/POM簽名完整、GitHubartifactnames、metadata一致、下載後的actualJARruntimecheck。
 
 ### T24 [P1] — DefinitionofDone及最終review
 
 **Required references:** 04§29；06 report模板；08全部相關決策。其餘只在新證據需要時擴讀。
 
-**Depends:** T23（不发版实施任务可先完成代码DoD，publication项保持unchecked）。
+**Depends:** T23（不發版實施任務可先完成代碼DoD，publication項保持unchecked）。
 
-- [ ] 执行04§29并把每项report证据link附上；没跑runtime不以compile替代。
-- [ ] `git diff --check`、`git status --short`、全diffreview；搜索staleendpoint/artifact/versionclaims。数字1.3.2作为历史baseline允许，不能全replace。
-- [ ] Freshreviewer检查money/ownership/recovery/API/compat，任何confirmedfundsbug回对应task修复；用户工作不覆盖。
-- [ ] 输出changed/why/tested/limits，发布仅实际成功时宣称。
+- [ ] 執行04§29並把每項report證據link附上；沒跑runtime不以compile替代。
+- [ ] `git diff --check`、`git status --short`、全diffreview；搜索staleendpoint/artifact/versionclaims。數字1.3.2作為歷史baseline允許，不能全replace。
+- [ ] Freshreviewer檢查money/ownership/recovery/API/compat，任何confirmedfundsbug回對應task修覆；用戶工作不覆蓋。
+- [ ] 輸出changed/why/tested/limits，發布僅實際成功時宣稱。
 
 ## Progress
 
@@ -939,17 +939,17 @@ Fresh Java `25.0.4+7-LTS-189` / Gradle `9.8.0` full validation passed with 53/53
 
 ## Surprises & Discoveries
 
-- 2026-10-04：coldVault同步I/O、LOCAL同步SQLite、queue100ms、transfermemoryrollback、SQLunconditionalupsert、configschema12/mergerfallback11均源自source，不是runtime新测结果。详细01/02/03。
+- 2026-10-04：coldVault同步I/O、LOCAL同步SQLite、queue100ms、transfermemoryrollback、SQLunconditionalupsert、configschema12/mergerfallback11均源自source，不是runtime新測結果。詳細01/02/03。
 - 2026-10-04：T00實測V00通過；1.3.2正式tag為annotated但未簽章，release CHECKSUMS.txt核對兩個artifact成功。Windows封裝與官方JAR有12項resource byte差異，正規化CRLF後一致，Git source blobs/classes未見差異；細節見manifest及06 evidence。此發現不是money-correctness triage，T01候選狀態不變。
-- 2026-10-04：Module名`syncmoney-web`已用于frontend；backend留bukkit；CI/embeddedscript路径与搬移同task处理。
+- 2026-10-04：Module名`syncmoney-web`已用於frontend；backend留bukkit；CI/embeddedscript路徑與搬移同task處理。
 
 ## Decision Log
 
 - 2026-10-04／使用者修訂：1.4.0升級Java25與Gradle9.8.0；同步最低runtime／SDK consumer與CI，保留1.3.2歷史基準。新增T00A，原T01–T24編號保持。
 - 2026-10-05／使用者後續確認：若Paper1.21.4 ASM無法處理Java25 classfile，可提高最低Paper。依實測將ADR-01 minimum從1.21.4調整為Paper1.21.6；1.21.5目前僅有ALPHA builds。
 - 2026-10-04／使用者：Maven namespace `io.github.misty4119`、Org `Misty4119`。
-- 2026-10-04／計畫：read-only async query API recommendation（ADR-03 OPEN）、全部public mutation延後；legacyv1默认、quiescedrolling、rootassemblyaliases、有界admission，reservation框架僅候選。
-- 2026-10-04／計畫：无hardcrashzero-loss/globalVaultfinality保证；unknownresponse不重试delta；风险有测试才宣称修复。
+- 2026-10-04／計畫：read-only async query API recommendation（ADR-03 OPEN）、全部public mutation延後；legacyv1默認、quiescedrolling、rootassemblyaliases、有界admission，reservation框架僅候選。
+- 2026-10-04／計畫：無hardcrashzero-loss/globalVaultfinality保證；unknownresponse不重試delta；風險有測試才宣稱修覆。
 
 ## Outcomes & Retrospective
 
@@ -957,7 +957,7 @@ Fresh Java `25.0.4+7-LTS-189` / Gradle `9.8.0` full validation passed with 53/53
 
 ## 中斷交接格式
 
-`Task/step: ...; Source SHA: ...; Changed files: ...; Tests(command + outcome): ...; Confirmed receipts/pending work: ...; Decision changes: ...; Next task + inputs: ...; Blocked dependency: ...`。不得写credentials，长期report放ignoredbuild/reports，publicdocs只合成summary。
+`Task/step: ...; Source SHA: ...; Changed files: ...; Tests(command + outcome): ...; Confirmed receipts/pending work: ...; Decision changes: ...; Next task + inputs: ...; Blocked dependency: ...`。不得寫credentials，長期report放ignoredbuild/reports，publicdocs只合成summary。
 
 ### Initial scope revision record — 2026-10-04 (historical)
 
@@ -1444,7 +1444,7 @@ The report-specific offline audit `maximum-paper-mysql-request-id-ddl-offline-au
 
 2026-10-15 T21 V03 maximum-Paper/MariaDB required-v11 audit DDL-permission-denial: **PASS_BOUNDED_SUBCASE (E2)** on user-pinned Paper `26.3#166`, MariaDB `12.3.3-MariaDB`, isolated Redis `8.10.1` DB 15, Java `25.0.4+7-LTS-189`, and candidate `1.4.0-alpha.1`. The refreshed report `build/reports/foundation/T21-sql-runtime/mariadb-sync-maximum-paper-20261015-195011-2a01ae3a89b6437ba296d8608c00a26a/result.json` is 31,124 bytes (SHA-256 `1bf12bebc939b9fc7f52d6d094e83675a0804b64c60a0e78cc6d705de62de1c3`). Its retained MariaDB `general_log` has exactly one candidate-account event: `ALTER TABLE syncmoney_audit_log ADD COLUMN request_id VARCHAR(36)`. The isolated general-log state was `OFF|FILE` before capture, `ON|TABLE` during startup, and restored to `OFF|FILE`. Main schema v1, audit schema v10, v10 columns/index/sentinel/version rows stayed unchanged and `request_id` remained absent. Startup created an empty `players` table, so whole-database atomic rollback is not claimed. Paper, MariaDB, Redis, and the isolated Gradle daemon stopped normally; cleanup failures, other SQL connections, Redis clients, and Redis DB 15 keys were all zero.
 
-The report-specific offline audit `maximum-paper-mariadb-request-id-ddl-offline-audit-20261015-195011.ps1` is 14,102 bytes (SHA-256 `54dfe0d50ceb6b0c7a9967a640bf2cfecd469055a09026922af0e22709810aa0`); it passed 23 assertions and rehashed all 34/34 declared runtime logs. Output `maximum-paper-mariadb-offline-audit-20261015-195011.log` is 1,511 bytes (SHA-256 `d282da5dceb7bbfa9994c12d35da961e5a631ba448afc29aa1fd8bf8d2348839`). The focused startup-failure validator passed 125 assertions (10,420 bytes; SHA-256 `346a221b78648a699788d137b436bc3fc355e129bb07d311998e3125c23eac4f`); shared T21 validation passed 156/156 (10,899 bytes; SHA-256 `5fec2e7a2b9dc2873b79c2ce924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted six scripts with zero errors (47 bytes; SHA-256 `0ba8e184bde90189e2821184046a12348e17439b1b7e8b58a41a7feaf146ee50`). Runtime source pins: runner `a6768e8408ac0485ef39071684d2b90a8b3402a762bb3a20c3f4219feb336ae6`, validator `5a7242e07258805480a9e9d63eef6212ba8fb638787956fe7b214a66d682d386`, validator test `145c145d58e32288fef803c159fe47b3304c3490b37cff7f553d1c2e7422b9fa`, shared validator/test `bf12a605d6f1d172d02bfdbe216274d4709276b4a5aec362f44aca33b2e5bdba` / `ab6eca1ceb355ca0b464bed0dd668c6dbfc3d4951f1065b069d8420a8c126f5b`. Candidate source commit is not asserted; the JAR SHA-256 identifies the exercised artifact. Java/Gradle product tests are **NOT RUN** because this continuation changed only PlugDev validation tooling/tests and evidence documents; the pinned candidate JAR was exercised in E2 runtime. No Java/product source, public contract, SQL schema, or recovery format changed. The current next V03 cell is maximum Paper `26.3#166` / PostgreSQL `18.1`; maximum-Paper PostgreSQL, Folia/Canvas required-v11 DDL-denial cells, and supplemental current-stable Paper remain **NOT RUN**. T21 remains **IN_PROGRESS**, E07 P1, E08 INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope, and licensed CMI **BLOCKED / NOT RUN**. Full report, audit, test commands and limits are in 06.
+The report-specific offline audit `maximum-paper-mariadb-request-id-ddl-offline-audit-20261015-195011.ps1` is 14,102 bytes (SHA-256 `54dfe0d50ceb6b0c7a9967a640bf2cfecd469055a09026922af0e22709810aa0`); it passed 23 assertions and rehashed all 34/34 declared runtime logs. Output `maximum-paper-mariadb-offline-audit-20261015-195011.log` is 1,511 bytes (SHA-256 `d282da5dceb7bbfa9994c12d35da961e5a631ba448afc29aa1fd8bf8d2348839`). The focused startup-failure validator passed 125 assertions (10,420 bytes; SHA-256 `346a221b78648a699788d137b436bc3fc355e129bb07d311998e3125c23eac4f`); shared T21 validation passed 156/156 (10,899 bytes; SHA-256 `5fec2e7a2b9dc2873b79c2ce924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted six scripts with zero errors (47 bytes; SHA-256 `0ba8e184bde90189e2821184046a12348e17439b1b7e8b58a41a7feaf146ee50`). Runtime source pins: runner `a6768e8408ac0485ef39071684d2b90a8b3402a762bb3a20c3f4219feb336ae6`, validator `5a7242e07258805480a9e9d63eef6212ba8fb638787956fe7b214a66d682d386`, validator test `145c145d58e32288fef803c159fe47b3304c3490b37cff7f553d1c2e7422b9fa`, shared validator/test `bf12a605d6f1d172d02bfdbe216274d4709276b4a5aec362f44aca33b2e5bdba` / `ab6eca1ceb355ca0b464bed0dd668c6dbfc3d4951f1065b069d8420a8c126f5b`. Candidate source commit is not asserted; the JAR SHA-256 identifies the exercised artifact. Java/Gradle product tests are **NOT RUN** because this continuation changed only PlugDev validation tooling/tests and evidence documents; the pinned candidate JAR was exercised in E2 runtime. No Java/product source, public contract, SQL schema, or recovery format changed. At that checkpoint, the next V03 cell was maximum Paper `26.3#166` / PostgreSQL `18.1`, now recorded below. The current required-v11 DDL-denial cell is maximum Folia `26.2#7` / PostgreSQL `18.1`; Canvas combinations and supplemental current-stable Paper remain **NOT RUN**. T21 remains **IN_PROGRESS**, E07 P1, E08 INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope, and licensed CMI **BLOCKED / NOT RUN**. Full report, audit, test commands and limits are in 06.
 
 2026-10-15 T21 V03 maximum-Paper/PostgreSQL required-v11 audit DDL-denial: PASS_BOUNDED_SUBCASE (E2), report runId 416a1a2f90e7424a965ece034b970cfd, report SHA-256 52681afd6fc3d496b005334e454895e7a1b8076fbbdcfa0fdb379d5e453ba059. PostgreSQL owner boundary rejected the candidate ALTER; audit v10/main v1, 14 columns, primary index, and sentinel were preserved. The empty players table means this is not whole-database atomic rollback. Offline audit passed 545 checks and matched 37/37 logs; focused/shared validators passed 127/156 PASS lines; six-script parser passed. Java/Gradle product tests NOT RUN (validation harness only); candidate JAR exercised in E2. Independent read-only code/evidence review found no actionable issue and confirmed the exact target guard, report pins, and log audit; the reviewer did not rerun validation or runtime. Next V03 required-v11 cell: minimum Folia 1.21.6#6 / MySQL 8.0.42; T21 stays IN_PROGRESS; E07 P1, E08 INCONCLUSIVE / P0-CANDIDATE, CMI BLOCKED / NOT RUN.
 
@@ -1460,6 +1460,7 @@ PostgreSQL confirmed the application role was non-superuser, not a member of the
 
 The offline audit passed 30 assertions over the report, five report-time source snapshots, runtime/artifact pins, PostgreSQL ownership evidence, preserved schema/data, cleanup, and all 37/37 log hashes. Focused startup-failure validation passed 130 checks; shared T21 validation passed 156/156; PowerShell Parser.ParseFile accepted six runner/validator/test/audit scripts with zero errors. Java/Gradle product tests are NOT RUN because this subcase changes only PlugDev validation tooling/tests and evidence records; the pinned candidate JAR was exercised in E2.
 
-T21 remains IN_PROGRESS. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and outside mandatory correctness scope; licensed CMI remains BLOCKED / NOT RUN. At that checkpoint the next ordered required-v11 denial cell was maximum Folia 26.2#7 / MySQL 8.0.42, now recorded below. The current next cell is maximum Folia 26.2#7 / MariaDB 12.3.3-MariaDB; maximum-Folia/PostgreSQL, Canvas combinations, supplemental current-stable Paper, and remaining lifecycle/migration/fleet-quiescence gates remain open or NOT RUN.
+T21 remains IN_PROGRESS. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE and outside mandatory correctness scope; licensed CMI remains BLOCKED / NOT RUN. At that checkpoint the next ordered required-v11 denial cell was maximum Folia 26.2#7 / MySQL 8.0.42, now recorded below. The current next cell is maximum Folia 26.2#7 / PostgreSQL 18.1; Canvas combinations, supplemental current-stable Paper, and remaining lifecycle/migration/fleet-quiescence gates remain open or NOT RUN.
 
 2026-10-15 T21 V03 maximum-Folia/MySQL required-v11 audit DDL-denial: PASS_BOUNDED_SUBCASE (E2) on user-pinned Folia `26.2#7` / MySQL `8.0.42` / Redis `8.10.1` DB 15 / Java `25.0.4+7-LTS-189`. The exact report is `mysql-sync-maximum-folia-20261015-222443-e634925e788b4c659d7d954a0fbc79d2/result.json` (29,686 bytes, SHA-256 `3e2c73a5a9936b3cf6bbdc5dc241644e42b4271af029170932b1f39bd243c50d`); its 27-assertion offline audit validates the report, ten admitted target cells, source/artifact pins, candidate build manifest, isolated CREATE-without-ALTER grants, v10 state/sentinel preservation, cleanup, and all 28 log hashes. Target guard tests passed 142 checks (eleven remaining endpoint/backend combinations rejected); shared validation passed 156/156. A clean forced rebuild at source commit `9c600e200440e9d3bffc78aa44f7e2f5ca319f08` produced the same candidate JAR hash used by earlier Folia/PostgreSQL evidence, recovering byte-identical candidate source provenance. Startup rejected audit schema 10→11, drained and closed the SQL writer/pool, and disabled Syncmoney; main v1, audit v10, all 14 audit columns, primary index, and sentinel money values remained unchanged. It created an empty `players` table, so whole-database atomic rollback is not claimed. No separate statement-level MySQL DDL trace was retained; exact SQL remains UNKNOWN. T21 remains IN_PROGRESS; E07 P1, E08 INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope, licensed CMI BLOCKED / NOT RUN. Next V03 denial cell: maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`; maximum-Folia/PostgreSQL, Canvas, and supplemental current-stable Paper remain NOT RUN. Full report, audit, source pins, validations, and limits are in 06.
+2026-10-15 T21 V03 maximum-Folia/MariaDB required-v11 audit DDL-denial: PASS_BOUNDED_SUBCASE (E2) on user-pinned Folia `26.2#7` / MariaDB `12.3.3-MariaDB` / isolated Redis `8.10.1` DB 15 / Java `25.0.4+7-LTS-189`; report `mariadb-sync-maximum-folia-20261015-224449-35d65649eec649578c2b5d44083d9405/result.json` is 30,050 bytes (SHA-256 `7ca0337ff9f06778115ea749e5cb3fadf70edb271eedec7aab699ef93598ec3c`). A clean forced candidate rebuild at commit `a6964c2130a340b5f3207cae0a7fcee8e9e90374` ran 15 Gradle tasks and produced the exercised `1.4.0-alpha.1` JAR (31,558,215 bytes; SHA-256 `57b717e7704e93e6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662`); the clean local PlugDev checkout is commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`. Startup rejected audit schema 10→11 with `ALTER command denied`; both loopback grants were verified as isolated-schema CREATE without ALTER/global CREATE. Main schema v1, audit v10, all 14 audit columns, index, version rows, and sentinel amounts (`1.25` / `99.99`) remained unchanged; Syncmoney disabled and resources stopped normally. Startup created an empty `players` table, so whole-database atomic rollback is not claimed. `deniedDdlEvidence` is null: no separate MariaDB statement trace was retained and exact SQL is UNKNOWN. The report-specific offline audit passed 25 assertions and rehashed 29/29 logs; focused/shared validators passed 142/156, and the six-script PowerShell parser check passed. Java/Gradle product tests are NOT RUN because only PlugDev harness/fixtures, docs, and evidence records changed; the pinned candidate was exercised in E2. T21 remains IN_PROGRESS; E07 P1, E08 INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope, licensed CMI BLOCKED / NOT RUN. Next ordered required-v11 denial cell: maximum Folia `26.2#7` / PostgreSQL `18.1`; Canvas and supplemental current-stable Paper cells plus broader lifecycle, migration, and fleet-quiescence gates remain open / NOT RUN. Full evidence and review status are in 06.

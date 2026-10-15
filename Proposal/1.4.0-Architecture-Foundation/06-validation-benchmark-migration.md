@@ -14,9 +14,9 @@ pnpm --dir syncmoney-web test:unit --run
 pnpm --dir syncmoney-web build
 ```
 
-Frontend改动后另跑 `pnpm --dir syncmoney-web build:embedded`；此command会改generateddist与WebAdminServerfilelists，二者一并review。只进行本次文件计划验证不需要执行此command。
+Frontend改動後另跑 `pnpm --dir syncmoney-web build:embedded`；此command會改generateddist與WebAdminServerfilelists，二者一並review。只進行本次文件計劃驗證不需要執行此command。
 
-未来新task（不是现有能力）：
+未來新task（不是現有能力）：
 
 ```powershell
 .\gradlew.bat verifyArchitecture verifyPackaging
@@ -24,51 +24,51 @@ Frontend改动后另跑 `pnpm --dir syncmoney-web build:embedded`；此command�
 .\gradlew.bat :syncmoney-storage:integrationTest :syncmoney-sync:integrationTest
 ```
 
-`verifyArchitecture`检查Gradle resolved compile/runtime deps与bytecode：API→JDK only；core→api/JDK；protocol→JDK+明确JSON；无forbiddenrefs或cycles。`verifyPackaging`检查actualshadowJAR：mainclass/descriptor/Lua/YAML/embeddedassets齐全、API不relocate且onlyoneclass、JDBCServiceLoader与SQLitenative资源可用、Adventure/Vault/PAPI/CMIserverruntime未shade、没有testkit/JMH/probeclasses。Rootoutputpaths维持原样。
+`verifyArchitecture`檢查Gradle resolved compile/runtime deps與bytecode：API→JDK only；core→api/JDK；protocol→JDK+明確JSON；無forbiddenrefs或cycles。`verifyPackaging`檢查actualshadowJAR：mainclass/descriptor/Lua/YAML/embeddedassets齊全、API不relocate且onlyoneclass、JDBCServiceLoader與SQLitenative資源可用、Adventure/Vault/PAPI/CMIserverruntime未shade、沒有testkit/JMH/probeclasses。Rootoutputpaths維持原樣。
 
 ## V01 — correctness/property suite
 
-固定合成账户 A `00000000-0000-0000-0000-000000000001`、B `...0002`，BigDecimal两位，round `1.005→1.01`。余额初始化由fixtureload完成，不在timed/critical section强行createaccount。
+固定合成賬戶 A `00000000-0000-0000-0000-000000000001`、B `...0002`，BigDecimal兩位，round `1.005→1.01`。餘額初始化由fixtureload完成，不在timed/critical section強行createaccount。
 
 | case | assertion | task |
 |---|---|---|
-| rejectednegative/zero/out-of-range | 无balance/version/queuedwork变化 | T01/T02 |
-| withdrawal concurrentinsufficient | 正确该次结果，不从其他writer版本猜成功 | T02 |
-| receivercancels transfer100/0→10 | 最终100/0，总量100，无单腿遗留 | T07 |
-| fulladmission + alloverflowunavailable | 立即拒绝，无mutation或成功event | T03 |
-| coldexistingbalance100 | no syncI/O；miss不persist0；asyncready后100 | T04 |
-| multipleasync loads sameUUID | 一个loader，pendingmutation不被stalesnapshot盖掉 | T04 |
-| confirmedRedis90/v7 then concurrent v8 | 同receipt90/7进wire和SQL，不配90/8 | T05 |
-| SQL v41 followed delayedv40 | row不regress（仅新writer）；同v不同moneyconflict | T05 |
-| Lua wrongreceiver/versiontype/overflow | 第一次mutation前reject；余额不变 | T06 |
-| alreadyexecuted,response lost | 去重确认或quarantine，不能第二次ADD | T06 |
-| markerabsent + SENT_UNKNOWN | 无blind retry，即使未满TTL | T06/T08 |
-| two-nodecached100 eachwithdraw80 | 明确authorityreject、pendingrebuild/unavailable，不能假globalfinal | T07 |
-| partialpairSQL | transactionrollback/整对stale拒绝；不能onlyoneleg持久化 | T07 |
-| recoveryread/crash/ack/compact | 原记录不先clear，成功后checkpoint | T08 |
-| pendingwriteeviction/logout | 不丢事件或confirmedbase/pendingowner | T03/T15 |
-| pluginAPIattribution/hooks | 正确name，一次pre/post/completion；cancel无资金变化 | T02/T11 |
+| rejectednegative/zero/out-of-range | 無balance/version/queuedwork變化 | T01/T02 |
+| withdrawal concurrentinsufficient | 正確該次結果，不從其他writer版本猜成功 | T02 |
+| receivercancels transfer100/0→10 | 最終100/0，總量100，無單腿遺留 | T07 |
+| fulladmission + alloverflowunavailable | 立即拒絕，無mutation或成功event | T03 |
+| coldexistingbalance100 | no syncI/O；miss不persist0；asyncready後100 | T04 |
+| multipleasync loads sameUUID | 一個loader，pendingmutation不被stalesnapshot蓋掉 | T04 |
+| confirmedRedis90/v7 then concurrent v8 | 同receipt90/7進wire和SQL，不配90/8 | T05 |
+| SQL v41 followed delayedv40 | row不regress（僅新writer）；同v不同moneyconflict | T05 |
+| Lua wrongreceiver/versiontype/overflow | 第一次mutation前reject；餘額不變 | T06 |
+| alreadyexecuted,response lost | 去重確認或quarantine，不能第二次ADD | T06 |
+| markerabsent + SENT_UNKNOWN | 無blind retry，即使未滿TTL | T06/T08 |
+| two-nodecached100 eachwithdraw80 | 明確authorityreject、pendingrebuild/unavailable，不能假globalfinal | T07 |
+| partialpairSQL | transactionrollback/整對stale拒絕；不能onlyoneleg持久化 | T07 |
+| recoveryread/crash/ack/compact | 原記錄不先clear，成功後checkpoint | T08 |
+| pendingwriteeviction/logout | 不丟事件或confirmedbase/pendingowner | T03/T15 |
+| pluginAPIattribution/hooks | 正確name，一次pre/post/completion；cancel無資金變化 | T02/T11 |
 | restartrequired reload | snapshot/owner均不halfapply | T09 |
-| schemaDDLfailed | metadata不advance；newerschema不隐式变更 | T09 |
-| equal/older remote | noappliedupdate/nooverwrite；unknownenum可读 | T10 |
+| schemaDDLfailed | metadata不advance；newerschema不隱式變更 | T09 |
+| equal/older remote | noappliedupdate/nooverwrite；unknownenum可讀 | T10 |
 | CMIclock/retirement | freshness在ownercallback再次判定、noecho | T13 |
 | shutdownqueueemptyretryfull | drain/recordpending、storage仍live | T15 |
 
-所有concurrencyfixture采用latches/barriers/manualexecutor，禁止靠sleep通过率证明正确。随机propertytests固定seed并记录失败seed；fakecontract与realbackends相同。
+所有concurrencyfixture采用latches/barriers/manualexecutor，禁止靠sleep通過率證明正確。隨機propertytests固定seed並記錄失敗seed；fakecontract與realbackends相同。
 
-## V02 — protocol／数据fixtures
+## V02 — protocol／數據fixtures
 
-保存actual1.3.2 codec/source读取后的合成goldens：optionalomitted、primitiveamount0.0、unknownevent/field、UUIDbad、missingfield、非finite金额、long>2^53、CMIeventtype、sourceServer/messageIdecho、reorder/duplicate。Java读long不得經JS浮點roundtrip。
+保存actual1.3.2 codec/source讀取後的合成goldens：optionalomitted、primitiveamount0.0、unknownevent/field、UUIDbad、missingfield、非finite金額、long>2^53、CMIeventtype、sourceServer/messageIdecho、reorder/duplicate。Java讀long不得經JS浮點roundtrip。
 
-FreezeLua KEY/ARGV/return/errorcontract，特别set键顺序是version/balance，add是balance/version。原数值double与截断结果不能被提取顺手改成decimalstring。脚本修复另保存before/afterexpectation。
+FreezeLua KEY/ARGV/return/errorcontract，特別set鍵順序是version/balance，add是balance/version。原數值double與截斷結果不能被提取順手改成decimalstring。腳本修覆另保存before/afterexpectation。
 
-SQL fixtures必须分别：
+SQL fixtures必須分別：
 
-- shared PostgreSQL/MySQL实际 `players.player_uuid`、DECIMAL20,2、BIGINT与schema table。
-- MariaDB通过既有mysqlconnection配置真实启动，不能假設有独立正式mode。
-- LOCAL SQLite `player_balances`/`transactions` 的REAL/int既有格式与同路径。
-- audit id='audit'/11、main id='1'/1、baltop、Shadow；disabledmodule不创建它的schema。
-- configschema12、messages/alias、unknownoperator键（值都是无secret合成值）。
+- shared PostgreSQL/MySQL實際 `players.player_uuid`、DECIMAL20,2、BIGINT與schema table。
+- MariaDB通過既有mysqlconnection配置真實啟動，不能假設有獨立正式mode。
+- LOCAL SQLite `player_balances`/`transactions` 的REAL/int既有格式與同路徑。
+- audit id='audit'/11、main id='1'/1、baltop、Shadow；disabledmodule不創建它的schema。
+- configschema12、messages/alias、unknownoperator鍵（值都是無secret合成值）。
 
 ## V03 — 正式runtime／upgrade matrix
 
@@ -319,20 +319,20 @@ plugdev server stop
 
 以上是待更新後的執行入口，不表示現在helper已支援該profile。Expected是actual logs ACCEPTANCE PASS，不能只看server start。latest/network以固定buildprofile執行；既有A990/B530 assertion保留，新增fault scenarios不替代baseline。
 
-Redis tests必須隔離process／port，不能只隔logical DB（PubSub跨DB）；SQL隔離database/user。禁止production資料上做wrong-type/flush/fault；probe為独立developer JAR。
-## V04 — Vault与PAPI兼容
+Redis tests必須隔離process／port，不能只隔logical DB（PubSub跨DB）；SQL隔離database/user。禁止production資料上做wrong-type/flush/fault；probe為獨立developer JAR。
+## V04 — Vault與PAPI兼容
 
-保存1.3.2compiledconsumer（非只重新compile）测试旧getter/descriptors；新consumercompileOnlyAPI并真实ServicesManagerlookup。測read cached100、offline100未warm、confirmed absent empty而無帳戶建立、unavailable exceptional、providerstop後read引用；notreadywithdraw只測既有Vault/internal，非new SDK方法。
+保存1.3.2compiledconsumer（非只重新compile）測試舊getter/descriptors；新consumercompileOnlyAPI並真實ServicesManagerlookup。測read cached100、offline100未warm、confirmed absent empty而無帳戶建立、unavailable exceptional、providerstop後read引用；notreadywithdraw只測既有Vault/internal，非new SDK方法。
 
-明确coldqueryfallback与coldmutation失败behavior是1.4设计变化，不能仅warmbench后说Vault全部seamless。真实第三方至少选择一个常用shop/reward integration与offlinequery consumer，记录版本和功能；不将mockprovider当生态覆盖。
+明確coldqueryfallback與coldmutation失敗behavior是1.4設計變化，不能僅warmbench後說Vault全部seamless。真實第三方至少選擇一個常用shop/reward integration與offlinequery consumer，記錄版本和功能；不將mockprovider當生態覆蓋。
 
-PAPI：oldexpansion/newplugin、newexpansion/oldplugin、新新；全部families、`balance()` accessorfallback、5秒/10000bounds、noI/Oplaceholder。不新增未成熟rank PublicAPI来强迫改PAPI。
+PAPI：oldexpansion/newplugin、newexpansion/oldplugin、新新；全部families、`balance()` accessorfallback、5秒/10000bounds、noI/Oplaceholder。不新增未成熟rank PublicAPI來強迫改PAPI。
 
-## V05 — CMI与可选模块
+## V05 — CMI與可選模塊
 
-LicensedCMI必须维护者本机提供并记录版本，不下载未授权jar。Unitreflectionfake只能证明adapterlogic，不能写成realCMIpass。Clockskew/backward/restart/counterwrap由deterministicclock；scheduledcallbackdelayed/retired/remoteecho由realowner验证。CMI和旧wiretimestampordering限制明写。
+LicensedCMI必須維護者本機提供並記錄版本，不下載未授權jar。Unitreflectionfake只能證明adapterlogic，不能寫成realCMIpass。Clockskew/backward/restart/counterwrap由deterministicclock；scheduledcallbackdelayed/retired/remoteecho由realowner驗證。CMI和舊wiretimestampordering限制明寫。
 
-组合至少：globalbreaker off/playerprotection on；audit off/cleanup-export开配置；web off；shadow off；LOCAL Redis/SQLoff；LOCAL_REDIS SQLoff；任一initstagefail与closefail。Assert不存在该module的heavyresources，guard唯一owner。
+組合至少：globalbreaker off/playerprotection on；audit off/cleanup-export開配置；web off；shadow off；LOCAL Redis/SQLoff；LOCAL_REDIS SQLoff；任一initstagefail與closefail。Assert不存在該module的heavyresources，guard唯一owner。
 
 ### T21 V05 optional audit parent gate — cleanup/export enabled under disabled audit (2026-10-14)
 
@@ -388,7 +388,7 @@ Focused command `gradlew.bat :syncmoney-bukkit:test --tests noietime.syncmoney.s
 
 Independent targeted review found no actionable issue and confirmed the mode/SQL writer branches. Evidence limit: LOCAL_REDIS proves required-backend constructor wiring and shared-SQL omission only; it does not establish Redis connection success or exercise the real CacheManager script/scheduler path. No real Redis, Paper, Folia, or Canvas runtime was exercised. This closes only these local backend-off E1 cells. Initialization/close-failure, remaining T21 mode/resource/runtime gates, and licensed CMI remain open or BLOCKED / NOT RUN; T21 remains IN_PROGRESS.
 
-## B00 — Benchmark profiles与command合同
+## B00 — Benchmark profiles與command合同
 
 As of 2026-10-09, T19 implements these Gradle tasks and runner CLI in `:syncmoney-benchmarks`; use the commands below only when the required hash-bound baseline pilot and endpoint configuration are available.
 
@@ -401,30 +401,30 @@ java -jar syncmoney-benchmarks/build/libs/SyncmoneyBenchmarks.jar -wi 5 -i 10 -w
 .\gradlew.bat :syncmoney-benchmarks:loadTest -Pprofile=syncmoney-benchmarks/profiles/redis-sql-open-loop.json '-PbaselineCheckout=C:/absolute/disposable/verified-1.3.2' '-PbaselinePilot=C:/absolute/evidence/verified-1.3.2-redis-sql-macro-pilot.json'
 ```
 
-JMH runner使用明确annotationprocessor/version锁定，独立fork，不在IDE跑。JMHparams：accountcount1/1000/10000，producer1/2/8，queuecapacitylegacy50000与小capacity压力case，hotkey集中与均匀。通过@Setup预热/初始化/重置，各runpostcondition检查资金与版本，不在measuredoperation准备环境。
+JMH runner使用明確annotationprocessor/version鎖定，獨立fork，不在IDE跑。JMHparams：accountcount1/1000/10000，producer1/2/8，queuecapacitylegacy50000與小capacity壓力case，hotkey集中與均勻。通過@Setup預熱/初始化/重置，各runpostcondition檢查資金與版本，不在measuredoperation準備環境。
 
-| benchmark | variant | 输出 |
+| benchmark | variant | 輸出 |
 |---|---|---|
-| balance read | warmed、cold/unready异步schedule separate | ns/op、bytes/op、cachedstatus |
+| balance read | warmed、cold/unready異步schedule separate | ns/op、bytes/op、cachedstatus |
 | deposit/withdraw/set | success、reject、cancel、hotcontention | ops/s、sampletime、alloc、outcomerate |
-| transfer | localpair、Redisconfirmedasync分开 | acceptance/receiptlatency、conservation |
+| transfer | localpair、Redisconfirmedasync分開 | acceptance/receiptlatency、conservation |
 | queue | reserve/commit/dequeue、full、多producer | offered/accepted/reject、tail、CPU、GC |
 | serialization | legacyminimal/full/CMI/badJSON | bytes/op、encode/decode latency、wireequivalence |
 | messageprocess | newer/equal/older/duplicate/burst | apply/rejectrate、alloc、lag |
 | batchpersistence | batch1/50/200/500 + maxwait1/5/20ms | rows/s、commitlatency、oldestage、rollback |
 | macro pipeline | Redis/SQL healthy/slow/down/reconnect | p50/95/99/99.9、reject、persisted、backlogrepair |
 
-主要paired profile固定JDK25/heap/GC、hardwareCPU/RAM/OS、flags、CPU affinity/power settings、Redis/SQL版本與network；1.3.2使用原Java21編譯artifact在Java25執行，1.4.0使用Java25編譯artifact，兩者測量JVM相同。另跑1.3.2/Java21作歷史profile、1.3.2/Java25作JVM影響profile；不可把Java21舊結果直接與Java25新結果混成架構收益。若舊artifact無法於Java25執行，標paired比較BLOCKED，先處理baseline harness相容且保留舊語義，不虛構數值。交錯跑避免温度/CPU噪聲；3 forks不是p99.9充分樣本保證。Java25.0.4 Windows host上的paired JMH先後在G1與ParallelGC profile出現native process crash；根因未知。同一失敗列各在ParallelGC與SerialGC下各成功跑完一次，不足以判定根因；依ADR-17，paired及current-only JMH改用**僅限benchmark量測的SerialGC profile**，並保留ADR-08全部correctness/sample gates。Macro pilot與open-loop仍維持ParallelGC profile：r2 macro pilot曾通過，open-loop尚未執行；它們是分開的Redis/SQL runner，不作JMH stability的替代證據。這些GC選擇不改Syncmoney runtime GC，也不宣稱HotSpot根因已知。
+主要paired profile固定JDK25/heap/GC、hardwareCPU/RAM/OS、flags、CPU affinity/power settings、Redis/SQL版本與network；1.3.2使用原Java21編譯artifact在Java25執行，1.4.0使用Java25編譯artifact，兩者測量JVM相同。另跑1.3.2/Java21作歷史profile、1.3.2/Java25作JVM影響profile；不可把Java21舊結果直接與Java25新結果混成架構收益。若舊artifact無法於Java25執行，標paired比較BLOCKED，先處理baseline harness相容且保留舊語義，不虛構數值。交錯跑避免溫度/CPU噪聲；3 forks不是p99.9充分樣本保證。Java25.0.4 Windows host上的paired JMH先後在G1與ParallelGC profile出現native process crash；根因未知。同一失敗列各在ParallelGC與SerialGC下各成功跑完一次，不足以判定根因；依ADR-17，paired及current-only JMH改用**僅限benchmark量測的SerialGC profile**，並保留ADR-08全部correctness/sample gates。Macro pilot與open-loop仍維持ParallelGC profile：r2 macro pilot曾通過，open-loop尚未執行；它們是分開的Redis/SQL runner，不作JMH stability的替代證據。這些GC選擇不改Syncmoney runtime GC，也不宣稱HotSpot根因已知。
 
 所有macro-pilot、open-loop及JMH測量fork固定最大heap為1 GiB，並使用ByteBuddy flag。Paired與current-only JMH使用SerialGC；macro pilot與open-loop使用ParallelGC。每次paired comparison的baseline/candidate必須共用相同JDK、GC、heap與JVM flags，不得混算不同profile。Macro pilot保留response/receipt/durable/accepted-time樣本直到報告生成，因此每次measurement最多允許1,000,000個offered樣本；profile要求更高minimum時必須在連接Redis/SQL前拒絕。此上限仍高於100,000個p99.9最低樣本門檻10倍；超限時measurement失敗，不截斷樣本或輸出部分valid報告。
 
-Macroopenloop到达率用baseline可持续acceptedrate的25/50/75/100/125%，不是手写漂亮ops数；每档120秒warm+300秒measurement起始、≥100000samples，实际profile由pilot确认。记录**scheduledarrival到response**（含schedlag），另记录accept到confirmedreceipt/durablecommit；reject也是response样本。HDR原始/expectedintervalcorrected分开标，closedloop用于diagnostic不能替代openloop。
+Macroopenloop到達率用baseline可持續acceptedrate的25/50/75/100/125%，不是手寫漂亮ops數；每檔120秒warm+300秒measurement起始、≥100000samples，實際profile由pilot確認。記錄**scheduledarrival到response**（含schedlag），另記錄accept到confirmedreceipt/durablecommit；reject也是response樣本。HDR原始/expectedintervalcorrected分開標，closedloop用於diagnostic不能替代openloop。
 
-Result JSON fields：runId、sourceSHA、baselineSHA、artifactSHA256、profileId、JDK/OS/hardware/deps、flags、dataset、duration/sampleCount、offered/accepted/rejected/persisted、responseHistogram、receiptHistogram、durableHistogram、allocationBytesPerOp、GC、queueMax/oldestAge、ambiguous/quarantine、moneyInvariantFailures、versionConflicts、notes。含counts不足时标 p99.9不可靠，不能造confidenceinterval。
+Result JSON fields：runId、sourceSHA、baselineSHA、artifactSHA256、profileId、JDK/OS/hardware/deps、flags、dataset、duration/sampleCount、offered/accepted/rejected/persisted、responseHistogram、receiptHistogram、durableHistogram、allocationBytesPerOp、GC、queueMax/oldestAge、ambiguous/quarantine、moneyInvariantFailures、versionConflicts、notes。含counts不足時標 p99.9不可靠，不能造confidenceinterval。
 
 **Performance regression/review gates（非hard money gate）：** matched p99≤baseline110%、allocation/op≤110%、throughput≥90%；p99.9結合confidence/samplecount。超過須profile/cost分析與maintainer documented exception，correctness修復的合理成本可接受；不靜默改threshold／刪rejected samples。**Hard blockers：** money invariant violation、confirmed loss/corruption、contract禁止的incorrect success、unsafe unbounded pipeline、禁止hotpath network/SQL/filesystem blocking。這些即使性能很好仍FAIL，不能performance exception。Cold behavior差異不得冒充收益。
 
-**Agrona合并条件：** 同contract/全部faultsuite、无unboundedspin/更高idleCPU，allocation或tail有可重复收益且maintainerreview复杂度；不满足保留JDKqueue。Batchcoalescing只能safeabsoluteSQLsnapshot，不能丢audit或ADDrequest identity、不能穿SET/transferbarrier。
+**Agrona合並條件：** 同contract/全部faultsuite、無unboundedspin/更高idleCPU，allocation或tail有可重覆收益且maintainerreview覆雜度；不滿足保留JDKqueue。Batchcoalescing只能safeabsoluteSQLsnapshot，不能丟audit或ADDrequest identity、不能穿SET/transferbarrier。
 
 ### T19 JMH dependency research
 
@@ -443,66 +443,66 @@ Supported upgrade：Existing Syncmoney1.3.2 persisted balance/config/SQL/Redis�
 
 **2026-10-05 T02 outage behavior / migration note:** in shared/synchronized modes, a known Redis-degraded state rejects new deposit, withdraw, and SET requests before memory mutation, transaction events, or queue admission. LOCAL remains on its SQLite path. Work accepted before the outage stays in the existing in-process write/retry tracking and resumes against Redis after recovery; SQL is not promoted to shared authority. This narrows the 1.3.2 degraded DB-fallback behavior. No config, schema, or Redis wire change is made; `pay.allow-in-degraded` retains its existing transfer-only meaning and default. This is E1 fixture evidence only: pending work is not hard-crash durable, and shutdown/restart recovery remains outside T02 (E08 stays INCONCLUSIVE/P0-CANDIDATE and non-mandatory).
 
-### M01 — 备份与维护窗口
+### M01 — 備份與維護窗口
 
-- [ ] 先確認Java≥25、Paper≥1.21.6 actual service/container啟動與dependencies；舊JVM/server先升环境，保留完整回復配置，不reset SQL/Redis/balances。原1.3.2 JAR在新環境若不支援，採離線合成fixture資料遷入supported環境驗證，不要求1.4維護舊platform。
-- [ ] 记录source/JARsha、Java/server/deps、configschema、SQLmain/auditschema、Redis版本与topology；不输出secret。
-- [ ] 全node关闭经济producer／third-party自动reward与管理员写入，确认API已unregister/healthquiescing。
-- [ ] drain queue、inflight、retry、DB與audit至zero或稳定可确认pending；pending无法确认则停止upgrade。
-- [ ] 正常stop所有nodes，备份config/messages/aliases、SQL、LOCALSQLite及WAL/SHM（优先SQLitebackupAPI或完全关闭后拷贝）、RedisRDB/AOF、overflow/recovery；保存preupgradehash。
+- [ ] 先確認Java≥25、Paper≥1.21.6 actual service/container啟動與dependencies；舊JVM/server先升環境，保留完整回復配置，不reset SQL/Redis/balances。原1.3.2 JAR在新環境若不支援，採離線合成fixture資料遷入supported環境驗證，不要求1.4維護舊platform。
+- [ ] 記錄source/JARsha、Java/server/deps、configschema、SQLmain/auditschema、Redis版本與topology；不輸出secret。
+- [ ] 全node關閉經濟producer／third-party自動reward與管理員寫入，確認API已unregister/healthquiescing。
+- [ ] drain queue、inflight、retry、DB與audit至zero或穩定可確認pending；pending無法確認則停止upgrade。
+- [ ] 正常stop所有nodes，備份config/messages/aliases、SQL、LOCALSQLite及WAL/SHM（優先SQLitebackupAPI或完全關閉後拷貝）、RedisRDB/AOF、overflow/recovery；保存preupgradehash。
 
-### M02 — 更新与canary
+### M02 — 更新與canary
 
-- [ ] 每台plugins仅一份 `Syncmoney-1.4.0.jar`，主类/datafolder不变；PAPIexpansion仍可旧版起步验证。
-- [ ] 先canary，关闭producer；确认startup/schema/key/config保留，API/Vaultready、optionaldisabled符合，webunsafe例外明确。
-- [ ] 使用**disposable acceptance账户**执行read/write验证（productioncanary测试须当时批准小范围写入），正确handler/codec与receipt；不拿真用户余额做破坏性fault。
-- [ ] 其余nodes升级，各节点ready且无mixedoldwriter后恢复producer。记录升级前后总量、版本与reconcile差异；健康OK不等于数据验收自动通过。
+- [ ] 每台plugins僅一份 `Syncmoney-1.4.0.jar`，主類/datafolder不變；PAPIexpansion仍可舊版起步驗證。
+- [ ] 先canary，關閉producer；確認startup/schema/key/config保留，API/Vaultready、optionaldisabled符合，webunsafe例外明確。
+- [ ] 使用**disposable acceptance賬戶**執行read/write驗證（productioncanary測試須當時批準小範圍寫入），正確handler/codec與receipt；不拿真用戶餘額做破壞性fault。
+- [ ] 其餘nodes升級，各節點ready且無mixedoldwriter後恢覆producer。記錄升級前後總量、版本與reconcile差異；健康OK不等於數據驗收自動通過。
 
-### M03 — 正常降级
+### M03 — 正常降級
 
 - [ ] 1.4.0 JAR不能在Java21載入。plugin降回1.3.2可先保留已驗證的Java25；若另需降JVM，須配回支援Java21的server與dependencies，26.2新server不可假定能降回Java21。
-- [ ] 再quiesce所有nodes并drain，保存**当前最新数据**与現有recovery紀錄（若採newspool也保存）。
-- [ ] 若ADR-07核准new `recovery-v1.jsonl`，其pending/ambiguous必须已解决，不能给旧reader忽略后说rollback成功。
-- [ ] 换回verified1.3.2JAR，保留当前compatibleSQL/Redis/SQLite/config数据；不清Redis、不把version归零。
-- [ ] 读取upgrade期间新交易并验证仍在；旧writer重新引入已知stale写入限制，downgrade说明恢复该限制。
-- [ ] 旧backup只用于另行批准的灾难恢复；restore会丢升级后合法交易，不能算seamlessrollback。
+- [ ] 再quiesce所有nodes並drain，保存**當前最新數據**與現有recovery紀錄（若採newspool也保存）。
+- [ ] 若ADR-07核準new `recovery-v1.jsonl`，其pending/ambiguous必須已解決，不能給舊reader忽略後說rollback成功。
+- [ ] 換回verified1.3.2JAR，保留當前compatibleSQL/Redis/SQLite/config數據；不清Redis、不把version歸零。
+- [ ] 讀取upgrade期間新交易並驗證仍在；舊writer重新引入已知stale寫入限制，downgrade說明恢覆該限制。
+- [ ] 舊backup只用於另行批準的災難恢覆；restore會丟升級後合法交易，不能算seamlessrollback。
 
-没有destructiveDDL或incompatiblewire并不自动证明rollback，newrecovery与behavior也要验收。
+沒有destructiveDDL或incompatiblewire並不自動證明rollback，newrecovery與behavior也要驗收。
 
-## M04–M12 — 数据／mixed-version矩阵
+## M04–M12 — 數據／mixed-version矩陣
 
 | ID | old→new/new→old scenarios | expected/releasepolicy |
 |---|---|---|
-| M04 | LOCALsyntheticSQLitewithhistoricaltransactions | schema/path/REAL值可读、normaldrain两方向 |
-| M05 | SYNCPostgreSQL/MySQL/MariaDB | player_uuid与schemaids不变、新guardwrites不会回退 |
-| M06 | LOCAL_REDIS/AOFrestart | legacykey/result相容，noSQLresource；实际Redisdurability依配置 |
-| M07 | CMIold/newwireclockskew | 明确freshness/collisionlimitations，licensedscenario |
-| M08 | config12/customkeys/oldschemafailedbackup | preserve/idempotent/fail原档、reload不halfapply |
-| M09 | old→new、新→oldJSON/unknownfield/CMIlong | codec互通，duplicate/stale无apply |
-| M10 | disconnect/reconnect/duplicate/receivedelayed | at-most-once丢訊後可reconcile，noecho |
-| M11 | oldSQLv40在newv41之后 | **预期能展示legacyrace，不能宣称live-mixed强一致** |
-| M12 | old/newnodes live sameaccountwrites/transfer/failures | 默认unsupported；结果记录，无matrix/ADR不扩展stable承诺 |
+| M04 | LOCALsyntheticSQLitewithhistoricaltransactions | schema/path/REAL值可讀、normaldrain兩方向 |
+| M05 | SYNCPostgreSQL/MySQL/MariaDB | player_uuid與schemaids不變、新guardwrites不會回退 |
+| M06 | LOCAL_REDIS/AOFrestart | legacykey/result相容，noSQLresource；實際Redisdurability依配置 |
+| M07 | CMIold/newwireclockskew | 明確freshness/collisionlimitations，licensedscenario |
+| M08 | config12/customkeys/oldschemafailedbackup | preserve/idempotent/fail原檔、reload不halfapply |
+| M09 | old→new、新→oldJSON/unknownfield/CMIlong | codec互通，duplicate/stale無apply |
+| M10 | disconnect/reconnect/duplicate/receivedelayed | at-most-once丟訊後可reconcile，noecho |
+| M11 | oldSQLv40在newv41之後 | **預期能展示legacyrace，不能宣稱live-mixed強一致** |
+| M12 | old/newnodes live sameaccountwrites/transfer/failures | 默認unsupported；結果記錄，無matrix/ADR不擴展stable承諾 |
 
-Drop-in artifact replacement、data compatibility、quiesced rolling、zero-downtime/live writes分開報告（定義04§15）；零停機不是既有承諾。ProposedCapability不证明未知peer真实行为，oldpeer永远按legacy处理。
+Drop-in artifact replacement、data compatibility、quiesced rolling、zero-downtime/live writes分開報告（定義04§15）；零停機不是既有承諾。ProposedCapability不證明未知peer真實行為，oldpeer永遠按legacy處理。
 
 ## Report模板／release gates
 
-| 字段 | 内容 |
+| 字段 | 內容 |
 |---|---|
 | Status | PASS / FAIL / BLOCKED / NOT_RUN（不混用） |
 | Artifacts | actualSHA/version/buildsettings |
 | Runtime | exactserver/JDK/optionaldependency/storageversions |
 | Case | test/scenario/profile、input、faultpoint |
-| Expected/Observed | 各自独立，附assertion/record |
+| Expected/Observed | 各自獨立，附assertion/record |
 | Triage / priority | 08 finding ID、CONFIRMED/DISPROVED/INCONCLUSIVE/DEFERRED、issue priority與review；不與測試PASS/FAIL混用 |
 | Remainingrisk | coldVaulttradeoff、hardcrashwindow、mixedwriters、CMIclock等 |
-| Evidence | ignoredreport路径与redactedsummary；不提交secrets/logs |
+| Evidence | ignoredreport路徑與redactedsummary；不提交secrets/logs |
 
-Alpha/Beta/Stable规则依04§24。没有realFolia/CMI/network证据不可用unit/build作为替代；明确blocking或缩窄支持声明需maintainerreview。
+Alpha/Beta/Stable規則依04§24。沒有realFolia/CMI/network證據不可用unit/build作為替代；明確blocking或縮窄支持聲明需maintainerreview。
 
 ## Acceptance routing
 
-V03正式support與歷史研究分開。所有CONFIRMED [P0]需修復／regression關閉；[P0-CANDIDATE]按08四種triage及review處理，未再現不自動成blocker；ADR-03/04/06/07在相關product/implementation/freeze前核准。Read-only SDK absence/shutdown/error contract、兩份descriptor api-version1.21.6、Paper1.21.6實際載入及最新supported Paper state upgrade不可被performance例外豁免。
+V03正式support與歷史研究分開。所有CONFIRMED [P0]需修復／regression關閉；[P0-CANDIDATE]按08四種triage及review處理，未再現不自動成blocker；ADR-03/04/06/07在相關product/implementation/freeze前核準。Read-only SDK absence/shutdown/error contract、兩份descriptor api-version1.21.6、Paper1.21.6實際載入及最新supported Paper state upgrade不可被performance例外豁免。
 public mutation/idempotency、Aeron transport與Agrona primitives、full engine redesign不是本matrix的隱含前置。Report增加priority與ADR approval／performance exception欄，NOT_RUN不算PASS。
 
 ## Executed evidence — T00 1.3.2 baseline (2026-10-04)
@@ -2969,7 +2969,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 **Validation:** The focused startup-failure validator passed `128/128` (10,752 bytes; SHA-256 `7d60d5a9e246fcf78fe034a9e52e41b5088d4f2309f34fc60515b6f28104dcc4`); shared T21 validation passed `156/156` (10,899 bytes; SHA-256 `5fec2e7a2b9dc2873b79c2ce924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted six runner/validator/test/audit scripts with zero errors (359-byte output; SHA-256 `ccd26828531d871d7124a5ed757ae3c82cb020a51e232d5b2a00a1242e62c688`). Java/Gradle product tests are **NOT RUN** because this subcase changes only PlugDev validation tooling/tests and planning/runbook evidence; the pinned candidate JAR was exercised in E2.
 
-T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At the earlier minimum-Folia/MySQL checkpoint, the next ordered cell was minimum Folia `1.21.6#6` / MariaDB `12.3.3-MariaDB`; that cell and the subsequent minimum-Folia/PostgreSQL cell are recorded in the following subsections. At the minimum-Folia/PostgreSQL checkpoint, the next cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded below. The current next cell is maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`; maximum-Folia/PostgreSQL, Canvas, supplemental current-stable Paper, lifecycle, migration, and fleet-quiescence gates remain open.
+T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At the earlier minimum-Folia/MySQL checkpoint, the next ordered cell was minimum Folia `1.21.6#6` / MariaDB `12.3.3-MariaDB`; that cell and the subsequent minimum-Folia/PostgreSQL cell are recorded in the following subsections. At the minimum-Folia/PostgreSQL checkpoint, the next cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded below. The current next cell is maximum Folia `26.2#7` / PostgreSQL `18.1`; maximum-Folia/PostgreSQL, Canvas, supplemental current-stable Paper, lifecycle, migration, and fleet-quiescence gates remain open.
 
 ## T21 V03 minimum-Folia/MariaDB required-v11 audit DDL permission-denial startup failure (2026-10-15)
 
@@ -3001,7 +3001,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 
 **Validation and review:** After the scoped change, focused startup-failure validation passed `129` assertions (10,872 bytes; SHA-256 `37e0b7f4c3d74a3630cefb0a8ced22a5fa20e47424a1d3e39e5a773fd351f412`); shared T21 validation passed `156/156` (10,899 bytes; SHA-256 `5fec2e7a2b9dc2873b79c2e924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted the runner, startup-failure validator/test, shared validator/test, and offline auditor (6 scripts, zero parse errors; output log `build/reports/foundation/T21-required-v11-ddl-failure/minimum-folia-mariadb-parser-rerun.log`, 820 bytes, SHA-256 `494c5d0746a957ccb77563865835b62fec50e07172c236aa92a61f92e3b6083c`). Independent read-only review found two documentation-only findings: the prior MySQL source-pin label overstated current-source identity, and the runner's secondary diagnostic omitted the new minimum-Folia targets. The MySQL section now labels pins as report-time and records that E2 was not rerun against the later extension; both runner diagnostics now reflect the narrow admitted matrix. A follow-up read-only diff review found the MySQL checkpoint next-cell sentence stale after the MariaDB run; it now labels that earlier route and points to the current PostgreSQL cell. Java/Gradle product tests are **NOT RUN** because only PlugDev validation tooling/tests and evidence documentation changed; the pinned candidate JAR was exercised by the E2 runtime. The universal evidence audit is **PASS** for all observable criteria listed above; the missing independent SQL statement remains an explicit evidence limit.
 
-T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At the time of this MariaDB checkpoint, the next selected cell was minimum Folia `1.21.6#6` / PostgreSQL `18.1`; the following subsection records its completion. At that checkpoint, the next cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded below. The current next cell is maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`; maximum-Folia/PostgreSQL, Canvas, and supplemental current-stable Paper remain open / NOT RUN for this failure scenario.
+T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At the time of this MariaDB checkpoint, the next selected cell was minimum Folia `1.21.6#6` / PostgreSQL `18.1`; the following subsection records its completion. At that checkpoint, the next cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded below. The current next cell is maximum Folia `26.2#7` / PostgreSQL `18.1`; maximum-Folia/PostgreSQL, Canvas, and supplemental current-stable Paper remain open / NOT RUN for this failure scenario.
 
 
 ## T21 V03 minimum-Folia/PostgreSQL required-v11 audit DDL permission-denial startup failure (2026-10-15)
@@ -3018,7 +3018,7 @@ Main schema v1 and audit schema v10 version rows remained unchanged. The 14-colu
 
 **Validation and review:** `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` passed 142 checks, including rejection of all 12 unfinished endpoint/backend pairs (11,746-byte log `build/reports/foundation/T21-required-v11-ddl-failure/minimum-folia-postgresql-focused-rerun.log`; SHA-256 `8431330149945a0a230018d054d23be30d143544feee040b77803e194f250fb0`). `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` passed 156/156 (10,899-byte log; SHA-256 `5fec2e7a2b9dc2873b79c2e924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted six runner/validator/test/audit scripts with zero parse errors (28-byte output `build/reports/foundation/T21-required-v11-ddl-failure/minimum-folia-postgresql-parser-rerun.txt`; SHA-256 `6ccdc69d18f9be8cb0d4b5cdb6358e6e8844f2af411b139ea9d7100b5235edf6`). Targeted independent read-only review found no actionable findings and confirmed the nine admitted plus twelve rejected endpoint/backend pairs match the recorded scope. Universal evidence verification is **PASS** for this bounded report predicate, source snapshots, artifact pins, privilege boundary, schema/sentinel preservation, retained log hashes, and cleanup. Candidate-source identity and a separate statement-level DDL trace remain **UNKNOWN**, as recorded above. Java/Gradle product tests are **NOT RUN** because this bounded subcase changes only PlugDev validation tooling/tests and planning evidence; the pinned candidate JAR was exercised by E2.
 
-T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At this PostgreSQL checkpoint, the next ordered denial cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded in the following subsection. The current next cell is maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`; maximum-Folia/PostgreSQL, all minimum/maximum Canvas combinations, supplemental current-stable Paper, and remaining lifecycle/migration/fleet-quiescence gates remain open / NOT RUN.
+T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At this PostgreSQL checkpoint, the next ordered denial cell was maximum Folia `26.2#7` / MySQL `8.0.42`, now recorded in the following subsection. The current next cell is maximum Folia `26.2#7` / PostgreSQL `18.1`; maximum-Folia/PostgreSQL, all minimum/maximum Canvas combinations, supplemental current-stable Paper, and remaining lifecycle/migration/fleet-quiescence gates remain open / NOT RUN.
 
 
 ## T21 V03 maximum-Folia/MySQL required-v11 audit DDL permission-denial startup failure (2026-10-15)
@@ -3033,4 +3033,37 @@ The report verifies both loopback MySQL grant sets: global `USAGE` only and an i
 
 **Validation and review:** The focused startup-failure validator passed 142 checks, including the ten admitted cells and rejection of the other eleven targets (11,786-byte log `build/reports/foundation/T21-required-v11-ddl-failure/maximum-folia-mysql-focused-green.log`; SHA-256 `1c30a9795c490a7ecb62cc268d13d6a660da4b515ff5973bc51e5aa120c0f857`). Shared T21 validation passed `156/156` (10,899 bytes; SHA-256 `5fec2e7a2b9dc2873b79c2e924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted seven runner, validator, test, and report-audit scripts with zero errors (28-byte output `build/reports/foundation/T21-required-v11-ddl-failure/maximum-folia-mysql-parser-final.txt`; SHA-256 `c2f31cf89a486e53ca9f5b92c3ce8dfe7bc4a5c0bc281121c129f29f3a0a30fb`). Gradle `shadowJar --rerun-tasks` passed as recorded above; the Gradle product test suite is **NOT RUN** because this cell changed PlugDev validation tooling/tests and evidence only. The independent read-only review found no actionable findings. Universal evidence verification is **PASS** for the bounded target, runtime, grants, preserved schema/data, source/artifact pins, logs, and cleanup; the exact DDL statement remains **UNKNOWN** because no separate MySQL statement trace was retained.
 
-T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. The next ordered required-v11 denial cell is maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`; maximum-Folia/PostgreSQL, all minimum/maximum Canvas combinations, and supplemental current-stable Paper remain open / NOT RUN for this failure scenario. Other lifecycle, migration, and fleet-quiescence gates also remain open.
+T21 remains **IN_PROGRESS**. E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. At this MySQL checkpoint, the next ordered required-v11 denial cell was maximum Folia `26.2#7` / MariaDB `12.3.3-MariaDB`, now recorded below. The current next cell is maximum Folia `26.2#7` / PostgreSQL `18.1`; all minimum/maximum Canvas combinations and supplemental current-stable Paper remain open / NOT RUN for this failure scenario. Other lifecycle, migration, and fleet-quiescence gates also remain open.
+
+## T21 V03 maximum-Folia/MariaDB required-v11 audit DDL permission-denial startup failure (2026-10-15)
+
+**Scope and target-gate repair:** The next ordered required-v11 denial cell was user-pinned Folia maximum `26.2#7` / MariaDB `12.3.3-MariaDB`. The positive MariaDB fixture reproduced the missing target admission before the narrow guard was extended. The target guard now admits eleven endpoint/product pairs: all three SQL products on minimum and maximum Paper, all three on minimum Folia, plus MySQL and MariaDB on maximum Folia. It continues to reject maximum-Folia/PostgreSQL, all six minimum/maximum Canvas combinations, and all three supplemental current-stable Paper combinations. Runner diagnostics reflect the admitted matrix. No Java/product source, public contract, SQL schema, recovery format, or release baseline changed.
+
+**Candidate artifact and E2 runtime:** A clean forced `shadowJar --rerun-tasks` build at Syncmoney commit `a6964c2130a340b5f3207cae0a7fcee8e9e90374` exited `0` with all 15 tasks executed under Java `25.0.4+7-LTS-189` and Gradle `9.8.0`. Manifest `build/reports/foundation/T21-required-v11-ddl-failure/maximum-folia-mariadb-candidate-build.json` is 954 bytes (SHA-256 `babde50d7e2ed654c18e29987b9b7f9cce62bea91bb79d56460efcdd7514dbcd`); its build log is 1,595 bytes (SHA-256 `0fe518df5801c9232bdbc4d98be33782411ccf9aa37b796f83f18bcdaa14ed7e`). It binds the candidate JAR (31,558,215 bytes; SHA-256 `57b717e7704e93e6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662`) to that clean source commit. The runtime used the clean local PlugDev checkout at commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`, its pinned CLI manifest, Java `25.0.4+7-LTS-189`, Folia artifact SHA-256 `128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3`, MariaDB `12.3.3-MariaDB`, isolated Redis `8.10.1` DB `15`, and candidate `1.4.0-alpha.1`. `tools/plugdev/run-mysql-sync-runtime.ps1` exited `0` with `-PlatformEndpoint MaximumFolia -DatabaseProduct MariaDB -RequiredV11DdlPermissionDeniedStartupFailure`. Report `build/reports/foundation/T21-sql-runtime/mariadb-sync-maximum-folia-20261015-224449-35d65649eec649578c2b5d44083d9405/result.json` is 30,050 bytes (SHA-256 `7ca0337ff9f06778115ea749e5cb3fadf70edb271eedec7aab699ef93598ec3c`), status `PASS_BOUNDED_SUBCASE`.
+
+**Reproduction command:**
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$foliaJar = (Resolve-Path 'build\reports\foundation\T21-artifacts\folia-26.2-7.jar').Path
+$mariaDbBin = 'C:\Users\margo\scoop\apps\mariadb\current\bin'
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $foliaJar `
+  -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' `
+  -ExpectedCandidateSha256 '57b717e7704e93e6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -MariaDbBin $mariaDbBin `
+  -PlatformEndpoint MaximumFolia `
+  -DatabaseProduct MariaDB `
+  -RequiredV11DdlPermissionDeniedStartupFailure
+```
+
+**Observed failure semantics and evidence limits:** Both candidate loopback accounts were verified before startup with isolated-schema `CREATE` and without `ALTER` or global `CREATE`. Folia startup failed during audit migration `10 → 11` with `ALTER command denied` on `syncmoney_audit_log`; Syncmoney rolled back initialized owners and disabled. Main schema v1 and audit schema v10 version rows remained unchanged; all 14 v10 audit columns, the primary index, and the exact sentinel row (`amount` `1.25`, `balance_after` `99.99`) were preserved, and `request_id` remained absent. Startup created an empty `players` table, so this is not whole-database atomic rollback evidence. `deniedDdlEvidence` is null and no separate MariaDB general-log statement was retained, so the exact attempted DDL is **UNKNOWN**. Folia, MariaDB, Redis, and the isolated Gradle daemon stopped normally; cleanup failures, extra SQL connections, other Redis clients, and Redis DB 15 keys were zero. The report declares 29 runtime logs, all of which were independently rehashed.
+
+**Independent report audit:** `build/reports/foundation/T21-required-v11-ddl-failure/maximum-folia-mariadb-offline-audit.ps1` is 15,466 bytes (SHA-256 `fa271965902adb7f70f5ef394eba603b08db6f095d82d1a2465fcf0974623962`); its retained output is 1,768 bytes (SHA-256 `93bcf63bb311fb8d6ee944451da7cec7743f1ce31fd5fd3fd99108185ffbe3f7`). It passed 25 assertions checking the report predicate, exact target/runtime identity, all report-time source and artifact pins, candidate build provenance, both grants, v10 state/sentinel preservation, explicit empty-players limit, cleanup, and all 29 log lengths/hashes. I reran the offline auditor during this continuation; it exited `0` with `OFFLINE_AUDIT_RESULT=PASS` and `AUDIT_ASSERTIONS=25`.
+
+**Validation and review:** `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` exited `0` with 142 passing assertions, including admission of the eleven approved endpoint/product cells and rejection of the remaining ten. Its retained output is 11,830 bytes (SHA-256 `7c228fabe127c02483aec62101bc1fdad01af86466cc6a4dfe38df96283789bb`). `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` exited `0` with 156 passing assertions; output is 10,899 bytes (SHA-256 `5fec2e7a2b9dc2873b79c2ce924af3abe87e048ec9573dda691d7e283a9549f0`). PowerShell `Parser.ParseFile` accepted six runner, validator, test, and auditor scripts with zero errors (18-byte result, SHA-256 `ea6681ec207b435fc7999008a22f9306498cc6b28ce6a20c27328e8b92e70bad`). The evidence audit is PASS for the bounded report, source/artifact pins, grant boundary, preserved schema/data, retained log hashes, cleanup, and documented rollback limits. The independent read-only review checked the three-file diff, T21 routing, runbook command, E2 report, candidate manifest, and retained audit/validator/parser outputs; it confirmed the 11 admitted / 10 rejected target split, hashes, 25 audit assertions over 29 logs, and 142/156 validator counts, with no actionable findings. Exact source pins: runner `b1c7907c26938f57b9bb728270dbb5674ac642bcaf99295bb78bd6cfd8e95f9d`, validator `f96e9a91d88fd48f984a3dab5f6746d435cb339e7aa7ab42ee9770363302d7b4`, focused test `c3358f7eaa5e1ea611f33169d72a25182308c54eef6596cbfe3ec7c7f8dbf91f`, shared validator/test `bf12a605d6f1d172d02bfdbe216274d4709276b4a5aec362f44aca33b2e5bdba` / `ab6eca1ceb355ca0b464bed0dd668c6dbfc3d4951f1065b069d8420a8c126f5b`. Java/Gradle product tests are **NOT RUN** because this subcase changed only PlugDev validation tooling/fixtures and documentation; the pinned candidate JAR was exercised by E2 runtime.
+
+T21 remains **IN_PROGRESS**. E07 remains P1, E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope, and licensed CMI remains **BLOCKED / NOT RUN**. The next ordered required-v11 denial cell is maximum Folia `26.2#7` / PostgreSQL `18.1`. Canvas combinations, supplemental current-stable Paper, and broader lifecycle/migration/fleet-quiescence gates remain open or **NOT RUN**.
