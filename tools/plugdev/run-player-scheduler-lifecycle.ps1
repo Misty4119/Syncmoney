@@ -28,8 +28,11 @@ $pin = $pins[$Endpoint]
 if ($CrossOwner.IsPresent -and $pin.software -ne 'folia') {
     throw '-CrossOwner is only supported for Folia endpoints.'
 }
-if (($Guard.IsPresent -or $GuardWithCircuitBreaker.IsPresent -or $BreakerOnly.IsPresent) -and $pin.software -ne 'canvas') {
-    throw 'Guard and breaker-only acceptance cases are only supported for Canvas endpoints.'
+if ($Guard.IsPresent -and $pin.software -notin @('canvas', 'folia')) {
+    throw 'Paired player-guard acceptance is only supported for Canvas or Folia endpoints.'
+}
+if (($GuardWithCircuitBreaker.IsPresent -or $BreakerOnly.IsPresent) -and $pin.software -ne 'canvas') {
+    throw 'Circuit-breaker paired acceptance cases are only supported for Canvas endpoints.'
 }
 if ($GuardWithCircuitBreaker.IsPresent -and -not $Guard.IsPresent) {
     throw '-GuardWithCircuitBreaker must be combined with -Guard.'
@@ -661,7 +664,7 @@ plugins {
         }
         $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardA uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardA entity-owner guard outcome'
         $null = Wait-ServerLog 'T21_GUARD_TRANSACTIONS player=AcceptanceGuardB uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} accepted=5 rejected=1 outcomes=SSSSSF before=0\.00 after=5\.00' 30 'AcceptanceGuardB entity-owner guard outcome'
-        $null = Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired Canvas owner guard outcome'
+        $null = Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired player-owner guard outcome'
     }
 
     $teleport = Invoke-Client 'teleport'
@@ -827,7 +830,11 @@ plugins {
     $notEstablished = @('CMI callback retirement', 'hard-kill recovery', 'fleet-wide quiescence', 'full backend/failure matrix')
     if (-not $crossOwnerEnabled) { $notEstablished += 'Folia two-region cross-owner behavior' }
     if ($Guard.IsPresent) {
-        $notEstablished += 'full Canvas owner/guard lifecycle matrix outside the tested two-owner quota scenario'
+        if ($pin.software -eq 'folia') {
+            $notEstablished += 'full Folia player-guard lifecycle matrix outside the tested two-owner quota scenario'
+        } else {
+            $notEstablished += 'full Canvas owner/guard lifecycle matrix outside the tested two-owner quota scenario'
+        }
     } elseif ($BreakerOnly.IsPresent) {
         $notEstablished += 'full Canvas owner/guard lifecycle matrix outside the tested two-owner global rate-limit scenario'
     } else {
@@ -842,7 +849,8 @@ plugins {
         } elseif ($GuardWithCircuitBreaker.IsPresent) {
             'T21 Canvas two-owner entity guard with global circuit breaker enabled and player lifecycle scheduler subcase'
         } elseif ($Guard.IsPresent) {
-            'T21 Canvas two-owner entity guard and player lifecycle scheduler subcase'
+            $platformName = if ($pin.software -eq 'folia') { 'Folia' } else { 'Canvas' }
+            "T21 $platformName two-owner entity guard and player lifecycle scheduler subcase"
         } else { 'T21 player lifecycle scheduler subcase' }
         runId = $runId
         endpoint = [ordered]@{ label = $Endpoint; software = $pin.software; minecraftVersion = $pin.version; build = $pin.build; serverJar = $serverJar; serverJarSha256 = $serverSha }

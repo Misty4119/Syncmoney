@@ -259,7 +259,7 @@ test("guard runtime proof requires the entity owner, exact quota outcome, player
   }), false, "the client notification must contain a UUID");
 });
 
-test("guard acceptance is an isolated Canvas-only profile and records runtime evidence", () => {
+test("guard acceptance admits the Folia ownership case while keeping breaker combinations Canvas-only", () => {
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
   const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
   const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
@@ -268,7 +268,8 @@ test("guard acceptance is an isolated Canvas-only profile and records runtime ev
   assert.match(runner, /\[switch\]\$Guard/);
   assert.match(runner, /\[switch\]\$GuardWithCircuitBreaker/);
   assert.match(runner, /GuardWithCircuitBreaker\.IsPresent -and -not \$Guard\.IsPresent/);
-  assert.match(runner, /\(\$Guard\.IsPresent -or \$GuardWithCircuitBreaker\.IsPresent -or \$BreakerOnly\.IsPresent\) -and \$pin\.software -ne 'canvas'/);
+  assert.match(runner, /\$Guard\.IsPresent -and \$pin\.software -notin @\('canvas', 'folia'\)/);
+  assert.match(runner, /\(\$GuardWithCircuitBreaker\.IsPresent -or \$BreakerOnly\.IsPresent\) -and \$pin\.software -ne 'canvas'/);
   assert.match(runner, /\$guardClient = Invoke-Client 'guard-pair'/);
   assert.match(runner, /Invoke-Client 'guard-pair-breaker'/);
   assert.match(runner, /--has-guard-pair-runtime-proof-json/);
@@ -438,7 +439,7 @@ test("Canvas breaker/guard proof requires both active managers and an unlocked g
   }), false, "each entity owner must observe the active, unlocked global breaker");
 });
 
-test("Canvas guard runner collects and validates the paired owner scenario", () => {
+test("paired owner guard runner records platform-specific ownership and residual scope", () => {
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8").replaceAll("\r\n", "\n");
   const client = readFileSync(new URL("./player-scheduler-lifecycle.mjs", import.meta.url), "utf8");
   const probe = readFileSync(new URL("../../src/acceptance/java/noietime/syncmoney/acceptance/AcceptanceProbe.java", import.meta.url), "utf8");
@@ -468,7 +469,13 @@ test("Canvas guard runner collects and validates the paired owner scenario", () 
     runner.indexOf("$notEstablished = @("),
     runner.indexOf("$script:result = [ordered]@{")
   );
-  assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} elseif \(\$BreakerOnly\.IsPresent\) \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner global rate-limit scenario'\s*\} else \{\s*\$notEstablished \+= 'Canvas two-owner guard scenario was not run'/);
+  assert.match(runner, /if \(-not \$crossOwnerEnabled\) \{ \$notEstablished \+= 'Folia two-region cross-owner behavior' \}/);
+  assert.doesNotMatch(runner, /\$twoRegionOwnershipProved/,
+    "the paired player-guard profile must not be treated as the separate Folia cross-owner scenario");
+  assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*if \(\$pin\.software -eq 'folia'\) \{\s*\$notEstablished \+= 'full Folia player-guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} else \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\}/);
+  assert.match(runner, /"T21 \$platformName two-owner entity guard and player lifecycle scheduler subcase"/);
+  assert.match(runner, /Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired player-owner guard outcome'/);
+  assert.doesNotMatch(runner, /'paired Canvas owner guard outcome'/);
   assert.match(probe, /runGuardTransactions\(\s*plugin, transactionGuard, economy, player, peer,/);
   const pairMethod = probe.slice(
     probe.indexOf("private void runGuardPairScenario"),

@@ -192,10 +192,7 @@ test("local mode produces an isolated config with the schema default and no netw
   assert.equal(settings.economy.mode, "local");
 });
 
-test("guard-only profile enables per-player protection without enabling optional modules", () => {
-  const options = validateOptions([
-    "canvas", "26.3", "local_redis", "off", "1.4.0-alpha.1", "guard-on",
-  ]);
+test("guard-only profile enables per-player protection independently on Canvas and Folia", () => {
   const defaults = {
     "config-version": 12,
     redis: { enabled: false },
@@ -211,17 +208,22 @@ test("guard-only profile enables per-player protection without enabling optional
     "discord-webhook": { enabled: true },
   };
 
-  const settings = createEconomySettings(defaults, options);
+  for (const [software, version] of [["canvas", "26.3"], ["folia", "26.2"]]) {
+    const options = validateOptions([
+      software, version, "local_redis", "off", "1.4.0-alpha.1", "guard-on",
+    ]);
+    const settings = createEconomySettings(defaults, options);
 
-  assert.equal(options.playerProtection, true);
-  assert.equal(settings["circuit-breaker"].enabled, false);
-  assert.equal(settings["circuit-breaker"]["player-protection"].enabled, true);
-  assert.equal(settings["circuit-breaker"]["player-protection"]["global-lock"].enabled, false);
-  assert.equal(settings["shadow-sync"].enabled, false);
-  assert.equal(settings.audit.enabled, false);
-  assert.equal(settings["transfer-guard"].enabled, false);
-  assert.equal(settings["web-admin"].enabled, false);
-  assert.equal(settings["discord-webhook"].enabled, false);
+    assert.equal(options.playerProtection, true);
+    assert.equal(settings["circuit-breaker"].enabled, false);
+    assert.equal(settings["circuit-breaker"]["player-protection"].enabled, true);
+    assert.equal(settings["circuit-breaker"]["player-protection"]["global-lock"].enabled, false);
+    assert.equal(settings["shadow-sync"].enabled, false);
+    assert.equal(settings.audit.enabled, false);
+    assert.equal(settings["transfer-guard"].enabled, false);
+    assert.equal(settings["web-admin"].enabled, false);
+    assert.equal(settings["discord-webhook"].enabled, false);
+  }
 });
 
 test("Canvas guard-breaker profile enables both guards while keeping optional modules disabled", () => {

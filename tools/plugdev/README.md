@@ -541,6 +541,18 @@ foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
 
 This keeps `AcceptanceGuardA` and `AcceptanceGuardB` online, moves B 16,384 blocks, and runs each participant's six Vault deposits on that player's entity scheduler with both the player guard and global circuit breaker enabled. Each callback must report ownership of its own player and not its peer; each player's independent quota must produce `SSSSSF` and Redis `5.00/v5`. The test runs A first and waits for A's client to receive and acknowledge its rate-limit notice before it starts B. A notice delivered to the wrong client, a mismatched UUID, an out-of-order rejection/acknowledgement, or a missing acknowledgement fails the offline proof. This is a bounded two-owner quota observation only; it does not establish the wider Canvas owner/guard lifecycle matrix or Paper/Folia behavior.
 
+For the Folia player-guard case without the global breaker, run `-Guard` on the user-pinned minimum and maximum Folia builds:
+
+```powershell
+foreach ($endpoint in @('folia-1216-min', 'folia-262-max')) {
+  .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -Guard `
+    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
+}
+```
+
+The runner admits the guard-only profile on Folia and Canvas; combined guard/circuit-breaker and breaker-only profiles remain Canvas-only. This profile uses `LOCAL_REDIS`, enables per-player protection, and disables SQL, the global circuit breaker, its global-lock monitor, and unrelated optional modules. The probe moves B 16,384 blocks, then runs each player's six deposits on that player's entity scheduler. Acceptance requires two owner proofs with `selfOwned=true` and `otherOwned=false`, independent `SSSSSF` outcomes, player-specific notices and acknowledgements, Redis `5.00/v5` for each account, and the existing successful teleport/logout and drain checks. The owner predicates do not run the separate `-CrossOwner` scenario, so Folia two-region cross-owner behavior remains unestablished by this profile. This is bounded Folia guard/lifecycle evidence, not general Folia scheduling or full guard/lifecycle coverage.
+
 For the inverse Canvas combination, run the same isolated lifecycle harness with `-BreakerOnly` on the user-pinned minimum and maximum Canvas builds:
 
 ```powershell
