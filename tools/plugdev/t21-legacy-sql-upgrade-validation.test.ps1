@@ -428,9 +428,9 @@ try {
 
     $runnerSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1')
     if (-not (
-        $runnerSource.Contains('Test-T21LegacySqlRuntimeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint') -and
+        $runnerSource.Contains('if ($script:legacySqlDataUpgrade) {') -and
+        $runnerSource.Contains('if (-not (Test-T21LegacySqlRuntimeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {') -and
         -not $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
-        -not $runnerSource.Contains('$script:databaseProduct -notin @(''MySQL'', ''MariaDB'', ''PostgreSQL'')') -and
         $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"') -and
         $runnerSource.Contains('Get-T21LegacyAuditSchemaMetadata $stage') -and
         $runnerSource.Contains('Test-T21MariaDbLegacyDataUpgradeReport') -and

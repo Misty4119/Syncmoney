@@ -848,40 +848,19 @@ try {
         return $copy
     }
 
-    if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Minimum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint Maximum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint Maximum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MinimumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MaximumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MinimumCanvas) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct MariaDB -PlatformEndpoint MaximumCanvas) -or
-        -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumCanvas)) {
-        throw 'The v11 required-DDL failure gate must admit all three SQL products on the user-pinned Paper, Folia, and Canvas endpoints.'
-    }
-    Write-Output 'PASS: admit the eighteen approved required-v11 product/endpoint combinations'
-    $uncompletedV11Endpoints = @('MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
+    $approvedV11Endpoints = @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
     $allV11Products = @('MySQL', 'MariaDB', 'PostgreSQL')
-    foreach ($uncompletedEndpoint in $uncompletedV11Endpoints) {
+    $approvedV11Count = 0
+    foreach ($approvedEndpoint in $approvedV11Endpoints) {
         foreach ($databaseProduct in $allV11Products) {
-            if ($uncompletedEndpoint -ceq 'MaximumFolia' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
-            if ($uncompletedEndpoint -ceq 'MinimumCanvas' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
-            if ($uncompletedEndpoint -ceq 'MaximumCanvas' -and $databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) { continue }
-            if (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $uncompletedEndpoint) {
-                throw ('The required-v11 DDL failure target guard unexpectedly admitted ' + $databaseProduct + '/' + $uncompletedEndpoint)
+            if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $approvedEndpoint)) {
+                throw ('The required-v11 DDL failure target guard rejected approved target ' + $databaseProduct + '/' + $approvedEndpoint)
             }
-            Write-Output ('PASS: reject uncompleted required-v11 target ' + $databaseProduct + '/' + $uncompletedEndpoint)
+            $approvedV11Count++
         }
     }
+    if ($approvedV11Count -ne 21) { throw "Expected 21 approved required-v11 product/endpoint combinations; observed $approvedV11Count." }
+    Write-Output 'PASS: admit the 21 required-v11 product/endpoint combinations, including supplemental current-stable Paper'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -972,6 +951,26 @@ try {
         throw 'The complete maximum-Canvas PostgreSQL v11 DDL-denial report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Canvas PostgreSQL v11 DDL-denial report with the exact pinned runtime identity and non-owner app role'
+    $currentStableEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentStable
+    foreach ($currentStableProduct in $allV11Products) {
+        $currentStableVersion = switch ($currentStableProduct) {
+            'MariaDB' { '12.3.3-MariaDB' }
+            'PostgreSQL' { '18.1' }
+            default { '8.0.42' }
+        }
+        $currentStableReport = New-T21RequiredV11DdlFailureReportFixture $currentStableProduct $currentStableVersion 'CurrentStable'
+        if (-not (Test-T21StartupFailureReportFixture $currentStableReport $currentStableEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+                -DatabaseProduct $currentStableProduct -PlatformEndpoint CurrentStable -FailureScenario RequiredV11DdlPermissionDenied)) {
+            throw "The complete current-stable Paper $currentStableProduct v11 DDL-denial report was rejected."
+        }
+        Write-Output "PASS: accept current-stable Paper $currentStableProduct v11 DDL-denial evidence with the exact runtime identity"
+    }
+    $currentStableMySqlReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'CurrentStable'
+    if (Test-T21StartupFailureReportFixture $currentStableMySqlReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentStable -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The current-stable Paper v11 DDL-denial report accepted the minimum-Paper server SHA-256.'
+    }
+    Write-Output 'PASS: reject current-stable Paper v11 DDL-denial evidence with the minimum-Paper server SHA-256'
     $maximumPaperMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumPaperMariaDbDdlFailureReport = New-T21RequiredV11DdlFailureReportFixture 'MariaDB' '12.3.3-MariaDB' 'Maximum'
     if (-not (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureReport $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `

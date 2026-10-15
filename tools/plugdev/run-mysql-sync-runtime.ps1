@@ -44,7 +44,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The required-v11-DDL-permission-failure case supports all three SQL products on the user-pinned minimum and maximum Paper, Folia, and Canvas endpoints; supplemental current-stable Paper and unpinned endpoints are not supported.'
+    throw 'The required-v11-DDL-permission-failure case supports all three SQL products on the user-pinned minimum and maximum Paper, Folia, and Canvas endpoints, plus supplemental current-stable Paper; unpinned endpoints are not supported.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path

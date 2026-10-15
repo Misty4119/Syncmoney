@@ -38,7 +38,7 @@ function Test-T21RequiredV11DdlFailureTarget(
     if ($PlatformEndpoint -ceq 'MaximumFolia') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -ceq 'MinimumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -ceq 'MaximumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
-    return $PlatformEndpoint -ceq 'Maximum'
+    return $PlatformEndpoint -in @('Maximum', 'CurrentStable')
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
