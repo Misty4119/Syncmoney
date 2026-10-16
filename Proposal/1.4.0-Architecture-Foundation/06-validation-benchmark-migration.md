@@ -3760,6 +3760,8 @@ The independent offline audit rehashed all `30/30` retained logs and found zero 
 
 **Current-source validation:** `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` — **PASS**; `pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1` — **PASS**; PowerShell parser on the six runner, validator, test, and audit scripts — **PASS**, zero errors; offline audit — **PASS**, 30/30 logs; `git diff --check` — **PASS** after this evidence update. Java/Gradle product tests are **NOT RUN** because no Java/product source changed; the pinned candidate JAR was exercised in this E2 runtime.
 
+An independent evidence review verified the report and offline-audit hashes, all 30 logs, pinned identities, schema/index and sentinel claims, cleanup, `UNKNOWN` player-row limitation, E2 scope, and next-cell routing; no actionable findings remain.
+
 Two independent reviews checked the report/audit hashes, exact endpoint and artifact pins, all 30 logs, schema and sentinel preservation, primary-constraint/index state, cleanup, and the player-row limitation. Both flagged that the diff-check status was initially unstated; it now records **PASS** after a fresh exit-0 run, and targeted re-review confirmed closure. No actionable findings remain.
 
 This closes only maximum-Folia/PostgreSQL successful audit-schema migration. Both Canvas endpoint groups, other V03 mode/resource/backend/failure cells, broader lifecycle, fleet-quiescence, and licensed-CMI gates remain open or **BLOCKED / NOT RUN**. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. Next ordered cell: user-pinned minimum Canvas `1.21.8#603` / MySQL `8.0.42`.
@@ -3817,3 +3819,29 @@ The independent offline audit rehashed all `24/24` retained logs and found zero 
 An independent evidence review verified the report and audit hashes, all 24 logs and four artifact hashes, pinned identities, schema/index and sentinel claims, cleanup, `UNKNOWN` player-row limitation, E2 scope, and next-cell routing; no actionable findings remain.
 
 This closes only minimum-Canvas/MariaDB successful audit-schema migration. Minimum-Canvas/PostgreSQL and all maximum-Canvas cells, other V03 mode/resource/backend/failure cells, broader lifecycle, fleet-quiescence, and licensed-CMI gates remain open or **BLOCKED / NOT RUN**. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. Next ordered cell: user-pinned minimum Canvas `1.21.8#603` / PostgreSQL `18.1`.
+
+## T21 V03 minimum-Canvas/PostgreSQL successful audit-schema v10-to-v11 migration (2026-10-16)
+
+**Result: PASS_BOUNDED_SUBCASE (E2)** on user-pinned Canvas `1.21.8#603`, Java `25.0.4+7-LTS-189` (feature 25), PostgreSQL `18.1`, isolated Redis `8.10.1` DB 15, local PlugDev, and Syncmoney `1.4.0-alpha.1`. The runtime exited `0`; the PostgreSQL / minimum-Canvas report predicate and independent offline audit both passed.
+
+**Runtime and audit commands (both exited 0):**
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 -ServerJar 'build/reports/foundation/T21-artifacts/canvas-build.603.jar' -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' -JavaHome 'C:\Program Files\Java\jdk-25.0.4' -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas -SuccessfulV10AuditSchemaUpgrade -RuntimeReportsRoot 'D:\Syncmoney-T21-sql-runtime\matrix-runs'
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 -ReportPath 'D:\Syncmoney-T21-sql-runtime\matrix-runs\postgresql-sync-minimum-canvas-20261016-113256-7d16e0c856e048579abd69a59de01c20\result.json' -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' -DatabaseProduct PostgreSQL -PlatformEndpoint MinimumCanvas
+```
+
+| Evidence | Identity |
+|---|---|
+| Runtime report | `D:\Syncmoney-T21-sql-runtime\matrix-runs\postgresql-sync-minimum-canvas-20261016-113256-7d16e0c856e048579abd69a59de01c20\result.json` — 57,502 bytes; SHA-256 `56b911c4328c84c571b939bc11463bd540c446f2245b5e3ee240c61da6351eb0` |
+| Platform and product artifacts | Canvas JAR — 58,325,135 bytes; SHA-256 `6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b`; candidate JAR — 31,558,215 bytes; SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662`; Acceptance JAR — 49,899 bytes; SHA-256 `f2c9523b6c32d5faa81a7c09bb38b036e3a028c60ca2ab82036999f1fd11c62a`; API Consumer JAR — 2,755 bytes; SHA-256 `b35f098f969387153f1feca27f1ea2535d522a859a69974a5d9d6960ab50169d` |
+| Runtime source pins | Runner `05e2198b35b3cefeef32a502fea9382c6f263820925a5517725dfb61878c2eda`; audit-schema validator/test `c6db0074dd40d05a1bbab665325122bbbe5f92431741095c8eeefcd00a3f68a8` / `a745cdaad4ec1f162ef6a4dae899d489c262334d4db59b98bfbbe275349e7138`; local PlugDev commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`; CLI SHA-256 `3a600872a3c95bb67b960bdb5efcbb84eb675110f89146566bedb1835ad047d7`; distribution manifest SHA-256 `f57b296b2e4de10dec9dd7a83a51f3e0f95fb5ef27d5de2934e9b4ef56e0fc16` before and after the run |
+| Independent offline audit | `validation/offline-audit.txt` — 182 bytes; SHA-256 `ef35643825b271f770c30d9bf0c21838a65efaa010369d286f17b1f4542f2519`; structured JSON — 7,453 bytes; SHA-256 `a7007dc43869b464a99143a166251fc7b4ad0576deab0da88ccc55ea346416b4` |
+
+The report records Canvas `1.21.8#603`, PostgreSQL server and executable `18.1`, Redis `8.10.1`, and Java feature 25. Main schema identity and version row remained `1`; audit schema advanced `10→11`; audit columns changed `13→15`, adding `request_id` and `sequence`. All four expected indexes were present and valid/ready/live; the primary index `syncmoney_audit_log_pkey` remained attached to the primary-key constraint and was unique. The v10 sentinel retained all 13 original column definitions and all 13 original field values unchanged. The report had no `players` table before startup; candidate startup created it empty, so preservation of pre-existing player rows is **UNKNOWN**.
+
+The independent offline audit rehashed all `30/30` retained logs and found zero run-owned Java/Node processes. Canvas, PostgreSQL, Redis, and the isolated Gradle daemon exited normally with observed exit `0`; forced cleanup was false and cleanup failures were zero.
+
+**Current-source validation:** `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` — **PASS**; `pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1` — **PASS**; PowerShell parser on the six runner, validator, test, and audit scripts — **PASS**, zero errors; offline audit — **PASS**, 30/30 logs; `git diff --check` — **PASS** after this evidence update. Java/Gradle product tests are **NOT RUN** because no Java/product source changed; the pinned candidate JAR was exercised in this E2 runtime.
+
+This closes only minimum-Canvas/PostgreSQL successful audit-schema migration. All maximum-Canvas cells, other V03 mode/resource/backend/failure cells, broader lifecycle, fleet-quiescence, and licensed-CMI gates remain open or **BLOCKED / NOT RUN**. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. Next ordered cell: user-pinned maximum Canvas `26.3#972` / MySQL `8.0.42`.
