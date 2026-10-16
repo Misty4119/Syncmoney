@@ -17,14 +17,82 @@ function Copy-T21UpgradeState([System.Collections.IDictionary]$State) {
     return $copy
 }
 
+function New-T21UpgradeColumnMetadata(
+    [string]$DatabaseProduct,
+    [System.Collections.IDictionary]$Definition,
+    [int]$Position,
+    [string]$DatabaseName
+) {
+    if ($DatabaseProduct -ceq 'PostgreSQL') {
+        return [ordered]@{
+            table_catalog = $DatabaseName
+            table_schema = 'public'
+            table_name = 'syncmoney_audit_log'
+            column_name = $Definition.name
+            ordinal_position = $Position
+            column_default = $Definition.defaultValue
+            is_nullable = $Definition.nullable
+            data_type = $Definition.postgresDataType
+            character_maximum_length = $Definition.characterLength
+            numeric_precision = $Definition.numericPrecision
+            numeric_scale = $Definition.numericScale
+            udt_name = $Definition.postgresUdt
+            is_identity = 'NO'
+            is_generated = 'NEVER'
+            generation_expression = $null
+            is_updatable = 'YES'
+        }
+    }
+
+    $columnType = if ($DatabaseProduct -ceq 'MariaDB') { $Definition.mariaDbType } else { $Definition.mySqlType }
+    $hasDeclaredDefault = $Definition.hasDefault
+    $usesImplicitMariaDbNull = $DatabaseProduct -ceq 'MariaDB' -and $Definition.nullable -ceq 'YES' -and -not $hasDeclaredDefault
+    return [ordered]@{
+        table_schema = $DatabaseName
+        table_name = 'syncmoney_audit_log'
+        column_name = $Definition.name
+        ordinal_position = $Position
+        column_default = if ($hasDeclaredDefault) { $Definition.defaultValue } elseif ($usesImplicitMariaDbNull) { 'NULL' } else { $null }
+        column_default_is_null = if ($hasDeclaredDefault -or $usesImplicitMariaDbNull) { 'false' } else { 'true' }
+        is_nullable = $Definition.nullable
+        column_type = $columnType
+        extra = ''
+        character_set_name = if ($Definition.character) { 'utf8mb4' } else { $null }
+        collation_name = if ($Definition.character -and $DatabaseProduct -ceq 'MySQL') { 'utf8mb4_0900_ai_ci' } elseif ($Definition.character) { 'utf8mb4_general_ci' } else { $null }
+        generation_expression = if ($DatabaseProduct -ceq 'MariaDB') { $null } else { '' }
+    }
+}
+
 function New-T21UpgradeState([string]$DatabaseProduct, [bool]$AfterUpgrade) {
     $v10Columns = @(
         'id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
         'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count'
     )
     $v11Columns = @($v10Columns + @('request_id', 'sequence'))
-    $names = if ($AfterUpgrade) { $v11Columns } else { $v10Columns }
-    $columns = @($names | ForEach-Object { [ordered]@{ column_name = $_ } })
+    $columnDefinitions = @(
+        [ordered]@{ name='id'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(36)'; mariaDbType='varchar(36)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=36; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='timestamp'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='bigint'; mariaDbType='bigint(20)'; postgresDataType='bigint'; postgresUdt='int8'; character=$false; characterLength=$null; numericPrecision=64; numericScale=0 }
+        [ordered]@{ name='type'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(20)'; mariaDbType='varchar(20)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=20; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='player_uuid'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(36)'; mariaDbType='varchar(36)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=36; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='player_name'; nullable='YES'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(16)'; mariaDbType='varchar(16)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=16; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='amount'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='decimal(20,2)'; mariaDbType='decimal(20,2)'; postgresDataType='numeric'; postgresUdt='numeric'; character=$false; characterLength=$null; numericPrecision=20; numericScale=2 }
+        [ordered]@{ name='balance_after'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='decimal(20,2)'; mariaDbType='decimal(20,2)'; postgresDataType='numeric'; postgresUdt='numeric'; character=$false; characterLength=$null; numericPrecision=20; numericScale=2 }
+        [ordered]@{ name='source'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(30)'; mariaDbType='varchar(30)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=30; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='server'; nullable='NO'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(50)'; mariaDbType='varchar(50)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=50; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='target_uuid'; nullable='YES'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(36)'; mariaDbType='varchar(36)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=36; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='target_name'; nullable='YES'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(16)'; mariaDbType='varchar(16)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=16; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='reason'; nullable='YES'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(255)'; mariaDbType='varchar(255)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=255; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='merged_count'; nullable='YES'; hasDefault=$true; defaultValue='1'; mySqlType='int'; mariaDbType='int(11)'; postgresDataType='integer'; postgresUdt='int4'; character=$false; characterLength=$null; numericPrecision=32; numericScale=0 }
+        [ordered]@{ name='request_id'; nullable='YES'; hasDefault=$false; defaultValue=$null; mySqlType='varchar(36)'; mariaDbType='varchar(36)'; postgresDataType='character varying'; postgresUdt='varchar'; character=$true; characterLength=36; numericPrecision=$null; numericScale=$null }
+        [ordered]@{ name='sequence'; nullable='YES'; hasDefault=$true; defaultValue='0'; mySqlType='bigint'; mariaDbType='bigint(20)'; postgresDataType='bigint'; postgresUdt='int8'; character=$false; characterLength=$null; numericPrecision=64; numericScale=0 }
+    )
+    $databaseName = 'syncmoney_t21_0123abcd'
+    $definitionCount = if ($AfterUpgrade) { $v11Columns.Count } else { $v10Columns.Count }
+    $columns = @(
+        for ($index = 0; $index -lt $definitionCount; $index++) {
+            New-T21UpgradeColumnMetadata $DatabaseProduct $columnDefinitions[$index] ($index + 1) $databaseName
+        }
+    )
     $primaryIndex = if ($DatabaseProduct -ceq 'PostgreSQL') { 'syncmoney_audit_log_pkey' } else { 'PRIMARY' }
     $indexNames = if ($AfterUpgrade) {
         @($primaryIndex, 'idx_audit_timestamp', 'idx_audit_player', 'idx_audit_type_timestamp_sequence')
@@ -39,7 +107,17 @@ function New-T21UpgradeState([string]$DatabaseProduct, [bool]$AfterUpgrade) {
                     'idx_audit_type_timestamp_sequence' { 'type, timestamp DESC, sequence DESC' }
                 }
                 $kind = if ($indexName -ceq 'syncmoney_audit_log_pkey') { 'CREATE UNIQUE INDEX' } else { 'CREATE INDEX' }
-                [ordered]@{ name = $indexName; definition = "$kind $indexName ON public.syncmoney_audit_log USING btree ($indexColumnSql)" }
+                $isPrimaryIndex = $indexName -ceq 'syncmoney_audit_log_pkey'
+                [ordered]@{
+                    name = $indexName
+                    definition = "$kind $indexName ON public.syncmoney_audit_log USING btree ($indexColumnSql)"
+                    isPrimaryConstraint = $isPrimaryIndex
+                    isPrimaryIndex = $isPrimaryIndex
+                    isUnique = $isPrimaryIndex
+                    isValid = $true
+                    isReady = $true
+                    isLive = $true
+                }
             } else {
                 $indexColumns = switch ($indexName) {
                     'PRIMARY' { @([ordered]@{ position = 1; columnName = 'id'; direction = 'A'; subPart = $null }) }
@@ -101,10 +179,64 @@ function New-T21UpgradeState([string]$DatabaseProduct, [bool]$AfterUpgrade) {
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
         "The minimum-Paper target was not admitted for $databaseProduct."
+    Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum) `
+        "The user-pinned maximum-Paper target was not admitted for $databaseProduct."
     $before = New-T21UpgradeState $databaseProduct $false
     $after = New-T21UpgradeState $databaseProduct $true
     Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeState $before $after -DatabaseProduct $databaseProduct) `
         "The valid $databaseProduct v10-to-v11 schema and sentinel transition was rejected."
+
+    $wrongColumnType = Copy-T21UpgradeState $after
+    $columns = @(ConvertFrom-Json -InputObject $wrongColumnType.auditColumnsJson -AsHashtable)
+    $sequenceColumn = @($columns | Where-Object { $_.column_name -ceq 'sequence' })[0]
+    if ($databaseProduct -ceq 'PostgreSQL') {
+        $sequenceColumn.data_type = 'integer'
+        $sequenceColumn.udt_name = 'int4'
+        $sequenceColumn.numeric_precision = 32
+    } else {
+        $sequenceColumn.column_type = if ($databaseProduct -ceq 'MariaDB') { 'int(11)' } else { 'int' }
+    }
+    $wrongColumnType.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongColumnType -DatabaseProduct $databaseProduct)) `
+        "The $databaseProduct validator accepted an integer sequence column instead of BIGINT."
+
+    $wrongRequestIdLength = Copy-T21UpgradeState $after
+    $columns = @(ConvertFrom-Json -InputObject $wrongRequestIdLength.auditColumnsJson -AsHashtable)
+    $requestIdColumn = @($columns | Where-Object { $_.column_name -ceq 'request_id' })[0]
+    if ($databaseProduct -ceq 'PostgreSQL') {
+        $requestIdColumn.character_maximum_length = 8
+    } else {
+        $requestIdColumn.column_type = 'varchar(8)'
+    }
+    $wrongRequestIdLength.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongRequestIdLength -DatabaseProduct $databaseProduct)) `
+        "The $databaseProduct validator accepted request_id VARCHAR(8) instead of VARCHAR(36)."
+
+    $wrongColumnDefault = Copy-T21UpgradeState $after
+    $columns = @(ConvertFrom-Json -InputObject $wrongColumnDefault.auditColumnsJson -AsHashtable)
+    $sequenceColumn = @($columns | Where-Object { $_.column_name -ceq 'sequence' })[0]
+    $sequenceColumn.column_default = '7'
+    if ($databaseProduct -ne 'PostgreSQL') { $sequenceColumn.column_default_is_null = 'false' }
+    $wrongColumnDefault.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongColumnDefault -DatabaseProduct $databaseProduct)) `
+        "The $databaseProduct validator accepted a sequence default other than zero."
+
+    $wrongColumnDefaultType = Copy-T21UpgradeState $after
+    $columns = @(ConvertFrom-Json -InputObject $wrongColumnDefaultType.auditColumnsJson -AsHashtable)
+    $sequenceColumn = @($columns | Where-Object { $_.column_name -ceq 'sequence' })[0]
+    $sequenceColumn.column_default = 0
+    if ($databaseProduct -ne 'PostgreSQL') { $sequenceColumn.column_default_is_null = 'false' }
+    $wrongColumnDefaultType.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongColumnDefaultType -DatabaseProduct $databaseProduct)) `
+        "The $databaseProduct validator accepted a numeric report value for the SQL column default."
+
+    $wrongColumnNullability = Copy-T21UpgradeState $after
+    $columns = @(ConvertFrom-Json -InputObject $wrongColumnNullability.auditColumnsJson -AsHashtable)
+    $sequenceColumn = @($columns | Where-Object { $_.column_name -ceq 'sequence' })[0]
+    $sequenceColumn.is_nullable = 'NO'
+    $wrongColumnNullability.auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongColumnNullability -DatabaseProduct $databaseProduct)) `
+        "The $databaseProduct validator accepted incorrect sequence nullability."
 
     $wrongBalance = Copy-T21UpgradeState $after
     $rows = @(ConvertFrom-Json -InputObject $wrongBalance.auditRowsJson -AsHashtable)
@@ -143,9 +275,55 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     $wrongIndexOrder.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
     Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $wrongIndexOrder -DatabaseProduct $databaseProduct)) `
         "The $DatabaseProduct validator accepted the wrong v11 index column order."
+
+    if ($databaseProduct -ceq 'PostgreSQL') {
+        $nonUniquePrimaryIndex = Copy-T21UpgradeState $after
+        $indexes = @(ConvertFrom-Json -InputObject $nonUniquePrimaryIndex.auditIndexesJson -AsHashtable)
+        $indexes | Where-Object { $_.name -ceq 'syncmoney_audit_log_pkey' } | ForEach-Object {
+            $_.definition = 'CREATE INDEX syncmoney_audit_log_pkey ON public.syncmoney_audit_log USING btree (id)'
+            $_.isPrimaryConstraint = $false
+            $_.isPrimaryIndex = $false
+            $_.isUnique = $false
+        }
+        $nonUniquePrimaryIndex.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $nonUniquePrimaryIndex -DatabaseProduct $databaseProduct)) `
+            'The PostgreSQL validator accepted a non-unique syncmoney_audit_log_pkey index.'
+
+        $nonPrimaryUniqueIndex = Copy-T21UpgradeState $after
+        $indexes = @(ConvertFrom-Json -InputObject $nonPrimaryUniqueIndex.auditIndexesJson -AsHashtable)
+        $indexes | Where-Object { $_.name -ceq 'syncmoney_audit_log_pkey' } | ForEach-Object {
+            $_.isPrimaryConstraint = $false
+            $_.isPrimaryIndex = $false
+            $_.isUnique = $true
+        }
+        $nonPrimaryUniqueIndex.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $nonPrimaryUniqueIndex -DatabaseProduct $databaseProduct)) `
+            'The PostgreSQL validator accepted a unique index named like the primary key without a primary constraint.'
+
+        $invalidPrimaryIndex = Copy-T21UpgradeState $after
+        $indexes = @(ConvertFrom-Json -InputObject $invalidPrimaryIndex.auditIndexesJson -AsHashtable)
+        $indexes | Where-Object { $_.name -ceq 'syncmoney_audit_log_pkey' } | ForEach-Object { $_.isValid = $false }
+        $invalidPrimaryIndex.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $invalidPrimaryIndex -DatabaseProduct $databaseProduct)) `
+            'The PostgreSQL validator accepted an invalid unique primary index.'
+
+        $unreadyPrimaryIndex = Copy-T21UpgradeState $after
+        $indexes = @(ConvertFrom-Json -InputObject $unreadyPrimaryIndex.auditIndexesJson -AsHashtable)
+        $indexes | Where-Object { $_.name -ceq 'syncmoney_audit_log_pkey' } | ForEach-Object { $_.isReady = $false }
+        $unreadyPrimaryIndex.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $unreadyPrimaryIndex -DatabaseProduct $databaseProduct)) `
+            'The PostgreSQL validator accepted a primary index that is not ready for inserts.'
+
+        $notLivePrimaryIndex = Copy-T21UpgradeState $after
+        $indexes = @(ConvertFrom-Json -InputObject $notLivePrimaryIndex.auditIndexesJson -AsHashtable)
+        $indexes | Where-Object { $_.name -ceq 'syncmoney_audit_log_pkey' } | ForEach-Object { $_.isLive = $false }
+        $notLivePrimaryIndex.auditIndexesJson = ConvertTo-Json -InputObject ([object[]]$indexes) -Depth 8 -Compress
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $before $notLivePrimaryIndex -DatabaseProduct $databaseProduct)) `
+            'The PostgreSQL validator accepted a primary index marked for concurrent removal.'
+    }
 }
 
-foreach ($endpoint in @('Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+foreach ($endpoint in @('CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
     Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct MySQL -PlatformEndpoint $endpoint)) `
         "The bounded positive-migration runner admitted unexercised endpoint $endpoint."
 }
@@ -240,10 +418,35 @@ Syncmoney disabled.
         $report[$sqlKey] = [ordered]@{ product=$databaseProduct; version=$databaseVersion }
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $report $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
             "The complete successful $databaseProduct minimum-Paper upgrade report fixture was rejected."
+        $maximumPlatform = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+        $maximumReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $maximumReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($maximumPlatform.taskSuffix)"
+        $maximumReport.server.minecraftVersion = $maximumPlatform.minecraftVersion
+        $maximumReport.server.build = $maximumPlatform.build
+        $maximumReport.server.sha256 = $maximumPlatform.sha256
+        $maximumReport.startupObservations[0].runtimeIdentity.runtimeVersion = $maximumPlatform.minecraftVersion
+        $maximumReport.startupObservations[0].runtimeIdentity.minecraftVersion = $maximumPlatform.minecraftVersion
+        $maximumReport.startupObservations[0].runtimeIdentity.build = $maximumPlatform.build
+        Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumReport $maximumPlatform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum) `
+            "The complete successful $databaseProduct user-pinned maximum-Paper upgrade report fixture was rejected."
+        $wrongMaximumIdentity = $maximumReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $wrongMaximumIdentity.server.build = $maximumPlatform.build - 1
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $wrongMaximumIdentity $maximumPlatform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum)) `
+            "The $databaseProduct report validator accepted a maximum-Paper report with the wrong server build."
         $invalidReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
         $invalidReport.schemaStateAfter.auditRowsJson = '[]'
         Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $invalidReport $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
             "The $databaseProduct report validator accepted a report with a missing sentinel row."
+
+        $wrongReportDatabaseIdentity = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        foreach ($snapshotName in @('schemaStateBefore', 'schemaStateAfter')) {
+            $columns = @(ConvertFrom-Json -InputObject $wrongReportDatabaseIdentity[$snapshotName].auditColumnsJson -AsHashtable)
+            $databaseIdentityField = if ($databaseProduct -ceq 'PostgreSQL') { 'table_catalog' } else { 'table_schema' }
+            foreach ($column in $columns) { $column[$databaseIdentityField] = $databaseName + '_other' }
+            $wrongReportDatabaseIdentity[$snapshotName].auditColumnsJson = ConvertTo-Json -InputObject ([object[]]$columns) -Depth 10 -Compress
+        }
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $wrongReportDatabaseIdentity $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+            "The $databaseProduct report validator accepted matching before/after snapshots bound to a database other than the configured database."
     }
 } finally {
     if (Test-Path -LiteralPath $fixtureRoot) {
@@ -258,14 +461,24 @@ Syncmoney disabled.
     }
 }
 $runnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1') -Raw -ErrorAction Stop
+$offlineAuditSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 't21-audit-schema-upgrade-offline-audit.ps1') -Raw -ErrorAction Stop
 foreach ($requiredRunnerContract in @(
         '[switch]$SuccessfulV10AuditSchemaUpgrade',
         'Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct',
         'Seed-T21AuditSchemaV10Upgrade',
         'Get-T21StartupFailureSchemaState -AfterAuditSchemaV10Upgrade',
         'Test-T21AuditSchemaV10UpgradeState',
-        'Test-T21AuditSchemaV10UpgradeReport')) {
+        'Test-T21AuditSchemaV10UpgradeReport',
+        "'isPrimaryConstraint', EXISTS (",
+        'index_state.indisprimary',
+        'index_state.indisvalid',
+        'index_state.indisready',
+        'index_state.indislive')) {
     Assert-T21Upgrade ($runnerSource.Contains($requiredRunnerContract)) `
         "The runtime runner is missing successful v10-to-v11 migration contract: $requiredRunnerContract"
 }
+Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum')][string]`$PlatformEndpoint") -and
+    $offlineAuditSource.Contains('Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint') -and
+    $offlineAuditSource.Contains('-DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint')) `
+    'The offline auditor does not bind its expected server hash and strict report predicate to an explicit pinned Paper endpoint.'
 Write-Output 'PASS: T21 v10-to-v11 target and migration-state predicates'

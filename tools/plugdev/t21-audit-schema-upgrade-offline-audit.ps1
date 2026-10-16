@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ReportPath,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256,
-    [Parameter(Mandatory = $true)][ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct
+    [Parameter(Mandatory = $true)][ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [Parameter(Mandatory = $true)][ValidateSet('Minimum', 'Maximum')][string]$PlatformEndpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,9 +40,10 @@ Assert-T21AuditUpgradeOffline ([string]::Equals($absoluteReportPath, $expectedRe
 Assert-T21AuditUpgradeOffline ([string](Get-T21ObservedValue $report 'status') -ceq 'PASS_BOUNDED_SUBCASE') `
     'The report does not claim PASS_BOUNDED_SUBCASE.'
 
-$expectedServerSha256 = (Get-T21PlatformEndpoint -PlatformEndpoint Minimum).sha256
+$platform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+$expectedServerSha256 = $platform.sha256
 Assert-T21AuditUpgradeOffline (Test-T21AuditSchemaV10UpgradeReport $report $expectedServerSha256 $ExpectedCandidateSha256 `
-    -DatabaseProduct $DatabaseProduct -PlatformEndpoint Minimum) 'The strict v10-to-v11 runtime report predicate rejected the report.'
+    -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint) 'The strict v10-to-v11 runtime report predicate rejected the report.'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $candidatePath = Join-Path $repositoryRoot 'build\libs\Syncmoney-1.4.0-alpha.1.jar'
@@ -115,7 +117,7 @@ $audit = [ordered]@{
     reportPath=$absoluteReportPath
     reportSha256=(Get-T21AuditUpgradeFileSha256 $absoluteReportPath)
     task=[string](Get-T21ObservedValue $report 'task')
-    platform='Paper 1.21.6#48'
+    platform="Paper $($platform.minecraftVersion)#$($platform.build)"
     databaseProduct=$DatabaseProduct
     artifacts=$artifactEvidence
     sourcePins=[ordered]@{

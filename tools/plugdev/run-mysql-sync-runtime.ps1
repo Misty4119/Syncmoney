@@ -50,7 +50,7 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The successful audit-schema upgrade case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper 1.21.6#48.'
+    throw 'The successful audit-schema upgrade case is bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper 1.21.6#48 and maximum Paper 26.3#166.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -957,11 +957,30 @@ FROM (
     WHERE table_schema = current_schema() AND table_name = 'syncmoney_audit_log'
 ) AS c;
 "@
-            $auditIndexesSql = @"
+            $auditIndexesSql = if ($script:successfulV10AuditSchemaUpgrade) { @"
+SELECT COALESCE(json_agg(json_build_object(
+    'name', index_class.relname,
+    'definition', pg_get_indexdef(index_class.oid),
+    'isPrimaryConstraint', EXISTS (
+        SELECT 1 FROM pg_constraint AS constraint_row
+        WHERE constraint_row.conindid = index_class.oid AND constraint_row.contype = 'p'
+    ),
+    'isPrimaryIndex', index_state.indisprimary,
+    'isUnique', index_state.indisunique,
+    'isValid', index_state.indisvalid,
+    'isReady', index_state.indisready,
+    'isLive', index_state.indislive
+) ORDER BY index_class.relname)::text, '[]')
+FROM pg_class AS table_class
+JOIN pg_namespace AS table_namespace ON table_namespace.oid = table_class.relnamespace
+JOIN pg_index AS index_state ON index_state.indrelid = table_class.oid
+JOIN pg_class AS index_class ON index_class.oid = index_state.indexrelid
+WHERE table_namespace.nspname = current_schema() AND table_class.relname = 'syncmoney_audit_log';
+"@ } else { @"
 SELECT COALESCE(json_agg(json_build_object('name', indexname, 'definition', indexdef) ORDER BY indexname)::text, '[]')
 FROM pg_indexes
 WHERE schemaname = current_schema() AND tablename = 'syncmoney_audit_log';
-"@
+"@ }
             $auditRowsSql = @"
 SELECT COALESCE(json_agg(to_jsonb(a) ORDER BY id)::text, '[]')
 FROM syncmoney_audit_log AS a;
