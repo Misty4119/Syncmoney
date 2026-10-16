@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256,
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Parameter(Mandatory = $true)][string]$JavaHome,
+    [string]$RuntimeReportsRoot,
     [string]$MySqlBin = 'C:\Program Files\MySQL\MySQL Server 8.0\bin',
     [string]$MariaDbBin = 'C:\Program Files\MariaDB 12.3\bin',
     [string]$PostgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin',
@@ -50,7 +51,7 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The successful audit-schema upgrade case is bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper 1.21.6#48 and maximum Paper 26.3#166.'
+    throw 'The successful audit-schema upgrade case supports MySQL, MariaDB, or PostgreSQL on the six exact user-pinned minimum/maximum Paper, Folia, and Canvas endpoints.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -99,7 +100,7 @@ $script:plugDevCliInvocationObservations = [Collections.Generic.List[object]]::n
 $script:javaHomePath = (Resolve-Path -LiteralPath $JavaHome).Path
 $script:mysqlBinPath = (Resolve-Path -LiteralPath $script:databaseBin).Path
 $script:node = (Get-Command node.exe, node -ErrorAction Stop | Select-Object -First 1).Source
-$script:reportsRoot = [IO.Path]::GetFullPath((Join-Path $script:root 'build\reports\foundation\T21-sql-runtime'))
+$script:reportsRoot = Resolve-T21RuntimeReportsRoot $script:root $RuntimeReportsRoot
 $script:runId = [guid]::NewGuid().ToString('N')
 $script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:runId
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)

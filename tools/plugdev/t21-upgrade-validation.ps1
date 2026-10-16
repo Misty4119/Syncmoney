@@ -117,6 +117,24 @@ function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable'
     return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
+function Resolve-T21RuntimeReportsRoot([string]$RepositoryRoot, [string]$RequestedRoot) {
+    if ([string]::IsNullOrWhiteSpace($RequestedRoot)) {
+        return [IO.Path]::GetFullPath((Join-Path $RepositoryRoot 'build\reports\foundation\T21-sql-runtime'))
+    }
+    if (-not [IO.Path]::IsPathFullyQualified($RequestedRoot)) {
+        throw 'The optional T21 runtime reports root must be an absolute path.'
+    }
+
+    $resolvedRoot = [IO.Path]::GetFullPath($RequestedRoot)
+    $filesystemRoot = [IO.Path]::GetPathRoot($resolvedRoot)
+    $trimmedRoot = $resolvedRoot.TrimEnd([char[]]@('\', '/'))
+    $trimmedFilesystemRoot = $filesystemRoot.TrimEnd([char[]]@('\', '/'))
+    if ([string]::Equals($trimmedRoot, $trimmedFilesystemRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The optional T21 runtime reports root cannot be a filesystem root.'
+    }
+    return $resolvedRoot
+}
+
 function Get-T21ShutdownFailureMarkers([string]$serverLogText) {
     $pattern = '(?im)(?:CRITICAL HEALTH:|Shutdown step failed:|DB writer stopped with \d+ stale transfer|DB writer drain timed out|DB writer is still using storage after shutdown deadline|Failed while draining database writer|Failed to process batch to DB|Failed to flush \d+ audit records)'
     return @([regex]::Matches($serverLogText, $pattern) |

@@ -146,6 +146,29 @@ if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
+$defaultRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' ''
+if ($defaultRuntimeReportsRoot -cne [IO.Path]::GetFullPath('C:\syncmoney\build\reports\foundation\T21-sql-runtime')) {
+    throw 'The T21 runtime reports root must preserve the repository-local default when no override is supplied.'
+}
+Write-Output 'PASS: preserve the repository-local T21 reports root by default'
+$alternateRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:\syncmoney-t21-reports'
+if ($alternateRuntimeReportsRoot -cne [IO.Path]::GetFullPath('D:\syncmoney-t21-reports')) {
+    throw 'The T21 runtime reports root override did not resolve to its exact absolute destination.'
+}
+Write-Output 'PASS: resolve an explicit absolute T21 reports root'
+Assert-ThrowsContaining 'reject a relative T21 reports root' {
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'reports'
+} 'must be an absolute path'
+Assert-ThrowsContaining 'reject a drive-relative T21 reports root' {
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:syncmoney-t21-reports'
+} 'must be an absolute path'
+Assert-ThrowsContaining 'reject a root-relative T21 reports root' {
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' '\syncmoney-t21-reports'
+} 'must be an absolute path'
+Assert-ThrowsContaining 'reject a filesystem root as the T21 reports root' {
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:\'
+} 'cannot be a filesystem root'
+
 $runtimePlatformEndpoints = @(
     [ordered]@{ endpoint='MinimumFolia'; taskSuffix='minimum-Folia'; software='folia'; minecraftVersion='1.21.6'; build=6; sha256='917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' },
     [ordered]@{ endpoint='MaximumFolia'; taskSuffix='maximum-Folia'; software='folia'; minecraftVersion='26.2'; build=7; sha256='128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' },
@@ -2041,6 +2064,8 @@ if ($runnerSource -notmatch 'backend=''redis''; command=''SHUTDOWN SAVE''; comma
 Write-Output 'PASS: bind Redis shutdown evidence to the run-owned process ID'
 
 if ($runnerSource -notmatch 'Get-T21PlatformEndpoint -PlatformEndpoint \$PlatformEndpoint' -or
+    $runnerSource -notmatch '\[string\]\$RuntimeReportsRoot' -or
+    $runnerSource -notmatch 'Resolve-T21RuntimeReportsRoot \$script:root \$RuntimeReportsRoot' -or
     $runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$platformLogPath' -or
     $runnerSource -notmatch '\$script:report\.platformLogs = @\(\$script:platformServerLogs\)' -or
     $runnerSource -notmatch 'schemaVersion = 4') {
