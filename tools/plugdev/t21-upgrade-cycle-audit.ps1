@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$RunDirectory,
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
-    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+    [Alias('PaperEndpoint')]
+    [ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,7 +131,6 @@ $report = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
 Assert-Equal 'report run directory binding' $runRoot ([IO.Path]::GetFullPath([string]$report.runDirectory))
 Assert-Equal 'M04 report status' 'PASS' ([string]$report.status)
 Assert-Equal 'M04 report task' 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle' ([string]$report.task)
-Assert-Equal 'M04 project identity' 'paper' ([string]$report.platform)
 Assert-Equal '1.3.2 baseline JAR pin' '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10' ([string]$report.expectedBaselinePluginSha256)
 Assert-Equal '1.3.2 baseline source commit pin' '71cc55dfeefe9a8f40a3835b051ddd324d353767' ([string]$report.baselineSourceCommit)
 Assert-Equal 'VaultUnlocked dependency version' '2.20.2' ([string]$report.vaultUnlockedDependencyVersion)
@@ -196,7 +197,17 @@ Assert-True 'shared validation source exists' (Test-Path -LiteralPath $validatio
 $validationSourceSha256 = (Get-FileHash -LiteralPath $validationSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-Equal 'shared validation source SHA-256' ([string]$sourcePins.validationSha256) $validationSourceSha256
 . $validationSourcePath
-Assert-True "exact $PaperEndpoint Paper endpoint pin" (Test-T21M04PaperEndpointReport $report -PaperEndpoint $PaperEndpoint)
+Assert-True "exact $PlatformEndpoint platform endpoint pin" (Test-T21M04PlatformEndpointReport $report -PlatformEndpoint $PlatformEndpoint)
+foreach ($stage in @('baseline-1.3.2', 'upgrade-1.4', 'rollback-1.3.2')) {
+    $startupLogPath = Resolve-RunRelativePath (Join-Path 'logs' "$stage-start.txt")
+    if (-not (Test-Path -LiteralPath $startupLogPath -PathType Leaf)) {
+        throw "Required M04 server startup log is missing: $stage-start.txt"
+    }
+    $startupLogText = Get-Content -LiteralPath $startupLogPath -Raw
+    Assert-True "observed $PlatformEndpoint identity in $stage startup log" (
+        Test-T21M04PlatformStartupIdentity $startupLogText -PlatformEndpoint $PlatformEndpoint
+    )
+}
 Assert-True 'Acceptance runtime copy matches staged build artifact' (Test-T21M04RuntimeArtifactCopy $artifactByName.acceptance $artifactByName.'acceptance-runtime' 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar')
 Assert-True 'API consumer runtime copy matches staged build artifact' (Test-T21M04RuntimeArtifactCopy $artifactByName.'api-consumer' $artifactByName.'api-consumer-runtime' 'api-consumer' 'build/acceptance/SyncmoneyApiConsumer.jar' 'api-consumer-runtime' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar')
 $plugDevPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $PlugDevRoot).Path)
@@ -352,4 +363,4 @@ foreach ($log in $actualLogs) {
     Assert-True "runner log is manifested $relativePath" $manifestedLogPaths.ContainsKey($relativePath)
 }
 
-Write-Output ("T21 M04 offline audit PASS: {0} assertions; Paper endpoint {1}; report {2}" -f $script:assertionCount, $PaperEndpoint, $resultPath)
+Write-Output ("T21 M04 offline audit PASS: {0} assertions; platform endpoint {1}; report {2}" -f $script:assertionCount, $PlatformEndpoint, $resultPath)

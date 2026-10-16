@@ -117,16 +117,42 @@ function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable'
     return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
-function Test-T21M04PaperEndpointReport(
+function Test-T21M04PlatformEndpointReport(
     [object]$report,
-    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+    [ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ($null -eq $report) { return $false }
-    $expected = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
+    $expected = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
     return ([string](Get-T21ObservedValue $report 'platform') -ceq $expected.software -and
         [string](Get-T21ObservedValue $report 'minecraftVersion') -ceq $expected.minecraftVersion -and
         [string](Get-T21ObservedValue $report 'buildNumber') -ceq [string]$expected.build -and
         [string](Get-T21ObservedValue $report 'expectedServerSha256') -ceq $expected.sha256)
+}
+
+function Test-T21M04PlatformStartupIdentity(
+    [string]$serverLogText,
+    [ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint = 'Minimum'
+) {
+    if ([string]::IsNullOrWhiteSpace($serverLogText)) { return $false }
+    try {
+        $observed = Get-T21PlatformIdentity $serverLogText
+    } catch {
+        return $false
+    }
+    $expected = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+    return ($observed.software -ceq $expected.software -and
+        $observed.runtimeVersion -ceq $expected.minecraftVersion -and
+        [int]$observed.build -eq [int]$expected.build -and
+        $observed.minecraftVersion -ceq $expected.minecraftVersion)
+}
+
+function Test-T21M04PaperEndpointReport(
+    [object]$report,
+    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+) {
+    return Test-T21M04PlatformEndpointReport $report -PlatformEndpoint $PaperEndpoint
 }
 
 function Resolve-T21RuntimeReportsRoot([string]$RepositoryRoot, [string]$RequestedRoot) {

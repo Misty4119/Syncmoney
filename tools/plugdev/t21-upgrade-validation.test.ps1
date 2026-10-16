@@ -239,6 +239,59 @@ if (Test-T21M04PaperEndpointReport $m04UnpinnedPaperReport -PaperEndpoint Maximu
 }
 Write-Output 'PASS: reject supplemental current-stable Paper under the maximum-Paper pin'
 
+foreach ($endpointCase in $runtimePlatformEndpoints) {
+    $m04PlatformReport = [ordered]@{
+        platform = $endpointCase.software
+        minecraftVersion = $endpointCase.minecraftVersion
+        buildNumber = $endpointCase.build
+        expectedServerSha256 = $endpointCase.sha256
+    }
+    if (-not (Test-T21M04PlatformEndpointReport $m04PlatformReport -PlatformEndpoint $endpointCase.endpoint)) {
+        throw "The M04 auditor must accept the exact user-pinned $($endpointCase.endpoint) endpoint."
+    }
+    Write-Output "PASS: accept exact M04 $($endpointCase.endpoint) platform endpoint pin"
+
+    $softwareName = switch ($endpointCase.software) { 'folia' { 'Folia' } 'canvas' { 'Canvas' } default { 'Paper' } }
+    $startupLog = "[ServerMain/INFO]: [bootstrap] Loading $softwareName $($endpointCase.minecraftVersion)-$($endpointCase.build)-main@fixture (2026-10-16T00:00:00Z) for Minecraft $($endpointCase.minecraftVersion)"
+    if (-not (Test-T21M04PlatformStartupIdentity $startupLog -PlatformEndpoint $endpointCase.endpoint)) {
+        throw "The M04 auditor must accept the exact $($endpointCase.endpoint) identity from its startup log."
+    }
+    Write-Output "PASS: accept exact M04 $($endpointCase.endpoint) startup identity"
+}
+
+$m04MinimumFoliaReport = [ordered]@{
+    platform = 'folia'
+    minecraftVersion = '1.21.6'
+    buildNumber = 6
+    expectedServerSha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234'
+}
+if (Test-T21M04PlatformEndpointReport $m04MinimumFoliaReport -PlatformEndpoint Minimum) {
+    throw 'The M04 auditor must not accept minimum-Folia evidence under the minimum-Paper endpoint.'
+}
+Write-Output 'PASS: reject minimum Folia evidence under the minimum-Paper endpoint'
+
+$m04MinimumFoliaStartup = '[ServerMain/INFO]: [bootstrap] Loading Folia 1.21.6-6-main@fixture (2026-10-16T00:00:00Z) for Minecraft 1.21.6'
+if (Test-T21M04PlatformStartupIdentity $m04MinimumFoliaStartup -PlatformEndpoint Minimum) {
+    throw 'The M04 auditor must not accept minimum-Folia startup identity under the minimum-Paper endpoint.'
+}
+Write-Output 'PASS: reject minimum Folia startup identity under the minimum-Paper endpoint'
+
+if (Test-T21M04PlatformStartupIdentity ($m04MinimumFoliaStartup.Replace('1.21.6-6', '1.21.6-7')) -PlatformEndpoint MinimumFolia) {
+    throw 'The M04 auditor must reject a Folia startup log with the wrong server build.'
+}
+Write-Output 'PASS: reject Folia startup identity with an unpinned build number'
+
+$m04WrongFoliaHashReport = [ordered]@{
+    platform = $m04MinimumFoliaReport.platform
+    minecraftVersion = $m04MinimumFoliaReport.minecraftVersion
+    buildNumber = $m04MinimumFoliaReport.buildNumber
+    expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+}
+if (Test-T21M04PlatformEndpointReport $m04WrongFoliaHashReport -PlatformEndpoint MinimumFolia) {
+    throw 'The M04 auditor must reject minimum-Folia identity with a different platform artifact hash.'
+}
+Write-Output 'PASS: reject minimum Folia endpoint with a mismatched server artifact pin'
+
 function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [Collections.IDictionary]$endpointCase, [string]$databaseProduct) {
     $report.schemaVersion = 4
     $report.task = "T21-M05-SYNC-$databaseProduct-$($endpointCase.taskSuffix)"
@@ -2229,6 +2282,7 @@ if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
     $upgradeCycleAuditSource -notmatch 'Get-FileHash' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$distRoot -File -Recurse -Force' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$logsRoot -File -Recurse -Force' -or
+    $upgradeCycleAuditSource -notmatch 'Test-T21M04PlatformStartupIdentity' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$runRoot -File -Recurse -Filter ''recovery-v1\.jsonl'' -Force' -or
     -not $upgradeCycleAuditSource.Contains($expectedM04DatabasePath) -or
     -not $upgradeCycleAuditSource.Contains($m04DatabasePathBinding) -or
