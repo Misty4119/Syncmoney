@@ -372,7 +372,8 @@ try {
             @{ database='MySQL'; endpoint='Maximum'; expected=$true }
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
             @{ database='MySQL'; endpoint='MinimumFolia'; expected=$true }
-            @{ database='MySQL'; endpoint='MaximumFolia'; expected=$false }
+            @{ database='MySQL'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='MySQL'; endpoint='MinimumCanvas'; expected=$false }
             @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
             @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
@@ -382,7 +383,7 @@ try {
             throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
         }
     }
-    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper and minimum Folia MySQL'
+    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper and minimum/maximum Folia MySQL'
 
     $currentStablePathResolutionObserved = $false
     try {
@@ -436,16 +437,29 @@ try {
     }
     Write-Output 'PASS: accept the minimum-Folia MySQL player-row-preservation runner target before external resources are resolved'
 
-    $playerRowWrongEndpointRejected = $false
+    $maximumFoliaPlayerRowPreservationPathResolutionObserved = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia `
             -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
     } catch {
-        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper or minimum Folia with MySQL 8\.0\.42'
+        $maximumFoliaPlayerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $maximumFoliaPlayerRowPreservationPathResolutionObserved) {
+        throw 'The maximum-Folia MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the maximum-Folia MySQL player-row-preservation runner target before external resources are resolved'
+
+    $playerRowWrongEndpointRejected = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper or minimum/maximum Folia with MySQL 8\.0\.42'
     }
     if (-not $playerRowWrongEndpointRejected) {
-        throw 'The player-row-preservation runner accepted a non-Paper endpoint.'
+        throw 'The player-row-preservation runner accepted an unsupported platform endpoint.'
     }
     Write-Output 'PASS: reject an unsupported platform for player-row preservation before external paths are resolved'
 
@@ -664,6 +678,21 @@ try {
         throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing minimum-Folia MySQL player row.'
     }
     Write-Output 'PASS: accept minimum-Folia incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $maximumFoliaEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MaximumFolia
+    $maximumFoliaPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MaximumFolia'
+    $maximumFoliaPlayerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-maximum-Folia'
+    $maximumFoliaPlayerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $maximumFoliaPlayerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $maximumFoliaPlayerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $maximumFoliaPlayerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $maximumFoliaPlayerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $maximumFoliaPlayerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $maximumFoliaPlayerRowPreservationReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing maximum-Folia MySQL player row.'
+    }
+    Write-Output 'PASS: accept maximum-Folia incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
 
 
     $maximumLegacyMinimumPaperLabelReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -2212,7 +2241,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper or minimum Folia with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper or minimum/maximum Folia with MySQL 8.0.42.', [StringComparison]::Ordinal)
     if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
         throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }
