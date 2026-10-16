@@ -86,6 +86,8 @@ pwsh -NoProfile -File tools/plugdev/t21-upgrade-cycle-audit.ps1 `
   -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main'
 ```
 
+For Folia or Canvas, pass the matching `-PlatformEndpoint` selector: `MinimumFolia`, `MaximumFolia`, `MinimumCanvas`, or `MaximumCanvas`. The offline auditor checks both the report's endpoint/hash and the actual startup identity in baseline, candidate, and rollback logs. Omitting the selector retains the minimum-Paper default; the existing `-PaperEndpoint` alias remains supported.
+
 This verifies the selected profile and lifecycle only; the M04 probe does not exercise a player's rate-limit decision.
 
 Example for the minimum endpoint (use the verified local artifacts from the T15 manifest):
