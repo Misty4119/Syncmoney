@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ReportPath,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256,
     [Parameter(Mandatory = $true)][ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [Parameter(Mandatory = $true)][ValidateSet('Minimum', 'Maximum')][string]$PlatformEndpoint
+    [Parameter(Mandatory = $true)][ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +58,13 @@ $candidatePathMatches = [string]::Equals([IO.Path]::GetFullPath([string](Get-T21
 Assert-T21AuditUpgradeOffline $candidatePathMatches `
     'The candidate artifact path is not the canonical build output.'
 $artifactEvidence = [ordered]@{}
-$artifactEvidence.server = Assert-T21AuditUpgradeArtifact ([string](Get-T21ObservedValue $server 'path')) $expectedServerSha256 'Paper server'
+$platformName = switch -CaseSensitive ($platform.software) {
+    'paper' { 'Paper' }
+    'folia' { 'Folia' }
+    'canvas' { 'Canvas' }
+    default { throw "Unsupported pinned T21 platform software: $($platform.software)" }
+}
+$artifactEvidence.server = Assert-T21AuditUpgradeArtifact ([string](Get-T21ObservedValue $server 'path')) $expectedServerSha256 "$platformName server"
 $artifactEvidence.candidate = Assert-T21AuditUpgradeArtifact $candidatePath $ExpectedCandidateSha256 'Syncmoney candidate'
 $artifactEvidence.acceptance = Assert-T21AuditUpgradeArtifact $acceptancePath ([string](Get-T21ObservedValue $acceptance 'sha256')) 'Acceptance harness'
 $artifactEvidence.apiConsumer = Assert-T21AuditUpgradeArtifact $apiConsumerPath ([string](Get-T21ObservedValue $apiConsumer 'sha256')) 'API consumer'
@@ -117,7 +123,7 @@ $audit = [ordered]@{
     reportPath=$absoluteReportPath
     reportSha256=(Get-T21AuditUpgradeFileSha256 $absoluteReportPath)
     task=[string](Get-T21ObservedValue $report 'task')
-    platform="Paper $($platform.minecraftVersion)#$($platform.build)"
+    platform="$platformName $($platform.minecraftVersion)#$($platform.build)"
     databaseProduct=$DatabaseProduct
     artifacts=$artifactEvidence
     sourcePins=[ordered]@{
@@ -138,7 +144,7 @@ New-Item -ItemType Directory -Force -Path $auditDirectory | Out-Null
 $auditPath = Join-Path $auditDirectory 'offline-audit.json'
 $auditTextPath = Join-Path $auditDirectory 'offline-audit.txt'
 $audit | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $auditPath -Encoding utf8
-$summary = "PASS: T21 successful audit schema v10-to-v11 offline audit; product=$DatabaseProduct logs=$($auditedLogs.Count) reportSha256=$($audit.reportSha256)"
+$summary = "PASS: T21 successful audit schema v10-to-v11 offline audit; platform=$platformName product=$DatabaseProduct logs=$($auditedLogs.Count) reportSha256=$($audit.reportSha256)"
 [IO.File]::WriteAllText($auditTextPath, $summary + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 Write-Output $summary
 Write-Output "Audit: $auditTextPath"

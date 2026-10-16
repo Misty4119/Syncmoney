@@ -5,7 +5,8 @@ function Test-T21AuditSchemaV10UpgradeTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum')
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
 }
 
 function Test-T21AuditUpgradeHasField([object]$observation, [string]$name) {
@@ -311,7 +312,7 @@ function Test-T21AuditSchemaV10UpgradeReport(
             (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $ExpectedCandidateSha256.ToLowerInvariant() -or
             $ExpectedServerSha256.ToLowerInvariant() -cne $platform.sha256 -or
-            (Get-T21ObservedValue $java 'feature') -ne 25) { return $false }
+            -not (Test-T21IntegralNumber (Get-T21ObservedValue $java 'feature') 25 ([int]::MaxValue))) { return $false }
         if ((Get-T21ObservedValue $configuration 'schema') -ne 12 -or
             (Get-T21ObservedValue $configuration 'configSchema') -ne 12 -or
             (Get-T21ObservedValue $configuration 'mode') -cne 'sync' -or

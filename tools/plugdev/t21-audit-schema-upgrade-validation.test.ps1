@@ -323,9 +323,13 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     }
 }
 
-foreach ($endpoint in @('CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
-    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct MySQL -PlatformEndpoint $endpoint)) `
-        "The bounded positive-migration runner admitted unexercised endpoint $endpoint."
+foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
+    foreach ($endpoint in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+        Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
+            "The bounded positive-migration runner rejected pinned $databaseProduct endpoint $endpoint."
+    }
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint CurrentStable)) `
+        "The bounded positive-migration runner admitted supplemental current-stable endpoint for $databaseProduct."
 }
 
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('t21-audit-schema-upgrade-validation-' + [guid]::NewGuid().ToString('N'))
@@ -418,21 +422,48 @@ Syncmoney disabled.
         $report[$sqlKey] = [ordered]@{ product=$databaseProduct; version=$databaseVersion }
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $report $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
             "The complete successful $databaseProduct minimum-Paper upgrade report fixture was rejected."
-        $maximumPlatform = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
-        $maximumReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
-        $maximumReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($maximumPlatform.taskSuffix)"
-        $maximumReport.server.minecraftVersion = $maximumPlatform.minecraftVersion
-        $maximumReport.server.build = $maximumPlatform.build
-        $maximumReport.server.sha256 = $maximumPlatform.sha256
-        $maximumReport.startupObservations[0].runtimeIdentity.runtimeVersion = $maximumPlatform.minecraftVersion
-        $maximumReport.startupObservations[0].runtimeIdentity.minecraftVersion = $maximumPlatform.minecraftVersion
-        $maximumReport.startupObservations[0].runtimeIdentity.build = $maximumPlatform.build
-        Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumReport $maximumPlatform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum) `
-            "The complete successful $databaseProduct user-pinned maximum-Paper upgrade report fixture was rejected."
-        $wrongMaximumIdentity = $maximumReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
-        $wrongMaximumIdentity.server.build = $maximumPlatform.build - 1
-        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $wrongMaximumIdentity $maximumPlatform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum)) `
-            "The $databaseProduct report validator accepted a maximum-Paper report with the wrong server build."
+        foreach ($endpoint in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+            $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
+            $endpointReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $endpointReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($endpointPlatform.taskSuffix)"
+            $endpointReport.server.software = $endpointPlatform.software
+            $endpointReport.server.minecraftVersion = $endpointPlatform.minecraftVersion
+            $endpointReport.server.build = $endpointPlatform.build
+            $endpointReport.server.sha256 = $endpointPlatform.sha256
+            $endpointReport.startupObservations[0].runtimeIdentity.software = $endpointPlatform.software
+            $endpointReport.startupObservations[0].runtimeIdentity.runtimeVersion = $endpointPlatform.minecraftVersion
+            $endpointReport.startupObservations[0].runtimeIdentity.minecraftVersion = $endpointPlatform.minecraftVersion
+            $endpointReport.startupObservations[0].runtimeIdentity.build = $endpointPlatform.build
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $endpointReport $endpointPlatform.sha256 $candidateSha `
+                    -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
+                "The complete successful $databaseProduct $endpoint upgrade report fixture was rejected."
+            $wrongEndpointIdentity = $endpointReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $wrongEndpointIdentity.server.build = $endpointPlatform.build - 1
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $wrongEndpointIdentity $endpointPlatform.sha256 $candidateSha `
+                    -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint)) `
+                "The $databaseProduct report validator accepted a $endpoint report with the wrong server build."
+        }
+
+        $java26Report = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $java26Report.java.feature = 26
+        Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $java26Report $platform.sha256 $candidateSha `
+                -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
+            "The $databaseProduct report validator rejected Java 26, above the Java 25 minimum."
+        $java24Report = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $java24Report.java.feature = 24
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $java24Report $platform.sha256 $candidateSha `
+                -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+            "The $databaseProduct report validator accepted Java 24, below the Java 25 minimum."
+        $fractionalJavaReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $fractionalJavaReport.java.feature = [decimal]25.5
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $fractionalJavaReport $platform.sha256 $candidateSha `
+                -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+            "The $databaseProduct report validator accepted a fractional Java feature value."
+        $nonnumericJavaReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $nonnumericJavaReport.java.feature = 'not-a-number'
+        Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $nonnumericJavaReport $platform.sha256 $candidateSha `
+                -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+            "The $databaseProduct report validator accepted a nonnumeric Java feature value."
         $invalidReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
         $invalidReport.schemaStateAfter.auditRowsJson = '[]'
         Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $invalidReport $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
@@ -477,8 +508,9 @@ foreach ($requiredRunnerContract in @(
     Assert-T21Upgrade ($runnerSource.Contains($requiredRunnerContract)) `
         "The runtime runner is missing successful v10-to-v11 migration contract: $requiredRunnerContract"
 }
-Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum')][string]`$PlatformEndpoint") -and
+Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]`$PlatformEndpoint") -and
     $offlineAuditSource.Contains('Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint') -and
-    $offlineAuditSource.Contains('-DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint')) `
-    'The offline auditor does not bind its expected server hash and strict report predicate to an explicit pinned Paper endpoint.'
+    $offlineAuditSource.Contains('-DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint') -and
+    $offlineAuditSource.Contains('platform="$platformName $($platform.minecraftVersion)#$($platform.build)"')) `
+    'The offline auditor does not bind its expected server hash, platform identity, and strict report predicate to an explicit pinned endpoint.'
 Write-Output 'PASS: T21 v10-to-v11 target and migration-state predicates'
