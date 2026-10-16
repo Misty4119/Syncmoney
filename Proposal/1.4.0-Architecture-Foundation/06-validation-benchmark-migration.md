@@ -3735,3 +3735,31 @@ Two independent read-only evidence reviews found no actionable issue. They check
 An independent documentation review found literal leading `+` characters in the two command examples; they were removed, and targeted re-review confirmed both commands are replayable with no remaining finding.
 
 This closes only maximum-Folia/MariaDB successful audit-schema migration. Maximum-Folia/PostgreSQL and both Canvas endpoint groups, other V03 mode/resource/backend/failure cells, broader lifecycle, fleet-quiescence, and licensed-CMI gates remain open or **BLOCKED / NOT RUN**. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. Next ordered cell: user-pinned maximum Folia `26.2#7` / PostgreSQL `18.1`.
+
+## T21 V03 maximum-Folia/PostgreSQL successful audit-schema v10-to-v11 migration (2026-10-16)
+
+**Result: PASS_BOUNDED_SUBCASE (E2)** on user-pinned Folia `26.2#7`, Java `25.0.4+7-LTS-189` (feature 25), PostgreSQL `18.1`, isolated Redis `8.10.1` DB 15, local PlugDev, and Syncmoney `1.4.0-alpha.1`. The runtime exited `0`; the PostgreSQL / maximum-Folia report predicate and independent offline audit both passed.
+
+**Runtime and audit commands (both exited 0):**
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 -ServerJar 'build/reports/foundation/T21-artifacts/folia-26.2-7.jar' -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' -JavaHome 'C:\Program Files\Java\jdk-25.0.4' -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia -SuccessfulV10AuditSchemaUpgrade -RuntimeReportsRoot 'D:\Syncmoney-T21-sql-runtime\matrix-runs'
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 -ReportPath 'D:\Syncmoney-T21-sql-runtime\matrix-runs\postgresql-sync-maximum-folia-20261016-110557-cff550ecfadd4fbc969d5a0db6395172\result.json' -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4d34e53a74efc0e9c44877a3e856e0db90c662' -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia
+```
+
+| Evidence | Identity |
+|---|---|
+| Runtime report | `D:\Syncmoney-T21-sql-runtime\matrix-runs\postgresql-sync-maximum-folia-20261016-110557-cff550ecfadd4fbc969d5a0db6395172\result.json` — 57,478 bytes; SHA-256 `d6cf8cab9632f07087fc59a90a8b311a110a196c76fda9712ab778f5ba06c476` |
+| Platform and product artifacts | Folia JAR — 64,717,630 bytes; SHA-256 `128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3`; candidate JAR SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662`; Acceptance JAR SHA-256 `f2c9523b6c32d5faa81a7c09bb38b036e3a028c60ca2ab82036999f1fd11c62a`; API Consumer JAR SHA-256 `b35f098f969387153f1feca27f1ea2535d522a859a69974a5d9d6960ab50169d` |
+| Runtime source pins | Runner `05e2198b35b3cefeef32a502fea9382c6f263820925a5517725dfb61878c2eda`; audit-schema validator/test `c6db0074dd40d05a1bbab665325122bbbe5f92431741095c8eeefcd00a3f68a8` / `a745cdaad4ec1f162ef6a4dae899d489c262334d4db59b98bfbbe275349e7138`; local PlugDev commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`; CLI SHA-256 `3a600872a3c95bb67b960bdb5efcbb84eb675110f89146566bedb1835ad047d7`; distribution manifest SHA-256 `f57b296b2e4de10dec9dd7a83a51f3e0f95fb5ef27d5de2934e9b4ef56e0fc16` before and after the run |
+| Independent offline audit | `validation/offline-audit.txt` — 181 bytes; SHA-256 `31e59afbe30f4e703a31637d6a00c29f2581002c73855ecef8ffe22460ab27ae`; structured JSON — 7,442 bytes; SHA-256 `eaa3bbf166f311722802fc9295a7225636646002198a515c84bafbcf0f611f10` |
+
+The report records Folia `26.2#7`, PostgreSQL server and executable `18.1`, Redis `8.10.1`, and Java feature 25. Main schema identity and version row remained `1`; audit schema advanced `10→11`; audit columns changed `13→15`, adding `request_id` and `sequence`. All four expected indexes were present: the primary index is attached to the expected primary-key constraint and is unique, valid, ready, and live; all three secondary indexes are valid, ready, and live. One v10 sentinel row retained all 13 pre-existing values unchanged. The report had no `players` table before candidate startup; startup created the table empty, so preservation of pre-existing player rows is **UNKNOWN**.
+
+The independent offline audit rehashed all `30/30` retained logs and found zero run-owned Java/Node processes. Folia, PostgreSQL, Redis, and the isolated Gradle daemon exited normally with observed exit `0`; forced cleanup was false and cleanup failures were zero. The report SHA-256 matched the audit record.
+
+**Current-source validation:** `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` — **PASS**; `pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1` — **PASS**; PowerShell parser on the six runner, validator, test, and audit scripts — **PASS**, zero errors; offline audit — **PASS**, 30/30 logs; `git diff --check` — **PASS** after this evidence update. Java/Gradle product tests are **NOT RUN** because no Java/product source changed; the pinned candidate JAR was exercised in this E2 runtime.
+
+Two independent reviews checked the report/audit hashes, exact endpoint and artifact pins, all 30 logs, schema and sentinel preservation, primary-constraint/index state, cleanup, and the player-row limitation. Both flagged that the diff-check status was initially unstated; it now records **PASS** after a fresh exit-0 run, and targeted re-review confirmed closure. No actionable findings remain.
+
+This closes only maximum-Folia/PostgreSQL successful audit-schema migration. Both Canvas endpoint groups, other V03 mode/resource/backend/failure cells, broader lifecycle, fleet-quiescence, and licensed-CMI gates remain open or **BLOCKED / NOT RUN**. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains INCONCLUSIVE / P0-CANDIDATE outside mandatory correctness scope; licensed CMI remains **BLOCKED / NOT RUN**. Next ordered cell: user-pinned minimum Canvas `1.21.8#603` / MySQL `8.0.42`.
