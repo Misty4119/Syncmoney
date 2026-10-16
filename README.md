@@ -61,6 +61,8 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 > [!NOTE]
 > Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
 
+The formal 1.4.0 runtime-validation endpoints are Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. These identify the pinned lowest and highest endpoint builds; they do not claim that every intervening build has been exercised.
+
 The historical 1.3.2 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. Folia was tested successfully on that beta server build; this remains an observed compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
 
 ---
