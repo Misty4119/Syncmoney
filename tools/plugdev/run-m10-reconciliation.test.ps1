@@ -58,6 +58,7 @@ if ([regex]::Matches($runnerSource, '\$null = Assert-PlugDevCliUnchanged').Count
 $expectedEndpoints = @(
     "'paper-1216-min' = [ordered]@{ software = 'paper'; label = 'Paper 1.21.6#48'; minecraftVersion = '1.21.6'; build = 48; artifact = 'paper-1.21.6-48.jar'; sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' }",
     "'paper-263-max' = [ordered]@{ software = 'paper'; label = 'Paper 26.3#166'; minecraftVersion = '26.3'; build = 166; artifact = 'paper-26.3-166.jar'; sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' }",
+    "'paper-263-currentstable' = [ordered]@{ software = 'paper'; label = 'Paper 26.3#194 (CurrentStable)'; minecraftVersion = '26.3'; build = 194; artifact = 'paper-26.3-194.jar'; sha256 = '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784' }",
     "'folia-1216-min' = [ordered]@{ software = 'folia'; label = 'Folia 1.21.6#6'; minecraftVersion = '1.21.6'; build = 6; artifact = 'folia-1.21.6-6.jar'; sha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' }",
     "'folia-262-max' = [ordered]@{ software = 'folia'; label = 'Folia 26.2#7'; minecraftVersion = '26.2'; build = 7; artifact = 'folia-26.2-7.jar'; sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' }",
     "'canvas-1218-min' = [ordered]@{ software = 'canvas'; label = 'Canvas 1.21.8#603'; minecraftVersion = '1.21.8'; build = 603; artifact = 'canvas-1.21.8-603.jar'; sha256 = '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' }",
@@ -68,8 +69,20 @@ foreach ($endpoint in $expectedEndpoints) {
         throw "M10 runner is missing or changed a user-pinned platform endpoint: $endpoint"
     }
 }
-if (-not $runnerSource.Contains("ValidateSet('paper-1216-min', 'paper-263-max', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')", [StringComparison]::Ordinal)) {
-    throw 'M10 runner parameter does not expose the complete six-endpoint platform matrix.'
+if (-not $runnerSource.Contains("ValidateSet('paper-1216-min', 'paper-263-max', 'paper-263-currentstable', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')", [StringComparison]::Ordinal)) {
+    throw 'M10 runner parameter does not expose the six formal endpoints and separately named CurrentStable Paper selector.'
+}
+if (-not $runnerSource.Contains("build\reports\foundation\T21-M10\artifacts\paper-26.3-194.jar", [StringComparison]::Ordinal)) {
+    throw 'M10 runner does not bind CurrentStable Paper to its separate supplemental artifact path.'
+}
+foreach ($snapshotMarker in @(
+        'runnerSourceSnapshotPath = $null',
+        'Join-Path $runRoot ''source-pins''',
+        'Copy-Item -LiteralPath $PSCommandPath -Destination $runnerSourceSnapshotPath',
+        '$script:manifest.acceptance.runnerSourceSnapshotPath = [IO.Path]::GetFullPath($runnerSourceSnapshotPath)')) {
+    if (-not $runnerSource.Contains($snapshotMarker, [StringComparison]::Ordinal)) {
+        throw "M10 runtime report does not retain its exact runner source snapshot: $snapshotMarker"
+    }
 }
 $probePath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'src\acceptance\java\noietime\syncmoney\acceptance\AcceptanceProbe.java'
 $probeSource = Get-Content -LiteralPath $probePath -Raw

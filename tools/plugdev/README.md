@@ -128,6 +128,16 @@ For the user-confirmed maximum endpoints, use the exact JARs from the T15 artifa
 
 `run-quiesced-network-upgrade.ps1` runs the bounded two-node M01–M03 SYNC baseline → candidate → normal rollback cycle and requires all synthetic nodes stopped with verified drain before backup. It records four candidate owner-drain reports and never restores pre-upgrade backups for normal rollback. The run is limited to the two synthetic Syncmoney nodes and its acceptance probe; it does not establish production third-party writer quiescence. Pass `-EnableAudit` to enable SQL audit and Redis hybrid-audit only, leaving cleanup/export and other optional modules disabled. That profile verifies each disposable account gained persisted audit rows after the candidate write and retained them through rollback; its result report records the audit profile and per-stage counts. Audit remains disabled by default.
 
+## T21 M10 supplemental CurrentStable Paper reconciliation
+
+The M10 two-node missed-Pub/Sub reconciliation runner has a separate `paper-263-currentstable` selector for Paper `26.3#194`. Its JAR is stored under `build/reports/foundation/T21-M10/artifacts/paper-26.3-194.jar` and pinned to SHA-256 `5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784`. This selector is supplemental and does not change the formal endpoints: Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`.
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/run-m10-reconciliation.ps1 -Endpoint paper-263-currentstable
+```
+
+The runner uses only the configured local PlugDev and Mineflayer checkouts, isolated Redis DB 15, and run-owned server ports. It records the exact runner source inside each run report directory. Runtime output is under ignored `build/reports/foundation/T21-M10/runtime/`; acceptance remains bounded to this one reconnect/reconciliation scenario.
+
 ## T21 M05 SYNC SQL runtime cells by platform
 
 The focused runner verifies exact pinned platform endpoints with `-PlatformEndpoint`. `Minimum`, `Maximum`, and `CurrentStable` select Paper `1.21.6#48`, Paper `26.3#166`, and supplemental stable Paper `26.3#194` (SHA-256 `5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784`). Historical reports recorded against `26.3#178` retain their actual pinned endpoint and do not imply the current selector still resolves there. `MinimumFolia` and `MaximumFolia` select Folia `1.21.6#6` and `26.2#7`; `MinimumCanvas` and `MaximumCanvas` select Canvas `1.21.8#603` and `26.3#972`. Paper `-PaperEndpoint` remains an alias for existing invocations. The current-stable Paper build is supplemental and does not change the user-confirmed maximum. Select MySQL `8.0.42`, MariaDB `12.3.3`, or PostgreSQL `18.1` with `-DatabaseProduct`; PostgreSQL uses `-PostgreSqlBin` to locate `initdb`, `pg_ctl`, `psql`, and `postgres`. Runtime reports include a deterministic inventory of every file under the local `packages/cli/dist` tree. The runner checks that manifest before and after each PlugDev invocation and across the full run, so changes to imported CLI chunks invalidate the report.

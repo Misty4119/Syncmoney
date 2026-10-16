@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('paper-1216-min', 'paper-263-max', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')]
+    [ValidateSet('paper-1216-min', 'paper-263-max', 'paper-263-currentstable', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')]
     [string]$Endpoint,
     [string]$PlugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main',
     [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master'
@@ -26,18 +26,24 @@ $redisCli = (Get-Command redis-cli.exe, redis-cli -ErrorAction Stop | Select-Obj
 $endpointPins = @{
     'paper-1216-min' = [ordered]@{ software = 'paper'; label = 'Paper 1.21.6#48'; minecraftVersion = '1.21.6'; build = 48; artifact = 'paper-1.21.6-48.jar'; sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' }
     'paper-263-max' = [ordered]@{ software = 'paper'; label = 'Paper 26.3#166'; minecraftVersion = '26.3'; build = 166; artifact = 'paper-26.3-166.jar'; sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' }
+    'paper-263-currentstable' = [ordered]@{ software = 'paper'; label = 'Paper 26.3#194 (CurrentStable)'; minecraftVersion = '26.3'; build = 194; artifact = 'paper-26.3-194.jar'; sha256 = '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784' }
     'folia-1216-min' = [ordered]@{ software = 'folia'; label = 'Folia 1.21.6#6'; minecraftVersion = '1.21.6'; build = 6; artifact = 'folia-1.21.6-6.jar'; sha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' }
     'folia-262-max' = [ordered]@{ software = 'folia'; label = 'Folia 26.2#7'; minecraftVersion = '26.2'; build = 7; artifact = 'folia-26.2-7.jar'; sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' }
     'canvas-1218-min' = [ordered]@{ software = 'canvas'; label = 'Canvas 1.21.8#603'; minecraftVersion = '1.21.8'; build = 603; artifact = 'canvas-1.21.8-603.jar'; sha256 = '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' }
     'canvas-263-max' = [ordered]@{ software = 'canvas'; label = 'Canvas 26.3#972'; minecraftVersion = '26.3'; build = 972; artifact = 'canvas-26.3-972.jar'; sha256 = 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
 }
 $selectedEndpoint = $endpointPins[$Endpoint]
+$serverJarPath = if ($Endpoint -eq 'paper-263-currentstable') {
+    Join-Path $repoRoot 'build\reports\foundation\T21-M10\artifacts\paper-26.3-194.jar'
+} else {
+    Join-Path $repoRoot ('build\reports\foundation\T15-runtime-pins\artifacts\' + $selectedEndpoint.artifact)
+}
 $endpointInfo = [ordered]@{
     label = $selectedEndpoint.label
     software = $selectedEndpoint.software
     minecraftVersion = $selectedEndpoint.minecraftVersion
     build = $selectedEndpoint.build
-    serverJar = Join-Path $repoRoot ('build\reports\foundation\T15-runtime-pins\artifacts\' + $selectedEndpoint.artifact)
+    serverJar = $serverJarPath
     serverSha256 = $selectedEndpoint.sha256
 }
 $candidateJar = Join-Path $repoRoot "build\libs\Syncmoney-$candidateVersion.jar"
@@ -75,7 +81,7 @@ $script:manifest = [ordered]@{
     sourceTree = (& git -C $repoRoot rev-parse 'HEAD^{tree}' 2>$null | Out-String).Trim()
     java = [ordered]@{ home = $javaHome; version = $null }
     candidate = [ordered]@{ version = $candidateVersion; path = $candidateJar; sha256 = $null }
-    acceptance = [ordered]@{ path = $acceptanceJar; sha256 = $null; apiConsumerPath = $apiConsumerJar; apiConsumerSha256 = $null; probeSourceSha256 = $null; clientSourceSha256 = $null; identityHelperPath = $identityHelperTool; identityHelperSourceSha256 = $null; identityHelperTestPath = $identityHelperTestTool; identityHelperTestSha256 = $null; observerPath = $observerTool; observerSourceSha256 = $null; runnerSha256 = $null; runnerTestPath = $runnerTestTool; runnerTestSha256 = $null; prepareSha256 = $null }
+    acceptance = [ordered]@{ path = $acceptanceJar; sha256 = $null; apiConsumerPath = $apiConsumerJar; apiConsumerSha256 = $null; probeSourceSha256 = $null; clientSourceSha256 = $null; identityHelperPath = $identityHelperTool; identityHelperSourceSha256 = $null; identityHelperTestPath = $identityHelperTestTool; identityHelperTestSha256 = $null; observerPath = $observerTool; observerSourceSha256 = $null; runnerSha256 = $null; runnerSourceSnapshotPath = $null; runnerTestPath = $runnerTestTool; runnerTestSha256 = $null; prepareSha256 = $null }
     plugDev = [ordered]@{
         root = [IO.Path]::GetFullPath($PlugDevRoot); cli = $plugDevCli; cliSha256 = $null; cliDistRoot = $plugDevCliDistRoot
         cliDistManifest = @(); commit = $null; version = $null; workingTreeClean = $false
@@ -1179,8 +1185,16 @@ try {
     $script:manifest.redis.version = (& $redisServer --version 2>&1 | Out-String).Trim()
     if ($script:manifest.redis.version -notmatch 'v=8\.10\.1') { throw "Expected isolated Redis 8.10.1, observed: $($script:manifest.redis.version)" }
     if (Test-Path -LiteralPath $runRoot) { throw "Refusing to reuse existing M10 report path: $runRoot" }
-    New-Item -ItemType Directory -Path @($runRoot, (Join-Path $runRoot 'redis'), (Join-Path $runRoot '.plugdev-home'), (Join-Path $runRoot '.gradle-user-home')) -ErrorAction Stop | Out-Null
+    $runnerSourceSnapshotDir = Join-Path $runRoot 'source-pins'
+    $runnerSourceSnapshotPath = Join-Path $runnerSourceSnapshotDir 'run-m10-reconciliation.ps1'
+    New-Item -ItemType Directory -Path @($runRoot, (Join-Path $runRoot 'redis'), (Join-Path $runRoot '.plugdev-home'), (Join-Path $runRoot '.gradle-user-home'), $runnerSourceSnapshotDir) -ErrorAction Stop | Out-Null
     $script:runRootOwned = $true
+    $null = Assert-M10NoReparsePath $runnerSourceSnapshotDir
+    Copy-Item -LiteralPath $PSCommandPath -Destination $runnerSourceSnapshotPath -ErrorAction Stop
+    $script:manifest.acceptance.runnerSourceSnapshotPath = [IO.Path]::GetFullPath($runnerSourceSnapshotPath)
+    if ((Get-Sha256 $runnerSourceSnapshotPath) -cne [string]$script:manifest.acceptance.runnerSha256) {
+        throw 'The retained M10 runner source snapshot does not match the report pin.'
+    }
     foreach ($port in @($redisPort, $gamePorts.a, ($gamePorts.a + 10000), $gamePorts.b, ($gamePorts.b + 10000))) { Assert-PortClosed $port }
     $env:JAVA_HOME = $javaHome
     $env:Path = "$javaHome\bin;$env:Path"
