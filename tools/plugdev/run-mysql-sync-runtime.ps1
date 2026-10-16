@@ -17,6 +17,7 @@ param(
     [switch]$NewerAuditSchemaStartupFailure,
     [switch]$IncompleteV10AuditTableStartupFailure,
     [switch]$RequiredV11DdlPermissionDeniedStartupFailure,
+    [switch]$SuccessfulV10AuditSchemaUpgrade,
     [string]$BaselinePluginJar,
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedBaselinePluginSha256
 )
@@ -27,6 +28,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 SQL runtime validation r
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-legacy-sql-upgrade-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-startup-failure-validation.ps1')
+. (Join-Path $PSScriptRoot 't21-audit-schema-upgrade-validation.ps1')
 
 $requestedDatabaseProduct = $DatabaseProduct
 $script:databaseProduct = Resolve-T21SqlRuntimeProduct $requestedDatabaseProduct
@@ -46,6 +48,10 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The required-v11-DDL-permission-failure case supports all three SQL products on the user-pinned minimum and maximum Paper, Folia, and Canvas endpoints, plus supplemental current-stable Paper; unpinned endpoints are not supported.'
 }
+if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
+    -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+    throw 'The successful audit-schema upgrade case is currently bounded to MySQL, MariaDB, or PostgreSQL on minimum Paper 1.21.6#48.'
+}
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -58,6 +64,7 @@ $script:legacySqlDataUpgrade = $LegacySqlDataUpgrade.IsPresent
 $script:newerAuditSchemaStartupFailure = $NewerAuditSchemaStartupFailure.IsPresent
 $script:incompleteV10AuditTableStartupFailure = $IncompleteV10AuditTableStartupFailure.IsPresent
 $script:requiredV11DdlPermissionDeniedStartupFailure = $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent
+$script:successfulV10AuditSchemaUpgrade = $SuccessfulV10AuditSchemaUpgrade.IsPresent
 $script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:incompleteV10AuditTableStartupFailure -or
     $script:requiredV11DdlPermissionDeniedStartupFailure
 $script:schemaStateBefore = $null
@@ -71,7 +78,8 @@ $startupFailureModeCount = 0
 if ($script:newerAuditSchemaStartupFailure) { $startupFailureModeCount++ }
 if ($script:incompleteV10AuditTableStartupFailure) { $startupFailureModeCount++ }
 if ($script:requiredV11DdlPermissionDeniedStartupFailure) { $startupFailureModeCount++ }
-if (($script:legacySqlDataUpgrade -and $script:auditSchemaStartupFailure) -or
+if ($script:successfulV10AuditSchemaUpgrade) { $startupFailureModeCount++ }
+if (($script:legacySqlDataUpgrade -and ($script:auditSchemaStartupFailure -or $script:successfulV10AuditSchemaUpgrade)) -or
     $startupFailureModeCount -gt 1) {
     throw 'The selected T21 SQL runtime case modes are mutually exclusive.'
 }
@@ -760,6 +768,7 @@ function Stop-T21Server([string]$stage) {
         'after-candidate-existing-read' { 'candidate-existing-read' }
         'after-legacy-rollback-read' { 'legacy-rollback-read' }
         'after-startup-failure' { 'candidate-startup-failure' }
+        'after-audit-v10-upgrade' { 'candidate-audit-v10-upgrade' }
         default { throw "Unexpected platform log snapshot stage: $stage" }
     }
     $platformLogRelativePath = 'logs\platform-' + $platformLogStage + '.txt'
@@ -895,7 +904,7 @@ function Get-BackendSnapshot(
     return $snapshot
 }
 
-function Get-T21StartupFailureSchemaState {
+function Get-T21StartupFailureSchemaState([switch]$AfterAuditSchemaV10Upgrade) {
     if ($script:databaseProduct -ceq 'PostgreSQL') {
         $stateSql = @"
 SELECT COALESCE((SELECT version::text FROM syncmoney_schema_version WHERE id = '1'), 'NULL') || '|' ||
@@ -1026,6 +1035,20 @@ SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid'
     'merged_count', merged_count, 't21_sentinel', t21_sentinel)
 FROM syncmoney_audit_log
 ORDER BY id;
+"@ } elseif ($script:successfulV10AuditSchemaUpgrade -and $AfterAuditSchemaV10Upgrade) { @"
+SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
+    'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
+    'server', server, 'target_uuid', target_uuid, 'target_name', target_name, 'reason', reason,
+    'merged_count', merged_count, 'request_id', request_id, 'sequence', sequence)
+FROM syncmoney_audit_log
+ORDER BY id;
+"@ } elseif ($script:successfulV10AuditSchemaUpgrade) { @"
+SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
+    'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
+    'server', server, 'target_uuid', target_uuid, 'target_name', target_name, 'reason', reason,
+    'merged_count', merged_count)
+FROM syncmoney_audit_log
+ORDER BY id;
 "@ } else { @"
 SELECT JSON_OBJECT('id', id, 'timestamp', timestamp, 'type', type, 'player_uuid', player_uuid,
     'player_name', player_name, 'amount', amount, 'balance_after', balance_after, 'source', source,
@@ -1050,6 +1073,59 @@ ORDER BY id;
         auditIndexesJson = $auditIndexesJson
         auditRowsJson = $auditRowsJson
     }
+}
+
+function Seed-T21AuditSchemaV10Upgrade {
+    $ddl = @'
+CREATE TABLE syncmoney_schema_version (
+    id VARCHAR(50) PRIMARY KEY,
+    version INT NOT NULL DEFAULT 0,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description VARCHAR(255)
+);
+INSERT INTO syncmoney_schema_version (id, version, applied_at, description)
+VALUES ('1', 1, TIMESTAMP '2026-10-14 00:00:00', 'T21 pre-existing main schema');
+INSERT INTO syncmoney_schema_version (id, version, applied_at, description)
+VALUES ('audit', 10, TIMESTAMP '2026-10-14 00:00:00', 'T21 v10 migration sentinel');
+CREATE TABLE syncmoney_audit_log (
+    id VARCHAR(36) PRIMARY KEY,
+    timestamp BIGINT NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    player_uuid VARCHAR(36) NOT NULL,
+    player_name VARCHAR(16),
+    amount DECIMAL(20, 2) NOT NULL,
+    balance_after DECIMAL(20, 2) NOT NULL,
+    source VARCHAR(30) NOT NULL,
+    server VARCHAR(50) NOT NULL,
+    target_uuid VARCHAR(36),
+    target_name VARCHAR(16),
+    reason VARCHAR(255),
+    merged_count INT DEFAULT 1
+);
+INSERT INTO syncmoney_audit_log (
+    id, timestamp, type, player_uuid, player_name, amount, balance_after, source, server,
+    target_uuid, target_name, reason, merged_count
+) VALUES (
+    '00000000-0000-0000-0000-000000000330', 1791936000000, 'DEPOSIT',
+    '00000000-0000-0000-0000-000000000330', 'T21Fixture', 1.25, 99.99,
+    'TEST', 't21-schema-upgrade', NULL, NULL, 'v10 upgrade preservation sentinel', 1
+);
+'@
+    $null = Invoke-MySqlQuery $ddl 'seed-v10-audit-schema-upgrade'
+    $state = Get-T21StartupFailureSchemaState
+    $columns = @(ConvertFrom-Json -InputObject $state.auditColumnsJson -AsHashtable -ErrorAction Stop)
+    $indexes = @(ConvertFrom-Json -InputObject $state.auditIndexesJson -AsHashtable -ErrorAction Stop)
+    $rows = @(ConvertFrom-Json -InputObject $state.auditRowsJson -AsHashtable -ErrorAction Stop)
+    if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 10 -or
+        -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
+        $state.mainVersionRowJson -notmatch 'T21 pre-existing main schema' -or
+        $state.auditVersionRowJson -notmatch 'T21 v10 migration sentinel' -or
+        $columns.Count -ne 13 -or $indexes.Count -ne 1 -or $rows.Count -ne 1 -or
+        $rows[0].id -cne '00000000-0000-0000-0000-000000000330' -or
+        $rows[0].reason -cne 'v10 upgrade preservation sentinel') {
+        throw "The isolated $script:databaseProduct database did not retain the exact seeded audit v10 fixture."
+    }
+    return $state
 }
 
 function Seed-T21NewerAuditSchema {
@@ -1868,6 +1944,8 @@ $script:report = [ordered]@{
         "T21-V03-SYNC-incomplete-v10-audit-table-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
         "T21-V03-SYNC-v11-audit-ddl-permission-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
+    } elseif ($script:successfulV10AuditSchemaUpgrade) {
+        "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } else { "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)" }
     status = 'IN_PROGRESS'
     startedAtUtc = $script:startedAtUtc
@@ -1901,6 +1979,8 @@ $script:report = [ordered]@{
     restartReadObservation = $null
     normalStops = @()
     snapshots = @()
+    schemaStateBefore = $null
+    schemaStateAfter = $null
     backendShutdowns = @()
     gradleDaemonCleanup = $null
     cleanupFailures = @()
@@ -2015,6 +2095,8 @@ try {
         $script:schemaStateBefore = Seed-T21IncompleteV10AuditTable
     } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
         $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure
+    } elseif ($script:successfulV10AuditSchemaUpgrade) {
+        $script:schemaStateBefore = Seed-T21AuditSchemaV10Upgrade
     }
     if ($script:requiredV11DdlPermissionDeniedStartupFailure -and
         $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
@@ -2100,6 +2182,20 @@ try {
             throw 'SQL or Redis resources remained active after the startup rollback completed.'
         }
         Stop-T21Server 'after-startup-failure'
+    } elseif ($script:successfulV10AuditSchemaUpgrade) {
+        $null = Start-T21Server 'candidate-audit-v10-upgrade'
+        $upgradeLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
+        $missingUpgradeMarkers = @(@(
+                'Syncmoney audit schema version: current 10, target 11',
+                'Starting audit schema upgrade: from version 10 to 11',
+                'Audit schema version recorded: 11 - v1.1.0 Cursor pagination optimization',
+                'Audit schema upgrade completed at version 11') | Where-Object { -not $upgradeLog.Contains($_) })
+        Stop-T21Server 'after-audit-v10-upgrade'
+        $script:schemaStateAfter = Get-T21StartupFailureSchemaState -AfterAuditSchemaV10Upgrade
+        if ($missingUpgradeMarkers.Count -gt 0) { throw "Successful audit-schema migration log markers are missing: $($missingUpgradeMarkers -join '; ')" }
+        if (-not (Test-T21AuditSchemaV10UpgradeState $script:schemaStateBefore $script:schemaStateAfter -DatabaseProduct $script:databaseProduct)) {
+            throw 'The successful v10-to-v11 migration did not preserve the sentinel and produce the required v11 schema.'
+        }
     } elseif ($script:legacySqlDataUpgrade) {
         $baselineStartup = Start-T21Server 'legacy-seed' '1.3.2'
         $seedLineStart = Get-ServerLogLineCount
@@ -2162,7 +2258,14 @@ try {
 } finally {
     try { Disable-T21MySqlGeneralLogCapture } catch { $script:cleanupFailures.Add("MySQL general-log cleanup failed: $($_.Exception.Message)") }
     try {
-        if (@(Get-T21ServerProcesses).Count -gt 0) { Stop-RunOwnedServerAfterFailure }
+        if (@(Get-T21ServerProcesses).Count -gt 0) {
+            if ($script:successfulV10AuditSchemaUpgrade) {
+                try { Stop-T21Server 'after-audit-v10-upgrade' } catch {
+                    $script:cleanupFailures.Add("Graceful Paper cleanup failed after the audit-schema upgrade case: $($_.Exception.Message)")
+                }
+            }
+            if (@(Get-T21ServerProcesses).Count -gt 0) { Stop-RunOwnedServerAfterFailure }
+        }
     } catch { $script:cleanupFailures.Add("Platform cleanup check failed: $($_.Exception.Message)") }
     try { Stop-MySqlBackend } catch { $script:cleanupFailures.Add("MySQL cleanup failed: $($_.Exception.Message)") }
     try { Stop-RedisBackend } catch { $script:cleanupFailures.Add("Redis cleanup failed: $($_.Exception.Message)") }
@@ -2204,6 +2307,8 @@ try {
             startupFailureValidatorTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-startup-failure-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             legacyValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             legacyTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-legacy-sql-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            auditSchemaUpgradeValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-audit-schema-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            auditSchemaUpgradeTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-audit-schema-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
         }
     } catch {
         $script:failure = "Could not finalize runtime evidence hashes: $($_.Exception.Message)"
@@ -2218,6 +2323,8 @@ try {
     $script:report.backendShutdowns = @($script:backendShutdowns)
     $script:report.cleanupFailures = @($script:cleanupFailures)
     $script:report.failure = $script:failure
+    $script:report.schemaStateBefore = $script:schemaStateBefore
+    $script:report.schemaStateAfter = $script:schemaStateAfter
     if ($null -eq $script:failure -and $script:cleanupFailures.Count -eq 0) {
         $script:report.status = 'PASS_BOUNDED_SUBCASE'
         if ($script:auditSchemaStartupFailure) {
@@ -2302,6 +2409,11 @@ try {
                 -ExpectedPlugDevSourceCommit $script:plugDevSourceCommit -ExpectedPlugDevCliSha256 $script:plugDevCliSha256 `
                 -ExpectedPlugDevCliDistManifestSha256 $script:plugDevCliDistManifest.sha256 `
                 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -FailureScenario $failureScenario
+        } elseif ($script:successfulV10AuditSchemaUpgrade) {
+            $reportAccepted = Test-T21AuditSchemaV10UpgradeReport $script:report `
+                $ExpectedServerSha256 $ExpectedCandidateSha256 `
+                -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
+            $script:finalReport = $script:report
         } elseif ($script:legacySqlDataUpgrade) {
             $backendProcesses = $script:report.backendProcesses
             $databaseProcess = $backendProcesses[$script:sqlReportKey]
@@ -2395,6 +2507,8 @@ try {
             $script:finalReport.status = 'FAIL'
             $script:failure = if ($script:legacySqlDataUpgrade) {
                 'The completed report did not satisfy the product-specific T21 legacy SQL data upgrade predicate.'
+            } elseif ($script:successfulV10AuditSchemaUpgrade) {
+                'The completed report did not satisfy Test-T21AuditSchemaV10UpgradeReport.'
             } elseif ($script:auditSchemaStartupFailure) {
                 'The completed report did not satisfy Test-T21NewerAuditSchemaStartupFailureReport.'
             } else {
