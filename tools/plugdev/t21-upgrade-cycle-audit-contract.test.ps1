@@ -14,6 +14,21 @@ if ($parseErrors.Count -gt 0) {
     throw "The T21 offline auditor has PowerShell parse errors: $details"
 }
 
+$platformEndpointParameter = $auditAst.ParamBlock.Parameters | Where-Object {
+    $_.Name.VariablePath.UserPath -ceq 'PlatformEndpoint'
+} | Select-Object -First 1
+$platformEndpointValidateSet = $platformEndpointParameter.Attributes | Where-Object {
+    $_.TypeName.Name -ceq 'ValidateSet'
+} | Select-Object -First 1
+$acceptedPlatformEndpoints = @($platformEndpointValidateSet.PositionalArguments | ForEach-Object { [string]$_.Value })
+if ($acceptedPlatformEndpoints -notcontains 'CurrentStable') {
+    throw 'The M04 offline auditor must accept the explicitly pinned current-stable Paper endpoint.'
+}
+if ($acceptedPlatformEndpoints -notcontains 'Maximum') {
+    throw 'The M04 offline auditor must continue to accept the separate formal maximum endpoint.'
+}
+Write-Output 'PASS: M04 offline auditor accepts current-stable without replacing the formal maximum selector'
+
 function Import-AuditPredicate([string]$Name) {
     $predicate = {
         param($node)

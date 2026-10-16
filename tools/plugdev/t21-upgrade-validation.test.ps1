@@ -146,6 +146,30 @@ if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
+$currentStableM04Report = [ordered]@{
+    platform = $currentStablePaper.software
+    minecraftVersion = $currentStablePaper.minecraftVersion
+    buildNumber = $currentStablePaper.build
+    expectedServerSha256 = $currentStablePaper.sha256
+}
+if (-not (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint CurrentStable)) {
+    throw 'The M04 auditor must accept the exact pinned current-stable Paper endpoint.'
+}
+Write-Output 'PASS: accept exact current-stable Paper identity for M04'
+if (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint Maximum) {
+    throw 'The M04 auditor must not accept current-stable Paper evidence as the formal maximum endpoint.'
+}
+Write-Output 'PASS: keep current-stable Paper separate from the formal maximum in M04'
+$currentStableM04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-194-main@fixture (2026-10-16T00:00:00Z) for Minecraft 26.3'
+if (-not (Test-T21M04PlatformStartupIdentity $currentStableM04Startup -PlatformEndpoint CurrentStable)) {
+    throw 'The M04 auditor must accept the exact current-stable Paper startup identity.'
+}
+Write-Output 'PASS: accept exact current-stable Paper startup identity for M04'
+if (Test-T21M04PlatformStartupIdentity ($currentStableM04Startup.Replace('26.3-194', '26.3-166')) -PlatformEndpoint CurrentStable) {
+    throw 'The M04 auditor must reject current-stable startup evidence with the formal maximum build.'
+}
+Write-Output 'PASS: reject a non-current-stable Paper build under the current-stable M04 selector'
+
 $defaultRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' ''
 if ($defaultRuntimeReportsRoot -cne [IO.Path]::GetFullPath('C:\syncmoney\build\reports\foundation\T21-sql-runtime')) {
     throw 'The T21 runtime reports root must preserve the repository-local default when no override is supplied.'

@@ -119,7 +119,7 @@ function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable'
 
 function Test-T21M04PlatformEndpointReport(
     [object]$report,
-    [ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ($null -eq $report) { return $false }
@@ -132,7 +132,7 @@ function Test-T21M04PlatformEndpointReport(
 
 function Test-T21M04PlatformStartupIdentity(
     [string]$serverLogText,
-    [ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ([string]::IsNullOrWhiteSpace($serverLogText)) { return $false }
