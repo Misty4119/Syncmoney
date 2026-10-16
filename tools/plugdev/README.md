@@ -138,6 +138,17 @@ pwsh -NoProfile -File tools/plugdev/run-m10-reconciliation.ps1 -Endpoint paper-2
 
 The runner uses only the configured local PlugDev and Mineflayer checkouts, isolated Redis DB 15, and run-owned server ports. It records the exact runner source inside each run report directory. Runtime output is under ignored `build/reports/foundation/T21-M10/runtime/`; acceptance remains bounded to this one reconnect/reconciliation scenario.
 
+The accepted CurrentStable report is `build/reports/foundation/T21-M10/runtime/paper-263-currentstable-20261017-021441-e62a05ae5c2f4ca68f80af468e99a6e6/result.json` (SHA-256 `93ab68a595807b7cd4366dde46197a970cce504f6842a230bade925f5f5ce2ae`). Reproduce its offline audit with the configured local PlugDev and Mineflayer checkouts:
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/m10-runtime-matrix-offline-audit.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -SupplementalCurrentStableOnly `
+  -CurrentStableRunId 'paper-263-currentstable-20261017-021441-e62a05ae5c2f4ca68f80af468e99a6e6'
+```
+
+This audit validates that supplemental run only and does not change the formal endpoint range. It verifies report, log, artifact/source, command-to-event, and cleanup provenance. It does not establish a bounded reconciliation deadline or live mixed-version safety.
+
 ## T21 M05 SYNC SQL runtime cells by platform
 
 The focused runner verifies exact pinned platform endpoints with `-PlatformEndpoint`. `Minimum`, `Maximum`, and `CurrentStable` select Paper `1.21.6#48`, Paper `26.3#166`, and supplemental stable Paper `26.3#194` (SHA-256 `5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784`). Historical reports recorded against `26.3#178` retain their actual pinned endpoint and do not imply the current selector still resolves there. `MinimumFolia` and `MaximumFolia` select Folia `1.21.6#6` and `26.2#7`; `MinimumCanvas` and `MaximumCanvas` select Canvas `1.21.8#603` and `26.3#972`. Paper `-PaperEndpoint` remains an alias for existing invocations. The current-stable Paper build is supplemental and does not change the user-confirmed maximum. Select MySQL `8.0.42`, MariaDB `12.3.3`, or PostgreSQL `18.1` with `-DatabaseProduct`; PostgreSQL uses `-PostgreSqlBin` to locate `initdb`, `pg_ctl`, `psql`, and `postgres`. Runtime reports include a deterministic inventory of every file under the local `packages/cli/dist` tree. The runner checks that manifest before and after each PlugDev invocation and across the full run, so changes to imported CLI chunks invalidate the report.
