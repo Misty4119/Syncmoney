@@ -375,19 +375,27 @@ try {
             @{ database='MySQL'; endpoint='MaximumFolia'; expected=$true }
             @{ database='MySQL'; endpoint='MinimumCanvas'; expected=$true }
             @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$true }
-            @{ database='MariaDB'; endpoint='MinimumCanvas'; expected=$false }
-            @{ database='PostgreSQL'; endpoint='MinimumCanvas'; expected=$false }
-            @{ database='MariaDB'; endpoint='MaximumCanvas'; expected=$false }
-            @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
-            @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
-            @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
+            @{ database='MariaDB'; endpoint='Minimum'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='Minimum'; expected=$true }
+            @{ database='MariaDB'; endpoint='Maximum'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='Maximum'; expected=$true }
+            @{ database='MariaDB'; endpoint='MinimumFolia'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='MinimumFolia'; expected=$true }
+            @{ database='MariaDB'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='MariaDB'; endpoint='MinimumCanvas'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='MinimumCanvas'; expected=$true }
+            @{ database='MariaDB'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='MariaDB'; endpoint='CurrentStable'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='CurrentStable'; expected=$false }
         )) {
         $accepted = Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $preservationCase.database -PlatformEndpoint $preservationCase.endpoint
         if ($accepted -ne $preservationCase.expected) {
             throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
         }
     }
-    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper, minimum/maximum Folia, and minimum/maximum Canvas MySQL'
+    Write-Output 'PASS: restrict existing-player-row preservation to user-pinned minimum/maximum Paper, Folia, and Canvas across all SQL products'
 
     $currentStablePathResolutionObserved = $false
     try {
@@ -480,13 +488,31 @@ try {
     }
     Write-Output 'PASS: accept the maximum-Canvas MySQL player-row-preservation runner target before external resources are resolved'
 
+    foreach ($crossDialectCase in @(
+            @{ database='MariaDB'; endpoint='MinimumCanvas' }
+            @{ database='PostgreSQL'; endpoint='MaximumCanvas' }
+        )) {
+        $crossDialectPathResolutionObserved = $false
+        try {
+            & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+                -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct $crossDialectCase.database -PlatformEndpoint $crossDialectCase.endpoint `
+                -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+        } catch {
+            $crossDialectPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+        }
+        if (-not $crossDialectPathResolutionObserved) {
+            throw "The $($crossDialectCase.database) / $($crossDialectCase.endpoint) player-row-preservation target was rejected before external paths were resolved."
+        }
+    }
+    Write-Output 'PASS: accept MariaDB and PostgreSQL row-preservation targets before resolving external resources'
+
     $playerRowWrongEndpointRejected = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentStable `
             -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
     } catch {
-        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas with MySQL 8\.0\.42'
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'user-pinned minimum/maximum Paper, Folia, and Canvas endpoints'
     }
     if (-not $playerRowWrongEndpointRejected) {
         throw 'The player-row-preservation runner accepted an unsupported platform endpoint.'
@@ -657,6 +683,25 @@ try {
         last_server = 't21-player-preservation'
         updated_at = '2026-10-16 12:34:56'
     }
+    $postgresPlayerRowSentinel = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.56'
+        version = '73'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:56.000000'
+    }
+    $postgresPlayerRowsJson = ConvertTo-Json -InputObject @($postgresPlayerRowSentinel) -Depth 10 -Compress
+    if (-not (Test-T21IncompleteV10PlayerRowSentinel $postgresPlayerRowsJson -DatabaseProduct PostgreSQL)) {
+        throw 'The PostgreSQL player-row sentinel rejected its exact six-digit fractional-second timestamp.'
+    }
+    $postgresPlayerRowSentinel.updated_at = '2026-10-16 12:34:56.000001'
+    $postgresFractionOnlyMutationJson = ConvertTo-Json -InputObject @($postgresPlayerRowSentinel) -Depth 10 -Compress
+    if (Test-T21IncompleteV10PlayerRowSentinel $postgresFractionOnlyMutationJson -DatabaseProduct PostgreSQL) {
+        throw 'The PostgreSQL player-row sentinel accepted a one-microsecond timestamp mutation.'
+    }
+    Write-Output 'PASS: preserve PostgreSQL TIMESTAMP microseconds and reject a fractional-only player-row mutation'
+
     $playerRowsJson = ConvertTo-Json -InputObject @($playerRowSentinel) -Depth 10 -Compress
     $playerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-minimum-Paper'
     $playerRowPreservationReport.schemaStateBefore.playersTableExists = $true
@@ -678,6 +723,20 @@ try {
         throw 'The incomplete-v10 startup-failure report rejected the previously emitted minimum-Paper player-row task label.'
     }
     Write-Output 'PASS: accept the historical MinimumPaper task label for minimum-Paper player-row evidence'
+
+    $legacyMariaDbMinimumPaperTaskReport = New-T21MySqlIncompleteAuditReportFixture 'MariaDB' '12.3.3-MariaDB'
+    $legacyMariaDbMinimumPaperTaskReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateBefore.playersTableExists = $true
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateBefore.playerRows = 1
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateAfter.playersTableExists = $true
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateAfter.playerRows = 1
+    $legacyMariaDbMinimumPaperTaskReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (Test-T21StartupFailureReportFixture $legacyMariaDbMinimumPaperTaskReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The MariaDB incomplete-v10 report accepted the historical MySQL-only MinimumPaper task label.'
+    }
+    Write-Output 'PASS: reject the historical MySQL MinimumPaper task label for MariaDB evidence'
 
     $maximumPaperEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'Maximum'
@@ -1733,6 +1792,47 @@ try {
         return $copy
     }
 
+    $postgresMinimumEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Minimum
+    $postgresRowPreservationReport = New-T21PostgreSqlIncompleteAuditReportFixture 'Minimum'
+    $postgresRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-PostgreSQL-minimum-Paper'
+    $postgresPlayerRowSentinel.updated_at = '2026-10-16 12:34:56.000000'
+    $postgresPlayerRowsJson = ConvertTo-Json -InputObject @($postgresPlayerRowSentinel) -Depth 10 -Compress
+    $postgresRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $postgresRowPreservationReport.schemaStateBefore.playerRows = 1
+    $postgresRowPreservationReport.schemaStateBefore.playerRowsJson = $postgresPlayerRowsJson
+    $postgresRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $postgresRowPreservationReport.schemaStateAfter.playerRows = 1
+    $postgresRowPreservationReport.schemaStateAfter.playerRowsJson = $postgresPlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $postgresRowPreservationReport $postgresMinimumEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The PostgreSQL player-row-preservation report rejected its exact six-digit timestamp snapshot.'
+    }
+    Write-Output 'PASS: accept PostgreSQL player-row-preservation evidence with exact timestamp precision'
+
+    $postgresFractionMutationReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $postgresRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $fractionMutationRow = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.56'
+        version = '73'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:56.000001'
+    }
+    $postgresFractionMutationReport.schemaStateAfter.playerRowsJson = ConvertTo-Json -InputObject @($fractionMutationRow) -Depth 10 -Compress
+    if (Test-T21StartupFailureReportFixture $postgresFractionMutationReport $postgresMinimumEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The PostgreSQL player-row-preservation report accepted a one-microsecond-only row mutation.'
+    }
+    Write-Output 'PASS: reject PostgreSQL player-row-preservation evidence with a one-microsecond-only mutation'
+
+    $postgresLegacyMinimumPaperTaskReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $postgresRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $postgresLegacyMinimumPaperTaskReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    if (Test-T21StartupFailureReportFixture $postgresLegacyMinimumPaperTaskReport $postgresMinimumEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The PostgreSQL incomplete-v10 report accepted the historical MySQL-only MinimumPaper task label.'
+    }
+    Write-Output 'PASS: reject the historical MySQL MinimumPaper task label for PostgreSQL evidence'
+
     $minimumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumCanvas
     $minimumCanvasIncompleteReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MinimumCanvas'
     if (-not (Test-T21StartupFailureReportFixture $minimumCanvasIncompleteReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -2261,8 +2361,16 @@ try {
     if (-not $runnerSource.Contains('[switch]$IncompleteV10AuditTablePlayerRowPreservation') -or
         -not $runnerSource.Contains('Test-T21IncompleteAuditTablePlayerRowPreservationTarget') -or
         -not $runnerSource.Contains('Seed-T21IncompleteV10AuditTable -SeedExistingPlayerRow:$script:incompleteV10AuditTablePlayerRowPreservation') -or
-        -not $runnerSource.Contains('JSON_ARRAYAGG(JSON_OBJECT')) {
+        -not $runnerSource.Contains('JSON_ARRAYAGG(JSON_OBJECT') -or
+        -not $runnerSource.Contains('CREATE INDEX idx_player_name ON players (player_name);') -or
+        -not $runnerSource.Contains("if (`$script:databaseProduct -ceq 'PostgreSQL')")) {
         throw 'The runtime runner does not seed and snapshot the bounded pre-existing player-row fixture.'
+    }
+    if (-not $runnerSource.Contains("to_char(updated_at, 'YYYY-MM-DD HH24:MI:SS.US')")) {
+        throw 'The PostgreSQL player-row snapshot must retain TIMESTAMP fractional seconds.'
+    }
+    if (-not $runnerSource.Contains('Test-T21IncompleteV10PlayerRowSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct')) {
+        throw 'The runtime pre-start sentinel check must select the exact SQL-product timestamp representation.'
     }
     $playerRowsSqlStart = $runnerSource.IndexOf('SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT(', [StringComparison]::Ordinal)
     $playerRowsSqlEnd = if ($playerRowsSqlStart -ge 0) {
@@ -2284,7 +2392,7 @@ try {
         $failureScenarioStartIndex -le $playerRowFailureScenarioIndex) {
         throw 'The startup-failure runtime gate must require one unchanged player row for the preservation subcase.'
     }
-    Write-Output 'PASS: require one unchanged MySQL player row only for the preservation subcase'
+    Write-Output 'PASS: require one unchanged player row only for the preservation subcase'
     $startupFailureHelperStart = $runnerSource.IndexOf('function Start-T21ServerExpectingAuditSchemaFailure(', [StringComparison]::Ordinal)
     $startupFailureHelperEnd = if ($startupFailureHelperStart -ge 0) {
         $runnerSource.IndexOf("`nfunction ", $startupFailureHelperStart + 1, [StringComparison]::Ordinal)
@@ -2317,7 +2425,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to all three SQL products on the user-pinned minimum/maximum Paper, Folia, and Canvas endpoints.', [StringComparison]::Ordinal)
     if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
         throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }

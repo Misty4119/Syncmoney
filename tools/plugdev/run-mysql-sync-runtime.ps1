@@ -49,7 +49,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 if ($IncompleteV10AuditTablePlayerRowPreservation.IsPresent -and
     (-not $IncompleteV10AuditTableStartupFailure.IsPresent -or
         -not (Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint))) {
-    throw 'Pre-existing player-row preservation is scoped to minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas with MySQL 8.0.42.'
+    throw 'Pre-existing player-row preservation is scoped to all three SQL products on the user-pinned minimum/maximum Paper, Folia, and Canvas endpoints.'
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -955,7 +955,7 @@ SELECT CONCAT_WS('|',
         $playerRowsSql = if ($script:databaseProduct -ceq 'PostgreSQL') { @"
 SELECT COALESCE(json_agg(json_build_object(
     'player_uuid', player_uuid::text, 'player_name', player_name, 'balance', balance::text,
-    'version', version::text, 'last_server', last_server, 'updated_at', to_char(updated_at, 'YYYY-MM-DD HH24:MI:SS'))
+    'version', version::text, 'last_server', last_server, 'updated_at', to_char(updated_at, 'YYYY-MM-DD HH24:MI:SS.US'))
     ORDER BY player_uuid)::text, '[]')
 FROM players;
 "@ } else { @"
@@ -1228,7 +1228,7 @@ function Seed-T21IncompleteV10AuditTable([switch]$SeedExistingPlayerRow) {
     if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { throw 'The incomplete-v10-audit-table fixture requires MySQL, MariaDB, or PostgreSQL.' }
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'The pre-existing player-row sentinel is restricted to minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas MySQL.'
+        throw 'The pre-existing player-row sentinel is restricted to all three SQL products on the user-pinned minimum/maximum Paper, Folia, and Canvas endpoints.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1246,7 +1246,22 @@ INSERT INTO syncmoney_audit_log (id) VALUES ('00000000-0000-0000-0000-0000000003
 '@
     $null = Invoke-MySqlQuery $ddl 'seed-incomplete-v10-audit-table'
     if ($SeedExistingPlayerRow.IsPresent) {
-        $playerDdl = @'
+        if ($script:databaseProduct -ceq 'PostgreSQL') {
+            $playerDdl = @'
+CREATE TABLE players (
+    player_uuid VARCHAR(36) PRIMARY KEY,
+    player_name VARCHAR(16),
+    balance DECIMAL(20,2) NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
+    last_server VARCHAR(64),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_player_name ON players (player_name);
+INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', TIMESTAMP '2026-10-16 12:34:56');
+'@
+        } else {
+            $playerDdl = @'
 CREATE TABLE players (
     player_uuid VARCHAR(36) PRIMARY KEY,
     player_name VARCHAR(16),
@@ -1259,13 +1274,15 @@ CREATE TABLE players (
 INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
 VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', '2026-10-16 12:34:56');
 '@
+        }
         $null = Invoke-MySqlQuery $playerDdl 'seed-incomplete-v10-existing-player-row'
     }
     $state = Get-T21StartupFailureSchemaState
     $columns = @(ConvertFrom-Json -InputObject $state.auditColumnsJson -AsHashtable -ErrorAction Stop)
     $rows = @(ConvertFrom-Json -InputObject $state.auditRowsJson -AsHashtable -ErrorAction Stop)
     $playerFixtureValid = if ($SeedExistingPlayerRow.IsPresent) {
-        $state.playersTableExists -and $state.playerRows -eq 1 -and (Test-T21IncompleteV10PlayerRowSentinel $state.playerRowsJson)
+        $state.playersTableExists -and $state.playerRows -eq 1 -and
+            (Test-T21IncompleteV10PlayerRowSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct)
     } else { -not $state.playersTableExists -and $null -eq $state.playerRows }
     if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 9 -or
         -not $state.auditTableExists -or -not $playerFixtureValid -or
@@ -2411,7 +2428,8 @@ try {
                 task=if ($script:newerAuditSchemaStartupFailure) {
                     'T21-V03-SYNC-newer-audit-schema-startup-failure'
                 } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
-                    "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-$($script:platformTarget.taskSuffix)"
+                    $productTaskSuffix = if ($script:databaseProduct -ceq 'MySQL') { 'MySQL' } else { $script:databaseProduct }
+                    "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-$productTaskSuffix-$($script:platformTarget.taskSuffix)"
                 } elseif ($script:incompleteV10AuditTableStartupFailure) {
                     'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
                 } else {

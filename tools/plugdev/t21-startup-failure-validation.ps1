@@ -33,10 +33,14 @@ function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
 }
 
-function Test-T21IncompleteV10PlayerRowSentinel([object]$RowsJson) {
+function Test-T21IncompleteV10PlayerRowSentinel(
+    [object]$RowsJson,
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct
+) {
     if ($RowsJson -isnot [string] -or [string]::IsNullOrWhiteSpace($RowsJson)) { return $false }
     try {
         $rows = @(ConvertFrom-Json -InputObject $RowsJson -AsHashtable -ErrorAction Stop)
@@ -47,7 +51,7 @@ function Test-T21IncompleteV10PlayerRowSentinel([object]$RowsJson) {
             balance = '1234.56'
             version = '73'
             last_server = 't21-player-preservation'
-            updated_at = '2026-10-16 12:34:56'
+            updated_at = if ($DatabaseProduct -ceq 'PostgreSQL') { '2026-10-16 12:34:56.000000' } else { '2026-10-16 12:34:56' }
         }
         if ($rows[0].Count -ne $expected.Count) { return $false }
         foreach ($key in $expected.Keys) {
@@ -444,11 +448,16 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedTask = switch ($FailureScenario) {
             'NewerAuditSchema' { 'T21-V03-SYNC-newer-audit-schema-startup-failure' }
             'IncompleteV10AuditTable' { 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' }
-            'IncompleteV10AuditTablePlayerRowPreservation' { "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-$($expectedPlatform.taskSuffix)" }
+            'IncompleteV10AuditTablePlayerRowPreservation' {
+                $productTaskSuffix = if ($DatabaseProduct -ceq 'MySQL') { 'MySQL' } else { $DatabaseProduct }
+                "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-$productTaskSuffix-$($expectedPlatform.taskSuffix)"
+            }
             default { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
         }
         $acceptedTasks = @($expectedTask)
-        if ($FailureScenario -ceq 'IncompleteV10AuditTablePlayerRowPreservation' -and $PlatformEndpoint -ceq 'Minimum') {
+        if ($FailureScenario -ceq 'IncompleteV10AuditTablePlayerRowPreservation' -and
+            $DatabaseProduct -ceq 'MySQL' -and
+            $PlatformEndpoint -ceq 'Minimum') {
             $acceptedTasks += 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
         }
         $sqlReportKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
@@ -581,8 +590,8 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'playersTableExists') $true) -or
                 [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 1 -or
                 [string](Get-T21ObservedValue $schemaBefore 'playerRowsJson') -cne [string](Get-T21ObservedValue $schemaAfter 'playerRowsJson') -or
-                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson')) -or
-                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson')) -or
+                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
+                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
                 (Get-T21ObservedValue $schemaBefore 'mainVersionRowJson') -cne (Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) { return $false }
             $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
             if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
