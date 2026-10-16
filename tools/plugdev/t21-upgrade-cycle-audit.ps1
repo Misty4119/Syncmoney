@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$RunDirectory,
-    [Parameter(Mandatory = $true)][string]$PlugDevRoot
+    [Parameter(Mandatory = $true)][string]$PlugDevRoot,
+    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,9 +130,6 @@ Assert-Equal 'report run directory binding' $runRoot ([IO.Path]::GetFullPath([st
 Assert-Equal 'M04 report status' 'PASS' ([string]$report.status)
 Assert-Equal 'M04 report task' 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle' ([string]$report.task)
 Assert-Equal 'M04 project identity' 'paper' ([string]$report.platform)
-Assert-Equal 'M04 Minecraft endpoint' '1.21.6' ([string]$report.minecraftVersion)
-Assert-Equal 'M04 server build' '48' ([string]$report.buildNumber)
-Assert-Equal 'minimum Paper server pin' '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' ([string]$report.expectedServerSha256)
 Assert-Equal '1.3.2 baseline JAR pin' '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10' ([string]$report.expectedBaselinePluginSha256)
 Assert-Equal '1.3.2 baseline source commit pin' '71cc55dfeefe9a8f40a3835b051ddd324d353767' ([string]$report.baselineSourceCommit)
 Assert-Equal 'VaultUnlocked dependency version' '2.20.2' ([string]$report.vaultUnlockedDependencyVersion)
@@ -198,6 +196,7 @@ Assert-True 'shared validation source exists' (Test-Path -LiteralPath $validatio
 $validationSourceSha256 = (Get-FileHash -LiteralPath $validationSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-Equal 'shared validation source SHA-256' ([string]$sourcePins.validationSha256) $validationSourceSha256
 . $validationSourcePath
+Assert-True "exact $PaperEndpoint Paper endpoint pin" (Test-T21M04PaperEndpointReport $report -PaperEndpoint $PaperEndpoint)
 Assert-True 'Acceptance runtime copy matches staged build artifact' (Test-T21M04RuntimeArtifactCopy $artifactByName.acceptance $artifactByName.'acceptance-runtime' 'acceptance' 'build/acceptance/SyncmoneyAcceptance.jar' 'acceptance-runtime' '.plugdev/run/plugins/SyncmoneyAcceptance.jar')
 Assert-True 'API consumer runtime copy matches staged build artifact' (Test-T21M04RuntimeArtifactCopy $artifactByName.'api-consumer' $artifactByName.'api-consumer-runtime' 'api-consumer' 'build/acceptance/SyncmoneyApiConsumer.jar' 'api-consumer-runtime' '.plugdev/run/plugins/SyncmoneyApiConsumer.jar')
 $plugDevPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $PlugDevRoot).Path)
@@ -353,4 +352,4 @@ foreach ($log in $actualLogs) {
     Assert-True "runner log is manifested $relativePath" $manifestedLogPaths.ContainsKey($relativePath)
 }
 
-Write-Output ("T21 M04 offline audit PASS: {0} assertions; report {1}" -f $script:assertionCount, $resultPath)
+Write-Output ("T21 M04 offline audit PASS: {0} assertions; Paper endpoint {1}; report {2}" -f $script:assertionCount, $PaperEndpoint, $resultPath)

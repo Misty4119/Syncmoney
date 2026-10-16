@@ -187,6 +187,58 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
     Write-Output "PASS: pin exact T21 SQL platform endpoint $($endpointCase.endpoint)"
 }
 
+$m04MinimumPaperReport = [ordered]@{
+    platform = 'paper'
+    minecraftVersion = '1.21.6'
+    buildNumber = 48
+    expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+}
+if (-not (Test-T21M04PaperEndpointReport $m04MinimumPaperReport -PaperEndpoint Minimum)) {
+    throw 'The M04 offline auditor must continue accepting the exact user-pinned minimum-Paper endpoint.'
+}
+Write-Output 'PASS: accept the exact M04 minimum-Paper endpoint pin'
+
+$m04MaximumPaperReport = [ordered]@{
+    platform = 'paper'
+    minecraftVersion = '26.3'
+    buildNumber = 166
+    expectedServerSha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+}
+if (-not (Test-T21M04PaperEndpointReport $m04MaximumPaperReport -PaperEndpoint Maximum)) {
+    throw 'The M04 offline auditor must accept the exact user-pinned maximum-Paper endpoint.'
+}
+Write-Output 'PASS: accept the exact M04 maximum-Paper endpoint pin'
+
+if (Test-T21M04PaperEndpointReport $m04MaximumPaperReport -PaperEndpoint Minimum) {
+    throw 'The M04 offline auditor must reject maximum-Paper evidence under the minimum-Paper pin.'
+}
+Write-Output 'PASS: reject maximum-Paper evidence under the minimum-Paper pin'
+
+$m04WrongPaperHashReport = [ordered]@{
+    platform = $m04MaximumPaperReport.platform
+    minecraftVersion = $m04MaximumPaperReport.minecraftVersion
+    buildNumber = $m04MaximumPaperReport.buildNumber
+    expectedServerSha256 = $m04MaximumPaperReport.expectedServerSha256
+}
+$m04WrongPaperHashReport.expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+if (Test-T21M04PaperEndpointReport $m04WrongPaperHashReport -PaperEndpoint Maximum) {
+    throw 'The M04 offline auditor must reject a maximum-Paper report with the minimum-Paper artifact hash.'
+}
+Write-Output 'PASS: reject maximum-Paper endpoint with a mismatched server artifact pin'
+
+$m04UnpinnedPaperReport = [ordered]@{
+    platform = $m04MaximumPaperReport.platform
+    minecraftVersion = $m04MaximumPaperReport.minecraftVersion
+    buildNumber = $m04MaximumPaperReport.buildNumber
+    expectedServerSha256 = $m04MaximumPaperReport.expectedServerSha256
+}
+$m04UnpinnedPaperReport.buildNumber = 178
+$m04UnpinnedPaperReport.expectedServerSha256 = '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757'
+if (Test-T21M04PaperEndpointReport $m04UnpinnedPaperReport -PaperEndpoint Maximum) {
+    throw 'The M04 offline auditor must not treat supplemental current-stable Paper as the user-pinned maximum.'
+}
+Write-Output 'PASS: reject supplemental current-stable Paper under the maximum-Paper pin'
+
 function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [Collections.IDictionary]$endpointCase, [string]$databaseProduct) {
     $report.schemaVersion = 4
     $report.task = "T21-M05-SYNC-$databaseProduct-$($endpointCase.taskSuffix)"

@@ -117,6 +117,18 @@ function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable'
     return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
+function Test-T21M04PaperEndpointReport(
+    [object]$report,
+    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+) {
+    if ($null -eq $report) { return $false }
+    $expected = Get-T21PaperEndpoint -PaperEndpoint $PaperEndpoint
+    return ([string](Get-T21ObservedValue $report 'platform') -ceq $expected.software -and
+        [string](Get-T21ObservedValue $report 'minecraftVersion') -ceq $expected.minecraftVersion -and
+        [string](Get-T21ObservedValue $report 'buildNumber') -ceq [string]$expected.build -and
+        [string](Get-T21ObservedValue $report 'expectedServerSha256') -ceq $expected.sha256)
+}
+
 function Resolve-T21RuntimeReportsRoot([string]$RepositoryRoot, [string]$RequestedRoot) {
     if ([string]::IsNullOrWhiteSpace($RequestedRoot)) {
         return [IO.Path]::GetFullPath((Join-Path $RepositoryRoot 'build\reports\foundation\T21-sql-runtime'))
