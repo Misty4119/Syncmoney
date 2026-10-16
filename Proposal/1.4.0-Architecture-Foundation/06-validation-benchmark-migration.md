@@ -4756,3 +4756,20 @@ All reports leave active CMI license status `UNKNOWN`; no licensed-acceptance cl
 Focused validation passed 1/1. The full `:syncmoney-bukkit:test` task completed successfully; aggregated JUnit results contain 541 tests across 110 suites, with 0 failures, 0 errors, and 0 skipped. The run used Java 25 and Gradle 9.8.0. An independent read-only review confirmed that the injected startup failure occurs after owner construction, the two close failures genuinely test continued cleanup, and the `InOrder` assertions match the manager’s shutdown order; no findings. The reviewer did not run tests.
 
 Coverage is intentionally narrow: `AuditLogCleanup.start()` succeeds; this does not cover every audit failure point, other module owners, shutdown-logger failure, or actual Paper/Folia/Canvas runtime behavior. It is lifecycle test evidence, not closure of the V03 mode/resource/failure matrix. T21 remains **IN_PROGRESS**; formal endpoints remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness fixes; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because active license status is `UNKNOWN`.
+
+## T21 repository-wide Java verification after audit lifecycle test (2026-10-17)
+
+**Result: `PASS_BOUNDED_E1` for repository Java tests/build artifacts at HEAD `2b505a4`.** The verification used Oracle JDK `25.0.4+7-LTS-189` and Gradle `9.8.0`:
+
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar --rerun-tasks --no-daemon --console=plain
+```
+
+The command exited 0 with `BUILD SUCCESSFUL` and 53/53 actionable tasks executed. The `syncmoney-*` module JUnit XMLs contain 748 tests across 153 suites, with 0 failures, 0 errors, and 0 skipped. `shadowJar`, PAPI `jar`, and `acceptanceJar` completed.
+
+| Evidence | Identity |
+|---|---|
+| Build/test log | `build/reports/foundation/T21-audit-service-failure/core-validation-java25.log`; SHA-256 `1BB8198A7DE30E9AE6874545891499766C97D48D671F2AEC966FE17CFFD38FB6` |
+| Runtime/build environment | `build/reports/foundation/T21-audit-service-failure/core-validation-environment-java25.txt`; SHA-256 `E8CA3F00393C56620B43B2B441F4323F3B424AEAF6E0069872D377F5810A7BC3`; identifies Java `25.0.4+7-LTS-189`, Gradle `9.8.0`, and launcher/daemon JVM |
+
+This was a repository Java/build verification, not a PlugDev server run. It adds no Paper, Folia, or Canvas runtime evidence and does not close T21's remaining lifecycle, V03 mode/resource/failure, fleet-quiescence, or licensed CMI gates. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness fixes; licensed CMI remains **BLOCKED / NOT VERIFIED** because active license status is `UNKNOWN`.
