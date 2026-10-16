@@ -33,7 +33,7 @@ function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Minimum'
+    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('Minimum', 'Maximum')
 }
 
 function Test-T21IncompleteV10PlayerRowSentinel([object]$RowsJson) {
@@ -440,13 +440,17 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             }
         }
         if (-not $targetAccepted) { return $false }
+        $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
         $expectedTask = switch ($FailureScenario) {
             'NewerAuditSchema' { 'T21-V03-SYNC-newer-audit-schema-startup-failure' }
             'IncompleteV10AuditTable' { 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' }
-            'IncompleteV10AuditTablePlayerRowPreservation' { 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-$($expectedPlatform.taskSuffix)" }
             default { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
         }
-        $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+        $acceptedTasks = @($expectedTask)
+        if ($FailureScenario -ceq 'IncompleteV10AuditTablePlayerRowPreservation' -and $PlatformEndpoint -ceq 'Minimum') {
+            $acceptedTasks += 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+        }
         $sqlReportKey = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
         $expectedDatabaseType = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
         $expectedDatabaseVersion = switch ($DatabaseProduct) {
@@ -455,7 +459,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             'PostgreSQL' { '18.1' }
         }
         if ((Get-T21ObservedValue $report 'schemaVersion') -ne 1 -or
-            (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
+            (Get-T21ObservedValue $report 'task') -cnotin $acceptedTasks -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE' -or
             $null -ne (Get-T21ObservedValue $report 'failure') -or
             @(Get-T21ObservedValue $report 'cleanupFailures').Count -ne 0) { return $false }

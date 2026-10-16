@@ -369,8 +369,10 @@ try {
 
     foreach ($preservationCase in @(
             @{ database='MySQL'; endpoint='Minimum'; expected=$true }
-            @{ database='MySQL'; endpoint='Maximum'; expected=$false }
+            @{ database='MySQL'; endpoint='Maximum'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
             @{ database='MySQL'; endpoint='MinimumFolia'; expected=$false }
+            @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
             @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
         )) {
@@ -379,7 +381,7 @@ try {
             throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
         }
     }
-    Write-Output 'PASS: restrict the existing-player-row preservation case to minimum-Paper MySQL'
+    Write-Output 'PASS: restrict the existing-player-row preservation case to pinned minimum/maximum Paper MySQL'
 
     $currentStablePathResolutionObserved = $false
     try {
@@ -407,18 +409,31 @@ try {
     }
     Write-Output 'PASS: accept the minimum-Paper MySQL player-row-preservation runner target before external resources are resolved'
 
-    $playerRowWrongEndpointRejected = $false
+    $maximumPlayerRowPreservationPathResolutionObserved = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint Maximum `
             -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
     } catch {
-        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum Paper with MySQL 8\.0\.42'
+        $maximumPlayerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $maximumPlayerRowPreservationPathResolutionObserved) {
+        throw 'The maximum-Paper MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the maximum-Paper MySQL player-row-preservation runner target before external resources are resolved'
+
+    $playerRowWrongEndpointRejected = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum or maximum Paper with MySQL 8\.0\.42'
     }
     if (-not $playerRowWrongEndpointRejected) {
-        throw 'The player-row-preservation runner accepted a non-minimum Paper endpoint.'
+        throw 'The player-row-preservation runner accepted a non-Paper endpoint.'
     }
-    Write-Output 'PASS: reject a non-minimum Paper endpoint for player-row preservation before external paths are resolved'
+    Write-Output 'PASS: reject an unsupported platform for player-row preservation before external paths are resolved'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -585,7 +600,7 @@ try {
         updated_at = '2026-10-16 12:34:56'
     }
     $playerRowsJson = ConvertTo-Json -InputObject @($playerRowSentinel) -Depth 10 -Compress
-    $playerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    $playerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-minimum-Paper'
     $playerRowPreservationReport.schemaStateBefore.playersTableExists = $true
     $playerRowPreservationReport.schemaStateBefore.playerRows = 1
     $playerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
@@ -597,6 +612,37 @@ try {
         throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing MySQL player balance/version row.'
     }
     Write-Output 'PASS: accept incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $legacyMinimumPaperTaskReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $playerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $legacyMinimumPaperTaskReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    if (-not (Test-T21StartupFailureReportFixture $legacyMinimumPaperTaskReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected the previously emitted minimum-Paper player-row task label.'
+    }
+    Write-Output 'PASS: accept the historical MinimumPaper task label for minimum-Paper player-row evidence'
+
+    $maximumPaperEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+    $maximumPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'Maximum'
+    $maximumPlayerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-maximum-Paper'
+    $maximumPlayerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $maximumPlayerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $maximumPlayerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $maximumPlayerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $maximumPlayerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $maximumPlayerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $maximumPlayerRowPreservationReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing maximum-Paper MySQL player row.'
+    }
+    Write-Output 'PASS: accept maximum-Paper incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $maximumLegacyMinimumPaperLabelReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumLegacyMinimumPaperLabelReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    if (Test-T21StartupFailureReportFixture $maximumLegacyMinimumPaperLabelReport $maximumPaperEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Maximum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The maximum-Paper incomplete-v10 startup-failure report accepted the historical minimum-Paper task label.'
+    }
+    Write-Output 'PASS: reject the historical MinimumPaper task label for maximum-Paper player-row evidence'
 
     $mutatedPlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $playerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $mutatedPlayerRow = [ordered]@{
@@ -2136,7 +2182,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to the incomplete-v10 startup-failure case on minimum Paper with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to the incomplete-v10 startup-failure case on minimum or maximum Paper with MySQL 8.0.42.', [StringComparison]::Ordinal)
     if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
         throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }
