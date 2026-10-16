@@ -120,6 +120,16 @@ test("cross-owner client completion requires the targeted marker from both live 
   assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceA", "T21_CROSS_OWNER_PASS player=AcceptanceB"), false);
   assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceB", "T21_CROSS_OWNER_PASS player=AcceptanceB"), true);
   assert.equal(observeCrossOwnerClientPass(passed, "AcceptanceB", "T21_CROSS_OWNER_PASS player=AcceptanceB"), true);
+
+  for (const invalidMessage of [
+    "notice T21_CROSS_OWNER_PASS player=AcceptanceA",
+    "T21_CROSS_OWNER_PASS player=AcceptanceA extra",
+    "T21_CROSS_OWNER_PASS player=AcceptanceAA",
+  ]) {
+    const alreadyPassed = new Set(["AcceptanceB"]);
+    assert.equal(observeCrossOwnerClientPass(alreadyPassed, "AcceptanceA", invalidMessage), false);
+    assert.deepEqual([...alreadyPassed], ["AcceptanceB"]);
+  }
 });
 
 test("requires exactly one exact logout reason for the expected player", () => {

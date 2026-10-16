@@ -4499,3 +4499,27 @@ The machine index build/reports/foundation/T21-sql-runtime/validation/postgresql
 
 
 Independent read-only cross-dialect review of the current code diff, six runtime/audit identities, endpoint bounds, source-pin and supersession wording, validation evidence, and exclusions found no actionable findings. The reviewer did not rerun the tests or runtime; the checks and E2 runs above are the execution evidence.
+
+
+## T21 Folia cross-owner exact client completion marker (2026-10-16)
+
+**Discovery and repair:** an independent review found that both the Mineflayer listener and shared assertion helper used substring matching for `T21_CROSS_OWNER_PASS player=<username>`. A prefixed message, a suffixed message, or the near-name `AcceptanceAA` could therefore be accepted as a successful completion for `AcceptanceA`. Both checks now require exact whole-line equality. The regression cases assert that these invalid messages return false and leave the already-passed set unchanged.
+
+**RED/GREEN evidence:** before the predicate repair, `node --test tools/plugdev/player-scheduler-lifecycle-assertions.test.mjs` produced 25 passes and one failure by accepting an invalid marker. With the exact-match repair, the same command passed all 26 tests (0 failures). The independent code review confirmed each negative control fails against the old substring check while valid per-client completion remains accepted.
+
+**Fresh E2 runtime evidence:** the two reports below are `PASS` at `E2_REAL_SERVER_AND_ISOLATED_REDIS`. Each run exercised LOCAL_REDIS with two live clients at distant Folia regions. Both entity-owner callbacks proved `selfOwned=true` and `otherOwned=false`; the two clients each received exactly one targeted completion marker; Redis retained account balance `4.00` / version `4`; server, Redis, and isolated Gradle cleanup exited normally; `forcedCleanup=false`.
+
+| Endpoint | Runtime report | Report SHA-256 | Offline audit |
+|---|---|---|---|
+| Folia `1.21.6#6` | `build/reports/foundation/T21-player-scheduler/folia-1216-min-20261016-233753-5a45d52323d348ca93b72e82b36c7bc6/result.json` (9,028 bytes) | `98167d9c49adc4efd24138a8f975de706b761c470ad91c261536b8ee62869ed5` | Included in the 110-assertion pair audit below |
+| Folia `26.2#7` | `build/reports/foundation/T21-player-scheduler/folia-262-max-20261016-233854-09affd5b95c44376a869e38082022272/result.json` (9,033 bytes) | `03d085ca7eebd2a54f8a94f61723d058b6bb830599c3441844b971ba146efab3` | Included in the 110-assertion pair audit below |
+
+Both reports bind candidate source commit `44872e161c16413cfd4642f5899c749139e8bf4a`, the pinned Folia server JAR, candidate/acceptance/API consumer artifacts, runner/client/assertion sources, and each run's 13 retained logs. The fresh report-specific offline audit is `build/reports/foundation/T21-player-scheduler/validation/folia-cross-owner-exact-marker-20261016/cross-owner-offline-audit.json` (19,227 bytes; SHA-256 `155a7f473337cefc2cd1c61f399303b1fb9f8ba3f3a65d8758707492da1697e3`), produced by `offline-audit.ps1` (22,233 bytes; SHA-256 `9f82eca6f6ea22e12b704e5e2d53ce796cde63c6122a21e7a15978d14fb9a74a`). It passed 110 checks across both reports, client/server/Redis logs, source and artifact pins, two owner proofs, exact per-client marker receipt, normal shutdown, and stopped Redis persistence files. The retained audit output is `offline-audit.txt` (8,039 bytes; SHA-256 `1dd8caac63e2b2ea5b6f7bc379e10d56861f5ceb45664eef63f06c5233762858`).
+
+**Redis observation and limit:** the minimum Folia report recorded `DBSIZE=5` and the maximum report `DBSIZE=4` before Redis shutdown. Independent reloads of both stopped DB 15 AOF snapshots contained only the four expected persistent keys (balance, version, baltop, baltop total) with the expected account and baltop values. The identity of the additional minimum-run key in the earlier live sample is unknown; no broader claim is made about transient key inventory. This discrepancy does not change the audited stopped-AOF state.
+
+**Current-source validation:** `node --test tools/plugdev/player-scheduler-lifecycle-assertions.test.mjs` passed 26/26; PowerShell `Parser.ParseFile` accepted all 30 PlugDev scripts with zero errors; the report-specific offline audit exited 0 with 110 assertions. `git diff --check` is recorded with this documentation update. Java/Gradle product tests are **NOT RUN** because this subcase changes only PlugDev harness/tests and planning evidence; the pinned candidate JAR was exercised in the two E2 runs.
+
+The supported endpoints remain exactly Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. This evidence closes only the bounded minimum/maximum Folia cross-owner gate. It does not establish full scheduler or lifecycle safety, CMI callback retirement, hard-kill recovery, fleet-wide quiescence, or the wider backend/mode/failure matrix. T21 remains **IN_PROGRESS**; E07 remains P1, E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope, and licensed CMI remains **BLOCKED / NOT RUN**.
+
+**Independent post-change review:** a fresh read-only review checked the complete code and documentation diff against the acceptance criteria, report/audit identities, endpoint range, Redis discrepancy, and residual-scope wording. It found no actionable findings and confirmed the documented hashes, 110 audit checks, targeted per-client markers, and four expected stopped-AOF keys. The reviewer did not rerun the focused tests or live services.

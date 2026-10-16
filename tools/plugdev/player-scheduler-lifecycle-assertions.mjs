@@ -125,7 +125,7 @@ export function hasTwoRegionOwnershipProof(logLines) {
 
 export function observeCrossOwnerClientPass(passedPlayers, playerName, messageText) {
   if (!(passedPlayers instanceof Set) || !["AcceptanceA", "AcceptanceB"].includes(playerName)) return false;
-  if (typeof messageText !== "string" || !messageText.includes(`T21_CROSS_OWNER_PASS player=${playerName}`)) return false;
+  if (messageText !== `T21_CROSS_OWNER_PASS player=${playerName}`) return false;
   passedPlayers.add(playerName);
   return passedPlayers.has("AcceptanceA") && passedPlayers.has("AcceptanceB");
 }

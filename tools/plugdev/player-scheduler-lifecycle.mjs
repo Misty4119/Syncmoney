@@ -67,7 +67,7 @@ const globalBreakerAcknowledgements = new Map();
 
 function observeCrossOwnerPass(activeBot, text) {
   if (scenario !== "cross-owner") return;
-  if (!text.includes(`T21_CROSS_OWNER_PASS player=${activeBot.username}`)) return;
+  if (text !== `T21_CROSS_OWNER_PASS player=${activeBot.username}`) return;
   const complete = observeCrossOwnerClientPass(crossOwnerClientsPassed, activeBot.username, text);
   console.log(`BOT_CROSS_OWNER_PASS player=${activeBot.username}`);
   if (complete) finish(0, "both live clients received their targeted owner-proof completion marker");
