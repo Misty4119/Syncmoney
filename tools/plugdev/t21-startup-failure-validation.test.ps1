@@ -176,7 +176,7 @@ try {
         [string]$expectedApiConsumerSha,
         [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'PostgreSQL',
         [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
-        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
+        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
     ) {
         return Test-T21NewerAuditSchemaStartupFailureReport $candidateReport $expectedServerSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha `
             -ExpectedPlugDevRoot $expectedPlugDevRoot -ExpectedPlugDevSourceCommit $expectedPlugDevSourceCommit -ExpectedPlugDevCliSha256 $expectedPlugDevCliSha256 `
@@ -367,6 +367,20 @@ try {
     if (-not $unsupportedIncompleteV10EndpointRejected) { throw 'The incomplete-v10 startup-failure target guard accepted an endpoint outside the pinned platform set.' }
     Write-Output 'PASS: reject an unpinned endpoint for the incomplete-v10 startup-failure case'
 
+    foreach ($preservationCase in @(
+            @{ database='MySQL'; endpoint='Minimum'; expected=$true }
+            @{ database='MySQL'; endpoint='Maximum'; expected=$false }
+            @{ database='MySQL'; endpoint='MinimumFolia'; expected=$false }
+            @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
+        )) {
+        $accepted = Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $preservationCase.database -PlatformEndpoint $preservationCase.endpoint
+        if ($accepted -ne $preservationCase.expected) {
+            throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
+        }
+    }
+    Write-Output 'PASS: restrict the existing-player-row preservation case to minimum-Paper MySQL'
+
     $currentStablePathResolutionObserved = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
@@ -379,6 +393,32 @@ try {
         throw 'The current-stable Paper incomplete-v10 target was rejected before resolving the intentionally missing server JAR.'
     }
     Write-Output 'PASS: accept the current-stable Paper incomplete-v10 target before external resources are resolved'
+
+    $playerRowPreservationPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint Minimum `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $playerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $playerRowPreservationPathResolutionObserved) {
+        throw 'The minimum-Paper MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the minimum-Paper MySQL player-row-preservation runner target before external resources are resolved'
+
+    $playerRowWrongEndpointRejected = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint Maximum `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum Paper with MySQL 8\.0\.42'
+    }
+    if (-not $playerRowWrongEndpointRejected) {
+        throw 'The player-row-preservation runner accepted a non-minimum Paper endpoint.'
+    }
+    Write-Output 'PASS: reject a non-minimum Paper endpoint for player-row preservation before external paths are resolved'
 
     function New-T21MySqlStartupFailureReportFixture([string]$product, [string]$version) {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -534,6 +574,54 @@ try {
         $copy.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
         return $copy
     }
+
+    $playerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'Minimum'
+    $playerRowSentinel = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.56'
+        version = '73'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:56'
+    }
+    $playerRowsJson = ConvertTo-Json -InputObject @($playerRowSentinel) -Depth 10 -Compress
+    $playerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
+    $playerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $playerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $playerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $playerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $playerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $playerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $playerRowPreservationReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing MySQL player balance/version row.'
+    }
+    Write-Output 'PASS: accept incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $mutatedPlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $playerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedPlayerRow = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.57'
+        version = '74'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:57'
+    }
+    $mutatedPlayerRowReport.schemaStateAfter.playerRowsJson = ConvertTo-Json -InputObject @($mutatedPlayerRow) -Depth 10 -Compress
+    if (Test-T21StartupFailureReportFixture $mutatedPlayerRowReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The incomplete-v10 startup-failure report accepted a changed pre-existing MySQL player row.'
+    }
+    Write-Output 'PASS: reject incomplete-v10 startup evidence when the pre-existing MySQL player row changed'
+
+    $missingPlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $playerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $missingPlayerRowReport.schemaStateAfter.playerRows = 0
+    $missingPlayerRowReport.schemaStateAfter.playerRowsJson = '[]'
+    if (Test-T21StartupFailureReportFixture $missingPlayerRowReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The incomplete-v10 startup-failure report accepted a missing pre-existing MySQL player row.'
+    }
+    Write-Output 'PASS: reject incomplete-v10 startup evidence when the pre-existing MySQL player row is missing'
 
     function Set-T21MySqlGrantFixtureLines([object]$Report, [string]$Field, [string]$LogRelativePath, [string[]]$Lines) {
         $Report.databaseDdlPrivileges[$Field] = [string[]]$Lines
@@ -1989,6 +2077,47 @@ try {
         $runnerSource -notmatch '(?s)SELECT \*\s+FROM information_schema\.columns') {
         throw 'The SQL runtime runner does not implement the bounded newer-audit-schema startup-failure mode.'
     }
+    if (-not $runnerSource.Contains('[switch]$IncompleteV10AuditTablePlayerRowPreservation') -or
+        -not $runnerSource.Contains('Test-T21IncompleteAuditTablePlayerRowPreservationTarget') -or
+        -not $runnerSource.Contains('Seed-T21IncompleteV10AuditTable -SeedExistingPlayerRow:$script:incompleteV10AuditTablePlayerRowPreservation') -or
+        -not $runnerSource.Contains('JSON_ARRAYAGG(JSON_OBJECT')) {
+        throw 'The runtime runner does not seed and snapshot the bounded pre-existing player-row fixture.'
+    }
+    $playerRowsSqlStart = $runnerSource.IndexOf('SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT(', [StringComparison]::Ordinal)
+    $playerRowsSqlEnd = if ($playerRowsSqlStart -ge 0) {
+        $runnerSource.IndexOf('"@ }', $playerRowsSqlStart, [StringComparison]::Ordinal)
+    } else { -1 }
+    if ($playerRowsSqlEnd -le $playerRowsSqlStart -or
+        $runnerSource.Substring($playerRowsSqlStart, $playerRowsSqlEnd - $playerRowsSqlStart) -notmatch '(?m)^\s*FROM\s+players\s*;\s*$') {
+        throw 'The MySQL/MariaDB sentinel snapshot query must read its JSON rows from the players table.'
+    }
+    Write-Output 'PASS: read the MySQL/MariaDB sentinel snapshot from the players table'
+    $failureScenarioSwitchIndex = $runnerSource.IndexOf('$failureScenario = switch ($true)', [StringComparison]::Ordinal)
+    $playerRowFailureScenarioIndex = $runnerSource.IndexOf("`$script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }", $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
+    $failureScenarioStartIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario', $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
+    $expectedStartupFailureFunctionSignature = 'function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet(''NewerAuditSchema'', ''IncompleteV10AuditTable'', ''IncompleteV10AuditTablePlayerRowPreservation'', ''RequiredV11DdlPermissionDenied'')][string]$FailureScenario)'
+    if (-not $runnerSource.Contains('$expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation) { 1 } else { 0 }') -or
+        -not $runnerSource.Contains('$script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson') -or
+        -not $runnerSource.Contains($expectedStartupFailureFunctionSignature) -or
+        $failureScenarioSwitchIndex -lt 0 -or $playerRowFailureScenarioIndex -lt $failureScenarioSwitchIndex -or
+        $failureScenarioStartIndex -le $playerRowFailureScenarioIndex) {
+        throw 'The startup-failure runtime gate must require one unchanged player row for the preservation subcase.'
+    }
+    Write-Output 'PASS: require one unchanged MySQL player row only for the preservation subcase'
+    $startupFailureHelperStart = $runnerSource.IndexOf('function Start-T21ServerExpectingAuditSchemaFailure(', [StringComparison]::Ordinal)
+    $startupFailureHelperEnd = if ($startupFailureHelperStart -ge 0) {
+        $runnerSource.IndexOf("`nfunction ", $startupFailureHelperStart + 1, [StringComparison]::Ordinal)
+    } else { -1 }
+    $startupFailureHelperSource = if ($startupFailureHelperEnd -gt $startupFailureHelperStart) {
+        $runnerSource.Substring($startupFailureHelperStart, $startupFailureHelperEnd - $startupFailureHelperStart)
+    } else { '' }
+    if (-not $startupFailureHelperSource.Contains("'IncompleteV10AuditTablePlayerRowPreservation' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }") -or
+        -not $startupFailureHelperSource.Contains("'IncompleteV10AuditTablePlayerRowPreservation' { 'incomplete-v10-audit-table' }") -or
+        -not $startupFailureHelperSource.Contains("'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }") -or
+        -not $startupFailureHelperSource.Contains("'IncompleteV10AuditTablePlayerRowPreservation' { @('Syncmoney audit schema version: current 9, target 11', `$failureDetailMarker) }")) {
+        throw 'The expected-startup-failure helper must classify the row-preservation case as the incomplete-v10 scenario.'
+    }
+    Write-Output 'PASS: classify row preservation as incomplete-v10 in the server failure observation'
     $seedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21NewerAuditSchema', [StringComparison]::Ordinal)
     $incompleteSeedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21IncompleteV10AuditTable', [StringComparison]::Ordinal)
     $requiredDdlSeedIndex = $runnerSource.IndexOf('$script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure', [StringComparison]::Ordinal)
@@ -2006,6 +2135,10 @@ try {
     $runtimePathResolutionIndex = $runnerSource.IndexOf('$script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path', [StringComparison]::Ordinal)
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
+    }
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to the incomplete-v10 startup-failure case on minimum Paper with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
+        throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }
     Write-Output 'PASS: seed the newer schema before the expected-failure platform start and validate its report'
 

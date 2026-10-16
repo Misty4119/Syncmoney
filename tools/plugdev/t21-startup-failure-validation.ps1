@@ -28,6 +28,35 @@ function Test-T21IncompleteAuditTableStartupFailureTarget(
         $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia')
 }
 
+function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [string]$PlatformEndpoint
+) {
+    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -ceq 'Minimum'
+}
+
+function Test-T21IncompleteV10PlayerRowSentinel([object]$RowsJson) {
+    if ($RowsJson -isnot [string] -or [string]::IsNullOrWhiteSpace($RowsJson)) { return $false }
+    try {
+        $rows = @(ConvertFrom-Json -InputObject $RowsJson -AsHashtable -ErrorAction Stop)
+        if ($null -eq $rows -or @($rows).Count -ne 1 -or $rows[0] -isnot [Collections.IDictionary]) { return $false }
+        $expected = [ordered]@{
+            player_uuid = '00000000-0000-0000-0000-00000000cafe'
+            player_name = 'T21-ROW-SENTINEL'
+            balance = '1234.56'
+            version = '73'
+            last_server = 't21-player-preservation'
+            updated_at = '2026-10-16 12:34:56'
+        }
+        if ($rows[0].Count -ne $expected.Count) { return $false }
+        foreach ($key in $expected.Keys) {
+            if (-not $rows[0].Contains($key) -or [string]$rows[0][$key] -cne [string]$expected[$key]) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
 function Test-T21RequiredV11DdlFailureTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
@@ -393,7 +422,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
+    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
 ) {
     try {
         $targetAccepted = switch ($FailureScenario) {
@@ -403,6 +432,9 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             'IncompleteV10AuditTable' {
                 Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
             }
+            'IncompleteV10AuditTablePlayerRowPreservation' {
+                Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
             default {
                 Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
             }
@@ -411,6 +443,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedTask = switch ($FailureScenario) {
             'NewerAuditSchema' { 'T21-V03-SYNC-newer-audit-schema-startup-failure' }
             'IncompleteV10AuditTable' { 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper' }
             default { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
         }
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
@@ -480,15 +513,18 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedFailureMessage = switch ($FailureScenario) {
             'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
             'IncompleteV10AuditTable' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
             default { 'Failed audit schema migration to version 11; version metadata was not advanced past 10' }
         }
         $expectedFailureKind = switch ($FailureScenario) {
             'NewerAuditSchema' { 'newer-audit-schema' }
             'IncompleteV10AuditTable' { 'incomplete-v10-audit-table' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 'incomplete-v10-audit-table' }
             default { 'required-v11-audit-ddl-permission-failure' }
         }
         $expectedFailureDetailMarker = switch ($FailureScenario) {
             'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }
             'RequiredV11DdlPermissionDenied' {
                 if ($DatabaseProduct -ceq 'PostgreSQL') { 'must be owner of table syncmoney_audit_log' }
                 else { 'ALTER command denied' }
@@ -529,8 +565,25 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 0) { return $false }
             $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
             if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
+        } elseif ($FailureScenario -ceq 'IncompleteV10AuditTablePlayerRowPreservation') {
+            if ([int](Get-T21ObservedValue $schemaBefore 'mainVersion') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaBefore 'auditVersion') -ne 9 -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'auditTableExists') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'playersTableExists') $true) -or
+                [int](Get-T21ObservedValue $schemaBefore 'playerRows') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaAfter 'mainVersion') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaAfter 'auditVersion') -ne 9 -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'auditTableExists') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'playersTableExists') $true) -or
+                [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 1 -or
+                [string](Get-T21ObservedValue $schemaBefore 'playerRowsJson') -cne [string](Get-T21ObservedValue $schemaAfter 'playerRowsJson') -or
+                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson')) -or
+                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson')) -or
+                (Get-T21ObservedValue $schemaBefore 'mainVersionRowJson') -cne (Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) { return $false }
+            $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
+            if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
         } else {
-            $expectedPreexistingAuditVersion = if ($FailureScenario -ceq 'IncompleteV10AuditTable') { 9 } else { 10 }
+            $expectedPreexistingAuditVersion = if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation')) { 9 } else { 10 }
             if ([int](Get-T21ObservedValue $schemaBefore 'mainVersion') -ne 1 -or
                 [int](Get-T21ObservedValue $schemaBefore 'auditVersion') -ne $expectedPreexistingAuditVersion -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'auditTableExists') $true) -or
@@ -556,11 +609,13 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedAuditVersion = switch ($FailureScenario) {
             'NewerAuditSchema' { 12 }
             'IncompleteV10AuditTable' { 9 }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 9 }
             default { 10 }
         }
         $expectedAuditDescription = switch ($FailureScenario) {
             'NewerAuditSchema' { 'T21 newer audit schema preservation sentinel' }
             'IncompleteV10AuditTable' { 'T21 incomplete audit v9 sentinel' }
+            'IncompleteV10AuditTablePlayerRowPreservation' { 'T21 incomplete audit v9 sentinel' }
             default { 'T21 required v11 DDL failure sentinel' }
         }
         if ($auditVersionRow['id'] -cne 'audit' -or [int]$auditVersionRow['version'] -ne $expectedAuditVersion -or
@@ -574,6 +629,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                     'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 'request_id', 'sequence', 't21_sentinel')
             }
             'IncompleteV10AuditTable' { @('id') }
+            'IncompleteV10AuditTablePlayerRowPreservation' { @('id') }
             default {
                 @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
                     'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
@@ -596,7 +652,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 'column_default_is_null', 'extra', 'character_set_name', 'collation_name', 'generation_expression')
         }
         if ($actualAuditColumns.Count -ne $requiredAuditColumns.Count -or $auditColumns.Count -ne $requiredAuditColumns.Count) { return $false }
-        if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
+        if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation')) {
             $column = $auditColumns[0]
             $columnMetadataFields = @($column.Keys | ForEach-Object { [string]$_ })
             if ($column -isnot [System.Collections.IDictionary] -or
@@ -709,7 +765,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
 
         $auditIndexes = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditIndexesJson')) -AsHashtable -ErrorAction Stop)
-        if ($FailureScenario -in @('IncompleteV10AuditTable', 'RequiredV11DdlPermissionDenied')) {
+        if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')) {
             if ($auditIndexes.Count -ne 1) { return $false }
             if ($DatabaseProduct -ceq 'PostgreSQL') {
                 if ([string]$auditIndexes[0]['name'] -cne 'syncmoney_audit_log_pkey' -or
@@ -776,7 +832,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
 
         $auditRowsJson = [string](Get-T21ObservedValue $schemaBefore 'auditRowsJson')
         $auditRows = @(ConvertFrom-Json -InputObject $auditRowsJson -AsHashtable -ErrorAction Stop)
-        if ($FailureScenario -ceq 'IncompleteV10AuditTable') {
+        if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation')) {
             if ($auditRows.Count -ne 1 -or
                 $auditRows[0].Count -ne 1 -or
                 $auditRows[0]['id'] -cne '00000000-0000-0000-0000-000000000329') { return $false }
@@ -1055,6 +1111,11 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 @('Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.')
             }
             'IncompleteV10AuditTable' {
+                @('Syncmoney audit schema version: current 9, target 11',
+                    'Failed audit schema migration to version 10; version metadata was not advanced past 9',
+                    'Required v10 audit columns are missing:')
+            }
+            'IncompleteV10AuditTablePlayerRowPreservation' {
                 @('Syncmoney audit schema version: current 9, target 11',
                     'Failed audit schema migration to version 10; version metadata was not advanced past 9',
                     'Required v10 audit columns are missing:')

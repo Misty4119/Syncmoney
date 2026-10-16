@@ -115,6 +115,100 @@ function Assert-LogMarker([string]$relativePath, [string]$marker) {
     Assert-True "runtime marker '$marker' in $relativePath" $contents.Contains($marker)
 }
 
+function Assert-T21StartupRecoveryChronology([string]$LogText, [string]$RecoveryMarker,
+        [string]$EnabledMarker, [string]$FirstReplayReadMarker) {
+    $markers = @($RecoveryMarker, $EnabledMarker, $FirstReplayReadMarker)
+    $positions = [System.Collections.Generic.List[int]]::new()
+    foreach ($marker in $markers) {
+        $first = $LogText.IndexOf($marker, [StringComparison]::Ordinal)
+        $last = $LogText.LastIndexOf($marker, [StringComparison]::Ordinal)
+        if ($first -lt 0) { throw "FAIL: startup recovery chronology is missing marker '$marker'." }
+        if ($first -ne $last) { throw "FAIL: startup recovery chronology marker must occur exactly once: '$marker'." }
+        $positions.Add($first)
+    }
+    if (-not ($positions[0] -lt $positions[1] -and $positions[1] -lt $positions[2])) {
+        throw 'FAIL: startup recovery chronology requires journal replay before plugin readiness and the first replay read.'
+    }
+}
+
+function Assert-T21ReplayReceiptBinding($Observation, [string]$ExpectedRow, [object[]]$SqliteRows) {
+    $reportedRows = @($Observation.transactionRows)
+    if ($reportedRows.Count -ne 1) {
+        throw "FAIL: reported receipt row count must be 1, observed $($reportedRows.Count)."
+    }
+    if ([string]$reportedRows[0] -cne $ExpectedRow) {
+        throw 'FAIL: reported receipt differs from the expected replay transaction.'
+    }
+    if ($SqliteRows.Count -ne 1) {
+        throw "FAIL: SQLite receipt row count must be 1, observed $($SqliteRows.Count)."
+    }
+    if ([string]$SqliteRows[0] -cne $ExpectedRow) {
+        throw 'FAIL: SQLite receipt differs from the expected replay transaction.'
+    }
+    if ([string]$reportedRows[0] -cne [string]$SqliteRows[0]) {
+        throw 'FAIL: reported receipt differs from the independently queried SQLite receipt.'
+    }
+}
+
+function Assert-T21AbsentPreReplayReceipt($ReportedReceipt, [object[]]$SqliteRows) {
+    if ($null -ne $ReportedReceipt -and -not [string]::IsNullOrEmpty([string]$ReportedReceipt)) {
+        throw 'FAIL: seed report contains a pre-replay receipt for the absent-receipt scenario.'
+    }
+    if ($SqliteRows.Count -ne 0) {
+        throw "FAIL: SQLite contains a pre-replay receipt for the absent-receipt scenario; row count=$($SqliteRows.Count)."
+    }
+}
+
+function Assert-T21SourcePin([string]$Name, [string]$ExpectedSha256, [string]$ActualSha256) {
+    if ($ExpectedSha256 -cne $ActualSha256) {
+        throw "FAIL: $Name source SHA-256 pin does not match the source used for this audit. Historical predicate normalization does not establish full-report provenance."
+    }
+}
+
+function Resolve-T21RecoveryScenario($Report) {
+    $recoveryScenario = [string](Get-Field $Report 'recoveryScenario')
+    if ([string]::IsNullOrWhiteSpace($recoveryScenario)) { return 'normal-drain' }
+    if ($recoveryScenario -notin @('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+        throw "Unknown M04 recovery scenario: '$recoveryScenario'."
+    }
+    return $recoveryScenario
+}
+
+function Assert-T21RecoveryTask([string]$RecoveryScenario, [string]$Task) {
+    $expectedTasks = switch ($RecoveryScenario) {
+        'seeded-journal-replay' {
+            @(
+                'T21 M04 LOCAL SQLite seeded journal replay and rollback cycle',
+                'T21 M04 LOCAL SQLite seeded duplicate-receipt journal replay and rollback cycle'
+            )
+        }
+        'seeded-journal-replay-no-receipt' { @('T21 M04 LOCAL SQLite seeded missing-receipt journal replay and rollback cycle') }
+        'normal-drain' { @('T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle') }
+        default { throw "Unknown M04 recovery scenario: '$RecoveryScenario'." }
+    }
+    if ($Task -cnotin $expectedTasks) {
+        throw "FAIL: M04 report task '$Task' does not match recovery scenario '$RecoveryScenario'."
+    }
+}
+
+function Assert-T21CandidateCheckoutCommit($Commit, [bool]$Required) {
+    if ([string]::IsNullOrWhiteSpace([string]$Commit)) {
+        if ($Required) { throw 'FAIL: candidate checkout commit metadata is required for this new runtime report.' }
+        return
+    }
+    if ([string]$Commit -cnotmatch '^[0-9a-fA-F]{40}$') {
+        throw 'FAIL: candidate checkout commit metadata must be a 40-character Git SHA.'
+    }
+}
+
+function Get-T21LocalJournalHelperPin($SourcePins, [bool]$Required) {
+    $pin = [string](Get-Field $SourcePins 'localJournalHelperSha256')
+    if ([string]::IsNullOrWhiteSpace($pin) -and $Required) {
+        throw 'FAIL: new runtime reports must pin the LOCAL journal helper source.'
+    }
+    return $pin
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $reportsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build\reports\foundation\T21-upgrade-cycles'))
 $runRoot = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $RunDirectory).Path)
@@ -130,7 +224,12 @@ $report = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
 
 Assert-Equal 'report run directory binding' $runRoot ([IO.Path]::GetFullPath([string]$report.runDirectory))
 Assert-Equal 'M04 report status' 'PASS' ([string]$report.status)
-Assert-Equal 'M04 report task' 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle' ([string]$report.task)
+$hasExplicitRecoveryScenario = -not [string]::IsNullOrWhiteSpace([string](Get-Field $report 'recoveryScenario'))
+$recoveryScenario = Resolve-T21RecoveryScenario $report
+Assert-T21RecoveryTask $recoveryScenario ([string]$report.task)
+$candidateCheckoutCommit = Get-Field $report 'candidateCheckoutCommit'
+if ($null -eq $candidateCheckoutCommit) { $candidateCheckoutCommit = Get-Field $report 'candidateSourceCommit' }
+Assert-T21CandidateCheckoutCommit $candidateCheckoutCommit ($recoveryScenario -eq 'seeded-journal-replay-no-receipt')
 Assert-Equal '1.3.2 baseline JAR pin' '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10' ([string]$report.expectedBaselinePluginSha256)
 Assert-Equal '1.3.2 baseline source commit pin' '71cc55dfeefe9a8f40a3835b051ddd324d353767' ([string]$report.baselineSourceCommit)
 Assert-Equal 'VaultUnlocked dependency version' '2.20.2' ([string]$report.vaultUnlockedDependencyVersion)
@@ -232,16 +331,21 @@ $plugDevCliEntry = @($plugDevDistManifest | Where-Object path -ceq 'cli.js')
 Assert-Equal 'PlugDev CLI distribution entry count' '1' ([string]$plugDevCliEntry.Count)
 Assert-Equal 'PlugDev CLI SHA-256 pin' ([string]$sourcePins.plugDevCliSha256) ([string]$plugDevCliEntry[0].sha256)
 
-foreach ($sourcePin in @(
+$localJournalHelperPin = Get-T21LocalJournalHelperPin $sourcePins $hasExplicitRecoveryScenario
+$sourcePinsToVerify = @(
     [ordered]@{ name = 'runner'; path = Join-Path $repoRoot 'tools\plugdev\run-upgrade-cycle.ps1'; hash = [string]$sourcePins.runnerSha256 },
     [ordered]@{ name = 'prepare'; path = Join-Path $repoRoot 'tools\plugdev\prepare.mjs'; hash = [string]$sourcePins.prepareSha256 },
     [ordered]@{ name = 'prepare test'; path = Join-Path $repoRoot 'tools\plugdev\prepare.test.mjs'; hash = [string]$sourcePins.prepareTestSha256 },
     [ordered]@{ name = 'shared validation'; path = Join-Path $repoRoot 'tools\plugdev\t21-upgrade-validation.ps1'; hash = [string]$sourcePins.validationSha256 },
     [ordered]@{ name = 'offline auditor'; path = Join-Path $repoRoot 'tools\plugdev\t21-upgrade-cycle-audit.ps1'; hash = [string]$sourcePins.offlineAuditorSha256 }
-)) {
+)
+if (-not [string]::IsNullOrWhiteSpace($localJournalHelperPin)) {
+    $sourcePinsToVerify += [ordered]@{ name = 'LOCAL journal helper'; path = Join-Path $repoRoot 'tools\plugdev\t21-local-persistence-journal.ps1'; hash = $localJournalHelperPin }
+}
+foreach ($sourcePin in $sourcePinsToVerify) {
     Assert-True "$($sourcePin.name) source exists" (Test-Path -LiteralPath $sourcePin.path -PathType Leaf)
     $sourceHash = (Get-FileHash -LiteralPath $sourcePin.path -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-Equal "$($sourcePin.name) source SHA-256" ([string]$sourcePin.hash) $sourceHash
+    Assert-T21SourcePin $sourcePin.name ([string]$sourcePin.hash) $sourceHash
 }
 $stagedPreparePath = Resolve-RunRelativePath 'tools/plugdev/prepare.mjs'
 $stagedPrepareSha256 = (Get-FileHash -LiteralPath $stagedPreparePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -316,7 +420,19 @@ $upgradeStartRecords = @($startRecords | Where-Object { [string]$_.stage -ceq 'u
 Assert-Equal 'upgrade runtime start record count' '1' ([string]$upgradeStartRecords.Count)
 Assert-Equal 'candidate API consumer classloader marker' 'PASS' ([string]$upgradeStartRecords[0].apiClassLoader)
 Assert-LogMarker 'baseline-1.3.2-server.log' 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
-Assert-LogMarker 'upgrade-1.4-server.log' 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
+if ($recoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+    $upgradeLogPath = Resolve-RunRelativePath (Join-Path 'logs' 'upgrade-1.4-server.log')
+    if (-not (Test-Path -LiteralPath $upgradeLogPath -PathType Leaf)) {
+        throw 'Required M04 runtime log is missing: upgrade-1.4-server.log'
+    }
+    $upgradeLog = Get-Content -LiteralPath $upgradeLogPath -Raw
+    Assert-T21StartupRecoveryChronology $upgradeLog `
+        'Recovered 1 accepted LOCAL SQLite write(s) from the shutdown journal' `
+        'Syncmoney enabled successfully.' `
+        'T21_LEGACY_SQLITE_PASS operation=read expected-a=117.25 expected-b=0.00'
+} else {
+    Assert-LogMarker 'upgrade-1.4-server.log' 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
+}
 Assert-LogMarker 'upgrade-1.4-server.log' 'T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50'
 Assert-LogMarker 'upgrade-1.4-server.log' 'API CLASSLOADER PASS provider=Syncmoney'
 Assert-LogMarker 'rollback-1.3.2-server.log' 'T21_LEGACY_SQLITE_PASS operation=read expected-a=1337.25 expected-b=765.50'
@@ -338,6 +454,123 @@ $realBalanceColumn = @(Invoke-SqliteRead $sqlite3Command.Source $databasePath "S
 Assert-Equal 'historical REAL balance column preserved' '1' ([string]$realBalanceColumn[0])
 $historicalTransaction = @(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || typeof(amount) || '|' || printf('%.2f', amount) || '|' || typeof(balance_before) || '|' || printf('%.2f', balance_before) || '|' || typeof(balance_after) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || timestamp || '|' || sequence FROM transactions WHERE id=1;")
 Assert-Equal 'historical transaction row preserved' '1|00000000-0000-0000-0000-000000000001|fixture-a|DEPOSIT|real|100.00|real|0.00|real|100.00|TEST|1700000000000|1' ([string]$historicalTransaction[0])
+if ($recoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+    $replay = Get-Field $report 'recoveryJournalReplay'
+    Assert-True 'seeded replay report is present' ($null -ne $replay)
+    $seed = Get-Field $replay 'seed'
+    Assert-True 'seeded replay input is present' ($null -ne $seed)
+    $expectedReceiptState = if ($recoveryScenario -eq 'seeded-journal-replay-no-receipt') { 'absent' } else { 'committed' }
+    $expectedPreReplayRequestIdSchemaCount = if ($expectedReceiptState -eq 'committed') { '1' } else { '0' }
+    Assert-Equal 'seeded replay receipt state' $expectedReceiptState ([string](Get-Field $seed 'receiptState'))
+    Assert-Equal 'journal seed database path' '.plugdev/run/plugins/Syncmoney/t21-data/legacy-local.db' ([string](Get-Field $seed 'databasePath'))
+    Assert-Equal 'journal seed path' '.plugdev/run/plugins/Syncmoney/t21-data/local-persistence.journal' ([string](Get-Field $seed 'journalPath'))
+    Assert-Equal 'retained journal seed path' 'inputs/seeded-local-persistence.journal' ([string](Get-Field $seed 'archivePath'))
+
+    $seedArchivePath = Resolve-RunRelativePath ([string](Get-Field $seed 'archivePath'))
+    Assert-True 'retained journal seed file exists' (Test-Path -LiteralPath $seedArchivePath -PathType Leaf)
+    $seedBytes = [IO.File]::ReadAllBytes($seedArchivePath)
+    Assert-Equal 'retained journal seed byte count' ([long](Get-Field $seed 'fileBytes')) ([long]$seedBytes.Length)
+    $seedFileHash = (Get-FileHash -LiteralPath $seedArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Equal 'retained journal seed SHA-256' ([string](Get-Field $seed 'fileSha256')) $seedFileHash
+    $expectedSeedBytes = [Text.Encoding]::UTF8.GetBytes([string](Get-Field $seed 'record') + "`n")
+    Assert-Equal 'seed input has exact single LF record bytes' ([Convert]::ToBase64String($expectedSeedBytes)) ([Convert]::ToBase64String($seedBytes))
+    $record = [string](Get-Field $seed 'record')
+    Assert-Equal 'seed record SHA-256' ([string](Get-Field $seed 'recordSha256')) ((Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($record))) -Algorithm SHA256).Hash.ToLowerInvariant())
+    $parts = $record.Split([char[]]@("`t"), [StringSplitOptions]::None)
+    Assert-Equal 'SYNCLOCAL1 field count' '11' ([string]$parts.Count)
+    Assert-Equal 'SYNCLOCAL1 format marker' 'SYNCLOCAL1' $parts[0]
+    $payload = [string]::Join("`t", $parts[0..9])
+    $checksumAlgorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $checksum = [BitConverter]::ToString($checksumAlgorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $checksumAlgorithm.Dispose()
+    }
+    Assert-Equal 'SYNCLOCAL1 payload checksum' $checksum $parts[10]
+
+    $decodeBase64Url = {
+        param([string]$value)
+        $standard = $value.Replace('-', '+').Replace('_', '/')
+        switch ($standard.Length % 4) {
+            2 { $standard += '==' }
+            3 { $standard += '=' }
+            1 { throw 'Invalid base64url field in retained LOCAL journal seed.' }
+        }
+        return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($standard))
+    }
+    Assert-Equal 'seed event UUID' '00000000-0000-0000-0000-000000000001' (& $decodeBase64Url $parts[1])
+    Assert-Equal 'seed event delta' '17.25' (& $decodeBase64Url $parts[2])
+    Assert-Equal 'seed event balance after' '117.25' (& $decodeBase64Url $parts[3])
+    Assert-Equal 'seed event version' '7' $parts[4]
+    Assert-Equal 'seed event type' 'DEPOSIT' $parts[5]
+    Assert-Equal 'seed event source' 'VAULT_DEPOSIT' $parts[6]
+    $requestId = & $decodeBase64Url $parts[7]
+    Assert-Equal 'seed request ID matches report' ([string](Get-Field $seed 'requestId')) $requestId
+    Assert-True 'seed request ID is unique T21 synthetic data' ($requestId -match '^t21-local-replay-[0-9a-f]{32}$')
+    Assert-Equal 'seed event timestamp matches report' ([string](Get-Field $seed 'timestamp')) $parts[8]
+    Assert-Equal 'seed event player name' 'fixture-a' (& $decodeBase64Url $parts[9])
+    $expectedReplayedTransaction = "2|00000000-0000-0000-0000-000000000001|fixture-a|DEPOSIT|real|17.25|real|100.00|real|117.25|VAULT_DEPOSIT|$([long](Get-Field $seed 'timestamp'))|2|$requestId"
+    $expectedPreReplayBalances = if ($expectedReceiptState -eq 'committed') {
+        "00000000-0000-0000-0000-000000000001|fixture-a|real|117.25|8`n00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3"
+    } else {
+        "00000000-0000-0000-0000-000000000001|fixture-a|real|100.00|7`n00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3"
+    }
+    Assert-Equal 'pre-replay account rows match receipt state' $expectedPreReplayBalances (@(Get-Field $seed 'preReplayBalances') -join "`n")
+    Assert-Equal 'pre-replay historical transaction' '1|00000000-0000-0000-0000-000000000001|fixture-a|DEPOSIT|100.00|TEST' ([string](Get-Field $seed 'preReplayTransaction'))
+
+    $preReplayDatabaseRelativePath = [string](Get-Field $seed 'preReplayDatabasePath')
+    Assert-Equal 'pre-replay SQLite snapshot path' 'inputs/pre-replay-local.db' $preReplayDatabaseRelativePath
+    $preReplayDatabasePath = Resolve-RunRelativePath $preReplayDatabaseRelativePath
+    Assert-True 'retained pre-replay SQLite snapshot exists' (Test-Path -LiteralPath $preReplayDatabasePath -PathType Leaf)
+    $preReplayDatabaseItem = Get-Item -LiteralPath $preReplayDatabasePath
+    Assert-Equal 'retained pre-replay SQLite snapshot byte count' ([long](Get-Field $seed 'preReplayDatabaseBytes')) ([long]$preReplayDatabaseItem.Length)
+    $preReplayDatabaseSha256 = (Get-FileHash -LiteralPath $preReplayDatabasePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Equal 'retained pre-replay SQLite snapshot SHA-256' ([string](Get-Field $seed 'preReplayDatabaseSha256')) $preReplayDatabaseSha256
+    $preReplayDatabaseBalances = @(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;")
+    Assert-Equal 'snapshot account rows match receipt state' $expectedPreReplayBalances ($preReplayDatabaseBalances -join "`n")
+    Assert-Equal 'snapshot balances match seed report' (@(Get-Field $seed 'preReplayBalances') -join "`n") ($preReplayDatabaseBalances -join "`n")
+    Assert-Equal 'seed pre-replay request-ID column count' $expectedPreReplayRequestIdSchemaCount ([string](Get-Field $seed 'preReplayRequestIdColumnCount'))
+    Assert-Equal 'seed pre-replay request-ID index count' $expectedPreReplayRequestIdSchemaCount ([string](Get-Field $seed 'preReplayRequestIdIndexCount'))
+    $preReplayDatabaseRequestIdColumnCount = @(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath "SELECT COUNT(*) FROM pragma_table_info('transactions') WHERE lower(name)='request_id';")
+    $preReplayDatabaseRequestIdIndexCount = @(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath "SELECT COUNT(*) FROM pragma_index_list('transactions') WHERE lower(name)='idx_transactions_request_id';")
+    Assert-Equal 'snapshot pre-replay request-ID column count' $expectedPreReplayRequestIdSchemaCount ([string]$preReplayDatabaseRequestIdColumnCount[0])
+    Assert-Equal 'snapshot pre-replay request-ID index count' $expectedPreReplayRequestIdSchemaCount ([string]$preReplayDatabaseRequestIdIndexCount[0])
+    if ($expectedReceiptState -eq 'committed') {
+        $preReplayDatabaseReceipt = @(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || typeof(amount) || '|' || printf('%.2f', amount) || '|' || typeof(balance_before) || '|' || printf('%.2f', balance_before) || '|' || typeof(balance_after) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || timestamp || '|' || sequence || '|' || request_id FROM transactions WHERE request_id='$requestId';")
+        Assert-Equal 'same-request SQLite receipt predates replay' $expectedReplayedTransaction ([string](Get-Field $seed 'preReplayReplayTransaction'))
+        $preReplayObservation = [pscustomobject]@{ transactionRows = @([string](Get-Field $seed 'preReplayReplayTransaction')) }
+        Assert-T21ReplayReceiptBinding $preReplayObservation $expectedReplayedTransaction $preReplayDatabaseReceipt
+    } else {
+        Assert-T21AbsentPreReplayReceipt (Get-Field $seed 'preReplayReplayTransaction') @()
+        Assert-Equal 'no-receipt snapshot retains only historical transaction' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath 'SELECT COUNT(*) FROM transactions;')[0]))
+        Assert-Equal 'no-receipt snapshot historical transaction' '1|00000000-0000-0000-0000-000000000001|fixture-a|DEPOSIT|100.00|TEST' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $preReplayDatabasePath "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || printf('%.2f', amount) || '|' || source FROM transactions WHERE id=1;")[0]))
+    }
+
+    $startupSchemaObservation = Get-Field $replay 'startupSchemaObservation'
+    Assert-True 'candidate startup schema observation is present before replay read' ($null -ne $startupSchemaObservation)
+    Assert-Equal 'candidate startup schema observation stage' 'candidate-enabled-before-replay-read' ([string](Get-Field $startupSchemaObservation 'stage'))
+    Assert-Equal 'candidate startup request-ID column count' '1' ([string](Get-Field $startupSchemaObservation 'requestIdColumnCount'))
+    Assert-Equal 'candidate startup request-ID index count' '1' ([string](Get-Field $startupSchemaObservation 'requestIdIndexCount'))
+
+    $observation = Get-Field $replay 'replayObservation'
+    Assert-True 'runtime journal replay observation is present' ($null -ne $observation)
+    Assert-Equal 'replayed account rows' "00000000-0000-0000-0000-000000000001|fixture-a|real|117.25|8`n00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3" (@(Get-Field $observation 'balanceRows') -join "`n")
+    Assert-Equal 'one replay transaction receipt' '1' ([string](Get-Field $observation 'requestIdCount'))
+    Assert-Equal 'runtime replay journal path' ([string](Get-Field $seed 'journalPath')) ([string](Get-Field $observation 'journalPath'))
+    Assert-Equal 'runtime journal was empty after replay receipt' '0' ([string](Get-Field $observation 'journalBytes'))
+
+    $journalPath = Resolve-RunRelativePath ([string](Get-Field $seed 'journalPath'))
+    Assert-True 'cleared journal remains as the receipt-backed file' (Test-Path -LiteralPath $journalPath -PathType Leaf)
+    Assert-Equal 'journal empty after candidate normal stop' '0' ([long](Get-Item -LiteralPath $journalPath).Length)
+    if ($requestId -notmatch '^[a-z0-9-]+$') { throw 'Refusing an unsafe request ID in the independent SQLite query.' }
+    Assert-Equal 'final request-ID column exists after candidate startup' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT COUNT(*) FROM pragma_table_info('transactions') WHERE lower(name)='request_id';")[0]))
+    Assert-Equal 'final request-ID index exists after candidate startup' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT COUNT(*) FROM pragma_index_list('transactions') WHERE lower(name)='idx_transactions_request_id';")[0]))
+    $replayedTransaction = @(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || typeof(amount) || '|' || printf('%.2f', amount) || '|' || typeof(balance_before) || '|' || printf('%.2f', balance_before) || '|' || typeof(balance_after) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || timestamp || '|' || sequence || '|' || request_id FROM transactions WHERE request_id='$requestId';")
+    Assert-Equal 'SQLite request ID has exactly one replay row' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT COUNT(*) FROM transactions WHERE request_id='$requestId';")[0]))
+    Assert-T21ReplayReceiptBinding $observation $expectedReplayedTransaction $replayedTransaction
+} else {
+    Assert-Equal 'normal-drain scenario has no seeded journal report' $null (Get-Field $report 'recoveryJournalReplay')
+}
 $recoveryJournals = @(Get-ChildItem -LiteralPath $runRoot -File -Recurse -Filter 'recovery-v1.jsonl' -Force)
 Assert-Equal 'no LOCAL recovery journal remains' '0' ([string]$recoveryJournals.Count)
 

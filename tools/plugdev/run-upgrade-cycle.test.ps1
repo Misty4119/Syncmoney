@@ -14,9 +14,17 @@ $fixtureRunner = Join-Path $plugDevScripts 'run-upgrade-cycle.ps1'
 $reportsRoot = Join-Path $workspaceRoot 'build\reports\foundation\T21-upgrade-cycles'
 
 try {
+    $runnerSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools\plugdev\run-upgrade-cycle.ps1') -Raw
+    $candidateStartPosition = $runnerSource.IndexOf('Start-UpgradeServer "build/libs/Syncmoney-$CandidateVersion.jar" $CandidateVersion ''upgrade-1.4''', [StringComparison]::Ordinal)
+    $startupSchemaPosition = $runnerSource.IndexOf('$script:recoveryJournalReplay.startupSchemaObservation = Assert-LegacySqliteJournalReplayStartupSchema', [StringComparison]::Ordinal)
+    $replayReadPosition = $runnerSource.IndexOf("Invoke-UpgradeCommand 'smaccept legacy-sqlite read 117.25 0.00' 'upgrade-1.4-journal-replay-read'", [StringComparison]::Ordinal)
+    if ($candidateStartPosition -lt 0 -or $startupSchemaPosition -le $candidateStartPosition -or $replayReadPosition -le $startupSchemaPosition) {
+        throw 'The runner must record candidate-created receipt schema after startup and before the first replay balance read.'
+    }
+
     New-Item -ItemType Directory -Path $plugDevScripts -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'tools\plugdev\run-upgrade-cycle.ps1') -Destination $fixtureRunner
-    foreach ($fileName in @('prepare.mjs', 'prepare.test.mjs', 't21-upgrade-validation.ps1')) {
+    foreach ($fileName in @('prepare.mjs', 'prepare.test.mjs', 't21-upgrade-validation.ps1', 't21-local-persistence-journal.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repositoryRoot "tools\plugdev\$fileName") -Destination (Join-Path $plugDevScripts $fileName)
     }
 
@@ -31,6 +39,7 @@ try {
         BaselineSourceCommit = '0' * 40
         PlugDevRoot = Join-Path $fixtureRoot 'missing-plugdev'
         JavaHome = Join-Path $fixtureRoot 'missing-java'
+        RecoveryScenario = 'seeded-journal-replay-no-receipt'
     }
     $pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $output = (& $pwsh -NoProfile -File $fixtureRunner @arguments 2>&1 | Out-String)

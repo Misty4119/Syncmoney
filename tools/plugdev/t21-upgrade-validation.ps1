@@ -69,8 +69,8 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'current-stable-Paper'
                 software = 'paper'
                 minecraftVersion = '26.3'
-                build = 178
-                sha256 = '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757'
+                build = 194
+                sha256 = '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784'
             }
         }
         'MinimumFolia' {

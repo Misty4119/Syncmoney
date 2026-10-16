@@ -140,8 +140,8 @@ $currentStablePaper = Get-T21PaperEndpoint -PaperEndpoint CurrentStable
 if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
     $currentStablePaper.software -cne 'paper' -or
     $currentStablePaper.minecraftVersion -cne '26.3' -or
-    $currentStablePaper.build -ne 178 -or
-    $currentStablePaper.sha256 -cne '5dd0c8fb20a96eb7c98f3c4b1c890e99ef6db56fd689a2cf06975a3471fda757') {
+    $currentStablePaper.build -ne 194 -or
+    $currentStablePaper.sha256 -cne '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784') {
     throw 'The T21 current-stable Paper endpoint must remain pinned independently from the user-supplied maximum endpoint.'
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
@@ -2255,6 +2255,10 @@ if ($upgradeCycleAuditParseErrors.Count -gt 0) {
     throw "The M04 offline report auditor has PowerShell parse errors: $details"
 }
 $upgradeCycleAuditSource = [IO.File]::ReadAllText($upgradeCycleAuditPath)
+$upgradeCycleAuditContractTestPath = Join-Path $PSScriptRoot 't21-upgrade-cycle-audit-contract.test.ps1'
+if (-not (Test-Path -LiteralPath $upgradeCycleAuditContractTestPath -PathType Leaf)) {
+    throw 'The M04 offline auditor requires behavioral regression coverage for replay chronology and receipt binding.'
+}
 $expectedM04DatabasePath = 'expectedDatabaseRelativePath = ''.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'''
 $m04DatabasePathBinding = 'Assert-Equal ''report SQLite path matches M04 runtime fixture'' $expectedDatabaseRelativePath ([string]$report.sqlitePath)'
 $expectedM04StartPins = @(
@@ -2283,6 +2287,12 @@ if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$distRoot -File -Recurse -Force' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$logsRoot -File -Recurse -Force' -or
     $upgradeCycleAuditSource -notmatch 'Test-T21M04PlatformStartupIdentity' -or
+    $upgradeCycleAuditSource -notmatch 'function Assert-T21StartupRecoveryChronology' -or
+    $upgradeCycleAuditSource -notmatch 'Assert-T21StartupRecoveryChronology \$upgradeLog' -or
+    $upgradeCycleAuditSource -notmatch 'function Assert-T21SourcePin' -or
+    $upgradeCycleAuditSource -notmatch 'Assert-T21SourcePin \$sourcePin\.name' -or
+    $upgradeCycleAuditSource -notmatch 'function Assert-T21ReplayReceiptBinding' -or
+    $upgradeCycleAuditSource -notmatch 'Assert-T21ReplayReceiptBinding \$observation \$expectedReplayedTransaction \$replayedTransaction' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$runRoot -File -Recurse -Filter ''recovery-v1\.jsonl'' -Force' -or
     -not $upgradeCycleAuditSource.Contains($expectedM04DatabasePath) -or
     -not $upgradeCycleAuditSource.Contains($m04DatabasePathBinding) -or
@@ -2297,7 +2307,16 @@ if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
     -not $upgradeCycleAuditSource.Contains('$upgradeStartRecords = @($startRecords | Where-Object { [string]$_.stage -ceq ''upgrade-1.4'' -and [string]$_.pluginVersion -ceq [string]$report.candidatePlugin })') -or
     -not $upgradeCycleAuditSource.Contains('Assert-Equal ''candidate API consumer classloader marker'' ''PASS'' ([string]$upgradeStartRecords[0].apiClassLoader)') -or
     -not $upgradeCycleAuditSource.Contains('API CLASSLOADER PASS provider=Syncmoney') -or
-    -not $upgradeCycleAuditSource.Contains('T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50')) {
+    -not $upgradeCycleAuditSource.Contains('T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50') -or
+    $upgradeCycleAuditSource -notmatch 'same-request SQLite receipt predates replay' -or
+    $upgradeCycleAuditSource -notmatch 'snapshot account rows match receipt state' -or
+    $upgradeCycleAuditSource -notmatch 'Assert-T21AbsentPreReplayReceipt \(Get-Field \$seed ''preReplayReplayTransaction''\) @\(\)' -or
+    $upgradeCycleAuditSource -notmatch 'preReplayRequestIdColumnCount' -or
+    $upgradeCycleAuditSource -notmatch 'preReplayRequestIdIndexCount' -or
+    $upgradeCycleAuditSource -notmatch 'startupSchemaObservation' -or
+    $upgradeCycleAuditSource -notmatch 'candidate startup request-ID column count' -or
+    $upgradeCycleAuditSource -notmatch 'retained pre-replay SQLite snapshot SHA-256' -or
+    $upgradeCycleAuditSource -notmatch 'Assert-T21ReplayReceiptBinding \$preReplayObservation \$expectedReplayedTransaction \$preReplayDatabaseReceipt') {
     throw 'The reusable M04 offline auditor must independently rehash copied artifacts, PlugDev distribution files, and retained logs.'
 }
 foreach ($expectedPin in $expectedM04StartPins) {

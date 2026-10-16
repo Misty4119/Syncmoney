@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ReportPath,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256,
     [Parameter(Mandatory = $true)][ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [Parameter(Mandatory = $true)][ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint
+    [Parameter(Mandatory = $true)][ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint
 )
 
 $ErrorActionPreference = 'Stop'

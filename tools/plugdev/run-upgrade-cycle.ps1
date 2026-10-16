@@ -10,7 +10,8 @@ param(
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Parameter(Mandatory = $true)][string]$JavaHome,
     [string]$CandidateVersion = '1.4.0-alpha.1',
-    [ValidateSet('off', 'guard-on')][string]$GuardProfile = 'off'
+    [ValidateSet('off', 'guard-on')][string]$GuardProfile = 'off',
+    [ValidateSet('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt')][string]$RecoveryScenario = 'normal-drain'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -182,7 +183,8 @@ function Assert-RunInputsUnchanged {
         [ordered]@{ path = $prepareSourcePath; expected = $prepareSourceSha256; name = 'prepare source' },
         [ordered]@{ path = $prepareTestSourcePath; expected = $prepareTestSourceSha256; name = 'prepare test source' },
         [ordered]@{ path = $validationSourcePath; expected = $validationSourceSha256; name = 'shared validation source' },
-        [ordered]@{ path = $auditSourcePath; expected = $auditSourceSha256; name = 'offline auditor source' }
+        [ordered]@{ path = $auditSourcePath; expected = $auditSourceSha256; name = 'offline auditor source' },
+        [ordered]@{ path = $localJournalHelperSourcePath; expected = $localJournalHelperSourceSha256; name = 'LOCAL journal helper' }
     )) {
         if ([string]::IsNullOrWhiteSpace([string]$pin.expected) -or -not (Test-Path -LiteralPath $pin.path -PathType Leaf)) {
             throw "Pinned $($pin.name) is unavailable at report emission."
@@ -218,6 +220,12 @@ Assert-NoReparsePointAncestors $root
 Assert-NoReparsePointAncestors $reportsRoot
 $runnerSourcePath = (Resolve-Path -LiteralPath $PSCommandPath).Path
 $runnerSourceSha256 = (Get-FileHash -LiteralPath $runnerSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$localJournalHelperSourcePath = Join-Path $root 'tools\plugdev\t21-local-persistence-journal.ps1'
+if (-not (Test-Path -LiteralPath $localJournalHelperSourcePath -PathType Leaf)) {
+    throw "T21 M04 requires the LOCAL journal helper source: $localJournalHelperSourcePath"
+}
+$localJournalHelperSourceSha256 = (Get-FileHash -LiteralPath $localJournalHelperSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+. $localJournalHelperSourcePath
 $prepareSourcePath = Join-Path $root 'tools\plugdev\prepare.mjs'
 $prepareSourceSha256 = (Get-FileHash -LiteralPath $prepareSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $prepareTestSourcePath = Join-Path $root 'tools\plugdev\prepare.test.mjs'
@@ -229,6 +237,10 @@ if (-not (Test-Path -LiteralPath $auditSourcePath -PathType Leaf)) {
     throw "T21 M04 requires the offline auditor before report creation: $auditSourcePath"
 }
 $auditSourceSha256 = (Get-FileHash -LiteralPath $auditSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$candidateCheckoutCommit = (& git -C $root rev-parse HEAD 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $candidateCheckoutCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'Could not resolve the candidate checkout commit metadata.'
+}
 if (-not (Test-Path -LiteralPath $reportsRoot -PathType Container)) {
     New-Item -ItemType Directory -Force -Path $reportsRoot -ErrorAction Stop | Out-Null
     Assert-NoReparsePointAncestors $reportsRoot
@@ -484,6 +496,7 @@ $script:locationPushed = $false
 $script:stageRecords = [System.Collections.Generic.List[object]]::new()
 $script:configObservations = [System.Collections.Generic.List[object]]::new()
 $script:sqliteObservations = [System.Collections.Generic.List[object]]::new()
+$script:recoveryJournalReplay = $null
 $script:cleanupEvents = [System.Collections.Generic.List[object]]::new()
 $databaseRelativePath = '.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'
 $databasePath = Join-Path $runRoot $databaseRelativePath
@@ -546,6 +559,63 @@ function Assert-LegacySqliteState([string]$expectedA, [string]$expectedB, [strin
     }
     $script:sqliteObservations.Add($observation)
     return $observation
+}
+
+function Assert-LegacySqliteJournalReplayState($seed) {
+    $balanceRows = @(Invoke-SqliteQuery "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;" -ReadOnly)
+    $expectedRows = @(
+        '00000000-0000-0000-0000-000000000001|fixture-a|real|117.25|8',
+        '00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3'
+    )
+    if (($balanceRows -join "`n") -cne ($expectedRows -join "`n")) {
+        throw "SQLite journal replay account/version mismatch. Expected '$($expectedRows -join '; ')'; observed '$($balanceRows -join '; ')' ."
+    }
+
+    $requestId = [string]$seed.requestId
+    if ($requestId -notmatch '^t21-local-replay-[0-9a-f]{32}$') {
+        throw 'The isolated LOCAL journal seed has an invalid request ID.'
+    }
+    $transactionRows = @(Invoke-SqliteQuery "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || typeof(amount) || '|' || printf('%.2f', amount) || '|' || typeof(balance_before) || '|' || printf('%.2f', balance_before) || '|' || typeof(balance_after) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || timestamp || '|' || sequence || '|' || request_id FROM transactions WHERE request_id='$requestId';" -ReadOnly)
+    $expectedTransaction = "2|00000000-0000-0000-0000-000000000001|fixture-a|DEPOSIT|real|17.25|real|100.00|real|117.25|VAULT_DEPOSIT|$([long]$seed.timestamp)|2|$requestId"
+    if ($transactionRows.Count -ne 1 -or $transactionRows[0] -cne $expectedTransaction) {
+        throw "SQLite journal replay receipt mismatch. Expected '$expectedTransaction'; observed '$($transactionRows -join '; ')'."
+    }
+    $requestIdCount = @(Invoke-SqliteQuery "SELECT COUNT(*) FROM transactions WHERE request_id='$requestId';" -ReadOnly)
+    if ($requestIdCount.Count -ne 1 -or $requestIdCount[0] -cne '1') {
+        throw 'SQLite journal replay request ID must have exactly one durable transaction receipt.'
+    }
+
+    $journalPath = Join-Path (Split-Path -Parent $databasePath) 'local-persistence.journal'
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+        throw 'SQLite startup replay must retain the existing journal path after receipt-backed clearing.'
+    }
+    $journalBytes = [long](Get-Item -LiteralPath $journalPath).Length
+    if ($journalBytes -ne 0) { throw "SQLite journal was not cleared after replay receipt; bytes=$journalBytes." }
+
+    $observation = [ordered]@{
+        stage = 'upgrade-1.4-replay'
+        balanceRows = $balanceRows
+        transactionRows = $transactionRows
+        requestIdCount = [long]$requestIdCount[0]
+        journalPath = '.plugdev/run/plugins/Syncmoney/t21-data/local-persistence.journal'
+        journalBytes = $journalBytes
+    }
+    $script:recoveryJournalReplay.replayObservation = $observation
+    return $observation
+}
+
+function Assert-LegacySqliteJournalReplayStartupSchema {
+    $requestIdColumnCount = @(Invoke-SqliteQuery "SELECT COUNT(*) FROM pragma_table_info('transactions') WHERE lower(name)='request_id';" -ReadOnly)
+    $requestIdIndexCount = @(Invoke-SqliteQuery "SELECT COUNT(*) FROM pragma_index_list('transactions') WHERE lower(name)='idx_transactions_request_id';" -ReadOnly)
+    if ($requestIdColumnCount.Count -ne 1 -or $requestIdColumnCount[0] -cne '1' -or
+        $requestIdIndexCount.Count -ne 1 -or $requestIdIndexCount[0] -cne '1') {
+        throw "Candidate startup did not establish the LOCAL request-ID receipt schema before replay read; columns=$($requestIdColumnCount -join ','); indexes=$($requestIdIndexCount -join ',')."
+    }
+    return [ordered]@{
+        stage = 'candidate-enabled-before-replay-read'
+        requestIdColumnCount = [long]$requestIdColumnCount[0]
+        requestIdIndexCount = [long]$requestIdIndexCount[0]
+    }
 }
 
 function Wait-ServerMarker([string]$marker, [int]$timeoutSeconds = 45) {
@@ -787,9 +857,23 @@ try {
     $null = Invoke-ProfileEditor 'assert-config'
     $null = Assert-LegacySqliteState '100.00' '0.00' '1.3.2 stop'
 
+    if ($RecoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+        $receiptState = if ($RecoveryScenario -eq 'seeded-journal-replay-no-receipt') { 'absent' } else { 'committed' }
+        $seed = New-T21LocalJournalReplaySeed -RunDirectory $runRoot -DatabasePath $databasePath `
+            -SqliteExecutable $sqliteExecutable -ReceiptState $receiptState
+        $script:recoveryJournalReplay = [ordered]@{ seed = $seed; startupSchemaObservation = $null; replayObservation = $null }
+    }
+
     Start-UpgradeServer "build/libs/Syncmoney-$CandidateVersion.jar" $CandidateVersion 'upgrade-1.4'
-    Invoke-UpgradeCommand 'smaccept legacy-sqlite read' 'upgrade-1.4-read'
-    Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
+    if ($RecoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+        $script:recoveryJournalReplay.startupSchemaObservation = Assert-LegacySqliteJournalReplayStartupSchema
+        Invoke-UpgradeCommand 'smaccept legacy-sqlite read 117.25 0.00' 'upgrade-1.4-journal-replay-read'
+        Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=117.25 expected-b=0.00'
+        $null = Assert-LegacySqliteJournalReplayState $script:recoveryJournalReplay.seed
+    } else {
+        Invoke-UpgradeCommand 'smaccept legacy-sqlite read' 'upgrade-1.4-read'
+        Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
+    }
     $null = Invoke-ProfileEditor 'assert-config'
     Invoke-UpgradeCommand 'smaccept legacy-sqlite write 1337.25 765.50' 'upgrade-1.4-write'
     Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50'
@@ -873,7 +957,12 @@ try {
         else { $script:failureMessage = "$script:failureMessage; $($_.Exception.Message)" }
     }
     $result = [ordered]@{
-        task = 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle'
+        task = switch ($RecoveryScenario) {
+            'seeded-journal-replay' { 'T21 M04 LOCAL SQLite seeded journal replay and rollback cycle' }
+            'seeded-journal-replay-no-receipt' { 'T21 M04 LOCAL SQLite seeded missing-receipt journal replay and rollback cycle' }
+            default { 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle' }
+        }
+        recoveryScenario = $RecoveryScenario
         runtimeProfile = [ordered]@{
             mode = 'local'
             features = 'off'
@@ -901,6 +990,7 @@ try {
         candidatePlugin = $CandidateVersion
         candidatePluginSha256 = $candidateSha256
         candidatePluginBytes = [long](Get-Item -LiteralPath $candidateRunJar).Length
+        candidateCheckoutCommit = $candidateCheckoutCommit
         vaultUnlockedDependencyVersion = '2.20.2'
         vaultUnlockedPluginSha256 = $script:vaultUnlockedPluginSha256
         vaultUnlockedPluginBytes = $script:vaultUnlockedPluginBytes
@@ -916,6 +1006,7 @@ try {
             prepareTestSha256 = $prepareTestSourceSha256
             validationSha256 = $validationSourceSha256
             offlineAuditorSha256 = $auditSourceSha256
+            localJournalHelperSha256 = $localJournalHelperSourceSha256
             plugDevRoot = $plugDevRootPath
             plugDevCommit = $plugDevCommit
             plugDevCliSha256 = $plugDevCliSha256
@@ -935,6 +1026,7 @@ try {
         isolatedHomes = [ordered]@{ plugDev = $env:PLUGDEV_HOME; gradle = $env:GRADLE_USER_HOME }
         configObservations = @($script:configObservations)
         sqliteObservations = @($script:sqliteObservations)
+        recoveryJournalReplay = $script:recoveryJournalReplay
         stageRecords = @($script:stageRecords)
         cleanupEvents = @($script:cleanupEvents)
         gradleDaemonStopExitCode = $script:gradleDaemonStopExitCode

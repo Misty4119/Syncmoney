@@ -6,7 +6,7 @@ function Test-T21AuditSchemaV10UpgradeTarget(
     [string]$PlatformEndpoint
 ) {
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
-        $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
 }
 
 function Test-T21AuditUpgradeHasField([object]$observation, [string]$name) {

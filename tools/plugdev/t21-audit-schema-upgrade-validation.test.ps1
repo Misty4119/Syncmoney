@@ -324,12 +324,10 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
 }
 
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-    foreach ($endpoint in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+    foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
             "The bounded positive-migration runner rejected pinned $databaseProduct endpoint $endpoint."
     }
-    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint CurrentStable)) `
-        "The bounded positive-migration runner admitted supplemental current-stable endpoint for $databaseProduct."
 }
 
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('t21-audit-schema-upgrade-validation-' + [guid]::NewGuid().ToString('N'))
@@ -422,7 +420,7 @@ Syncmoney disabled.
         $report[$sqlKey] = [ordered]@{ product=$databaseProduct; version=$databaseVersion }
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $report $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
             "The complete successful $databaseProduct minimum-Paper upgrade report fixture was rejected."
-        foreach ($endpoint in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+        foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
             $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
             $endpointReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $endpointReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($endpointPlatform.taskSuffix)"
@@ -437,6 +435,11 @@ Syncmoney disabled.
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $endpointReport $endpointPlatform.sha256 $candidateSha `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
                 "The complete successful $databaseProduct $endpoint upgrade report fixture was rejected."
+            if ($endpoint -ceq 'CurrentStable') {
+                Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $endpointReport $endpointPlatform.sha256 $candidateSha `
+                        -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum)) `
+                    "A supplemental current-stable $databaseProduct report was accepted under the user-pinned maximum endpoint."
+            }
             $wrongEndpointIdentity = $endpointReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $wrongEndpointIdentity.server.build = $endpointPlatform.build - 1
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $wrongEndpointIdentity $endpointPlatform.sha256 $candidateSha `
@@ -508,7 +511,7 @@ foreach ($requiredRunnerContract in @(
     Assert-T21Upgrade ($runnerSource.Contains($requiredRunnerContract)) `
         "The runtime runner is missing successful v10-to-v11 migration contract: $requiredRunnerContract"
 }
-Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]`$PlatformEndpoint") -and
+Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]`$PlatformEndpoint") -and
     $offlineAuditSource.Contains('Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint') -and
     $offlineAuditSource.Contains('-DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint') -and
     $offlineAuditSource.Contains('platform="$platformName $($platform.minecraftVersion)#$($platform.build)"')) `
