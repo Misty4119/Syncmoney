@@ -33,7 +33,7 @@ function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia')
+    return $DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
 }
 
 function Test-T21IncompleteV10PlayerRowSentinel([object]$RowsJson) {

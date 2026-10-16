@@ -373,8 +373,12 @@ try {
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
             @{ database='MySQL'; endpoint='MinimumFolia'; expected=$true }
             @{ database='MySQL'; endpoint='MaximumFolia'; expected=$true }
-            @{ database='MySQL'; endpoint='MinimumCanvas'; expected=$false }
-            @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$false }
+            @{ database='MySQL'; endpoint='MinimumCanvas'; expected=$true }
+            @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='MariaDB'; endpoint='MinimumCanvas'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='MinimumCanvas'; expected=$false }
+            @{ database='MariaDB'; endpoint='MaximumCanvas'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
             @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
         )) {
@@ -383,7 +387,7 @@ try {
             throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
         }
     }
-    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper and minimum/maximum Folia MySQL'
+    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper, minimum/maximum Folia, and minimum/maximum Canvas MySQL'
 
     $currentStablePathResolutionObserved = $false
     try {
@@ -450,13 +454,39 @@ try {
     }
     Write-Output 'PASS: accept the maximum-Folia MySQL player-row-preservation runner target before external resources are resolved'
 
-    $playerRowWrongEndpointRejected = $false
+    $minimumCanvasPlayerRowPreservationPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $minimumCanvasPlayerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $minimumCanvasPlayerRowPreservationPathResolutionObserved) {
+        throw 'The minimum-Canvas MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the minimum-Canvas MySQL player-row-preservation runner target before external resources are resolved'
+
+    $maximumCanvasPlayerRowPreservationPathResolutionObserved = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas `
             -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
     } catch {
-        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper or minimum/maximum Folia with MySQL 8\.0\.42'
+        $maximumCanvasPlayerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $maximumCanvasPlayerRowPreservationPathResolutionObserved) {
+        throw 'The maximum-Canvas MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the maximum-Canvas MySQL player-row-preservation runner target before external resources are resolved'
+
+    $playerRowWrongEndpointRejected = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentStable `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas with MySQL 8\.0\.42'
     }
     if (-not $playerRowWrongEndpointRejected) {
         throw 'The player-row-preservation runner accepted an unsupported platform endpoint.'
@@ -693,6 +723,52 @@ try {
         throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing maximum-Folia MySQL player row.'
     }
     Write-Output 'PASS: accept maximum-Folia incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $minimumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumCanvas
+    $minimumCanvasPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MinimumCanvas'
+    $minimumCanvasPlayerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-minimum-Canvas'
+    $minimumCanvasPlayerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $minimumCanvasPlayerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $minimumCanvasPlayerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $minimumCanvasPlayerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $minimumCanvasPlayerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $minimumCanvasPlayerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $minimumCanvasPlayerRowPreservationReport $minimumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumCanvas -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing minimum-Canvas MySQL player row.'
+    }
+    Write-Output 'PASS: accept minimum-Canvas incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $maximumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MaximumCanvas
+    $maximumCanvasPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MaximumCanvas'
+    $maximumCanvasPlayerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-maximum-Canvas'
+    $maximumCanvasPlayerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $maximumCanvasPlayerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $maximumCanvasPlayerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $maximumCanvasPlayerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $maximumCanvasPlayerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $maximumCanvasPlayerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $maximumCanvasPlayerRowPreservationReport $maximumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing maximum-Canvas MySQL player row.'
+    }
+    Write-Output 'PASS: accept maximum-Canvas incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $maximumCanvasPlayerRowWrongBuildReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumCanvasPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumCanvasPlayerRowWrongBuildReport.startupObservation.runtimeIdentity.build = 971
+    if (Test-T21StartupFailureReportFixture $maximumCanvasPlayerRowWrongBuildReport $maximumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The maximum-Canvas MySQL player-row-preservation report accepted a runtime build that differs from the pinned endpoint.'
+    }
+    Write-Output 'PASS: reject maximum-Canvas MySQL player-row evidence with a mismatched runtime build'
+
+    $maximumCanvasPlayerRowWrongTaskReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumCanvasPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumCanvasPlayerRowWrongTaskReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-minimum-Canvas'
+    if (Test-T21StartupFailureReportFixture $maximumCanvasPlayerRowWrongTaskReport $maximumCanvasEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MaximumCanvas -FailureScenario IncompleteV10AuditTablePlayerRowPreservation) {
+        throw 'The maximum-Canvas MySQL player-row-preservation report accepted a task label for a different endpoint.'
+    }
+    Write-Output 'PASS: reject maximum-Canvas MySQL player-row evidence with a mismatched endpoint task label'
 
 
     $maximumLegacyMinimumPaperLabelReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
@@ -2241,7 +2317,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper or minimum/maximum Folia with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper, minimum/maximum Folia, or minimum/maximum Canvas with MySQL 8.0.42.', [StringComparison]::Ordinal)
     if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
         throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }

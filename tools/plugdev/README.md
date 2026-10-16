@@ -236,7 +236,8 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PlatformEndpoint MaximumCanvas `
   -DatabaseProduct MySQL `
-  -IncompleteV10AuditTableStartupFailure
+  -IncompleteV10AuditTableStartupFailure `
+  -IncompleteV10AuditTablePlayerRowPreservation
 ```
 
 For the selected maximum Canvas `26.3#972` / MariaDB `12.3.3-MariaDB` cell, provide the installed MariaDB binary directory explicitly:
