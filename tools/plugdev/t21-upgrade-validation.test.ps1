@@ -495,6 +495,31 @@ if (Test-T21M04StageRecordChronology $incompleteM04StageRecords) {
 }
 Write-Output 'PASS: reject incomplete M04 lifecycle chronology'
 
+$timeoutHandoffStages = @('baseline-1.3.2', 'upgrade-1.4', 'recovery-1.4', 'rollback-1.3.2')
+$timeoutHandoffRecords = @(
+    [ordered]@{ stage = 'baseline-1.3.2'; startExitCode = 0 },
+    [ordered]@{ stage = 'baseline-1.3.2'; stopExitCode = 0 },
+    [ordered]@{ stage = 'upgrade-1.4'; startExitCode = 0 },
+    [ordered]@{ stage = 'upgrade-1.4'; stopExitCode = 0 },
+    [ordered]@{ stage = 'recovery-1.4'; startExitCode = 0 },
+    [ordered]@{ stage = 'recovery-1.4'; stopExitCode = 0 },
+    [ordered]@{ stage = 'rollback-1.3.2'; startExitCode = 0 },
+    [ordered]@{ stage = 'rollback-1.3.2'; stopExitCode = 0 }
+)
+if (-not (Test-T21M04StageRecordChronology $timeoutHandoffRecords $timeoutHandoffStages)) {
+    throw 'The exact baseline, timeout candidate, recovery candidate, and rollback sequence was rejected.'
+}
+Write-Output 'PASS: accept M04 timeout-handoff recovery chronology'
+
+$reorderedTimeoutHandoffRecords = @($timeoutHandoffRecords)
+$temporaryTimeoutStageRecord = $reorderedTimeoutHandoffRecords[3]
+$reorderedTimeoutHandoffRecords[3] = $reorderedTimeoutHandoffRecords[4]
+$reorderedTimeoutHandoffRecords[4] = $temporaryTimeoutStageRecord
+if (Test-T21M04StageRecordChronology $reorderedTimeoutHandoffRecords $timeoutHandoffStages) {
+    throw 'M04 timeout-handoff recovery before the first candidate stop was accepted.'
+}
+Write-Output 'PASS: reject an M04 timeout-handoff recovery stage before the handoff stop'
+
 $acceptanceBuildArtifact = [ordered]@{
     name = 'acceptance'
     path = 'build/acceptance/SyncmoneyAcceptance.jar'
@@ -2214,12 +2239,21 @@ Write-Output 'PASS: parse the M04 LOCAL upgrade-cycle runner'
 
 $upgradeCycleSource = [IO.File]::ReadAllText($upgradeCycleRunnerPath)
 $configObservationCalls = [regex]::Matches($upgradeCycleSource, "Invoke-ProfileEditor '(?:seed-config|assert-config)'").Count
-if ($configObservationCalls -ne 6) {
-    throw "The M04 guard profile must record all six expected config observations; found $configObservationCalls."
+$timeoutHandoffBranchMatch = [regex]::Match(
+    $upgradeCycleSource,
+    '(?s)if \(\$RecoveryScenario -eq ''shutdown-timeout-handoff''\) \{(?<branch>.*?)\r?\n\s*\} else \{'
+)
+$timeoutHandoffConfigObservationCalls = if ($timeoutHandoffBranchMatch.Success) {
+    [regex]::Matches($timeoutHandoffBranchMatch.Groups['branch'].Value, "Invoke-ProfileEditor '(?:seed-config|assert-config)'").Count
+} else {
+    0
+}
+if ($configObservationCalls -ne 9 -or $timeoutHandoffConfigObservationCalls -ne 3) {
+    throw "The M04 runner must retain six normal config observations and add three timeout-handoff observations; found $configObservationCalls total / $timeoutHandoffConfigObservationCalls timeout-specific."
 }
 $directPlugDevCliCalls = [regex]::Matches($upgradeCycleSource, '(?m)^\s*&\s+node\s+\$cli\b').Count
 $verifiedPlugDevCliCallSites = [regex]::Matches($upgradeCycleSource, '(?m)^\s*(?:\$\w+\s*=\s*)?Invoke-VerifiedPlugDevCli\s+-Arguments\s+@\(').Count
-if ($directPlugDevCliCalls -ne 1 -or $verifiedPlugDevCliCallSites -ne 4 -or
+if ($directPlugDevCliCalls -ne 1 -or $verifiedPlugDevCliCallSites -ne 5 -or
     $upgradeCycleSource -notmatch 'Assert-PlugDevDistributionPinned "\$stage invocation"' -or
     $upgradeCycleSource -notmatch 'Assert-PlugDevDistributionPinned "\$stage completion"' -or
     $upgradeCycleSource -notmatch 'Get-ChildItem -LiteralPath \$distRoot -File -Recurse -Force' -or
@@ -2286,9 +2320,10 @@ if (-not (Test-Path -LiteralPath $upgradeCycleAuditContractTestPath -PathType Le
 $expectedM04DatabasePath = 'expectedDatabaseRelativePath = ''.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'''
 $m04DatabasePathBinding = 'Assert-Equal ''report SQLite path matches M04 runtime fixture'' $expectedDatabaseRelativePath ([string]$report.sqlitePath)'
 $expectedM04StartPins = @(
-    '[ordered]@{ stage = ''baseline-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' }',
-    '[ordered]@{ stage = ''upgrade-1.4''; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = ''PASS'' }',
-    '[ordered]@{ stage = ''rollback-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' }'
+    '$expectedStartRecords.Add([ordered]@{ stage = ''baseline-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' })',
+    '$expectedStartRecords.Add([ordered]@{ stage = ''upgrade-1.4''; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = ''PASS'' })',
+    '$expectedStartRecords.Add([ordered]@{ stage = ''recovery-1.4''; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = ''PASS'' })',
+    '$expectedStartRecords.Add([ordered]@{ stage = ''rollback-1.3.2''; pluginVersion = ''1.3.2''; apiClassLoader = ''NOT_APPLICABLE'' })'
 )
 if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
     $upgradeCycleAuditSource -notmatch "'acceptance-runtime'" -or
@@ -2320,11 +2355,16 @@ if ($upgradeCycleAuditSource -notmatch 'artifactManifest' -or
     $upgradeCycleAuditSource -notmatch 'Get-ChildItem -LiteralPath \$runRoot -File -Recurse -Filter ''recovery-v1\.jsonl'' -Force' -or
     -not $upgradeCycleAuditSource.Contains($expectedM04DatabasePath) -or
     -not $upgradeCycleAuditSource.Contains($m04DatabasePathBinding) -or
-    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'complete stage record count' '6' ([string]`$stageRecords.Count)") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-Equal 'complete stage record count' `$expectedStageRecordCount ([string]`$stageRecords.Count)") -or
     -not $upgradeCycleAuditSource.Contains("Assert-Equal 'invalid stage record shape count' '0' ([string]`$invalidStageRecords.Count)") -or
-    -not $upgradeCycleAuditSource.Contains("Assert-True 'baseline, upgrade, and rollback stage chronology' (Test-T21M04StageRecordChronology `$stageRecords)") -or
+    -not $upgradeCycleAuditSource.Contains("Assert-True 'M04 lifecycle stage chronology' (Test-T21M04StageRecordChronology `$stageRecords `$expectedLifecycleStages)") -or
+    $upgradeCycleAuditSource -notmatch 'shutdown-timeout-handoff' -or
+    $upgradeCycleAuditSource -notmatch 'Read-T21AuditLocalJournal' -or
+    $upgradeCycleAuditSource -notmatch 'Recovered 2 accepted LOCAL SQLite write\(s\) from the shutdown journal' -or
+    $upgradeCycleAuditSource -notmatch 'inputs/pre-timeout-handoff-local\.db' -or
+    $upgradeCycleAuditSource -notmatch 'inputs/timeout-handoff-local-persistence\.journal' -or
     $upgradeCycleAuditSource -notmatch 'validationSha256' -or
-    $upgradeCycleAuditSource -notmatch '\$expectedStartRecords\s*=\s*@\(' -or
+    $upgradeCycleAuditSource -notmatch '\$expectedStartRecords\s*=\s*\[System\.Collections\.Generic\.List\[object\]\]::new\(\)' -or
     $upgradeCycleAuditSource -notmatch 'start record count for \$\(\$expectedStart\.stage\)' -or
     $upgradeCycleAuditSource -notmatch 'stop record count for \$stage' -or
     $upgradeCycleAuditSource -notmatch 'API consumer marker for \$\(\$expectedStart\.stage\)' -or

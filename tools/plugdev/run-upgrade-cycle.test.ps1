@@ -22,6 +22,13 @@ try {
         throw 'The runner must record candidate-created receipt schema after startup and before the first replay balance read.'
     }
 
+    $timeoutReplayStatePosition = $runnerSource.IndexOf('$script:recoveryJournalHandoff.replay = Assert-T21TimeoutHandoffReplayState $script:recoveryJournalHandoff', [StringComparison]::Ordinal)
+    $timeoutReplayReadPosition = $runnerSource.IndexOf("Invoke-UpgradeCommand 'smaccept legacy-sqlite read 1337.25 765.50' 'recovery-1.4-journal-replay-read'", [StringComparison]::Ordinal)
+    if ($timeoutReplayStatePosition -lt 0 -or $timeoutReplayReadPosition -le $timeoutReplayStatePosition) {
+        throw 'The timeout-handoff report must capture replayed SQLite rows, receipts, and journal state before the first recovery balance read.'
+    }
+    Write-Output 'PASS: timeout-handoff replay evidence is captured before the first recovery balance read'
+
     New-Item -ItemType Directory -Path $plugDevScripts -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'tools\plugdev\run-upgrade-cycle.ps1') -Destination $fixtureRunner
     foreach ($fileName in @('prepare.mjs', 'prepare.test.mjs', 't21-upgrade-validation.ps1', 't21-local-persistence-journal.ps1')) {
@@ -39,7 +46,7 @@ try {
         BaselineSourceCommit = '0' * 40
         PlugDevRoot = Join-Path $fixtureRoot 'missing-plugdev'
         JavaHome = Join-Path $fixtureRoot 'missing-java'
-        RecoveryScenario = 'seeded-journal-replay-no-receipt'
+        RecoveryScenario = 'shutdown-timeout-handoff'
     }
     $pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $output = (& $pwsh -NoProfile -File $fixtureRunner @arguments 2>&1 | Out-String)

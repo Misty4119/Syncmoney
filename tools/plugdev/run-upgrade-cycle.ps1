@@ -11,7 +11,7 @@ param(
     [Parameter(Mandatory = $true)][string]$JavaHome,
     [string]$CandidateVersion = '1.4.0-alpha.1',
     [ValidateSet('off', 'guard-on')][string]$GuardProfile = 'off',
-    [ValidateSet('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt')][string]$RecoveryScenario = 'normal-drain'
+    [ValidateSet('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt', 'shutdown-timeout-handoff')][string]$RecoveryScenario = 'normal-drain'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -497,6 +497,8 @@ $script:stageRecords = [System.Collections.Generic.List[object]]::new()
 $script:configObservations = [System.Collections.Generic.List[object]]::new()
 $script:sqliteObservations = [System.Collections.Generic.List[object]]::new()
 $script:recoveryJournalReplay = $null
+$script:recoveryJournalHandoff = $null
+$script:sqliteWriterLock = $null
 $script:cleanupEvents = [System.Collections.Generic.List[object]]::new()
 $databaseRelativePath = '.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'
 $databasePath = Join-Path $runRoot $databaseRelativePath
@@ -615,6 +617,110 @@ function Assert-LegacySqliteJournalReplayStartupSchema {
         stage = 'candidate-enabled-before-replay-read'
         requestIdColumnCount = [long]$requestIdColumnCount[0]
         requestIdIndexCount = [long]$requestIdIndexCount[0]
+    }
+}
+
+function Assert-T21TimeoutHandoffJournal($Records) {
+    $expectedRecords = @(
+        [ordered]@{ uuid = '00000000-0000-0000-0000-000000000001'; playerName = 'fixture-a'; balanceAfter = '1337.25' },
+        [ordered]@{ uuid = '00000000-0000-0000-0000-000000000002'; playerName = 'fixture-b'; balanceAfter = '765.50' }
+    )
+    if (@($Records).Count -ne $expectedRecords.Count) {
+        throw "The shutdown-timeout journal must contain exactly two accepted account writes; observed $(@($Records).Count)."
+    }
+    for ($index = 0; $index -lt $expectedRecords.Count; $index++) {
+        $record = @($Records)[$index]
+        $expected = $expectedRecords[$index]
+        if ([string]$record.uuid -cne [string]$expected.uuid -or
+            [string]$record.playerName -cne [string]$expected.playerName -or
+            [string]$record.balanceAfter -cne [string]$expected.balanceAfter -or
+            [string]$record.type -cne 'SET_BALANCE' -or
+            [string]$record.source -cne 'COMMAND_ADMIN' -or
+            [string]$record.requestId -notmatch '^[A-Za-z0-9._:-]+$') {
+            throw "The shutdown-timeout journal record $($index + 1) does not match the accepted LOCAL fixture write."
+        }
+    }
+}
+
+function Assert-T21TimeoutHandoffPreReplayState($Records, [string[]]$ExpectedBalanceRows) {
+    $balanceRows = @(Invoke-SqliteQuery "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;" -ReadOnly)
+    if (($balanceRows -join "`n") -cne ($ExpectedBalanceRows -join "`n")) {
+        throw "The accepted writes changed SQLite before journal replay. Expected '$($ExpectedBalanceRows -join '; ')'; observed '$($balanceRows -join '; ')'."
+    }
+    $transactionCount = @(Invoke-SqliteQuery 'SELECT COUNT(*) FROM transactions;' -ReadOnly)
+    if ($transactionCount.Count -ne 1 -or $transactionCount[0] -cne '1') {
+        throw "The shutdown timeout must leave only the historical transaction before replay; observed $($transactionCount -join ',')."
+    }
+    $receiptStates = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in @($Records)) {
+        $requestId = [string]$record.requestId
+        $escapedRequestId = $requestId.Replace("'", "''")
+        $count = @(Invoke-SqliteQuery "SELECT COUNT(*) FROM transactions WHERE request_id='$escapedRequestId';" -ReadOnly)
+        if ($count.Count -ne 1 -or $count[0] -cne '0') {
+            throw "The request $requestId unexpectedly has a SQLite receipt before recovery."
+        }
+        $receiptStates.Add([ordered]@{ requestId = $requestId; count = [long]$count[0] })
+    }
+    return [ordered]@{
+        balanceRows = $balanceRows
+        transactionCount = [long]$transactionCount[0]
+        receiptStates = @($receiptStates)
+    }
+}
+
+function Assert-T21TimeoutHandoffReplayState($Handoff) {
+    $records = @($Handoff.journal.records)
+    Assert-T21TimeoutHandoffJournal $records
+    $beforeRows = @($Handoff.preReplay.balanceRows)
+    $beforeByUuid = @{}
+    foreach ($row in $beforeRows) {
+        $fields = ([string]$row).Split('|')
+        if ($fields.Count -ne 5) { throw 'The pre-replay LOCAL balance snapshot has invalid row framing.' }
+        $beforeByUuid[$fields[0]] = [ordered]@{ name = $fields[1]; balance = $fields[3]; version = [long]$fields[4] }
+    }
+
+    $expectedRows = [System.Collections.Generic.List[string]]::new()
+    $receiptRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $records) {
+        if (-not $beforeByUuid.ContainsKey([string]$record.uuid)) {
+            throw "The shutdown journal contains an account without a pre-replay row: $($record.uuid)."
+        }
+        $before = $beforeByUuid[[string]$record.uuid]
+        $eventVersion = [long]$record.eventVersion
+        $expectedVersion = [Math]::Max([long]($before.version + 1L), [long]($eventVersion + 1L))
+        $expectedRows.Add("$($record.uuid)|$($before.name)|real|$($record.balanceAfter)|$expectedVersion")
+        $escapedRequestId = ([string]$record.requestId).Replace("'", "''")
+        $rows = @(Invoke-SqliteQuery "SELECT uuid || '|' || name || '|' || type || '|' || printf('%.2f', amount) || '|' || printf('%.2f', balance_before) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || request_id FROM transactions WHERE request_id='$escapedRequestId';" -ReadOnly)
+        $expectedReceipt = "$($record.uuid)|$($before.name)|SET_BALANCE|$($record.balanceAfter)|$($before.balance)|$($record.balanceAfter)|COMMAND_ADMIN|$($record.requestId)"
+        if ($rows.Count -ne 1 -or $rows[0] -cne $expectedReceipt) {
+            throw "Journal replay did not create exactly one matching receipt for $($record.requestId)."
+        }
+        $receiptRows.Add($rows[0])
+    }
+
+    $actualBalanceRows = @(Invoke-SqliteQuery "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;" -ReadOnly)
+    $expectedBalanceRows = @($expectedRows | Sort-Object)
+    if (($actualBalanceRows -join "`n") -cne ($expectedBalanceRows -join "`n")) {
+        throw "Replayed LOCAL balances/versions mismatch. Expected '$($expectedBalanceRows -join '; ')'; observed '$($actualBalanceRows -join '; ')'."
+    }
+    $transactionCount = @(Invoke-SqliteQuery 'SELECT COUNT(*) FROM transactions;' -ReadOnly)
+    if ($transactionCount.Count -ne 1 -or $transactionCount[0] -cne '3') {
+        throw "Journal recovery must leave one historical transaction plus two request receipts; observed $($transactionCount -join ',')."
+    }
+    $journalPath = Join-Path (Split-Path -Parent $databasePath) 'local-persistence.journal'
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+        throw 'LOCAL recovery must retain its receipt-backed journal file after clearing.'
+    }
+    $journalBytes = [long](Get-Item -LiteralPath $journalPath).Length
+    if ($journalBytes -ne 0) { throw "The LOCAL journal was not cleared after replay receipts; bytes=$journalBytes." }
+    return [ordered]@{
+        stage = 'recovery-1.4-before-first-balance-read'
+        balanceRows = $actualBalanceRows
+        transactionRows = @($receiptRows)
+        requestIdCount = [long]$receiptRows.Count
+        transactionCount = [long]$transactionCount[0]
+        journalPath = '.plugdev/run/plugins/Syncmoney/t21-data/local-persistence.journal'
+        journalBytes = $journalBytes
     }
 }
 
@@ -818,6 +924,64 @@ function Stop-UpgradeServer([string]$stage) {
     $script:stageRecords.Add([ordered]@{ stage = $stage; stopExitCode = $stopExit; stopMethod = 'owned-session RCON command'; processExitVerified = $true; forcedCleanup = $false })
 }
 
+function Stop-UpgradeServerAfterTimeoutHandoff([string]$stage) {
+    $script:currentStage = $stage
+    $stopOutput = Join-Path $logs "$stage-stop.txt"
+    $session = Read-RunSession
+    if ($null -eq $session) { throw "PlugDev session missing before graceful timeout-handoff stop for ${stage}." }
+    $ownedSessionProcesses = @(Get-SessionOwnedProcesses $session)
+    if ($ownedSessionProcesses.Count -ne 1) {
+        throw 'Refusing timeout-handoff RCON stop: session PID is not the uniquely marked process owned by this run.'
+    }
+
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $stopExit = Invoke-VerifiedPlugDevCli -Arguments @('server', 'command', 'stop') -LogPath $stopOutput -Stage "$stage stop after SQLite lock"
+    if ($stopExit -ne 0) { throw "PlugDev RCON stop for $stage exited $stopExit; see $stopOutput." }
+    Wait-RunServerStopped -timeoutSeconds 90
+    $stopwatch.Stop()
+    if ($stopwatch.ElapsedMilliseconds -lt 10000) {
+        throw "The SQLite timeout-handoff stop completed before the 10-second drain deadline: $($stopwatch.ElapsedMilliseconds)ms."
+    }
+
+    Remove-RunSessionFile
+    $script:serverMayExist = $false
+    $serverLog = Join-Path $runRoot '.plugdev\run\logs\latest.log'
+    if (-not (Test-Path -LiteralPath $serverLog -PathType Leaf)) { throw "Expected server log missing after ${stage}: $serverLog" }
+    Copy-Item -LiteralPath $serverLog -Destination (Join-Path $logs "$stage-server.log")
+    $serverLogText = Get-Content -LiteralPath $serverLog -Raw
+    $timeoutMarker = 'LOCAL shutdown deadline expired; accepted writes remain owned while durable journal handoff runs outside the shutdown callback'
+    $handoffMarker = 'LOCAL accepted writes were durably journaled for idempotent startup recovery'
+    if (-not $serverLogText.Contains($timeoutMarker, [StringComparison]::Ordinal) -or
+        -not $serverLogText.Contains($handoffMarker, [StringComparison]::Ordinal)) {
+        throw "The graceful $stage stop did not record both SQLite drain-timeout and completed journal-handoff markers."
+    }
+
+    $stopObservation = [ordered]@{
+        stage = $stage
+        stopExitCode = [int]$stopExit
+        stopMethod = 'owned-session RCON command with held SQLite WAL writer lock'
+        processExitVerified = $true
+        forcedCleanup = $false
+        elapsedMilliseconds = [long]$stopwatch.ElapsedMilliseconds
+        requiredDrainDeadlineMilliseconds = 10000
+        timeoutMarkerObserved = $true
+        durableHandoffMarkerObserved = $true
+        serverLog = "$stage-server.log"
+    }
+    $script:stageRecords.Add([ordered]@{
+        stage = $stage
+        stopExitCode = [int]$stopExit
+        stopMethod = $stopObservation.stopMethod
+        processExitVerified = $true
+        forcedCleanup = $false
+        elapsedMilliseconds = [long]$stopwatch.ElapsedMilliseconds
+        requiredDrainDeadlineMilliseconds = 10000
+        timeoutMarkerObserved = $true
+        durableHandoffMarkerObserved = $true
+    })
+    return $stopObservation
+}
+
 $fixtureSource = Join-Path $root 'syncmoney-testkit\src\testFixtures\resources\sql\legacy-local-sqlite-v1.3.2.sql'
 if (-not (Test-Path -LiteralPath $fixtureSource -PathType Leaf)) { throw "Historical SQLite fixture not found: $fixtureSource" }
 $fixtureSha256 = (Get-FileHash -LiteralPath $fixtureSource -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -875,11 +1039,108 @@ try {
         Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
     }
     $null = Invoke-ProfileEditor 'assert-config'
-    Invoke-UpgradeCommand 'smaccept legacy-sqlite write 1337.25 765.50' 'upgrade-1.4-write'
-    Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50'
-    Stop-UpgradeServer 'upgrade-1.4'
-    $null = Invoke-ProfileEditor 'assert-config'
-    $null = Assert-LegacySqliteState '1337.25' '765.50' '1.4.0 normal stop'
+    if ($RecoveryScenario -eq 'shutdown-timeout-handoff') {
+        $preReplayBalanceRows = @(Invoke-SqliteQuery "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;" -ReadOnly)
+        $expectedPreReplayBalanceRows = @(
+            '00000000-0000-0000-0000-000000000001|fixture-a|real|100.00|7',
+            '00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3'
+        )
+        if (($preReplayBalanceRows -join "`n") -cne ($expectedPreReplayBalanceRows -join "`n")) {
+            throw "The isolated timeout-handoff fixture has unexpected starting LOCAL rows: $($preReplayBalanceRows -join '; ')."
+        }
+
+        $script:sqliteWriterLock = Start-T21LocalSqliteWriterLock -RunDirectory $runRoot `
+            -DatabasePath $databasePath -SqliteExecutable $sqliteExecutable
+        Invoke-UpgradeCommand 'smaccept legacy-sqlite write 1337.25 765.50' 'upgrade-1.4-write-before-timeout'
+        Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50'
+        $stopObservation = Stop-UpgradeServerAfterTimeoutHandoff 'upgrade-1.4'
+        $null = Invoke-ProfileEditor 'assert-config'
+
+        $journalPath = Join-Path (Split-Path -Parent $databasePath) 'local-persistence.journal'
+        if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+            throw 'Graceful shutdown after the SQLite deadline did not create the LOCAL persistence journal.'
+        }
+        $journalRecords = @(Get-T21LocalPersistenceJournalRecords -RunDirectory $runRoot `
+            -DatabasePath $databasePath -JournalPath $journalPath)
+        Assert-T21TimeoutHandoffJournal $journalRecords
+        $preReplayState = Assert-T21TimeoutHandoffPreReplayState $journalRecords $preReplayBalanceRows
+
+        $preReplaySnapshotRelativePath = 'inputs/pre-timeout-handoff-local.db'
+        $preReplaySnapshotPath = Join-Path $runRoot $preReplaySnapshotRelativePath.Replace('/', '\')
+        Assert-NoReparsePointAncestors $preReplaySnapshotPath
+        if (Test-Path -LiteralPath $preReplaySnapshotPath) { throw 'Refusing to overwrite the retained pre-replay SQLite snapshot.' }
+        Invoke-T21LocalJournalSqliteBackup $sqliteExecutable $databasePath $preReplaySnapshotPath
+        $preReplaySnapshot = Get-Item -LiteralPath $preReplaySnapshotPath
+        $preReplaySnapshotSha256 = (Get-FileHash -LiteralPath $preReplaySnapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $preReplayState.snapshot = [ordered]@{
+            path = $preReplaySnapshotRelativePath
+            bytes = [long]$preReplaySnapshot.Length
+            sha256 = $preReplaySnapshotSha256
+        }
+
+        $archiveRelativePath = 'inputs/timeout-handoff-local-persistence.journal'
+        $archivePath = Join-Path $runRoot $archiveRelativePath.Replace('/', '\')
+        Assert-NoReparsePointAncestors $archivePath
+        if (Test-Path -LiteralPath $archivePath) { throw 'Refusing to overwrite the retained timeout-handoff journal evidence.' }
+        Copy-Item -LiteralPath $journalPath -Destination $archivePath
+        $journalBytes = [IO.File]::ReadAllBytes($journalPath)
+        $archiveBytes = [IO.File]::ReadAllBytes($archivePath)
+        $journalSha256 = (Get-FileHash -LiteralPath $journalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $archiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($journalBytes.Length -ne $archiveBytes.Length -or
+            [Convert]::ToBase64String($journalBytes) -cne [Convert]::ToBase64String($archiveBytes) -or
+            $journalSha256 -cne $archiveSha256) {
+            throw 'The retained timeout-handoff journal does not match the live journal bytes.'
+        }
+
+        $lockObservation = [ordered]@{
+            processId = [int]$script:sqliteWriterLock.processId
+            journalMode = [string]$script:sqliteWriterLock.journalMode
+            startedUtc = [string]$script:sqliteWriterLock.startedUtc
+            writeLockObserved = [bool]$script:sqliteWriterLock.lockObserved.writeLockObserved
+            verifierExitCode = [int]$script:sqliteWriterLock.lockObserved.verifierExitCode
+            verifierOutput = [string]$script:sqliteWriterLock.lockObserved.verifierOutput
+        }
+        $releaseObservation = Stop-T21LocalSqliteWriterLock -Lock $script:sqliteWriterLock
+        $script:sqliteWriterLock = $null
+        $releaseProbe = @(& $sqliteExecutable -batch -cmd 'PRAGMA busy_timeout=0;' `
+            $databasePath 'BEGIN IMMEDIATE; ROLLBACK;' 2>&1)
+        $releaseProbeExitCode = $LASTEXITCODE
+        if ($releaseProbeExitCode -ne 0) {
+            throw "SQLite did not accept a new WAL writer after explicit lock release: $($releaseProbe -join ' ')."
+        }
+        $script:recoveryJournalHandoff = [ordered]@{
+            writeLock = $lockObservation
+            lockRelease = $releaseObservation
+            releaseProbeExitCode = [int]$releaseProbeExitCode
+            stop = $stopObservation
+            journal = [ordered]@{
+                path = '.plugdev/run/plugins/Syncmoney/t21-data/local-persistence.journal'
+                archivePath = $archiveRelativePath
+                bytes = [long]$journalBytes.Length
+                sha256 = $journalSha256
+                records = @($journalRecords)
+            }
+            preReplay = $preReplayState
+            replay = $null
+        }
+
+        Start-UpgradeServer "build/libs/Syncmoney-$CandidateVersion.jar" $CandidateVersion 'recovery-1.4'
+        $script:recoveryJournalHandoff.replayStartupSchemaObservation = Assert-LegacySqliteJournalReplayStartupSchema
+        $script:recoveryJournalHandoff.replay = Assert-T21TimeoutHandoffReplayState $script:recoveryJournalHandoff
+        Invoke-UpgradeCommand 'smaccept legacy-sqlite read 1337.25 765.50' 'recovery-1.4-journal-replay-read'
+        Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=read expected-a=1337.25 expected-b=765.50'
+        $null = Invoke-ProfileEditor 'assert-config'
+        Stop-UpgradeServer 'recovery-1.4'
+        $null = Invoke-ProfileEditor 'assert-config'
+        $null = Assert-LegacySqliteState '1337.25' '765.50' '1.4.0 timeout-journal recovery stop'
+    } else {
+        Invoke-UpgradeCommand 'smaccept legacy-sqlite write 1337.25 765.50' 'upgrade-1.4-write'
+        Wait-ServerMarker 'T21_LEGACY_SQLITE_PASS operation=write expected-a=1337.25 expected-b=765.50'
+        Stop-UpgradeServer 'upgrade-1.4'
+        $null = Invoke-ProfileEditor 'assert-config'
+        $null = Assert-LegacySqliteState '1337.25' '765.50' '1.4.0 normal stop'
+    }
 
     Start-UpgradeServer 'build/libs/Syncmoney-1.3.2.jar' '1.3.2' 'rollback-1.3.2'
     Invoke-UpgradeCommand 'smaccept legacy-sqlite read 1337.25 765.50' 'rollback-1.3.2-read'
@@ -892,6 +1153,22 @@ try {
     $script:failureMessage = $_.Exception.Message
 } finally {
     try {
+    if ($null -ne $script:sqliteWriterLock) {
+        try {
+            $lockRelease = Stop-T21LocalSqliteWriterLock -Lock $script:sqliteWriterLock
+            $script:cleanupEvents.Add([ordered]@{
+                stage = $script:currentStage
+                action = 'release-isolated-sqlite-writer-lock'
+                processId = [int]$lockRelease.processId
+                processExitVerified = [bool]$lockRelease.processExitVerified
+                exitCode = [int]$lockRelease.exitCode
+            })
+            $script:sqliteWriterLock = $null
+        } catch {
+            $script:cleanupFailure = "Could not release isolated SQLite writer lock: $($_.Exception.Message)"
+            $script:cleanupEvents.Add([ordered]@{ stage = $script:currentStage; action = 'release-isolated-sqlite-writer-lock-failed'; verified = $false })
+        }
+    }
     if ($script:serverMayExist) {
         try {
             $session = Read-RunSession
@@ -960,6 +1237,7 @@ try {
         task = switch ($RecoveryScenario) {
             'seeded-journal-replay' { 'T21 M04 LOCAL SQLite seeded journal replay and rollback cycle' }
             'seeded-journal-replay-no-receipt' { 'T21 M04 LOCAL SQLite seeded missing-receipt journal replay and rollback cycle' }
+            'shutdown-timeout-handoff' { 'T21 M04 LOCAL SQLite shutdown-timeout journal handoff and replay cycle' }
             default { 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle' }
         }
         recoveryScenario = $RecoveryScenario
@@ -1027,6 +1305,7 @@ try {
         configObservations = @($script:configObservations)
         sqliteObservations = @($script:sqliteObservations)
         recoveryJournalReplay = $script:recoveryJournalReplay
+        recoveryJournalHandoff = $script:recoveryJournalHandoff
         stageRecords = @($script:stageRecords)
         cleanupEvents = @($script:cleanupEvents)
         gradleDaemonStopExitCode = $script:gradleDaemonStopExitCode

@@ -286,15 +286,15 @@ function Test-T21M04RuntimeArtifactCopy(
     return $sourceSha256 -match '^[a-f0-9]{64}$' -and $runtimeSha256 -ceq $sourceSha256
 }
 
-function Test-T21M04StageRecordChronology([object[]]$stageRecords) {
-    $expected = @(
-        [ordered]@{ stage = 'baseline-1.3.2'; kind = 'start' },
-        [ordered]@{ stage = 'baseline-1.3.2'; kind = 'stop' },
-        [ordered]@{ stage = 'upgrade-1.4'; kind = 'start' },
-        [ordered]@{ stage = 'upgrade-1.4'; kind = 'stop' },
-        [ordered]@{ stage = 'rollback-1.3.2'; kind = 'start' },
-        [ordered]@{ stage = 'rollback-1.3.2'; kind = 'stop' }
-    )
+function Test-T21M04StageRecordChronology(
+    [object[]]$stageRecords,
+    [string[]]$lifecycleStages = @('baseline-1.3.2', 'upgrade-1.4', 'rollback-1.3.2')
+) {
+    $expected = [System.Collections.Generic.List[object]]::new()
+    foreach ($stage in $lifecycleStages) {
+        $expected.Add([ordered]@{ stage = $stage; kind = 'start' })
+        $expected.Add([ordered]@{ stage = $stage; kind = 'stop' })
+    }
     if ($stageRecords.Count -ne $expected.Count) { return $false }
 
     for ($index = 0; $index -lt $expected.Count; $index++) {

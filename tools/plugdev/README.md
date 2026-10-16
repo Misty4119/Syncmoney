@@ -106,6 +106,9 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
   -JavaHome $env:JAVA_HOME
 ```
 
+### LOCAL SQLite shutdown-timeout handoff case
+
+To exercise the graceful shutdown-timeout scenario, add `-GuardProfile guard-on -RecoveryScenario shutdown-timeout-handoff` to the `run-upgrade-cycle.ps1` invocation above. The runner holds an isolated SQLite WAL writer lock while two accepted LOCAL writes are pending through the 10-second drain deadline, verifies the checksummed journal handoff, releases the lock, and checks replay state before its first recovery balance read. The current accepted runtime observation is limited to Paper `1.21.6#48`; it is a graceful-stop test and does not establish forced-kill or power-loss durability.
 The acceptance probe supports `smaccept legacy-sqlite [read [balance-a balance-b]|write balance-a balance-b]` for the two fixed fixture UUIDs, plus `smaccept read` and `smaccept write` for the existing disposable accounts. These commands do not address arbitrary players.
 
 ## Confirmed platform endpoints and runtime smoke

@@ -13,6 +13,7 @@ $databasePath = Join-Path $runRoot '.plugdev\run\plugins\Syncmoney\t21-data\lega
 $journalPath = Join-Path (Split-Path -Parent $databasePath) 'local-persistence.journal'
 $archivePath = Join-Path $runRoot 'inputs\seeded-local-persistence.journal'
 $oldMarker = [Environment]::GetEnvironmentVariable('T21_RUN_MARKER', 'Process')
+$lock = $null
 $sqliteCommand = Get-Command sqlite3.exe, sqlite3 -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -eq $sqliteCommand -or $sqliteCommand.CommandType -ne 'Application') {
     throw 'sqlite3 is required for the T21 local journal replay helper regression test.'
@@ -28,6 +29,18 @@ try {
     . (Join-Path $PSScriptRoot 't21-local-persistence-journal.ps1')
     [Environment]::SetEnvironmentVariable('T21_RUN_MARKER', $runRoot, 'Process')
     $seed = New-T21LocalJournalReplaySeed -RunDirectory $runRoot -DatabasePath $databasePath -SqliteExecutable $sqliteCommand.Source
+    $parsedSeedRecords = @(Get-T21LocalPersistenceJournalRecords -RunDirectory $runRoot `
+        -DatabasePath $databasePath -JournalPath $journalPath)
+    if ($parsedSeedRecords.Count -ne 1 -or
+        [string]$parsedSeedRecords[0].uuid -cne '00000000-0000-0000-0000-000000000001' -or
+        [string]$parsedSeedRecords[0].delta -cne '17.25' -or
+        [string]$parsedSeedRecords[0].balanceAfter -cne '117.25' -or
+        [long]$parsedSeedRecords[0].eventVersion -ne 7 -or
+        [string]$parsedSeedRecords[0].type -cne 'DEPOSIT' -or
+        [string]$parsedSeedRecords[0].source -cne 'VAULT_DEPOSIT' -or
+        [string]$parsedSeedRecords[0].requestId -cne [string]$seed.requestId) {
+        throw 'The journal inspector must decode the seeded SYNCLOCAL1 event and verify its fields.'
+    }
 
     $preReplayBalances = @(Invoke-T21LocalJournalSqliteRead $sqliteCommand.Source $databasePath `
         "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;")
@@ -164,8 +177,74 @@ try {
     }
     if (-not $overwriteRejected) { throw 'The helper must never overwrite a pre-existing journal.' }
 
-    Write-Output 'PASS: committed receipt state and legacy no-receipt schema snapshot, pending replay journals, framing/checksum, isolated paths, and overwrite refusal'
+    $lockRunRoot = Join-Path $fixtureRoot 'lock-run'
+    $lockDatabasePath = Join-Path $lockRunRoot '.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lockDatabasePath) | Out-Null
+    $lockSeedOutput = @(& $sqliteCommand.Source -batch -noheader $lockDatabasePath 'PRAGMA journal_mode=WAL;' $seedCommand 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "Could not seed the isolated SQLite write-lock fixture: $($lockSeedOutput -join ' ')" }
+    $lockJournalMode = @(& $sqliteCommand.Source -batch -noheader $lockDatabasePath 'PRAGMA journal_mode;' 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $lockJournalMode.Count -ne 1 -or $lockJournalMode[0] -cne 'wal') {
+        throw "The isolated SQLite write-lock fixture must use WAL mode; observed '$($lockJournalMode -join ' ')'."
+    }
+    [Environment]::SetEnvironmentVariable('T21_RUN_MARKER', $lockRunRoot, 'Process')
+
+    $lock = Start-T21LocalSqliteWriterLock -RunDirectory $lockRunRoot `
+        -DatabasePath $lockDatabasePath -SqliteExecutable $sqliteCommand.Source
+    $heldLock = Assert-T21LocalSqliteWriterLockHeld -Lock $lock
+    if (-not [bool]$heldLock.writeLockObserved -or
+        [int]$heldLock.verifierExitCode -eq 0 -or
+        [string]$heldLock.verifierOutput -notmatch 'database is locked') {
+        throw 'The controlled SQLite delay must prove a second writer is blocked by the held transaction.'
+    }
+    if ([string]$lock.journalMode -cne 'wal' -or
+        [IO.Path]::GetFullPath([string]$lock.databasePath) -cne [IO.Path]::GetFullPath($lockDatabasePath) -or
+        [int]$lock.processId -le 0 -or
+        [string]$lock.sqliteExecutable -cne [IO.Path]::GetFullPath($sqliteCommand.Source)) {
+        throw 'The isolated WAL lock record must retain its mode, database, executable, and process identity.'
+    }
+
+    $lockSnapshotPath = Join-Path $lockRunRoot 'inputs\pre-lock-snapshot.db'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lockSnapshotPath) | Out-Null
+    Invoke-T21LocalJournalSqliteBackup $sqliteCommand.Source $lockDatabasePath $lockSnapshotPath
+    $lockSnapshotBalances = @(Invoke-T21LocalJournalSqliteRead $sqliteCommand.Source $lockSnapshotPath `
+        "SELECT uuid || '|' || printf('%.2f', balance) FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;")
+    if ($lockSnapshotBalances.Count -ne 2 -or $lockSnapshotBalances[0] -cne '00000000-0000-0000-0000-000000000001|100.00' -or
+        $lockSnapshotBalances[1] -cne '00000000-0000-0000-0000-000000000002|0.00') {
+        throw 'A read-only SQLite backup under the WAL writer lock must retain the committed pre-replay balances.'
+    }
+
+    $outsideLockRejected = $false
+    try {
+        Start-T21LocalSqliteWriterLock -RunDirectory $lockRunRoot `
+            -DatabasePath (Join-Path $fixtureRoot 'outside.db') -SqliteExecutable $sqliteCommand.Source | Out-Null
+    } catch {
+        $outsideLockRejected = $_.Exception.Message -match 'restricted to the isolated historical M04 SQLite path'
+    }
+    if (-not $outsideLockRejected) { throw 'SQLite write-lock injection must reject a database outside the M04 fixture.' }
+
+    $releasedLock = Stop-T21LocalSqliteWriterLock -Lock $lock
+    $lock = $null
+    if (-not [bool]$releasedLock.processExitVerified -or [int]$releasedLock.exitCode -ne 0) {
+        throw 'The SQLite lock owner must release its transaction and exit normally.'
+    }
+    $releaseProbe = @(& $sqliteCommand.Source -batch -cmd 'PRAGMA busy_timeout=0;' `
+        $lockDatabasePath 'BEGIN IMMEDIATE; ROLLBACK;' 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "The SQLite database must accept a writer after explicit lock release: $($releaseProbe -join ' ')"
+    }
+
+    Write-Output 'PASS: journal event decoding, committed receipt state, legacy no-receipt schema snapshot, WAL writer exclusion, framing/checksum, isolated paths, and overwrite refusal'
 } finally {
+    if ($null -ne $lock -and $null -ne $lock.process) {
+        try {
+            [Environment]::SetEnvironmentVariable('T21_RUN_MARKER', [string]$lock.runRoot, 'Process')
+            if (-not $lock.process.HasExited) {
+                Stop-T21LocalSqliteWriterLock -Lock $lock | Out-Null
+            }
+        } catch {
+            throw "Could not release the owned SQLite test writer lock before cleanup: $($_.Exception.Message)"
+        }
+    }
     [Environment]::SetEnvironmentVariable('T21_RUN_MARKER', $oldMarker, 'Process')
     $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
     $temporaryPrefix = $temporaryRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar

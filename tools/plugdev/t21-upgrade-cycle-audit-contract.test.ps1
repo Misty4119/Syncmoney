@@ -61,6 +61,9 @@ $recoveryTaskPredicate = Import-AuditPredicate 'Assert-T21RecoveryTask'
 $candidateCheckoutPredicate = Import-AuditPredicate 'Assert-T21CandidateCheckoutCommit'
 $journalHelperPinPredicate = Import-AuditPredicate 'Get-T21LocalJournalHelperPin'
 $sourcePinPredicate = Import-AuditPredicate 'Assert-T21SourcePin'
+$auditShaPredicate = Import-AuditPredicate 'Get-T21AuditSha256'
+$auditBase64Predicate = Import-AuditPredicate 'ConvertFrom-T21AuditBase64Url'
+$auditJournalReaderPredicate = Import-AuditPredicate 'Read-T21AuditLocalJournal'
 . $startupPredicate
 . $receiptPredicate
 . $absentReceiptPredicate
@@ -70,6 +73,9 @@ $sourcePinPredicate = Import-AuditPredicate 'Assert-T21SourcePin'
 . $candidateCheckoutPredicate
 . $journalHelperPinPredicate
 . $sourcePinPredicate
+. $auditShaPredicate
+. $auditBase64Predicate
+. $auditJournalReaderPredicate
 
 $recoveryMarker = 'Recovered 1 accepted LOCAL SQLite write(s) from the shutdown journal'
 $enabledMarker = 'Syncmoney enabled successfully.'
@@ -134,6 +140,20 @@ if ($legacyScenario -cne 'normal-drain') { throw 'A legacy report without recove
 Assert-T21RecoveryTask $legacyScenario $legacyReport.task
 Write-Output 'PASS: legacy report without recoveryScenario retains its normal-drain contract'
 
+$timeoutHandoffReport = [pscustomobject]@{
+    recoveryScenario = 'shutdown-timeout-handoff'
+    task = 'T21 M04 LOCAL SQLite shutdown-timeout journal handoff and replay cycle'
+}
+$timeoutHandoffScenario = Resolve-T21RecoveryScenario $timeoutHandoffReport
+if ($timeoutHandoffScenario -cne 'shutdown-timeout-handoff') {
+    throw 'The runtime auditor did not retain the shutdown-timeout-handoff scenario.'
+}
+Assert-T21RecoveryTask $timeoutHandoffScenario $timeoutHandoffReport.task
+Assert-ThrowsContaining 'timeout-handoff report with the wrong task is rejected' {
+    Assert-T21RecoveryTask 'shutdown-timeout-handoff' 'T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle'
+} 'does not match recovery scenario'
+Write-Output 'PASS: shutdown-timeout handoff scenario/task contract is recognized and bound'
+
 Assert-T21RecoveryTask 'seeded-journal-replay' 'T21 M04 LOCAL SQLite seeded journal replay and rollback cycle'
 Assert-T21RecoveryTask 'seeded-journal-replay' 'T21 M04 LOCAL SQLite seeded duplicate-receipt journal replay and rollback cycle'
 Write-Output 'PASS: canonical and historical duplicate-receipt task labels are accepted'
@@ -164,5 +184,54 @@ if ($runnerText -notmatch "'seeded-journal-replay'\s*\{\s*'T21 M04 LOCAL SQLite 
     throw 'The runtime runner must emit the canonical seeded journal replay task label.'
 }
 Write-Output 'PASS: runner emits the canonical seeded replay task label'
+
+if ($runnerText -notmatch "'shutdown-timeout-handoff'\s*\{\s*'T21 M04 LOCAL SQLite shutdown-timeout journal handoff and replay cycle'\s*\}") {
+    throw 'The runtime runner must emit the canonical timeout-handoff task label.'
+}
+Write-Output 'PASS: runner emits the canonical timeout-handoff task label'
+
+$journalFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "syncmoney-t21-audit-journal-$([guid]::NewGuid().ToString('N'))"
+$validJournalPath = Join-Path $journalFixtureRoot 'valid.journal'
+$invalidJournalPath = Join-Path $journalFixtureRoot 'invalid.journal'
+try {
+    New-Item -ItemType Directory -Path $journalFixtureRoot -Force | Out-Null
+    $encodeAuditBase64 = { param([string]$value) [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+    $journalFields = @(
+        'SYNCLOCAL1',
+        (& $encodeAuditBase64 '00000000-0000-0000-0000-000000000001'),
+        (& $encodeAuditBase64 '1237.25'),
+        (& $encodeAuditBase64 '1337.25'),
+        '8',
+        'SET_BALANCE',
+        'COMMAND_ADMIN',
+        (& $encodeAuditBase64 't21-timeout-request-a'),
+        '1700000000000',
+        (& $encodeAuditBase64 'fixture-a')
+    )
+    $journalPayload = [string]::Join("`t", $journalFields)
+    $journalChecksum = Get-T21AuditSha256 ([Text.Encoding]::UTF8.GetBytes($journalPayload))
+    [IO.File]::WriteAllText($validJournalPath, "$journalPayload`t$journalChecksum`n", [Text.UTF8Encoding]::new($false))
+    $parsedAuditRecords = @(Read-T21AuditLocalJournal $validJournalPath)
+    if ($parsedAuditRecords.Count -ne 1 -or
+        [string]$parsedAuditRecords[0].uuid -cne '00000000-0000-0000-0000-000000000001' -or
+        [string]$parsedAuditRecords[0].balanceAfter -cne '1337.25' -or
+        [string]$parsedAuditRecords[0].requestId -cne 't21-timeout-request-a') {
+        throw 'The independent auditor must decode one valid checksummed LOCAL journal record.'
+    }
+    [IO.File]::WriteAllText($invalidJournalPath, "$journalPayload`t$($journalChecksum.Replace('a', 'b', [StringComparison]::Ordinal))`n", [Text.UTF8Encoding]::new($false))
+    Assert-ThrowsContaining 'tampered timeout-journal checksum is rejected' {
+        Read-T21AuditLocalJournal $invalidJournalPath
+    } 'checksum differs'
+} finally {
+    $resolvedJournalFixtureRoot = [IO.Path]::GetFullPath($journalFixtureRoot)
+    $journalFixturePrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedJournalFixtureRoot.StartsWith($journalFixturePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove the audit journal test fixture outside temp: $resolvedJournalFixtureRoot"
+    }
+    if (Test-Path -LiteralPath $resolvedJournalFixtureRoot) {
+        Remove-Item -LiteralPath $resolvedJournalFixtureRoot -Recurse -Force
+    }
+}
+Write-Output 'PASS: independent offline auditor accepts valid LOCAL journal records and rejects tampered checksums'
 
 Write-Output 'T21 offline-auditor contract tests PASS'

@@ -168,7 +168,7 @@ function Assert-T21SourcePin([string]$Name, [string]$ExpectedSha256, [string]$Ac
 function Resolve-T21RecoveryScenario($Report) {
     $recoveryScenario = [string](Get-Field $Report 'recoveryScenario')
     if ([string]::IsNullOrWhiteSpace($recoveryScenario)) { return 'normal-drain' }
-    if ($recoveryScenario -notin @('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt')) {
+    if ($recoveryScenario -notin @('normal-drain', 'seeded-journal-replay', 'seeded-journal-replay-no-receipt', 'shutdown-timeout-handoff')) {
         throw "Unknown M04 recovery scenario: '$recoveryScenario'."
     }
     return $recoveryScenario
@@ -183,12 +183,97 @@ function Assert-T21RecoveryTask([string]$RecoveryScenario, [string]$Task) {
             )
         }
         'seeded-journal-replay-no-receipt' { @('T21 M04 LOCAL SQLite seeded missing-receipt journal replay and rollback cycle') }
+        'shutdown-timeout-handoff' { @('T21 M04 LOCAL SQLite shutdown-timeout journal handoff and replay cycle') }
         'normal-drain' { @('T21 M04 LOCAL SQLite upgrade and normal-drain rollback cycle') }
         default { throw "Unknown M04 recovery scenario: '$RecoveryScenario'." }
     }
     if ($Task -cnotin $expectedTasks) {
         throw "FAIL: M04 report task '$Task' does not match recovery scenario '$RecoveryScenario'."
     }
+}
+
+function Get-T21AuditSha256([byte[]]$Bytes) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($algorithm.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+function ConvertFrom-T21AuditBase64Url([string]$Value) {
+    if ($Value -notmatch '^[A-Za-z0-9_-]*$') { throw 'FAIL: retained LOCAL journal has an invalid base64url field.' }
+    $standard = $Value.Replace('-', '+').Replace('_', '/')
+    switch ($standard.Length % 4) {
+        1 { throw 'FAIL: retained LOCAL journal has an invalid base64url field length.' }
+        2 { $standard += '==' }
+        3 { $standard += '=' }
+    }
+    try {
+        return [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String($standard))
+    } catch {
+        throw "FAIL: retained LOCAL journal has invalid UTF-8 base64url data: $($_.Exception.Message)"
+    }
+}
+
+function Read-T21AuditLocalJournal([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -eq 0) { throw 'FAIL: retained LOCAL shutdown journal is empty.' }
+    try {
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+    } catch {
+        throw "FAIL: retained LOCAL shutdown journal is not valid UTF-8: $($_.Exception.Message)"
+    }
+    if (-not $text.EndsWith("`n", [StringComparison]::Ordinal) -or $text.Contains("`r")) {
+        throw 'FAIL: retained LOCAL shutdown journal must contain complete LF-terminated records.'
+    }
+    $lines = $text.Split([char[]]@("`n"), [StringSplitOptions]::None)
+    if ($lines.Length -lt 2 -or $lines[$lines.Length - 1] -cne '') {
+        throw 'FAIL: retained LOCAL shutdown journal has invalid final framing.'
+    }
+
+    $records = [System.Collections.Generic.List[object]]::new()
+    $requestIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for ($index = 0; $index -lt $lines.Length - 1; $index++) {
+        $line = $lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line)) { throw "FAIL: retained LOCAL journal has an empty record at line $($index + 1)." }
+        $parts = $line.Split([char[]]@("`t"), [StringSplitOptions]::None)
+        if ($parts.Length -ne 11 -or $parts[0] -cne 'SYNCLOCAL1') {
+            throw "FAIL: retained LOCAL journal record $($index + 1) has invalid SYNCLOCAL1 framing."
+        }
+        $payload = [string]::Join("`t", $parts[0..9])
+        if ((Get-T21AuditSha256 ([Text.Encoding]::UTF8.GetBytes($payload))) -cne $parts[10]) {
+            throw "FAIL: retained LOCAL journal checksum differs at line $($index + 1)."
+        }
+        $uuid = ConvertFrom-T21AuditBase64Url $parts[1]
+        $delta = ConvertFrom-T21AuditBase64Url $parts[2]
+        $balanceAfter = ConvertFrom-T21AuditBase64Url $parts[3]
+        $requestId = ConvertFrom-T21AuditBase64Url $parts[7]
+        $playerName = ConvertFrom-T21AuditBase64Url $parts[9]
+        if ($uuid -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+            $delta -notmatch '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$' -or
+            $balanceAfter -notmatch '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$' -or
+            $parts[4] -notmatch '^[0-9]+$' -or $parts[8] -notmatch '^[0-9]+$' -or
+            [string]::IsNullOrWhiteSpace($requestId) -or [string]::IsNullOrWhiteSpace($playerName) -or
+            $parts[5] -notin @('DEPOSIT', 'WITHDRAW', 'SET_BALANCE', 'TRANSFER_IN', 'TRANSFER_OUT') -or
+            [string]::IsNullOrWhiteSpace($parts[6])) {
+            throw "FAIL: retained LOCAL journal record $($index + 1) has an invalid event field."
+        }
+        if (-not $requestIds.Add($requestId)) { throw "FAIL: retained LOCAL journal repeats request ID '$requestId'." }
+        $records.Add([pscustomobject][ordered]@{
+            uuid = $uuid
+            delta = $delta
+            balanceAfter = $balanceAfter
+            eventVersion = [long]$parts[4]
+            type = $parts[5]
+            source = $parts[6]
+            requestId = $requestId
+            timestamp = [long]$parts[8]
+            playerName = $playerName
+            recordSha256 = Get-T21AuditSha256 ([Text.Encoding]::UTF8.GetBytes($line))
+        })
+    }
+    return @($records.ToArray())
 }
 
 function Assert-T21CandidateCheckoutCommit($Commit, [bool]$Required) {
@@ -226,10 +311,15 @@ Assert-Equal 'report run directory binding' $runRoot ([IO.Path]::GetFullPath([st
 Assert-Equal 'M04 report status' 'PASS' ([string]$report.status)
 $hasExplicitRecoveryScenario = -not [string]::IsNullOrWhiteSpace([string](Get-Field $report 'recoveryScenario'))
 $recoveryScenario = Resolve-T21RecoveryScenario $report
+$expectedLifecycleStages = if ($recoveryScenario -eq 'shutdown-timeout-handoff') {
+    @('baseline-1.3.2', 'upgrade-1.4', 'recovery-1.4', 'rollback-1.3.2')
+} else {
+    @('baseline-1.3.2', 'upgrade-1.4', 'rollback-1.3.2')
+}
 Assert-T21RecoveryTask $recoveryScenario ([string]$report.task)
 $candidateCheckoutCommit = Get-Field $report 'candidateCheckoutCommit'
 if ($null -eq $candidateCheckoutCommit) { $candidateCheckoutCommit = Get-Field $report 'candidateSourceCommit' }
-Assert-T21CandidateCheckoutCommit $candidateCheckoutCommit ($recoveryScenario -eq 'seeded-journal-replay-no-receipt')
+Assert-T21CandidateCheckoutCommit $candidateCheckoutCommit ($recoveryScenario -in @('seeded-journal-replay-no-receipt', 'shutdown-timeout-handoff'))
 Assert-Equal '1.3.2 baseline JAR pin' '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10' ([string]$report.expectedBaselinePluginSha256)
 Assert-Equal '1.3.2 baseline source commit pin' '71cc55dfeefe9a8f40a3835b051ddd324d353767' ([string]$report.baselineSourceCommit)
 Assert-Equal 'VaultUnlocked dependency version' '2.20.2' ([string]$report.vaultUnlockedDependencyVersion)
@@ -297,7 +387,7 @@ $validationSourceSha256 = (Get-FileHash -LiteralPath $validationSourcePath -Algo
 Assert-Equal 'shared validation source SHA-256' ([string]$sourcePins.validationSha256) $validationSourceSha256
 . $validationSourcePath
 Assert-True "exact $PlatformEndpoint platform endpoint pin" (Test-T21M04PlatformEndpointReport $report -PlatformEndpoint $PlatformEndpoint)
-foreach ($stage in @('baseline-1.3.2', 'upgrade-1.4', 'rollback-1.3.2')) {
+foreach ($stage in $expectedLifecycleStages) {
     $startupLogPath = Resolve-RunRelativePath (Join-Path 'logs' "$stage-start.txt")
     if (-not (Test-Path -LiteralPath $startupLogPath -PathType Leaf)) {
         throw "Required M04 server startup log is missing: $stage-start.txt"
@@ -353,7 +443,8 @@ Assert-Equal 'staged prepare source SHA-256' ([string]$sourcePins.prepareStagedS
 Assert-Equal 'staged prepare matches source' ([string]$sourcePins.prepareSha256) $stagedPrepareSha256
 
 $configObservations = @($report.configObservations)
-Assert-Equal 'config observation count' '6' ([string]$configObservations.Count)
+$expectedConfigObservationCount = if ($recoveryScenario -eq 'shutdown-timeout-handoff') { '8' } else { '6' }
+Assert-Equal 'config observation count' $expectedConfigObservationCount ([string]$configObservations.Count)
 $expectedProfile = [ordered]@{
     mode = 'local'
     redisEnabled = $false
@@ -386,16 +477,19 @@ foreach ($observation in $configObservations) {
 $stageRecords = @($report.stageRecords)
 $startRecords = @($stageRecords | Where-Object { $null -ne (Get-Field $_ 'startExitCode') })
 $stopRecords = @($stageRecords | Where-Object { $null -ne (Get-Field $_ 'stopExitCode') })
-$expectedStartRecords = @(
-    [ordered]@{ stage = 'baseline-1.3.2'; pluginVersion = '1.3.2'; apiClassLoader = 'NOT_APPLICABLE' },
-    [ordered]@{ stage = 'upgrade-1.4'; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = 'PASS' },
-    [ordered]@{ stage = 'rollback-1.3.2'; pluginVersion = '1.3.2'; apiClassLoader = 'NOT_APPLICABLE' }
-)
-$expectedLifecycleStages = @('baseline-1.3.2', 'upgrade-1.4', 'rollback-1.3.2')
-Assert-Equal 'complete stage record count' '6' ([string]$stageRecords.Count)
-Assert-Equal 'normal start record count' '3' ([string]$startRecords.Count)
-Assert-Equal 'normal stop record count' '3' ([string]$stopRecords.Count)
-Assert-True 'baseline, upgrade, and rollback stage chronology' (Test-T21M04StageRecordChronology $stageRecords)
+$expectedStartRecords = [System.Collections.Generic.List[object]]::new()
+$expectedStartRecords.Add([ordered]@{ stage = 'baseline-1.3.2'; pluginVersion = '1.3.2'; apiClassLoader = 'NOT_APPLICABLE' })
+$expectedStartRecords.Add([ordered]@{ stage = 'upgrade-1.4'; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = 'PASS' })
+if ($recoveryScenario -eq 'shutdown-timeout-handoff') {
+    $expectedStartRecords.Add([ordered]@{ stage = 'recovery-1.4'; pluginVersion = [string]$report.candidatePlugin; apiClassLoader = 'PASS' })
+}
+$expectedStartRecords.Add([ordered]@{ stage = 'rollback-1.3.2'; pluginVersion = '1.3.2'; apiClassLoader = 'NOT_APPLICABLE' })
+$expectedStartRecords = @($expectedStartRecords.ToArray())
+$expectedStageRecordCount = [string]($expectedLifecycleStages.Count * 2)
+Assert-Equal 'complete stage record count' $expectedStageRecordCount ([string]$stageRecords.Count)
+Assert-Equal 'normal start record count' ([string]$expectedLifecycleStages.Count) ([string]$startRecords.Count)
+Assert-Equal 'normal stop record count' ([string]$expectedLifecycleStages.Count) ([string]$stopRecords.Count)
+Assert-True 'M04 lifecycle stage chronology' (Test-T21M04StageRecordChronology $stageRecords $expectedLifecycleStages)
 $invalidStageRecords = @($stageRecords | Where-Object {
     $hasStartExit = $null -ne (Get-Field $_ 'startExitCode')
     $hasStopExit = $null -ne (Get-Field $_ 'stopExitCode')
@@ -430,6 +524,19 @@ if ($recoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-r
         'Recovered 1 accepted LOCAL SQLite write(s) from the shutdown journal' `
         'Syncmoney enabled successfully.' `
         'T21_LEGACY_SQLITE_PASS operation=read expected-a=117.25 expected-b=0.00'
+} elseif ($recoveryScenario -eq 'shutdown-timeout-handoff') {
+    $upgradeLogPath = Resolve-RunRelativePath (Join-Path 'logs' 'upgrade-1.4-server.log')
+    $upgradeLog = Get-Content -LiteralPath $upgradeLogPath -Raw
+    Assert-True 'shutdown timeout reached the configured LOCAL drain deadline' $upgradeLog.Contains('LOCAL shutdown deadline expired; accepted writes remain owned while durable journal handoff runs outside the shutdown callback', [StringComparison]::Ordinal)
+    Assert-True 'durable LOCAL journal handoff completed before server exit' $upgradeLog.Contains('LOCAL accepted writes were durably journaled for idempotent startup recovery', [StringComparison]::Ordinal)
+    $recoveryLogPath = Resolve-RunRelativePath (Join-Path 'logs' 'recovery-1.4-server.log')
+    Assert-True 'recovery candidate runtime log exists' (Test-Path -LiteralPath $recoveryLogPath -PathType Leaf)
+    $recoveryLog = Get-Content -LiteralPath $recoveryLogPath -Raw
+    Assert-T21StartupRecoveryChronology $recoveryLog `
+        'Recovered 2 accepted LOCAL SQLite write(s) from the shutdown journal' `
+        'Syncmoney enabled successfully.' `
+        'T21_LEGACY_SQLITE_PASS operation=read expected-a=1337.25 expected-b=765.50'
+    Assert-True 'recovery candidate API consumer marker' $recoveryLog.Contains('API CLASSLOADER PASS provider=Syncmoney', [StringComparison]::Ordinal)
 } else {
     Assert-LogMarker 'upgrade-1.4-server.log' 'T21_LEGACY_SQLITE_PASS operation=read expected-a=100.00 expected-b=0.00'
 }
@@ -568,8 +675,132 @@ if ($recoveryScenario -in @('seeded-journal-replay', 'seeded-journal-replay-no-r
     $replayedTransaction = @(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT id || '|' || uuid || '|' || name || '|' || type || '|' || typeof(amount) || '|' || printf('%.2f', amount) || '|' || typeof(balance_before) || '|' || printf('%.2f', balance_before) || '|' || typeof(balance_after) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || timestamp || '|' || sequence || '|' || request_id FROM transactions WHERE request_id='$requestId';")
     Assert-Equal 'SQLite request ID has exactly one replay row' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT COUNT(*) FROM transactions WHERE request_id='$requestId';")[0]))
     Assert-T21ReplayReceiptBinding $observation $expectedReplayedTransaction $replayedTransaction
+} elseif ($recoveryScenario -eq 'shutdown-timeout-handoff') {
+    Assert-Equal 'timeout-handoff scenario has no seeded replay report' $null (Get-Field $report 'recoveryJournalReplay')
+    $handoff = Get-Field $report 'recoveryJournalHandoff'
+    Assert-True 'shutdown-timeout handoff report is present' ($null -ne $handoff)
+
+    $writeLock = Get-Field $handoff 'writeLock'
+    Assert-Equal 'timeout-handoff SQLite journal mode' 'wal' ([string](Get-Field $writeLock 'journalMode'))
+    Assert-Equal 'second SQLite writer was blocked' $true ([bool](Get-Field $writeLock 'writeLockObserved'))
+    Assert-True 'SQLite competing-writer probe reported lock contention' ([string](Get-Field $writeLock 'verifierOutput') -match '(?i)database is locked')
+    Assert-True 'owned SQLite lock process ID was recorded' ([int](Get-Field $writeLock 'processId') -gt 0)
+    Assert-Equal 'SQLite writer lock exited after explicit rollback' $true ([bool](Get-Field (Get-Field $handoff 'lockRelease') 'processExitVerified'))
+    Assert-Equal 'SQLite writer lock release exit code' '0' ([string](Get-Field (Get-Field $handoff 'lockRelease') 'exitCode'))
+    Assert-Equal 'SQLite accepts a new writer after release' '0' ([string](Get-Field $handoff 'releaseProbeExitCode'))
+
+    $stopObservation = Get-Field $handoff 'stop'
+    Assert-Equal 'graceful timeout stop stage' 'upgrade-1.4' ([string](Get-Field $stopObservation 'stage'))
+    Assert-Equal 'timeout stop RCON exit code' '0' ([string](Get-Field $stopObservation 'stopExitCode'))
+    Assert-Equal 'timeout stop process exit verified' $true ([bool](Get-Field $stopObservation 'processExitVerified'))
+    Assert-Equal 'timeout stop used no forced cleanup' $false ([bool](Get-Field $stopObservation 'forcedCleanup'))
+    Assert-Equal 'reported LOCAL drain deadline' '10000' ([string](Get-Field $stopObservation 'requiredDrainDeadlineMilliseconds'))
+    Assert-True 'graceful shutdown exceeded the LOCAL drain deadline' ([long](Get-Field $stopObservation 'elapsedMilliseconds') -ge 10000)
+    Assert-Equal 'timeout marker was observed' $true ([bool](Get-Field $stopObservation 'timeoutMarkerObserved'))
+    Assert-Equal 'journal handoff completion marker was observed' $true ([bool](Get-Field $stopObservation 'durableHandoffMarkerObserved'))
+    Assert-Equal 'timeout stop log path' 'upgrade-1.4-server.log' ([string](Get-Field $stopObservation 'serverLog'))
+
+    $journal = Get-Field $handoff 'journal'
+    Assert-Equal 'runtime LOCAL journal path' '.plugdev/run/plugins/Syncmoney/t21-data/local-persistence.journal' ([string](Get-Field $journal 'path'))
+    Assert-Equal 'archived timeout journal path' 'inputs/timeout-handoff-local-persistence.journal' ([string](Get-Field $journal 'archivePath'))
+    Assert-True 'timeout journal byte count is nonzero' ([long](Get-Field $journal 'bytes') -gt 0)
+    $journalArchivePath = Resolve-RunRelativePath ([string](Get-Field $journal 'archivePath'))
+    Assert-NoReparsePointAncestors $journalArchivePath
+    Assert-True 'retained timeout journal archive exists' (Test-Path -LiteralPath $journalArchivePath -PathType Leaf)
+    $journalArchiveItem = Get-Item -LiteralPath $journalArchivePath
+    $journalArchiveSha256 = (Get-FileHash -LiteralPath $journalArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Equal 'retained timeout journal byte count' ([long](Get-Field $journal 'bytes')) ([long]$journalArchiveItem.Length)
+    Assert-Equal 'retained timeout journal SHA-256' ([string](Get-Field $journal 'sha256')) $journalArchiveSha256
+    $archiveRecords = @(Read-T21AuditLocalJournal $journalArchivePath)
+    $reportedRecords = @(Get-Field $journal 'records')
+    Assert-Equal 'runtime and retained journal record count' '2' ([string]$archiveRecords.Count)
+    Assert-Equal 'reported and independently parsed journal record count' ([string]$archiveRecords.Count) ([string]$reportedRecords.Count)
+    $expectedHandoffRecords = @(
+        [ordered]@{ uuid = '00000000-0000-0000-0000-000000000001'; playerName = 'fixture-a'; balanceAfter = '1337.25' },
+        [ordered]@{ uuid = '00000000-0000-0000-0000-000000000002'; playerName = 'fixture-b'; balanceAfter = '765.50' }
+    )
+    for ($index = 0; $index -lt $expectedHandoffRecords.Count; $index++) {
+        $parsed = $archiveRecords[$index]
+        $reported = $reportedRecords[$index]
+        $expected = $expectedHandoffRecords[$index]
+        Assert-Equal "handoff event account $index" ([string]$expected.uuid) ([string]$parsed.uuid)
+        Assert-Equal "handoff event player name $index" ([string]$expected.playerName) ([string]$parsed.playerName)
+        Assert-Equal "handoff event target balance $index" ([string]$expected.balanceAfter) ([string]$parsed.balanceAfter)
+        Assert-Equal "handoff event type $index" 'SET_BALANCE' ([string]$parsed.type)
+        Assert-Equal "handoff event source $index" 'COMMAND_ADMIN' ([string]$parsed.source)
+        Assert-Equal "handoff record checksum pin $index" ([string]$parsed.recordSha256) ([string](Get-Field $reported 'recordSha256'))
+        Assert-Equal "reported handoff request ID $index" ([string]$parsed.requestId) ([string](Get-Field $reported 'requestId'))
+    }
+
+    $preReplay = Get-Field $handoff 'preReplay'
+    $preReplayRows = @(
+        '00000000-0000-0000-0000-000000000001|fixture-a|real|100.00|7',
+        '00000000-0000-0000-0000-000000000002|fixture-b|real|0.00|3'
+    )
+    Assert-Equal 'pre-replay LOCAL balances and versions stayed unchanged' ($preReplayRows -join "`n") (@(Get-Field $preReplay 'balanceRows') -join "`n")
+    Assert-Equal 'only historical transaction exists before replay' '1' ([string](Get-Field $preReplay 'transactionCount'))
+    $preReplayReceiptStates = @(Get-Field $preReplay 'receiptStates')
+    Assert-Equal 'pre-replay receipt-state count' '2' ([string]$preReplayReceiptStates.Count)
+    foreach ($record in $archiveRecords) {
+        $matchingReceiptState = @($preReplayReceiptStates | Where-Object { [string](Get-Field $_ 'requestId') -ceq [string]$record.requestId })
+        Assert-Equal "no SQLite receipt before replay for $($record.requestId)" '1' ([string]$matchingReceiptState.Count)
+        Assert-Equal "pre-replay request count for $($record.requestId)" '0' ([string](Get-Field $matchingReceiptState[0] 'count'))
+    }
+
+    $snapshot = Get-Field $preReplay 'snapshot'
+    Assert-Equal 'pre-replay database snapshot path' 'inputs/pre-timeout-handoff-local.db' ([string](Get-Field $snapshot 'path'))
+    $snapshotPath = Resolve-RunRelativePath ([string](Get-Field $snapshot 'path'))
+    Assert-NoReparsePointAncestors $snapshotPath
+    Assert-True 'pre-replay database snapshot exists' (Test-Path -LiteralPath $snapshotPath -PathType Leaf)
+    $snapshotItem = Get-Item -LiteralPath $snapshotPath
+    Assert-Equal 'pre-replay database snapshot byte count' ([long](Get-Field $snapshot 'bytes')) ([long]$snapshotItem.Length)
+    $snapshotSha256 = (Get-FileHash -LiteralPath $snapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Equal 'pre-replay database snapshot SHA-256' ([string](Get-Field $snapshot 'sha256')) $snapshotSha256
+    $snapshotRows = @(Invoke-SqliteRead $sqlite3Command.Source $snapshotPath "SELECT uuid || '|' || name || '|' || typeof(balance) || '|' || printf('%.2f', balance) || '|' || version FROM player_balances WHERE uuid IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002') ORDER BY uuid;")
+    Assert-Equal 'pre-replay database snapshot balance/version rows' ($preReplayRows -join "`n") ($snapshotRows -join "`n")
+    Assert-Equal 'pre-replay database snapshot transaction count' '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $snapshotPath 'SELECT COUNT(*) FROM transactions;')[0]))
+    foreach ($record in $archiveRecords) {
+        $escapedRequestId = ([string]$record.requestId).Replace("'", "''")
+        Assert-Equal "pre-replay snapshot has no receipt for $($record.requestId)" '0' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $snapshotPath "SELECT COUNT(*) FROM transactions WHERE request_id='$escapedRequestId';")[0]))
+    }
+
+    $startupSchemaObservation = Get-Field $handoff 'replayStartupSchemaObservation'
+    Assert-True 'recovery candidate schema observation is present before the first replay read' ($null -ne $startupSchemaObservation)
+    Assert-Equal 'recovery candidate request-ID column count' '1' ([string](Get-Field $startupSchemaObservation 'requestIdColumnCount'))
+    Assert-Equal 'recovery candidate request-ID index count' '1' ([string](Get-Field $startupSchemaObservation 'requestIdIndexCount'))
+    $replayObservation = Get-Field $handoff 'replay'
+    Assert-True 'timeout-handoff replay observation is present' ($null -ne $replayObservation)
+    Assert-Equal 'timeout-handoff replay stage precedes first balance read' 'recovery-1.4-before-first-balance-read' ([string](Get-Field $replayObservation 'stage'))
+    $expectedReplayRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $archiveRecords) {
+        $before = @($preReplayRows | Where-Object { $_.StartsWith([string]$record.uuid + '|', [StringComparison]::Ordinal) })[0].Split('|')
+        $expectedVersion = [Math]::Max([long]$before[4] + 1L, [long]$record.eventVersion + 1L)
+        $expectedReplayRows.Add("$($record.uuid)|$($record.playerName)|real|$($record.balanceAfter)|$expectedVersion")
+    }
+    $expectedReplayBalanceRows = @($expectedReplayRows | Sort-Object)
+    Assert-Equal 'replayed LOCAL balances and versions' ($expectedReplayBalanceRows -join "`n") (@(Get-Field $replayObservation 'balanceRows') -join "`n")
+    Assert-Equal 'one receipt for each timeout-handoff request' '2' ([string](Get-Field $replayObservation 'requestIdCount'))
+    Assert-Equal 'replay transaction count' '3' ([string](Get-Field $replayObservation 'transactionCount'))
+    Assert-Equal 'replay journal path' ([string](Get-Field $journal 'path')) ([string](Get-Field $replayObservation 'journalPath'))
+    Assert-Equal 'replay cleared journal bytes' '0' ([string](Get-Field $replayObservation 'journalBytes'))
+    $liveJournalPath = Resolve-RunRelativePath ([string](Get-Field $journal 'path'))
+    Assert-True 'receipt-backed journal remains present after replay' (Test-Path -LiteralPath $liveJournalPath -PathType Leaf)
+    Assert-Equal 'live journal is empty after replay receipts' '0' ([string](Get-Item -LiteralPath $liveJournalPath).Length)
+    $actualReceiptRows = @(Get-Field $replayObservation 'transactionRows')
+    Assert-Equal 'replay observation receipt rows match accepted requests' '2' ([string]$actualReceiptRows.Count)
+    foreach ($record in $archiveRecords) {
+        $escapedRequestId = ([string]$record.requestId).Replace("'", "''")
+        $expectedBefore = ([string](@($preReplayRows | Where-Object { $_.StartsWith([string]$record.uuid + '|', [StringComparison]::Ordinal) })[0])).Split('|')[3]
+        $expectedReceipt = "$($record.uuid)|$($record.playerName)|SET_BALANCE|$($record.balanceAfter)|$expectedBefore|$($record.balanceAfter)|COMMAND_ADMIN|$($record.requestId)"
+        $matchingReportedReceipt = @($actualReceiptRows | Where-Object { [string]$_ -ceq $expectedReceipt })
+        Assert-Equal "report has the matching replay receipt for $($record.requestId)" '1' ([string]$matchingReportedReceipt.Count)
+        Assert-Equal "SQLite has exactly one replay receipt for $($record.requestId)" '1' ([string](@(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT COUNT(*) FROM transactions WHERE request_id='$escapedRequestId';")[0]))
+        $actualReceipt = @(Invoke-SqliteRead $sqlite3Command.Source $databasePath "SELECT uuid || '|' || name || '|' || type || '|' || printf('%.2f', amount) || '|' || printf('%.2f', balance_before) || '|' || printf('%.2f', balance_after) || '|' || source || '|' || request_id FROM transactions WHERE request_id='$escapedRequestId';")
+        Assert-Equal "SQLite replay receipt matches accepted event for $($record.requestId)" $expectedReceipt ([string]$actualReceipt[0])
+    }
 } else {
     Assert-Equal 'normal-drain scenario has no seeded journal report' $null (Get-Field $report 'recoveryJournalReplay')
+    Assert-Equal 'non-timeout scenario has no handoff report' $null (Get-Field $report 'recoveryJournalHandoff')
 }
 $recoveryJournals = @(Get-ChildItem -LiteralPath $runRoot -File -Recurse -Filter 'recovery-v1.jsonl' -Force)
 Assert-Equal 'no LOCAL recovery journal remains' '0' ([string]$recoveryJournals.Count)

@@ -53,6 +53,283 @@ function Invoke-T21LocalJournalSqliteBackup([string]$SqliteExecutable, [string]$
     }
 }
 
+function Assert-T21LocalSqliteLockTarget([string]$RunDirectory, [string]$DatabasePath, [string]$SqliteExecutable) {
+    $runRoot = [IO.Path]::GetFullPath($RunDirectory)
+    $marker = [Environment]::GetEnvironmentVariable('T21_RUN_MARKER', 'Process')
+    if ([string]::IsNullOrWhiteSpace($marker) -or [IO.Path]::GetFullPath($marker) -cne $runRoot) {
+        throw 'LOCAL SQLite write-lock injection requires the exact isolated T21 run marker.'
+    }
+    $expectedDatabase = [IO.Path]::GetFullPath((Join-Path $runRoot '.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'))
+    $database = [IO.Path]::GetFullPath($DatabasePath)
+    if ($database -cne $expectedDatabase) {
+        throw 'LOCAL SQLite write-lock injection is restricted to the isolated historical M04 SQLite path.'
+    }
+    $runPrefix = $runRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $database.StartsWith($runPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "LOCAL SQLite write-lock path escapes the isolated run: $database"
+    }
+    foreach ($path in @($runRoot, $database, $SqliteExecutable)) {
+        Assert-T21LocalJournalNoReparsePointAncestors $path
+    }
+    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
+        throw 'The isolated historical LOCAL SQLite database must exist before the write lock starts.'
+    }
+    $sqlite = [IO.Path]::GetFullPath($SqliteExecutable)
+    if (-not (Test-Path -LiteralPath $sqlite -PathType Leaf)) {
+        throw 'The local sqlite3 executable must exist before the write lock starts.'
+    }
+    return [pscustomobject]@{ runRoot = $runRoot; databasePath = $database; sqliteExecutable = $sqlite }
+}
+
+function Assert-T21LocalSqliteWriterLockHeld($Lock) {
+    if ($null -eq $Lock -or $null -eq $Lock.process -or $Lock.process.HasExited) {
+        throw 'The isolated SQLite write-lock owner is not alive.'
+    }
+    $target = Assert-T21LocalSqliteLockTarget $Lock.runRoot $Lock.databasePath $Lock.sqliteExecutable
+    if ([int]$Lock.processId -ne [int]$Lock.process.Id -or
+        $target.databasePath -cne [string]$Lock.databasePath -or
+        $target.sqliteExecutable -cne [string]$Lock.sqliteExecutable) {
+        throw 'The isolated SQLite write-lock identity changed before verification.'
+    }
+    $probeOutput = @(& $target.sqliteExecutable -batch -cmd 'PRAGMA busy_timeout=0;' `
+        $target.databasePath 'BEGIN IMMEDIATE;' 2>&1)
+    $probeExitCode = $LASTEXITCODE
+    $probeText = ($probeOutput | ForEach-Object { $_.ToString() }) -join ' '
+    if ($Lock.process.HasExited -or $probeExitCode -eq 0 -or $probeText -notmatch '(?i)database is locked') {
+        throw "The isolated SQLite transaction did not block a second writer: exit=$probeExitCode output=$probeText"
+    }
+    return [pscustomobject]@{
+        writeLockObserved = $true
+        verifierExitCode = [int]$probeExitCode
+        verifierOutput = $probeText
+        observedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+}
+
+function Start-T21LocalSqliteWriterLock {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)][string]$DatabasePath,
+        [Parameter(Mandatory = $true)][string]$SqliteExecutable
+    )
+
+    $target = Assert-T21LocalSqliteLockTarget $RunDirectory $DatabasePath $SqliteExecutable
+    $journalModeOutput = @(& $target.sqliteExecutable -batch -noheader $target.databasePath 'PRAGMA journal_mode;' 2>&1)
+    $journalModeExitCode = $LASTEXITCODE
+    $journalMode = ($journalModeOutput | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }) -join ''
+    if ($journalModeExitCode -ne 0 -or $journalMode -cne 'wal') {
+        throw "LOCAL SQLite timeout-handoff injection requires WAL mode; exit=$journalModeExitCode mode='$journalMode'."
+    }
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $target.sqliteExecutable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.ArgumentList.Add('-batch')
+    $startInfo.ArgumentList.Add($target.databasePath)
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw 'Could not start the isolated SQLite write-lock owner.' }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $lock = [pscustomobject]@{
+        runRoot = $target.runRoot
+        databasePath = $target.databasePath
+        sqliteExecutable = $target.sqliteExecutable
+        journalMode = $journalMode
+        processId = [int]$process.Id
+        process = $process
+        stdoutTask = $stdoutTask
+        stderrTask = $stderrTask
+        startedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+        lockObserved = $null
+    }
+    try {
+        $process.StandardInput.WriteLine('BEGIN IMMEDIATE;')
+        $process.StandardInput.Flush()
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            if ($process.HasExited) {
+                throw 'The isolated SQLite write-lock owner exited before establishing its transaction.'
+            }
+            try {
+                $lock.lockObserved = Assert-T21LocalSqliteWriterLockHeld $lock
+                return $lock
+            } catch {
+                if ([DateTime]::UtcNow -ge $deadline) { throw }
+                Start-Sleep -Milliseconds 100
+            }
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw 'The isolated SQLite write-lock owner did not establish a verified writer lock within five seconds.'
+    } catch {
+        try {
+            if (-not $process.HasExited) {
+                $process.StandardInput.WriteLine('.quit')
+                $process.StandardInput.Flush()
+                $process.StandardInput.Close()
+                $null = $process.WaitForExit(5000)
+            }
+        } catch { }
+        throw
+    }
+}
+
+function Stop-T21LocalSqliteWriterLock($Lock) {
+    if ($null -eq $Lock -or $null -eq $Lock.process) {
+        throw 'The isolated SQLite write-lock record is missing its owned process.'
+    }
+    if ($Lock.process.HasExited) {
+        throw "The isolated SQLite write-lock owner exited before explicit release (exit $($Lock.process.ExitCode))."
+    }
+    $target = Assert-T21LocalSqliteLockTarget $Lock.runRoot $Lock.databasePath $Lock.sqliteExecutable
+    if ([int]$Lock.processId -ne [int]$Lock.process.Id -or
+        $target.databasePath -cne [string]$Lock.databasePath -or
+        $target.sqliteExecutable -cne [string]$Lock.sqliteExecutable) {
+        throw 'Refusing to release a SQLite lock whose process or path identity changed.'
+    }
+    $Lock.process.StandardInput.WriteLine('ROLLBACK;')
+    $Lock.process.StandardInput.WriteLine('.quit')
+    $Lock.process.StandardInput.Flush()
+    $Lock.process.StandardInput.Close()
+    if (-not $Lock.process.WaitForExit(5000)) {
+        throw 'The owned SQLite write-lock process did not exit after explicit rollback and quit.'
+    }
+    $stdout = $Lock.stdoutTask.GetAwaiter().GetResult()
+    $stderr = $Lock.stderrTask.GetAwaiter().GetResult()
+    $exitCode = [int]$Lock.process.ExitCode
+    if ($exitCode -ne 0) {
+        throw "The isolated SQLite write-lock owner exited with $exitCode after release: $stderr $stdout"
+    }
+    $Lock.process.Dispose()
+    return [pscustomobject]@{
+        processId = [int]$Lock.processId
+        processExitVerified = $true
+        exitCode = $exitCode
+        releasedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+}
+
+function ConvertFrom-T21LocalJournalBase64Url([string]$Value) {
+    if ($Value -notmatch '^[A-Za-z0-9_-]*$') {
+        throw 'LOCAL journal contains an invalid base64url field.'
+    }
+    $standard = $Value.Replace('-', '+').Replace('_', '/')
+    switch ($standard.Length % 4) {
+        1 { throw 'LOCAL journal contains an invalid base64url field length.' }
+        2 { $standard += '==' }
+        3 { $standard += '=' }
+    }
+    try {
+        return [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String($standard))
+    } catch {
+        throw "LOCAL journal contains an invalid UTF-8 base64url field: $($_.Exception.Message)"
+    }
+}
+
+function Get-T21LocalPersistenceJournalRecords {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)][string]$DatabasePath,
+        [Parameter(Mandatory = $true)][string]$JournalPath
+    )
+
+    $runRoot = [IO.Path]::GetFullPath($RunDirectory)
+    $marker = [Environment]::GetEnvironmentVariable('T21_RUN_MARKER', 'Process')
+    if ([string]::IsNullOrWhiteSpace($marker) -or [IO.Path]::GetFullPath($marker) -cne $runRoot) {
+        throw 'LOCAL journal inspection requires the exact isolated T21 run marker.'
+    }
+    $expectedDatabase = [IO.Path]::GetFullPath((Join-Path $runRoot '.plugdev\run\plugins\Syncmoney\t21-data\legacy-local.db'))
+    $database = [IO.Path]::GetFullPath($DatabasePath)
+    if ($database -cne $expectedDatabase) {
+        throw 'LOCAL journal inspection is restricted to the isolated historical M04 SQLite path.'
+    }
+    $expectedJournal = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $database) 'local-persistence.journal'))
+    $journal = [IO.Path]::GetFullPath($JournalPath)
+    if ($journal -cne $expectedJournal) {
+        throw 'LOCAL journal inspection is restricted to the adjacent M04 local-persistence.journal.'
+    }
+    foreach ($path in @($runRoot, $database, $journal)) {
+        Assert-T21LocalJournalNoReparsePointAncestors $path
+    }
+    if (-not (Test-Path -LiteralPath $database -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $journal -PathType Leaf)) {
+        throw 'The isolated LOCAL database and non-empty handoff journal must exist before inspection.'
+    }
+
+    $bytes = [IO.File]::ReadAllBytes($journal)
+    if ($bytes.Length -eq 0) { throw 'The isolated LOCAL handoff journal is empty.' }
+    try {
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+    } catch {
+        throw "LOCAL journal is not valid UTF-8: $($_.Exception.Message)"
+    }
+    if (-not $text.EndsWith("`n", [StringComparison]::Ordinal) -or $text.Contains("`r")) {
+        throw 'LOCAL journal must use complete LF-terminated records.'
+    }
+
+    $lines = $text.Split([char[]]@("`n"), [StringSplitOptions]::None)
+    if ($lines.Length -lt 2 -or $lines[$lines.Length - 1] -cne '') {
+        throw 'LOCAL journal framing must end after a complete record.'
+    }
+    $records = [System.Collections.Generic.List[object]]::new()
+    $requestIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    for ($index = 0; $index -lt $lines.Length - 1; $index++) {
+        $line = $lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            throw "LOCAL journal contains an empty record at line $($index + 1)."
+        }
+        $parts = $line.Split([char[]]@("`t"), [StringSplitOptions]::None)
+        if ($parts.Length -ne 11 -or $parts[0] -cne 'SYNCLOCAL1') {
+            throw "LOCAL journal record $($index + 1) has invalid SYNCLOCAL1 framing."
+        }
+        $payload = [string]::Join("`t", $parts[0..9])
+        if ((Get-T21LocalJournalSha256 ([Text.Encoding]::UTF8.GetBytes($payload))) -cne $parts[10]) {
+            throw "LOCAL journal checksum mismatch at line $($index + 1)."
+        }
+
+        $uuidText = ConvertFrom-T21LocalJournalBase64Url $parts[1]
+        $deltaText = ConvertFrom-T21LocalJournalBase64Url $parts[2]
+        $balanceAfterText = ConvertFrom-T21LocalJournalBase64Url $parts[3]
+        $requestId = ConvertFrom-T21LocalJournalBase64Url $parts[7]
+        $playerName = ConvertFrom-T21LocalJournalBase64Url $parts[9]
+        $uuid = [Guid]::Empty
+        $delta = [decimal]0
+        $balanceAfter = [decimal]0
+        $version = [long]0
+        $timestamp = [long]0
+        if (-not [Guid]::TryParseExact($uuidText, 'D', [ref]$uuid) -or $uuid.ToString('D') -cne $uuidText -or
+            -not [decimal]::TryParse($deltaText, [Globalization.NumberStyles]::Number, $invariant, [ref]$delta) -or
+            -not [decimal]::TryParse($balanceAfterText, [Globalization.NumberStyles]::Number, $invariant, [ref]$balanceAfter) -or
+            -not [long]::TryParse($parts[4], [Globalization.NumberStyles]::Integer, $invariant, [ref]$version) -or
+            -not [long]::TryParse($parts[8], [Globalization.NumberStyles]::Integer, $invariant, [ref]$timestamp) -or
+            [string]::IsNullOrWhiteSpace($requestId) -or [string]::IsNullOrWhiteSpace($playerName) -or
+            $parts[5] -notin @('DEPOSIT', 'WITHDRAW', 'SET_BALANCE', 'TRANSFER_IN', 'TRANSFER_OUT') -or
+            [string]::IsNullOrWhiteSpace($parts[6])) {
+            throw "LOCAL journal record $($index + 1) contains an invalid event field."
+        }
+        if (-not $requestIds.Add($requestId)) {
+            throw "LOCAL journal has a duplicate request ID at line $($index + 1)."
+        }
+        $records.Add([pscustomobject][ordered]@{
+            uuid = $uuidText
+            delta = $deltaText
+            balanceAfter = $balanceAfterText
+            eventVersion = $version
+            type = $parts[5]
+            source = $parts[6]
+            requestId = $requestId
+            timestamp = $timestamp
+            playerName = $playerName
+            recordSha256 = Get-T21LocalJournalSha256 ([Text.Encoding]::UTF8.GetBytes($line))
+        })
+    }
+    return @($records.ToArray())
+}
+
 function Write-T21LocalJournalCreateNew([string]$Path, [byte[]]$Bytes) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try {
