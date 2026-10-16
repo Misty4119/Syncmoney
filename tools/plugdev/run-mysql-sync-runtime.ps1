@@ -49,7 +49,7 @@ if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
 if ($IncompleteV10AuditTablePlayerRowPreservation.IsPresent -and
     (-not $IncompleteV10AuditTableStartupFailure.IsPresent -or
         -not (Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint))) {
-    throw 'Pre-existing player-row preservation is scoped to the incomplete-v10 startup-failure case on minimum or maximum Paper with MySQL 8.0.42.'
+    throw 'Pre-existing player-row preservation is scoped to minimum/maximum Paper or minimum Folia with MySQL 8.0.42.'
 }
 if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -1228,7 +1228,7 @@ function Seed-T21IncompleteV10AuditTable([switch]$SeedExistingPlayerRow) {
     if ($script:databaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { throw 'The incomplete-v10-audit-table fixture requires MySQL, MariaDB, or PostgreSQL.' }
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'The pre-existing player-row sentinel is restricted to minimum or maximum Paper MySQL.'
+        throw 'The pre-existing player-row sentinel is restricted to minimum/maximum Paper or minimum Folia MySQL.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (

@@ -371,7 +371,8 @@ try {
             @{ database='MySQL'; endpoint='Minimum'; expected=$true }
             @{ database='MySQL'; endpoint='Maximum'; expected=$true }
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
-            @{ database='MySQL'; endpoint='MinimumFolia'; expected=$false }
+            @{ database='MySQL'; endpoint='MinimumFolia'; expected=$true }
+            @{ database='MySQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MariaDB'; endpoint='Minimum'; expected=$false }
             @{ database='PostgreSQL'; endpoint='Minimum'; expected=$false }
@@ -381,7 +382,7 @@ try {
             throw "The existing-player-row preservation target guard returned $accepted for $($preservationCase.database) / $($preservationCase.endpoint); expected $($preservationCase.expected)."
         }
     }
-    Write-Output 'PASS: restrict the existing-player-row preservation case to pinned minimum/maximum Paper MySQL'
+    Write-Output 'PASS: restrict existing-player-row preservation to minimum/maximum Paper and minimum Folia MySQL'
 
     $currentStablePathResolutionObserved = $false
     try {
@@ -422,13 +423,26 @@ try {
     }
     Write-Output 'PASS: accept the maximum-Paper MySQL player-row-preservation runner target before external resources are resolved'
 
+    $minimumFoliaPlayerRowPreservationPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia `
+            -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
+    } catch {
+        $minimumFoliaPlayerRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $minimumFoliaPlayerRowPreservationPathResolutionObserved) {
+        throw 'The minimum-Folia MySQL player-row-preservation target did not pass its guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: accept the minimum-Folia MySQL player-row-preservation runner target before external resources are resolved'
+
     $playerRowWrongEndpointRejected = $false
     try {
         & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia `
             -IncompleteV10AuditTableStartupFailure -IncompleteV10AuditTablePlayerRowPreservation
     } catch {
-        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum or maximum Paper with MySQL 8\.0\.42'
+        $playerRowWrongEndpointRejected = $_.Exception.Message -match 'minimum/maximum Paper or minimum Folia with MySQL 8\.0\.42'
     }
     if (-not $playerRowWrongEndpointRejected) {
         throw 'The player-row-preservation runner accepted a non-Paper endpoint.'
@@ -635,6 +649,22 @@ try {
         throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing maximum-Paper MySQL player row.'
     }
     Write-Output 'PASS: accept maximum-Paper incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
+    $minimumFoliaEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumFolia
+    $minimumFoliaPlayerRowPreservationReport = New-T21MySqlIncompleteAuditReportFixture 'MySQL' '8.0.42' 'MinimumFolia'
+    $minimumFoliaPlayerRowPreservationReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-minimum-Folia'
+    $minimumFoliaPlayerRowPreservationReport.schemaStateBefore.playersTableExists = $true
+    $minimumFoliaPlayerRowPreservationReport.schemaStateBefore.playerRows = 1
+    $minimumFoliaPlayerRowPreservationReport.schemaStateBefore.playerRowsJson = $playerRowsJson
+    $minimumFoliaPlayerRowPreservationReport.schemaStateAfter.playersTableExists = $true
+    $minimumFoliaPlayerRowPreservationReport.schemaStateAfter.playerRows = 1
+    $minimumFoliaPlayerRowPreservationReport.schemaStateAfter.playerRowsJson = $playerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $minimumFoliaPlayerRowPreservationReport $minimumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia -FailureScenario IncompleteV10AuditTablePlayerRowPreservation)) {
+        throw 'The incomplete-v10 startup-failure report rejected an unchanged pre-existing minimum-Folia MySQL player row.'
+    }
+    Write-Output 'PASS: accept minimum-Folia incomplete-v10 startup rejection with an unchanged pre-existing MySQL player row'
+
 
     $maximumLegacyMinimumPaperLabelReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPlayerRowPreservationReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $maximumLegacyMinimumPaperLabelReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-MinimumPaper'
@@ -2182,7 +2212,7 @@ try {
     if ($targetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $targetGuardIndex) {
         throw 'The startup-failure target guard must run before resolving runtime paths or creating resources.'
     }
-    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to the incomplete-v10 startup-failure case on minimum or maximum Paper with MySQL 8.0.42.', [StringComparison]::Ordinal)
+    $playerRowTargetGuardIndex = $runnerSource.IndexOf('Pre-existing player-row preservation is scoped to minimum/maximum Paper or minimum Folia with MySQL 8.0.42.', [StringComparison]::Ordinal)
     if ($playerRowTargetGuardIndex -lt 0 -or $runtimePathResolutionIndex -le $playerRowTargetGuardIndex) {
         throw 'The player-row-preservation target guard must run before resolving runtime paths or creating resources.'
     }
