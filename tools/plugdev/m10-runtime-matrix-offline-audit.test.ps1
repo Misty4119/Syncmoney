@@ -7,6 +7,18 @@ $tokens = $null
 $parseErrors = $null
 $auditAst = [System.Management.Automation.Language.Parser]::ParseInput($auditSource, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw "M10 offline audit has PowerShell parse errors: $($parseErrors -join '; ')" }
+foreach ($stableAuditMarker in @(
+        '[switch]$SupplementalCurrentStableOnly',
+        '[string]$CurrentStableRunId',
+        '^paper-263-currentstable-[0-9]{8}-[0-9]{6}-[0-9a-f]{32}$',
+        'Paper 26.3#194 (CurrentStable)',
+        'build/reports/foundation/T21-M10/artifacts/paper-26.3-194.jar',
+        'runnerSourceSnapshotPath',
+        '$expectedReportObserver = $expectedCurrentObserver')) {
+    if (-not $auditSource.Contains($stableAuditMarker, [StringComparison]::Ordinal)) {
+        throw "M10 offline audit is missing the supplemental CurrentStable report contract: $stableAuditMarker"
+    }
+}
 
 $script:assertions = 0
 foreach ($helperName in @('Assert-M10', 'ConvertTo-M10WhitespaceNormalizedSource', 'Assert-M10MissedPubSubTransition', 'Assert-M10ReportIdentity', 'Assert-M10MissedPubSubProvenance', 'Assert-M10ReportSourceEquivalent', 'Assert-M10ReportedPath', 'Assert-M10AuditNoReparsePath', 'Assert-M10AuditExpectedPlugDevRoot', 'Assert-M10AuditExpectedMineflayerRoot', 'Get-M10CliDistManifest', 'Assert-M10CliDistManifest')) {
@@ -241,6 +253,11 @@ try {
     Assert-Throws { Assert-M10AuditExpectedPlugDevRoot $localPlugDevRoot $localPlugDevRoot } 'M10 audit accepted a non-private PlugDev package.'
 
     $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $invalidRunOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot -SupplementalCurrentStableOnly -CurrentStableRunId 'paper-263-currentstable-invalid' 2>&1)
+    $invalidRunExitCode = $LASTEXITCODE
+    if ($invalidRunExitCode -eq 0 -or (($invalidRunOutput -join ' ') -notmatch 'requires the exact M10 paper-263-currentstable run ID')) {
+        throw 'M10 offline audit accepted an invalid CurrentStable run identity.'
+    }
     $alternateRoot = Join-Path $tempRoot 'alternate-root'
     $alternateOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot -PlugDevRoot $alternateRoot 2>&1)
     $alternateExitCode = $LASTEXITCODE
@@ -248,7 +265,7 @@ try {
         throw 'M10 offline audit entrypoint did not reject an alternate local PlugDev root before report inspection.'
     }
 
-    Write-Output 'PASS M10 offline audit provenance and transition regressions (run identity, event/deposit/snapshot linkage, account UUIDs, canonical versions, and path/bundle provenance)'
+    Write-Output 'PASS M10 offline audit provenance and transition regressions (run identity, current-stable selector, event/deposit/snapshot linkage, account UUIDs, canonical versions, and path/bundle provenance)'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }

@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$RepositoryRoot,
     [string]$PlugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main',
-    [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master'
+    [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master',
+    [switch]$SupplementalCurrentStableOnly,
+    [string]$CurrentStableRunId
 )
 $ErrorActionPreference = 'Stop'
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
@@ -15,10 +17,17 @@ if (-not [string]::Equals($expectedPlugDevRoot, $canonicalPlugDevRoot, [StringCo
 if (-not [string]::Equals($expectedMineflayerRoot, $canonicalMineflayerRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "The M10 evidence audit is pinned to the configured local Mineflayer checkout: $canonicalMineflayerRoot"
 }
+if ($SupplementalCurrentStableOnly) {
+    if ($CurrentStableRunId -notmatch '^paper-263-currentstable-[0-9]{8}-[0-9]{6}-[0-9a-f]{32}$') {
+        throw 'SupplementalCurrentStableOnly requires the exact M10 paper-263-currentstable run ID.'
+    }
+} elseif (-not [string]::IsNullOrWhiteSpace($CurrentStableRunId)) {
+    throw 'CurrentStableRunId is valid only with SupplementalCurrentStableOnly.'
+}
 $runtimeRoot = Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/runtime'
 $reportTimeSourceRoot = Join-Path $runtimeRoot 'source-pins/report-time'
 $expectedReportRunner = '6c1a60d2fd2afe92b12f06f261ef27e8a6d9ea163c09f24d00db3b326d361164'
-$expectedCurrentRunner = '9fb472ae4123ead4245af5195b67cf701d0d347ab93310e3c1711d72aff9b13a'
+$expectedCurrentRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'
 $expectedReportObserver = 'd02ce11780123c00f1cddb3be20edd8b7fbf1d8d9c42ab9a5c7f44777fe177cf'
 $expectedCurrentObserver = 'edaf79362470be7b3961922ad6c0f687d4a6686c88f26948fbdb17ae53eb4593'
 $expectedCandidate = 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'
@@ -33,6 +42,20 @@ $matrix = @(
     [pscustomobject]@{ RunId='canvas-1218-min-20261014-154543-b4bf95d399724455ad09be97b07acbcf'; Label='Canvas 1.21.8#603'; ArtifactFile='canvas-1.21.8-603.jar'; Artifact='6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' },
     [pscustomobject]@{ RunId='canvas-263-max-20261014-155301-4af1ed9de5574f36bd01edb5806a345a'; Label='Canvas 26.3#972'; ArtifactFile='canvas-26.3-972.jar'; Artifact='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
 )
+if ($SupplementalCurrentStableOnly) {
+    $expectedReportRunner = $expectedCurrentRunner
+    $expectedCandidate = '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662'
+    $expectedCommit = '3aa078203c659a8360791adececbfe40d0b8cdba'
+    $expectedTree = 'd76026dfb7ed856a118305d815e0f121b1b1f75d'
+    $matrix = @(
+        [pscustomobject]@{
+            RunId=$CurrentStableRunId
+            Label='Paper 26.3#194 (CurrentStable)'
+            ArtifactFile='paper-26.3-194.jar'
+            Artifact='5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784'
+        }
+    )
+}
 $script:assertions = 0
 function Assert-M10([bool]$Condition, [string]$Name) {
     $script:assertions++
@@ -284,16 +307,27 @@ function ConvertTo-M10ObservationTime([string]$Value) {
     return $parsed.ToUniversalTime()
 }
 $runnerPath = Join-Path $RepositoryRoot 'tools/plugdev/run-m10-reconciliation.ps1'
-$reportRunnerSourcePath = Join-Path $reportTimeSourceRoot 'run-m10-reconciliation.ps1'
+$reportRunnerSourcePath = if ($SupplementalCurrentStableOnly) {
+    Join-Path (Join-Path (Join-Path $runtimeRoot $CurrentStableRunId) 'source-pins') 'run-m10-reconciliation.ps1'
+} else {
+    Join-Path $reportTimeSourceRoot 'run-m10-reconciliation.ps1'
+}
 $observerPath = Join-Path $RepositoryRoot 'tools/plugdev/m10-redis-pubsub-observer.mjs'
-$reportObserverSourcePath = Join-Path $reportTimeSourceRoot 'm10-redis-pubsub-observer.mjs'
+$reportObserverSourcePath = if ($SupplementalCurrentStableOnly) {
+    $expectedReportObserver = $expectedCurrentObserver
+    $observerPath
+} else {
+    Join-Path $reportTimeSourceRoot 'm10-redis-pubsub-observer.mjs'
+}
 Assert-M10 (Test-Path -LiteralPath $reportRunnerSourcePath) 'report-time runner source snapshot exists'
 Assert-M10 (Test-Path -LiteralPath $reportObserverSourcePath) 'report-time observer source snapshot exists'
 $null = Assert-M10AuditNoReparsePath $reportRunnerSourcePath
 $null = Assert-M10AuditNoReparsePath $reportObserverSourcePath
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedReportRunner) 'report-time runner source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $runnerPath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current runner sha'
-$null = Assert-M10ReportSourceEquivalent (Get-Content -LiteralPath $reportRunnerSourcePath -Raw) (Get-Content -LiteralPath $runnerPath -Raw) 'M10 runner'
+if ($SupplementalCurrentStableOnly) {
+    $null = Assert-M10ReportSourceEquivalent (Get-Content -LiteralPath $reportRunnerSourcePath -Raw) (Get-Content -LiteralPath $runnerPath -Raw) 'CurrentStable M10 runner'
+}
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportObserverSourcePath).Hash.ToLowerInvariant() -eq $expectedReportObserver) 'report-time observer source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant() -eq $expectedCurrentObserver) 'current observer sha'
 $null = Assert-M10ReportSourceEquivalent (Get-Content -LiteralPath $reportObserverSourcePath -Raw) (Get-Content -LiteralPath $observerPath -Raw) 'M10 observer'
@@ -305,7 +339,11 @@ foreach ($entry in $matrix) {
     Assert-M10 ($report.status -eq 'PASS_BOUNDED_SUBCASE') "$($entry.Label) status"
     Assert-M10 ($report.endpoint.label -eq $entry.Label) "$($entry.Label) endpoint label"
     Assert-M10 ($report.endpoint.serverSha256.ToLowerInvariant() -eq $entry.Artifact) "$($entry.Label) artifact pin"
-    $expectedEndpointJar = Join-Path $RepositoryRoot ('build/reports/foundation/T15-runtime-pins/artifacts/' + $entry.ArtifactFile)
+    $expectedEndpointJar = if ($SupplementalCurrentStableOnly) {
+        Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/artifacts/paper-26.3-194.jar'
+    } else {
+        Join-Path $RepositoryRoot ('build/reports/foundation/T15-runtime-pins/artifacts/' + $entry.ArtifactFile)
+    }
     $endpointJar = Assert-M10ReportedPath $report.endpoint.serverJar $expectedEndpointJar "$($entry.Label) server artifact"
     $null = Assert-M10ReportedPath $report.endpoint.path $expectedEndpointJar "$($entry.Label) observed server artifact"
     Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $endpointJar).Hash.ToLowerInvariant() -eq $entry.Artifact) "$($entry.Label) artifact bytes"
@@ -315,6 +353,9 @@ foreach ($entry in $matrix) {
     $candidatePath = Assert-M10ReportedPath $report.candidate.path $expectedCandidatePath "$($entry.Label) candidate artifact"
     Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $candidatePath).Hash.ToLowerInvariant() -eq $expectedCandidate) "$($entry.Label) candidate bytes"
     Assert-M10 ($report.acceptance.runnerSha256.ToLowerInvariant() -eq $expectedReportRunner) "$($entry.Label) report runner pin"
+    if ($SupplementalCurrentStableOnly) {
+        $null = Assert-M10ReportedPath $report.acceptance.runnerSourceSnapshotPath $reportRunnerSourcePath "$($entry.Label) runner snapshot path"
+    }
     Assert-M10 ($report.java.version.Contains($expectedJavaMarker)) "$($entry.Label) Java runtime pin"
     $expectedAcceptancePath = Join-Path $RepositoryRoot 'build/acceptance/SyncmoneyAcceptance.jar'
     $acceptancePath = Assert-M10ReportedPath $report.acceptance.path $expectedAcceptancePath "$($entry.Label) acceptance artifact"
