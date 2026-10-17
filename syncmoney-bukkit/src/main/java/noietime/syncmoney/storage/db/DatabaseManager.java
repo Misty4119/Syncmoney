@@ -147,7 +147,18 @@ public final class DatabaseManager implements AutoCloseable {
 
         this.dataSource = new HikariDataSource(hikariConfig);
 
-        initializeSchema();
+        try {
+            initializeSchema();
+        } catch (RuntimeException | Error initializationFailure) {
+            try {
+                dataSource.close();
+            } catch (Throwable closeFailure) {
+                if (closeFailure != initializationFailure) {
+                    initializationFailure.addSuppressed(closeFailure);
+                }
+            }
+            throw initializationFailure;
+        }
         plugin.getLogger().fine("Database '" + config.database().getDatabaseName() + "' ready (type: " + databaseType + ").");
     }
 
