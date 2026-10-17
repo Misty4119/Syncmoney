@@ -376,7 +376,7 @@ $playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservatio
 Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
-        $expectedTarget = ($databaseProduct -in @('MySQL', 'MariaDB') -and $endpoint -in @('Minimum', 'Maximum'))
+        $expectedTarget = ($endpoint -in @('Minimum', 'Maximum'))
         Assert-T21Upgrade ((Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) -eq $expectedTarget) `
             "The successful-migration player-row target contract returned the wrong result for $databaseProduct/$endpoint."
@@ -473,7 +473,7 @@ Syncmoney disabled.
         $report[$sqlKey] = [ordered]@{ product=$databaseProduct; version=$databaseVersion }
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $report $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
             "The complete successful $databaseProduct minimum-Paper upgrade report fixture was rejected."
-        if ($databaseProduct -in @('MySQL', 'MariaDB')) {
+        if ($databaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')) {
             $playerRowReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $playerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$databaseProduct-minimum-Paper"
             $playerRowReport.schemaStateBefore = New-T21UpgradeState $databaseProduct $false
@@ -482,8 +482,20 @@ Syncmoney disabled.
             $playerRowReport.schemaStateBefore.playerRows = [long]1
             $playerRowReport.schemaStateAfter.playersTableExists = $true
             $playerRowReport.schemaStateAfter.playerRows = [long]1
+            $productPlayerRowsJson = $playerRowsJson
+            if ($databaseProduct -ceq 'PostgreSQL') {
+                $postgresPlayerRow = [ordered]@{
+                    player_uuid='00000000-0000-0000-0000-00000000cafe'
+                    player_name='T21-ROW-SENTINEL'
+                    balance='1234.56'
+                    version='73'
+                    last_server='t21-player-preservation'
+                    updated_at='2026-10-16 12:34:56.000000'
+                }
+                $productPlayerRowsJson = ConvertTo-Json -InputObject ([object[]]@($postgresPlayerRow)) -Depth 5 -Compress
+            }
             foreach ($snapshotName in @('schemaStateBefore', 'schemaStateAfter')) {
-                $playerRowReport[$snapshotName].playerRowsJson = $playerRowsJson
+                $playerRowReport[$snapshotName].playerRowsJson = $productPlayerRowsJson
             }
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
@@ -509,10 +521,17 @@ Syncmoney disabled.
                         -DatabaseProduct $databaseProduct -PlatformEndpoint MinimumFolia)) `
                 "The successful-migration $databaseProduct Paper player-row report was accepted for Folia."
             $changedPlayerReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
-            $changedPlayerReport.schemaStateAfter.playerRowsJson = $playerRowsJson.Replace('1234.56', '1234.57')
+            $changedPlayerReport.schemaStateAfter.playerRowsJson = $productPlayerRowsJson.Replace('1234.56', '1234.57')
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedPlayerReport $platform.sha256 $candidateSha `
                         -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
                 "The successful-migration $databaseProduct report predicate accepted a changed player balance."
+            if ($databaseProduct -ceq 'PostgreSQL') {
+                $changedTimestampReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+                $changedTimestampReport.schemaStateAfter.playerRowsJson = $productPlayerRowsJson.Replace('12:34:56.000000', '12:34:56.000001')
+                Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedTimestampReport $platform.sha256 $candidateSha `
+                            -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+                    'The successful-migration PostgreSQL report predicate accepted a changed player timestamp microsecond.'
+            }
         }
         foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
             $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint

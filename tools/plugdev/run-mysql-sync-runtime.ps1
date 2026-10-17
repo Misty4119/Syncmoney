@@ -62,7 +62,7 @@ if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on minimum/maximum Paper only.'
+    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum/maximum Paper only.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1126,7 +1126,7 @@ ORDER BY id;
 function Seed-T21AuditSchemaV10Upgrade([switch]$SeedExistingPlayerRow) {
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on minimum/maximum Paper only.'
+        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum/maximum Paper only.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1165,7 +1165,22 @@ INSERT INTO syncmoney_audit_log (
 '@
     $null = Invoke-MySqlQuery $ddl 'seed-v10-audit-schema-upgrade'
     if ($SeedExistingPlayerRow.IsPresent) {
-        $playerDdl = @'
+        if ($script:databaseProduct -ceq 'PostgreSQL') {
+            $playerDdl = @'
+CREATE TABLE players (
+    player_uuid VARCHAR(36) PRIMARY KEY,
+    player_name VARCHAR(16),
+    balance DECIMAL(20,2) NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
+    last_server VARCHAR(64),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_player_name ON players (player_name);
+INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', TIMESTAMP '2026-10-16 12:34:56.000000');
+'@
+        } else {
+            $playerDdl = @'
 CREATE TABLE players (
     player_uuid VARCHAR(36) PRIMARY KEY,
     player_name VARCHAR(16),
@@ -1178,6 +1193,7 @@ CREATE TABLE players (
 INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
 VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', '2026-10-16 12:34:56');
 '@
+        }
         $null = Invoke-MySqlQuery $playerDdl 'seed-v10-audit-schema-existing-player-row'
     }
     $state = Get-T21StartupFailureSchemaState

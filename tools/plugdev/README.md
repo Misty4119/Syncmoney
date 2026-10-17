@@ -186,7 +186,7 @@ Add `-IncompleteV10AuditTablePlayerRowPreservation` to seed one pre-existing `pl
 
 ### T21 V03 successful v10-to-v11 migration with an existing player row
 
-Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. The harness target is limited to MySQL `8.0.42` and MariaDB `12.3.3-MariaDB` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. Accepted E2 evidence covers both MySQL endpoints and both MariaDB endpoints; the reports observe one row each. This does not establish row preservation across PostgreSQL, Folia, Canvas, multiple rows, or whole-database atomicity. The MariaDB maximum-Paper report and audit hashes are recorded in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
+Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. The harness target accepts MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`. Accepted E2 evidence now covers both endpoints for all three SQL products; each report observes one row. This does not establish row preservation across Folia, Canvas, multiple rows, or whole-database atomicity. Report and audit hashes are recorded in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
 
 ```powershell
 $paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
@@ -212,7 +212,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
   -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
-  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -JavaHome $env:JAVA_HOME `
   -RuntimeReportsRoot $reportRoot `
   -MariaDbBin $mariaDbBin `
   -PlatformEndpoint Minimum `
@@ -244,7 +244,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
   -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
-  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -JavaHome $env:JAVA_HOME `
   -RuntimeReportsRoot $reportRoot `
   -MariaDbBin $mariaDbBin `
   -PlatformEndpoint Maximum `
@@ -252,7 +252,43 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -SuccessfulV10AuditSchemaPlayerRowPreservation
 ```
 
-Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with the matching `-PlatformEndpoint`, `-DatabaseProduct` (`MySQL` or `MariaDB`), and pinned candidate SHA-256. It rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
+For minimum Paper with PostgreSQL `18.1`, use the pinned PostgreSQL 18 binaries and Java 25:
+
+```powershell
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+$reportRoot = [IO.Path]::GetFullPath('build\r')
+$postgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin'
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -RuntimeReportsRoot $reportRoot `
+  -PostgreSqlBin $postgreSqlBin `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct PostgreSQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+```
+
+For maximum Paper, reuse `$reportRoot` and `$postgreSqlBin` with the maximum artifact and endpoint selector:
+
+```powershell
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-26.3-166.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -RuntimeReportsRoot $reportRoot `
+  -PostgreSqlBin $postgreSqlBin `
+  -PlatformEndpoint Maximum `
+  -DatabaseProduct PostgreSQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+```
+
+Run `t21-audit-schema-upgrade-offline-audit.ps1` against each emitted report with the matching `-PlatformEndpoint`, `-DatabaseProduct` (`MySQL`, `MariaDB`, or `PostgreSQL`), and pinned candidate SHA-256. It rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
 
 For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
 

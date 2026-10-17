@@ -5113,3 +5113,95 @@ Both commands exited `0`; the runner emitted `PASS_BOUNDED_SUBCASE`, and the off
 **Independent review and verification:** The harness/scope review found no actionable issue after checking target guards, endpoint/product negative controls, and fixtures. The retained-evidence review independently rehashed the report, text/JSON audits, all 25 logs, four artifact hashes, all nine report-pinned sources, local PlugDev commit/CLI and all 26 distribution files plus manifest; each matched. It confirmed the unchanged one-row JSON (`1234.56`, version `73`, timestamp `2026-10-16 12:34:56`), main schema v1/version row, audit v10→v11, normal Paper/MariaDB/Redis exit `0`, and no cleanup failures. Neither reviewer reran the live runtime. The report does not persist the exact JavaHome path or the offline-auditor source hash; those are traceability limits, not runtime failures. The README command arguments match this report.
 
 This is one existing-player-row preservation observation on maximum Paper/MariaDB only. Together with the minimum-Paper/MariaDB report above, it does not establish PostgreSQL, Folia, Canvas, multiple-row preservation, or whole-database atomicity. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because the active license status is **UNKNOWN**.
+
+## T21 V03 successful v10-to-v11 migration with existing player-row preservation — minimum and maximum Paper / PostgreSQL (2026-10-17)
+
+**Result: `PASS_BOUNDED_SUBCASE (E2)` for minimum and maximum Paper / PostgreSQL.** This extends the successful-migration player-row case from four Paper/MySQL-or-MariaDB cells to six Paper/backend cells by adding PostgreSQL `18.1` on the two exact user-pinned Paper endpoints. It does not expand the formal platform bounds: minimum Paper `1.21.6#48`, maximum Paper `26.3#166`, minimum/maximum Folia `1.21.6#6` / `26.2#7`, and minimum/maximum Canvas `1.21.8#603` / `26.3#972`.
+
+**Ruling and discovery:** Enable only the existing-player-row PostgreSQL case on minimum/maximum Paper, keeping all CurrentStable, Folia, Canvas, unsupported-product, and unpinned endpoint controls rejected. The regression first reproduced RED at `PostgreSQL/Minimum`. Inspection found the successful-migration fixture used MySQL-only `ON UPDATE CURRENT_TIMESTAMP` and inline-index syntax; the PostgreSQL fixture now uses PostgreSQL-compatible `TIMESTAMP` DDL and a separate `CREATE INDEX`, matching the established isolated PostgreSQL player-row fixture for the failure-path case. This is fixture/harness coverage only; no product schema, engine, recovery format, wire, or public contract changed. Cost if this ruling is wrong: the test may preserve an isolated fixture whose PostgreSQL `players` DDL differs from an operator's legacy table, so this remains one-row runtime evidence rather than a general schema-compatibility claim.
+
+**Confirmed behavior:** On both endpoints, the candidate preserved main schema version `1`, migrated audit schema `10→11`, expanded the audit table from 13 to 15 columns, and retained all four required PostgreSQL audit indexes. The pre-existing SQL `players` row remained one row and JSON-identical before/after: UUID `00000000-0000-0000-0000-00000000cafe`, name `T21-ROW-SENTINEL`, balance `1234.56`, version `73`, server marker `t21-player-preservation`, and timestamp `2026-10-16 12:34:56.000000`. Paper, PostgreSQL, and Redis each exited with code `0`; shutdown was not forced and cleanup failures were zero. Both runs used Java `25.0.4+7-LTS-189`, PostgreSQL `18.1`, Redis `8.10.1` DB 15, candidate `1.4.0-alpha.1` SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662`, and local PlugDev commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`.
+
+| Evidence | Minimum Paper / PostgreSQL | Maximum Paper / PostgreSQL |
+|---|---|---|
+| Runtime report | `build/r/postgresql-sync-minimum-paper-20261017-093106-e08653e0adac4401b09edefeaa8f8bde/result.json`; 58,536 bytes; SHA-256 `c65b12ea98427f8f88065fee287074af8e175a53e15c9371ea0fc8afad05a8fe` | `build/r/postgresql-sync-maximum-paper-20261017-093450-63e3a45ace4a4ee79c1ae69510de967d/result.json`; 58,531 bytes; SHA-256 `0d0a67569be90a1528fdfff7f695922b4ff5e41df18003abbff981fc50e9d887` |
+| Report-specific offline audit | `validation/offline-audit.txt`; PASS, 32 runtime logs; SHA-256 `ef504f3e9810b784a435dee513c1e38241ba65883f1bbb87dd73a4c2c9bb314e` | `validation/offline-audit.txt`; PASS, 32 runtime logs; SHA-256 `88b5b8859534305d4e8658c7ce937a649e9ce4c5f7351cb69626f566442496e6` |
+| Paper JAR | `1.21.6#48`; SHA-256 `35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214` | `26.3#166`; SHA-256 `dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd` |
+| State and cleanup | Main schema `1→1`; audit schema `10→11`; columns `13→15`; one identical player row; Paper/PostgreSQL/Redis exit `0`; no forced cleanup; 0 failures | Main schema `1→1`; audit schema `10→11`; columns `13→15`; one identical player row; Paper/PostgreSQL/Redis exit `0`; no forced cleanup; 0 failures |
+| Local PlugDev | Clean checkout, commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2` | Clean checkout, commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2` |
+
+Run from the repository root with the local PlugDev project. The emitted report path is printed by the runner; pass that path to the offline auditor with the same endpoint/product values:
+
+```powershell
+$reportRoot = [IO.Path]::GetFullPath('build\r')
+$postgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin'
+$javaHome = 'C:\Program Files\Java\jdk-25.0.4'
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $javaHome `
+  -RuntimeReportsRoot $reportRoot `
+  -PostgreSqlBin $postgreSqlBin `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct PostgreSQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-26.3-166.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $javaHome `
+  -RuntimeReportsRoot $reportRoot `
+  -PostgreSqlBin $postgreSqlBin `
+  -PlatformEndpoint Maximum `
+  -DatabaseProduct PostgreSQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 `
+  -ReportPath 'build/r/postgresql-sync-minimum-paper-20261017-093106-e08653e0adac4401b09edefeaa8f8bde/result.json' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -DatabaseProduct PostgreSQL `
+  -PlatformEndpoint Minimum
+
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 `
+  -ReportPath 'build/r/postgresql-sync-maximum-paper-20261017-093450-63e3a45ace4a4ee79c1ae69510de967d/result.json' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -DatabaseProduct PostgreSQL `
+  -PlatformEndpoint Maximum
+```
+
+Both runtime and offline-audit commands exited `0`. The target regression reported RED for PostgreSQL/Minimum before implementation and GREEN afterward. Fresh validation logs and hashes are retained under `build/reports/foundation/T21-postgres-player-row-validation-20261017/`:
+
+| Check | Result / retained output |
+|---|---|
+| `t21-audit-schema-upgrade-validation.test.ps1` | PASS, exit 0; SHA-256 `1b38c5ccb4c79c677459b53d4e8ba9b48478c259ff7d996ea60530b9b5cf299b` |
+| `t21-upgrade-validation.test.ps1` | PASS, 201 checks; SHA-256 `c09c999b8a148f40697816521947be4feabd5702ed87c7bb87387d8482a746f7` |
+| `t21-startup-failure-validation.test.ps1` | PASS, 176 checks; SHA-256 `f8910a0f0986ce2c648bc1723ef107b362d2522a0b0450a185a81e9252483bbb` |
+| `node --test tools/plugdev/prepare.test.mjs` | PASS, 12/12; SHA-256 `bc16c19340361b03b28eb82c14d1c382f57a2a3506f3fe2123b2bf82ee955a80` |
+| PowerShell `Parser.ParseFile` over `tools/plugdev/**/*.ps1` | PASS, 30 scripts, zero parse errors; SHA-256 `95187b1db2754d736eed60b366c11df19058c582594ce20dac29931426f04501` |
+| `git diff --check` | PASS, exit 0; SHA-256 `2563fa39117f125f1da80f794f7f7837bdc0c51c42db7bf336c6a7c4c95b6abb` |
+| Java/Gradle product tests | **NOT RUN**; no Java/product source changed; the pinned candidate was exercised in both E2 runs |
+
+No new blocker prevents this bounded case. The broader T21 lifecycle/V03 matrix remains open; successful-migration player-row preservation on Folia and Canvas, multiple rows, and whole-database atomicity remain unverified. Licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because active license status is **UNKNOWN**; that external gate is not a dependency of this case. E07 remains P1 and E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope. T21 remains **IN_PROGRESS**.
+
+**Independent review and post-review evidence refresh (2026-10-17):** A read-only PostgreSQL migration-harness review found a Minor test-isolation issue: the changed-balance negative control used the MySQL timestamp fixture, so the PostgreSQL report could be rejected for both timestamp-format and balance mismatches. The control now mutates the PostgreSQL-specific `.000000` snapshot; a separate negative control changes only timestamp microseconds from `.000000` to `.000001`. The reviewer confirmed the fix and the timestamp control isolate their intended predicates. The review's initial evidence-staleness note was addressed by rerunning the focused validator after the updated source: `t21-audit-schema-upgrade-validation.test.ps1` SHA-256 `c475c9d5c4d9669dbe5483d1363e6be87a372eb36a676c6d12bf47f53444a857`; result `PASS`, exit 0, retained at `build/reports/foundation/T21-postgres-player-row-validation-20261017-resume/audit-schema-review-fix.log`, SHA-256 `e3e1a6ba41279a619be79f638fbf45afaddb9da1712a6bbc3bf0ddc60d7e5c36`. Targeted re-review verified the source/log hashes and PASS marker; the evidence-staleness finding is closed with no remaining concern.
+
+Post-review validation refreshed under `build/reports/foundation/T21-postgres-player-row-validation-20261017-resume/`:
+
+| Check | Result / evidence SHA-256 |
+|---|---|
+| Updated audit-schema focused validator | PASS, exit 0; `audit-schema-review-fix.log`; `e3e1a6ba41279a619be79f638fbf45afaddb9da1712a6bbc3bf0ddc60d7e5c36` |
+| Shared T21 upgrade validator | PASS, exit 0; `shared-upgrade.log`; `e334744577097edfaa38e5813904b1d05ee7a7b18098d1d9e32f13c8b6faf890` |
+| T21 startup-failure validator | PASS, exit 0; `startup-failure.log`; `ba9af6694321a8237e555ba838c8ad6fd460e83015fb73d04d48b3c6cd98474` |
+| PlugDev preparation tests | PASS, 12/12, exit 0; `plugdev-preparation.log`; `72202f49d9e416f8f20af8a418bdb22600f79464afe7542c935ac71c47963bf0` |
+| PowerShell parser over PlugDev scripts | PASS, 30 scripts, zero parse errors; `powershell-parse-review-fix.log`; `866572b0c152a0b08327ea370678a5abb8e4b3b0acaa5e65530242f38c170a14` |
+| Universal AI verifier | PASS, 68 deterministic assertions covering both E2 reports/audits, sentinel/schema/index/cleanup state, refreshed validation, review fix, evidence scope and formal bounds; `universal-verification.log`; `77a4fb8cdcbbcdae3a058dadd487172511d2276fd94faeac7d01f329a3088af9` |
+| Java/product tests | **NOT RUN**; the task changed PlugDev harness and evidence/planning documents, not Java/product sources |
+| `git diff --check` | PASS, exit 0; `git-diff-check.log`; SHA-256 `e2c62fa76f30cabb93cd9c29bd9520e79750658a43de90ccaad4c183e48b3e61` |
+
+Review disposition: the Minor assertion-isolation finding is fixed and retested. No Critical or Important findings were reported. The evidence supports only one-row preservation on minimum/maximum Paper with PostgreSQL `18.1`; Folia, Canvas, multiple rows, whole-database atomic rollback, and unrelated licensed CMI acceptance remain outside this result. Formal bounds remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`.

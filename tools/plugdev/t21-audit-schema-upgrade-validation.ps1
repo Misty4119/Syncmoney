@@ -14,7 +14,7 @@ function Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -in @('Minimum', 'Maximum')
+    return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and $PlatformEndpoint -in @('Minimum', 'Maximum')
 }
 
 function Test-T21AuditUpgradeHasField([object]$observation, [string]$name) {
