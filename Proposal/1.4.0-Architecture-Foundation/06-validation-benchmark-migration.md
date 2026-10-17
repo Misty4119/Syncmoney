@@ -4945,3 +4945,56 @@ All six fresh report audits passed 543 assertions and rehashed each report's run
 No blocker prevents this bounded subcase. T21 remains **IN_PROGRESS**; wider lifecycle/V03 mode/resource/failure gates remain open, and this single-row observation does not close the broader successful-migration or rollback matrix. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory scope; full licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because its active license status is `UNKNOWN`.
 
 **Independent verification:** The universal verifier passed 33 deterministic assertions over the exact runtime report, endpoint/artifact/source pins, schema and row snapshots, all 24 report logs, cleanup, focused-check outputs, the planning records, unchanged formal endpoint bounds, and the explicitly `NOT RUN` product-test limit. During verifier setup, three assertion-text expectations were corrected against direct evidence: the report's canonical platform value is lowercase `paper`, Node's test reporter prints `ℹ pass/fail`, and the scope sentence uses its recorded wording. The corrected verifier passed; these were verifier-criteria mismatches, not runtime or test failures. Log: `build/reports/foundation/T21-success-migration-player-row-validation-20261017/universal-verification.log`, SHA-256 `d68b67e0110fcd42f652d45d747d5598326c066bfb964bba7e123e5b05af829d`. Final `git diff --check` exited `0` with no whitespace errors; output contains only LF-to-CRLF conversion warnings for the six edited files. Log: `build/reports/foundation/T21-success-migration-player-row-validation-20261017/git-diff-check.log`, SHA-256 `2e63dfd6acea147fcd9bcd6ed93cbad2279cf36bcd49794e4f152cf23d02b087`.
+
+## T21 V03 successful v10-to-v11 migration with existing player-row preservation — maximum Paper (2026-10-17)
+
+**Result: `PASS_BOUNDED_SUBCASE (E2)` for maximum Paper / MySQL.** This adds the second Paper endpoint to the successful-migration player-row preservation case; the minimum Paper / MySQL result remains recorded above. Formal bounds remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. The opt-in runner/report predicate now permits this case only on minimum or maximum user-pinned Paper with MySQL `8.0.42`. It remains one seeded row per run and does not establish Folia, Canvas, other SQL dialects, multi-row preservation, or whole-database atomicity.
+
+**Decision and confirmed behavior:** Extend only the evidence selector and its report fixtures to the existing maximum Paper pin. No product source, schema, public contract, recovery format, or platform bound changed. On Paper `26.3#166`, candidate startup migrated audit schema `10→11`, kept main schema version `1`, and retained the one `players` row count `1→1` with byte-identical normalized JSON: UUID `00000000-0000-0000-0000-00000000cafe`, name `T21-ROW-SENTINEL`, balance `1234.56`, version `73`, server marker `t21-player-preservation`, timestamp `2026-10-16 12:34:56`. Candidate shutdown was normal; there were zero cleanup failures. The report-specific current-source offline audit passed and rehashed all 24 runtime logs.
+
+| Evidence | Identity |
+|---|---|
+| Runtime report | `build/reports/foundation/T21-sql-runtime/mysql-sync-maximum-paper-20261017-083937-811a6a2241b14391b07a7fcf71c4cb4e/result.json`; SHA-256 `01d177b1711bfdf3384bc8aad2c73878800fd2bd6d1dba37a3888d5030ef51db` |
+| Report-specific offline audit | `build/reports/foundation/T21-sql-runtime/mysql-sync-maximum-paper-20261017-083937-811a6a2241b14391b07a7fcf71c4cb4e/validation/offline-audit.txt`; `PASS`, 24 logs; SHA-256 `d9497e512dbcf973d6dc33b4f2128e161cb8da15f9ec4ead8ff6ea74861e4f74`; JSON audit SHA-256 `4da54216f1076077ecc6597c33a33f405510acb32d8276128e17d5dfb41c2283` |
+| Candidate Syncmoney JAR | SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662` |
+| Maximum Paper JAR | Paper `26.3#166`; SHA-256 `dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd` |
+| Runtime | Java `25.0.4+7-LTS-189`; MySQL `8.0.42`; Redis `8.10.1`; config schema `12` |
+| Local PlugDev | commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`; CLI SHA-256 `3a600872a3c95bb67b960bdbb5efcbb84eb675110f89146566bedb1835ad047d`; distribution manifest SHA-256 `f57b296b2e4de10dec9dd7a83a51f3e0f95fb5ef27d5de2934e9b4ef56e0fc16` |
+| Report source pins | runner `f1523182cc52f91042311f95c88e616c1d9cce243c86c7a6f2cc86d3dec92978`; audit-schema validator `644317490b0992d8675e247e2e9b609cebba914cc98e4f720f8f5de73ba2331f`; audit-schema test `72893313db771128d75c52bb3ebd6486b30ea520a846cf48ea254a992c3c2d81` |
+
+**Validation commands and results:** Target/report predicates have positive minimum/maximum Paper fixtures and negative controls for CurrentStable Paper, Folia, Canvas, MariaDB, and PostgreSQL.
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar 'build/reports/foundation/T15-runtime-pins/artifacts/paper-26.3-166.jar' `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -PlatformEndpoint Maximum `
+  -DatabaseProduct MySQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 `
+  -ReportPath 'build/reports/foundation/T21-sql-runtime/mysql-sync-maximum-paper-20261017-083937-811a6a2241b14391b07a7fcf71c4cb4e/result.json' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -DatabaseProduct MySQL `
+  -PlatformEndpoint Maximum
+```
+
+Both commands exited `0`; the runner emitted `PASS_BOUNDED_SUBCASE`, and the current-source report auditor rehashed all 24 logs.
+
+| Check | Result / retained output |
+|---|---|
+| `pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1` | PASS, exit 0; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/audit-schema-validation.log`, SHA-256 `1b38c5ccb4c79c677459b53d4e8ba9b48478c259ff7d996ea60530b9b5cf299b` |
+| `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` | PASS, 201 PASS lines; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/upgrade-validation.log`, SHA-256 `c09c999b8a148f40697816521947be4feabd5702ed87c7bb87387d8482a746f7` |
+| `pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1` | PASS, 176 PASS lines; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/startup-failure-validation.log`, SHA-256 `f8910a0f0986ce2c648bc1723ef107b362d2522a0b0450a185a81e9252483bbb` |
+| `node --test tools/plugdev/prepare.test.mjs` | PASS, 12/12; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/plugdev-preparation-tests.log`, SHA-256 `6411990dd6d701f2def990567e87185a68f354edc615000aa1685d0f4a1e8ddf` |
+| PowerShell `Parser.ParseFile` over all `tools/plugdev/**/*.ps1` | PASS, 30 scripts, zero parse errors; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/powershell-parse.log`, SHA-256 `058eccfaa86dc8001a7e9d3e5a295d149905bb458cfadcafb5a78b0182eba66d` |
+| Universal AI verifier | PASS, 37 deterministic assertions; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/universal-verification.log`, SHA-256 `7657c491fb46c65da66a5698d6f1a2d388062396dd5f6788175c1be8f6a452a6` |
+| `git diff --check` | PASS, exit 0; only Git LF-to-CRLF working-copy warnings; `build/reports/foundation/T21-success-migration-player-row-validation-20261017-maximum/git-diff-check.log`, SHA-256 `2e63dfd6acea147fcd9bcd6ed93cbad2279cf36bcd49794e4f152cf23d02b087` |
+| Java/product tests | **NOT RUN**; no Java/product source changed; the E2 run exercised the pinned candidate JAR |
+
+**Independent review:** Two read-only reviews checked the endpoint/report predicates and the planning/evidence scope; both returned no actionable findings. After the final validation-command edit, a targeted documentation re-review matched command arguments and the report/audit hashes to the retained outputs and verified the six validation-log paths/hashes. It found no discrepancy. Reviewers did not rerun the runtime.
+
+T21 remains **IN_PROGRESS**; lifecycle and other V03 mode/resource/failure gates remain open. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because the active license status is **UNKNOWN**.

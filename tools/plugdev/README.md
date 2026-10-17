@@ -186,7 +186,7 @@ Add `-IncompleteV10AuditTablePlayerRowPreservation` to seed one pre-existing `pl
 
 ### T21 V03 successful v10-to-v11 migration with an existing player row
 
-Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing MySQL `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. This additional E2 scenario is intentionally restricted to minimum Paper `1.21.6#48` with MySQL `8.0.42`; it observes one row in one endpoint/backend cell and does not establish row preservation across other platforms/dialects or whole-database atomicity.
+Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing MySQL `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. This additional E2 scenario is restricted to minimum Paper `1.21.6#48` and maximum Paper `26.3#166`, each with MySQL `8.0.42`. It observes one row in two Paper endpoint/backend cells and does not establish row preservation across Folia, Canvas, other SQL dialects, multiple rows, or whole-database atomicity.
 
 ```powershell
 $paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
@@ -201,7 +201,22 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -SuccessfulV10AuditSchemaPlayerRowPreservation
 ```
 
-Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with `-PlatformEndpoint Minimum -DatabaseProduct MySQL`; it rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
+For maximum Paper, use the pinned Paper `26.3#166` artifact and `Maximum` selector:
+
+```powershell
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-26.3-166.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint Maximum `
+  -DatabaseProduct MySQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+```
+
+Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with `-PlatformEndpoint Minimum` or `Maximum` to match the selected run, `-DatabaseProduct MySQL`, and the pinned candidate SHA-256. It rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
 
 For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
 

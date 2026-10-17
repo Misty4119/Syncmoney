@@ -374,15 +374,20 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
 
 $playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -ErrorAction SilentlyContinue
 Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
-Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) `
-    'The successful-migration player-row case must admit only its selected minimum-Paper/MySQL cell.'
+foreach ($endpoint in @('Minimum', 'Maximum')) {
+    Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint $endpoint) `
+        "The successful-migration player-row case must admit the user-pinned Paper $endpoint/MySQL cell."
+}
 foreach ($unsupportedPlayerRowTarget in @(
         [ordered]@{ product='MariaDB'; endpoint='Minimum' }
         [ordered]@{ product='PostgreSQL'; endpoint='Minimum' }
-        [ordered]@{ product='MySQL'; endpoint='Maximum' }
-        [ordered]@{ product='MySQL'; endpoint='MinimumFolia' }
-        [ordered]@{ product='MySQL'; endpoint='MinimumCanvas' }
+        [ordered]@{ product='MariaDB'; endpoint='Maximum' }
+        [ordered]@{ product='PostgreSQL'; endpoint='Maximum' }
         [ordered]@{ product='MySQL'; endpoint='CurrentStable' }
+        [ordered]@{ product='MySQL'; endpoint='MinimumFolia' }
+        [ordered]@{ product='MySQL'; endpoint='MaximumFolia' }
+        [ordered]@{ product='MySQL'; endpoint='MinimumCanvas' }
+        [ordered]@{ product='MySQL'; endpoint='MaximumCanvas' }
     )) {
     Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
                 -DatabaseProduct $unsupportedPlayerRowTarget.product -PlatformEndpoint $unsupportedPlayerRowTarget.endpoint)) `
@@ -494,9 +499,26 @@ Syncmoney disabled.
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                     -DatabaseProduct MySQL -PlatformEndpoint Minimum) `
                 'The complete successful MySQL minimum-Paper report with its unchanged player row was rejected.'
+            $maximumPlayerRowReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $maximumPlatform = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
+            $maximumPlayerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-MySQL-$($maximumPlatform.taskSuffix)"
+            $maximumPlayerRowReport.server.software = $maximumPlatform.software
+            $maximumPlayerRowReport.server.minecraftVersion = $maximumPlatform.minecraftVersion
+            $maximumPlayerRowReport.server.build = $maximumPlatform.build
+            $maximumPlayerRowReport.server.sha256 = $maximumPlatform.sha256
+            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.software = $maximumPlatform.software
+            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.runtimeVersion = $maximumPlatform.minecraftVersion
+            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.minecraftVersion = $maximumPlatform.minecraftVersion
+            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.build = $maximumPlatform.build
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
+                    -DatabaseProduct MySQL -PlatformEndpoint Maximum) `
+                'The complete successful MySQL maximum-Paper report with its unchanged player row was rejected.'
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
-                        -DatabaseProduct MySQL -PlatformEndpoint Maximum)) `
-                'The successful-migration player-row report was accepted under a different Paper endpoint.'
+                        -DatabaseProduct MySQL -PlatformEndpoint CurrentStable)) `
+                'The successful-migration player-row report was accepted for supplemental CurrentStable Paper.'
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
+                        -DatabaseProduct MySQL -PlatformEndpoint MinimumFolia)) `
+                'The successful-migration Paper player-row report was accepted for Folia.'
             $changedPlayerReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $changedPlayerReport.schemaStateAfter.playerRowsJson = $playerRowsJson.Replace('1234.56', '1234.57')
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedPlayerReport $platform.sha256 $candidateSha `

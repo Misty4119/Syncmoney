@@ -62,7 +62,7 @@ if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'Successful audit-schema migration with an existing player-row sentinel is scoped to minimum Paper 1.21.6#48 with MySQL 8.0.42.'
+    throw 'Successful audit-schema migration with an existing player-row sentinel is scoped to MySQL 8.0.42 on minimum or maximum Paper (1.21.6#48 or 26.3#166).'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
