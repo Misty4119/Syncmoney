@@ -184,6 +184,25 @@ Use `-IncompleteV10AuditTableStartupFailure` to seed an isolated audit schema-ve
 
 Add `-IncompleteV10AuditTablePlayerRowPreservation` to seed one pre-existing `players` row and require byte-equivalent normalized row JSON before and after the expected startup rejection. Bounded E2 evidence covers MySQL `8.0.42`, MariaDB `12.3.3-MariaDB`, and PostgreSQL `18.1` on all six user-pinned endpoints: Paper `1.21.6#48` / `26.3#166`, Folia `1.21.6#6` / `26.2#7`, and Canvas `1.21.8#603` / `26.3#972` (18/18 cells). Each run verifies one row only; it does not prove whole-database atomic rollback. This does not expand the formal endpoints or claim row-preservation coverage on supplemental CurrentStable Paper.
 
+### T21 V03 successful v10-to-v11 migration with an existing player row
+
+Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing MySQL `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. This additional E2 scenario is intentionally restricted to minimum Paper `1.21.6#48` with MySQL `8.0.42`; it observes one row in one endpoint/backend cell and does not establish row preservation across other platforms/dialects or whole-database atomicity.
+
+```powershell
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct MySQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+```
+
+Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with `-PlatformEndpoint Minimum -DatabaseProduct MySQL`; it rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
+
 For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
 
 ```powershell

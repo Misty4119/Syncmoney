@@ -20,6 +20,7 @@ param(
     [switch]$IncompleteV10AuditTablePlayerRowPreservation,
     [switch]$RequiredV11DdlPermissionDeniedStartupFailure,
     [switch]$SuccessfulV10AuditSchemaUpgrade,
+    [switch]$SuccessfulV10AuditSchemaPlayerRowPreservation,
     [string]$BaselinePluginJar,
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedBaselinePluginSha256
 )
@@ -59,6 +60,10 @@ if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The successful audit-schema upgrade case supports MySQL, MariaDB, or PostgreSQL on the six exact user-pinned minimum/maximum Paper, Folia, and Canvas endpoints plus the separately pinned supplemental current-stable Paper endpoint.'
 }
+if ($SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent -and
+    -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+    throw 'Successful audit-schema migration with an existing player-row sentinel is scoped to minimum Paper 1.21.6#48 with MySQL 8.0.42.'
+}
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
@@ -72,7 +77,8 @@ $script:newerAuditSchemaStartupFailure = $NewerAuditSchemaStartupFailure.IsPrese
 $script:incompleteV10AuditTableStartupFailure = $IncompleteV10AuditTableStartupFailure.IsPresent
 $script:incompleteV10AuditTablePlayerRowPreservation = $IncompleteV10AuditTablePlayerRowPreservation.IsPresent
 $script:requiredV11DdlPermissionDeniedStartupFailure = $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent
-$script:successfulV10AuditSchemaUpgrade = $SuccessfulV10AuditSchemaUpgrade.IsPresent
+$script:successfulV10AuditSchemaPlayerRowPreservation = $SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent
+$script:successfulV10AuditSchemaUpgrade = $SuccessfulV10AuditSchemaUpgrade.IsPresent -or $script:successfulV10AuditSchemaPlayerRowPreservation
 $script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:incompleteV10AuditTableStartupFailure -or
     $script:requiredV11DdlPermissionDeniedStartupFailure
 $script:schemaStateBefore = $null
@@ -1117,7 +1123,11 @@ ORDER BY id;
     }
 }
 
-function Seed-T21AuditSchemaV10Upgrade {
+function Seed-T21AuditSchemaV10Upgrade([switch]$SeedExistingPlayerRow) {
+    if ($SeedExistingPlayerRow.IsPresent -and
+        -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+        throw 'Successful audit-schema migration with an existing player-row sentinel is scoped to minimum Paper 1.21.6#48 with MySQL 8.0.42.'
+    }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
     id VARCHAR(50) PRIMARY KEY,
@@ -1154,12 +1164,32 @@ INSERT INTO syncmoney_audit_log (
 );
 '@
     $null = Invoke-MySqlQuery $ddl 'seed-v10-audit-schema-upgrade'
+    if ($SeedExistingPlayerRow.IsPresent) {
+        $playerDdl = @'
+CREATE TABLE players (
+    player_uuid VARCHAR(36) PRIMARY KEY,
+    player_name VARCHAR(16),
+    balance DECIMAL(20,2) NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
+    last_server VARCHAR(64),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_player_name (player_name)
+);
+INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', '2026-10-16 12:34:56');
+'@
+        $null = Invoke-MySqlQuery $playerDdl 'seed-v10-audit-schema-existing-player-row'
+    }
     $state = Get-T21StartupFailureSchemaState
     $columns = @(ConvertFrom-Json -InputObject $state.auditColumnsJson -AsHashtable -ErrorAction Stop)
     $indexes = @(ConvertFrom-Json -InputObject $state.auditIndexesJson -AsHashtable -ErrorAction Stop)
     $rows = @(ConvertFrom-Json -InputObject $state.auditRowsJson -AsHashtable -ErrorAction Stop)
+    $playerFixtureValid = if ($SeedExistingPlayerRow.IsPresent) {
+        $state.playersTableExists -and $state.playerRows -eq 1 -and
+            (Test-T21AuditSchemaUpgradePlayerRowSentinel $state.playerRowsJson $script:databaseProduct)
+    } else { -not $state.playersTableExists -and $null -eq $state.playerRows }
     if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 10 -or
-        -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
+        -not $state.auditTableExists -or -not $playerFixtureValid -or
         $state.mainVersionRowJson -notmatch 'T21 pre-existing main schema' -or
         $state.auditVersionRowJson -notmatch 'T21 v10 migration sentinel' -or
         $columns.Count -ne 13 -or $indexes.Count -ne 1 -or $rows.Count -ne 1 -or
@@ -2033,6 +2063,8 @@ $script:report = [ordered]@{
         "T21-V03-SYNC-incomplete-v10-audit-table-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
         "T21-V03-SYNC-v11-audit-ddl-permission-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
+    } elseif ($script:successfulV10AuditSchemaPlayerRowPreservation) {
+        "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:successfulV10AuditSchemaUpgrade) {
         "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } else { "T21-M05-SYNC-$script:databaseProduct-$($script:platformTarget.taskSuffix)" }
@@ -2185,7 +2217,7 @@ try {
     } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
         $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure
     } elseif ($script:successfulV10AuditSchemaUpgrade) {
-        $script:schemaStateBefore = Seed-T21AuditSchemaV10Upgrade
+        $script:schemaStateBefore = Seed-T21AuditSchemaV10Upgrade -SeedExistingPlayerRow:$script:successfulV10AuditSchemaPlayerRowPreservation
     }
     if ($script:requiredV11DdlPermissionDeniedStartupFailure -and
         $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
@@ -2288,7 +2320,9 @@ try {
         Stop-T21Server 'after-audit-v10-upgrade'
         $script:schemaStateAfter = Get-T21StartupFailureSchemaState -AfterAuditSchemaV10Upgrade
         if ($missingUpgradeMarkers.Count -gt 0) { throw "Successful audit-schema migration log markers are missing: $($missingUpgradeMarkers -join '; ')" }
-        if (-not (Test-T21AuditSchemaV10UpgradeState $script:schemaStateBefore $script:schemaStateAfter -DatabaseProduct $script:databaseProduct)) {
+        if (-not (Test-T21AuditSchemaV10UpgradeState $script:schemaStateBefore $script:schemaStateAfter `
+                -DatabaseProduct $script:databaseProduct `
+                -PreserveExistingPlayerRow:$script:successfulV10AuditSchemaPlayerRowPreservation)) {
             throw 'The successful v10-to-v11 migration did not preserve the sentinel and produce the required v11 schema.'
         }
     } elseif ($script:legacySqlDataUpgrade) {

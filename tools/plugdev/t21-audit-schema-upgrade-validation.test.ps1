@@ -323,11 +323,70 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     }
 }
 
+$v10UpgradeStateCommand = Get-Command Test-T21AuditSchemaV10UpgradeState
+Assert-T21Upgrade ($v10UpgradeStateCommand.Parameters.ContainsKey('PreserveExistingPlayerRow')) `
+    'The successful-migration state predicate does not expose the explicit existing-player-row case.'
+$playerRowBefore = New-T21UpgradeState 'MySQL' $false
+$playerRowAfter = New-T21UpgradeState 'MySQL' $true
+$playerRow = [ordered]@{
+    player_uuid='00000000-0000-0000-0000-00000000cafe'
+    player_name='T21-ROW-SENTINEL'
+    balance='1234.56'
+    version='73'
+    last_server='t21-player-preservation'
+    updated_at='2026-10-16 12:34:56'
+}
+$playerRowsJson = ConvertTo-Json -InputObject ([object[]]@($playerRow)) -Depth 5 -Compress
+foreach ($state in @($playerRowBefore, $playerRowAfter)) {
+    $state.playersTableExists = $true
+    $state.playerRows = [long]1
+    $state.playerRowsJson = $playerRowsJson
+}
+Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $playerRowAfter `
+        -DatabaseProduct MySQL -PreserveExistingPlayerRow) `
+    'The successful migration state predicate rejected the unchanged existing MySQL player row.'
+$deletedPlayerRow = Copy-T21UpgradeState $playerRowAfter
+$deletedPlayerRow.playerRows = [long]0
+$deletedPlayerRow.playerRowsJson = '[]'
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $deletedPlayerRow `
+            -DatabaseProduct MySQL -PreserveExistingPlayerRow)) `
+    'The successful migration state predicate accepted deletion of the existing player row.'
+$changedPlayerRow = Copy-T21UpgradeState $playerRowAfter
+$changedPlayerRow.playerRowsJson = $playerRowsJson.Replace('1234.56', '1234.57')
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $changedPlayerRow `
+            -DatabaseProduct MySQL -PreserveExistingPlayerRow)) `
+    'The successful migration state predicate accepted a changed existing player balance.'
+$extraPlayerRow = Copy-T21UpgradeState $playerRowAfter
+$extraPlayerRow.playerRows = [long]2
+$extraPlayerRow.playerRowsJson = ConvertTo-Json -InputObject ([object[]]@($playerRow, $playerRow)) -Depth 5 -Compress
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $extraPlayerRow `
+            -DatabaseProduct MySQL -PreserveExistingPlayerRow)) `
+    'The successful migration state predicate accepted more than the one seeded player row.'
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $playerRowAfter -DatabaseProduct MySQL)) `
+    'The ordinary empty-players migration predicate accepted the preservation fixture.'
+
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
             "The bounded positive-migration runner rejected pinned $databaseProduct endpoint $endpoint."
     }
+}
+
+$playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -ErrorAction SilentlyContinue
+Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
+Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint Minimum) `
+    'The successful-migration player-row case must admit only its selected minimum-Paper/MySQL cell.'
+foreach ($unsupportedPlayerRowTarget in @(
+        [ordered]@{ product='MariaDB'; endpoint='Minimum' }
+        [ordered]@{ product='PostgreSQL'; endpoint='Minimum' }
+        [ordered]@{ product='MySQL'; endpoint='Maximum' }
+        [ordered]@{ product='MySQL'; endpoint='MinimumFolia' }
+        [ordered]@{ product='MySQL'; endpoint='MinimumCanvas' }
+        [ordered]@{ product='MySQL'; endpoint='CurrentStable' }
+    )) {
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
+                -DatabaseProduct $unsupportedPlayerRowTarget.product -PlatformEndpoint $unsupportedPlayerRowTarget.endpoint)) `
+        "The successful-migration player-row case unexpectedly admitted $($unsupportedPlayerRowTarget.product)/$($unsupportedPlayerRowTarget.endpoint)."
 }
 
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('t21-audit-schema-upgrade-validation-' + [guid]::NewGuid().ToString('N'))
@@ -420,6 +479,30 @@ Syncmoney disabled.
         $report[$sqlKey] = [ordered]@{ product=$databaseProduct; version=$databaseVersion }
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $report $platform.sha256 $candidateSha -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
             "The complete successful $databaseProduct minimum-Paper upgrade report fixture was rejected."
+        if ($databaseProduct -ceq 'MySQL') {
+            $playerRowReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $playerRowReport.task = 'T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-MySQL-minimum-Paper'
+            $playerRowReport.schemaStateBefore = New-T21UpgradeState 'MySQL' $false
+            $playerRowReport.schemaStateAfter = New-T21UpgradeState 'MySQL' $true
+            $playerRowReport.schemaStateBefore.playersTableExists = $true
+            $playerRowReport.schemaStateBefore.playerRows = [long]1
+            $playerRowReport.schemaStateAfter.playersTableExists = $true
+            $playerRowReport.schemaStateAfter.playerRows = [long]1
+            foreach ($snapshotName in @('schemaStateBefore', 'schemaStateAfter')) {
+                $playerRowReport[$snapshotName].playerRowsJson = $playerRowsJson
+            }
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
+                    -DatabaseProduct MySQL -PlatformEndpoint Minimum) `
+                'The complete successful MySQL minimum-Paper report with its unchanged player row was rejected.'
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
+                        -DatabaseProduct MySQL -PlatformEndpoint Maximum)) `
+                'The successful-migration player-row report was accepted under a different Paper endpoint.'
+            $changedPlayerReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $changedPlayerReport.schemaStateAfter.playerRowsJson = $playerRowsJson.Replace('1234.56', '1234.57')
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedPlayerReport $platform.sha256 $candidateSha `
+                        -DatabaseProduct MySQL -PlatformEndpoint Minimum)) `
+                'The successful-migration report predicate accepted a changed player balance.'
+        }
         foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
             $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
             $endpointReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
@@ -498,8 +581,10 @@ $runnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run-mysql-syn
 $offlineAuditSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 't21-audit-schema-upgrade-offline-audit.ps1') -Raw -ErrorAction Stop
 foreach ($requiredRunnerContract in @(
         '[switch]$SuccessfulV10AuditSchemaUpgrade',
+        '[switch]$SuccessfulV10AuditSchemaPlayerRowPreservation',
+        'Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct',
         'Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct',
-        'Seed-T21AuditSchemaV10Upgrade',
+        'Seed-T21AuditSchemaV10Upgrade -SeedExistingPlayerRow:',
         'Get-T21StartupFailureSchemaState -AfterAuditSchemaV10Upgrade',
         'Test-T21AuditSchemaV10UpgradeState',
         'Test-T21AuditSchemaV10UpgradeReport',
