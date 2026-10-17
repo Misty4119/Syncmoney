@@ -7,6 +7,17 @@ $tokens = $null
 $parseErrors = $null
 $auditAst = [System.Management.Automation.Language.Parser]::ParseInput($auditSource, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw "M10 offline audit has PowerShell parse errors: $($parseErrors -join '; ')" }
+$reportLoopAst = $auditAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+        $null -ne $node.Variable -and $node.Variable.VariablePath.UserPath -ceq 'entry'
+}, $true)
+if ($null -eq $reportLoopAst -or $null -eq $reportLoopAst.Body.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Assert-M10ClientCleanup'
+    }, $true)) {
+    throw 'M10 report audit loop must require the verified Mineflayer client cleanup predicate.'
+}
 $observerPath = Join-Path $PSScriptRoot 'm10-redis-pubsub-observer.mjs'
 $actualObserverSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant()
 if (-not $auditSource.Contains("`$expectedCurrentObserver = '$actualObserverSha'", [StringComparison]::Ordinal)) {
@@ -43,7 +54,7 @@ if (-not $auditSource.Contains("`$expectedCurrentStableRunner = 'a65c6c2e2515e22
 }
 
 $script:assertions = 0
-foreach ($helperName in @('Assert-M10', 'ConvertTo-M10WhitespaceNormalizedSource', 'Assert-M10MissedPubSubTransition', 'Assert-M10ReportIdentity', 'Assert-M10MissedPubSubProvenance', 'Assert-M10ReportSourceEquivalent', 'Assert-M10ReportedPath', 'Assert-M10AuditNoReparsePath', 'Assert-M10AuditExpectedPlugDevRoot', 'Assert-M10AuditExpectedMineflayerRoot', 'Get-M10CliDistManifest', 'Assert-M10CliDistManifest', 'Get-M10CurrentMaximumEntry')) {
+foreach ($helperName in @('Assert-M10', 'Assert-M10ClientCleanup', 'ConvertTo-M10WhitespaceNormalizedSource', 'Assert-M10MissedPubSubTransition', 'Assert-M10ReportIdentity', 'Assert-M10MissedPubSubProvenance', 'Assert-M10ReportSourceEquivalent', 'Assert-M10ReportedPath', 'Assert-M10AuditNoReparsePath', 'Assert-M10AuditExpectedPlugDevRoot', 'Assert-M10AuditExpectedMineflayerRoot', 'Get-M10CliDistManifest', 'Assert-M10CliDistManifest', 'Get-M10CurrentMaximumEntry')) {
     $helperAst = $auditAst.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName
@@ -70,6 +81,50 @@ foreach ($currentMaximumCase in @(
     }
 }
 Assert-Throws { Get-M10CurrentMaximumEntry 'PAPER-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } 'M10 current-maximum mapping accepted a noncanonical platform prefix.'
+
+$validClientCleanup = [ordered]@{
+    cleanup = @([ordered]@{
+        target = 'Mineflayer client'; forced = $false; processExitVerified = $true
+        gracefulExitVerified = $true; exitCode = [long]0
+    })
+}
+$null = Assert-M10ClientCleanup $validClientCleanup 'valid client cleanup fixture'
+$validClientCleanupObject = [pscustomobject]@{
+    cleanup = @([pscustomobject]@{
+        target = 'Mineflayer client'; forced = $false; processExitVerified = $true
+        gracefulExitVerified = $true; exitCode = [long]0
+    })
+}
+$null = Assert-M10ClientCleanup $validClientCleanupObject 'valid PSCustomObject cleanup fixture'
+Assert-Throws {
+    Assert-M10ClientCleanup ([pscustomobject]@{ cleanup = $validClientCleanupObject.cleanup[0] }) 'scalar PSCustomObject cleanup fixture'
+} 'M10 offline audit accepted a scalar cleanup record instead of the required array.'
+Assert-Throws {
+    Assert-M10ClientCleanup ([ordered]@{ cleanup = $validClientCleanup.cleanup[0] }) 'scalar dictionary cleanup fixture'
+} 'M10 offline audit accepted a scalar dictionary cleanup record instead of the required array.'
+Assert-Throws { Assert-M10ClientCleanup ([ordered]@{}) 'missing cleanup array fixture' } 'M10 offline audit accepted a report with no cleanup array.'
+Assert-Throws { Assert-M10ClientCleanup ([pscustomobject]@{}) 'missing PSCustomObject cleanup array fixture' } 'M10 offline audit accepted a PSCustomObject report with no cleanup array.'
+Assert-Throws {
+    Assert-M10ClientCleanup ([ordered]@{ cleanup = @([ordered]@{ target = 'isolated Redis'; forced = $false }) }) 'missing client record fixture'
+} 'M10 offline audit accepted cleanup records with no Mineflayer client entry.'
+Assert-Throws {
+    Assert-M10ClientCleanup ([pscustomobject]@{ cleanup = @([pscustomobject]@{ target = 'isolated Redis'; forced = $false }) }) 'missing PSCustomObject client record fixture'
+} 'M10 offline audit accepted PSCustomObject cleanup records with no Mineflayer client entry.'
+foreach ($invalidClientCleanup in @(
+        [ordered]@{ target = 'Mineflayer client'; forced = $true; processExitVerified = $true; gracefulExitVerified = $true; exitCode = [long]0 },
+        [ordered]@{ target = 'Mineflayer client'; forced = $false; processExitVerified = $false; gracefulExitVerified = $true; exitCode = [long]0 },
+        [ordered]@{ target = 'Mineflayer client'; forced = $false; processExitVerified = $true; gracefulExitVerified = $false; exitCode = [long]0 },
+        [ordered]@{ target = 'Mineflayer client'; forced = $false },
+        [ordered]@{ target = 'Mineflayer client'; forced = $false; processExitVerified = $true; gracefulExitVerified = $true; exitCode = [long]1 }
+    )) {
+    Assert-Throws {
+        Assert-M10ClientCleanup ([ordered]@{ cleanup = @($invalidClientCleanup) }) 'unsuccessful client cleanup fixture'
+    } 'M10 offline audit accepted a forced, unverified, or unsuccessful Mineflayer client exit.'
+}
+Assert-Throws {
+    $duplicateClient = [ordered]@{ cleanup = @($validClientCleanup.cleanup[0], $validClientCleanup.cleanup[0]) }
+    Assert-M10ClientCleanup $duplicateClient 'duplicate client cleanup fixture'
+} 'M10 offline audit accepted duplicate Mineflayer client cleanup records.'
 
 $reportSource = "function Set-M10Probe { `r`n    return `$true`r`n}`r`n`r`n"
 $currentSource = "function Set-M10Probe {`n    return `$true`n}`n"
@@ -333,7 +388,7 @@ try {
         throw 'M10 offline audit entrypoint did not reject an alternate local PlugDev root before report inspection.'
     }
 
-    Write-Output 'PASS M10 offline audit provenance and transition regressions (run identity, current-stable/current-maximum selectors, event/deposit/snapshot linkage, account UUIDs, canonical versions, and path/bundle provenance)'
+    Write-Output 'PASS M10 offline audit regressions (provenance, transition linkage, and exactly one graceful verified Mineflayer client exit in an array)'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }

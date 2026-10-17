@@ -23,4 +23,49 @@ if (-not $runnerSource.Contains($expectedSelectorSet, [StringComparison]::Ordina
 if (-not $runnerSource.Contains('build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\'' + $pin.artifact', [StringComparison]::Ordinal)) {
     throw 'Scheduler current-maximum selectors must resolve their artifacts from the verified T21 current-maximum artifact directory.'
 }
-Write-Output 'PASS: scheduler lifecycle pins preserve historical endpoints and expose all current maximum endpoints'
+if (-not $runnerSource.Contains("candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354'", [StringComparison]::Ordinal)) {
+    throw 'Scheduler lifecycle runner must pin the current candidate used by T21 endpoint validation.'
+}
+$runnerTokens = $null
+$runnerParseErrors = $null
+$runnerAst = [System.Management.Automation.Language.Parser]::ParseInput($runnerSource, [ref]$runnerTokens, [ref]$runnerParseErrors)
+if ($runnerParseErrors.Count -gt 0) { throw "Scheduler lifecycle runner has PowerShell parse errors: $($runnerParseErrors -join '; ')" }
+$nodeInvokerAst = $runnerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-NodeWithMineflayerModulePath'
+}, $true)
+if ($null -eq $nodeInvokerAst) { throw 'Scheduler lifecycle runner must scope NODE_PATH to Mineflayer client processes.' }
+$invokeClientAst = $runnerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Client'
+}, $true)
+if ($null -eq $invokeClientAst -or $null -eq $invokeClientAst.Body.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-NodeWithMineflayerModulePath'
+    }, $true)) {
+    throw 'Scheduler lifecycle Mineflayer probes must use the scoped module-path invoker.'
+}
+if (-not $invokeClientAst.Extent.Text.Contains('moduleSearchPath = $nodeResult.moduleSearchPath', [StringComparison]::Ordinal)) {
+    throw 'Scheduler lifecycle client report must retain the Mineflayer module-search path used for the probe.'
+}
+. ([scriptblock]::Create($nodeInvokerAst.Extent.Text))
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("syncmoney-scheduler-node-path-" + [guid]::NewGuid().ToString('N'))
+$modulePath = Join-Path $tempRoot 'node_modules'
+$null = New-Item -ItemType Directory -Path $modulePath -Force
+$originalNodePath = $env:NODE_PATH
+try {
+    $nodeProbe = Invoke-NodeWithMineflayerModulePath -Arguments @('-e', 'process.stdout.write(process.env.NODE_PATH || "")') -MineflayerPath $tempRoot
+    $observedNodePath = (@($nodeProbe.output | ForEach-Object { $_.ToString() }) -join '').Trim()
+    $expectedNodePath = [IO.Path]::GetFullPath($modulePath)
+    if ($nodeProbe.exitCode -ne 0 -or
+        -not [string]::Equals($observedNodePath, $expectedNodePath, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($nodeProbe.moduleSearchPath, $expectedNodePath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Scheduler lifecycle client child process did not receive the local Mineflayer node_modules path.'
+    }
+    if (-not [string]::Equals([string]$env:NODE_PATH, [string]$originalNodePath, [StringComparison]::Ordinal)) {
+        throw 'Scheduler lifecycle runner did not restore the parent NODE_PATH after the client process exited.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+}
+Write-Output 'PASS: scheduler lifecycle pins preserve historical/current maximum endpoints and scope Mineflayer NODE_PATH to the child process'

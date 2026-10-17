@@ -300,7 +300,7 @@ test("guard acceptance admits the Folia ownership case while keeping breaker com
   assert.match(probe, /T21_GUARD_TRANSACTIONS player=" \+ player\.getName\(\) \+ " uuid=/);
   assert.match(probe, /outcomes=/);
   assert.match(probe, /accepted=" \+ accepted \+ " rejected=" \+ rejected/);
-  assert.match(runner, /candidateSha -cne '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662'/);
+  assert.match(runner, /candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354'/);
 });
 
 test("Canvas guard-pair proof requires two entity owners, independent quotas, notices, and persisted balances", () => {

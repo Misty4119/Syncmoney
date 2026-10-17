@@ -122,6 +122,55 @@ function Assert-M10([bool]$Condition, [string]$Name) {
     $script:assertions++
     if (-not $Condition) { throw "FAIL: $Name" }
 }
+function Assert-M10ClientCleanup([object]$Report, [string]$Label) {
+    $clientRecords = @()
+    $hasCleanup = $false
+    $cleanup = $null
+    if ($Report -is [System.Collections.IDictionary]) {
+        if ($Report.Contains('cleanup')) {
+            $hasCleanup = $true
+            $cleanup = $Report['cleanup']
+        }
+    } elseif ($null -ne $Report) {
+        $cleanupProperty = $Report.PSObject.Properties['cleanup']
+        if ($null -ne $cleanupProperty) {
+            $hasCleanup = $true
+            $cleanup = $cleanupProperty.Value
+        }
+    }
+    $getFieldValue = {
+        param([object]$Object, [string]$Name)
+        if ($null -eq $Object) { return $null }
+        if ($Object -is [System.Collections.IDictionary]) {
+            if ($Object.Contains($Name)) { return $Object[$Name] }
+            return $null
+        }
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -eq $property) { return $null }
+        return $property.Value
+    }
+    if ($hasCleanup -and $cleanup -is [System.Collections.IList]) {
+        $clientRecords = @($cleanup | Where-Object {
+            [string]::Equals([string](& $getFieldValue $_ 'target'), 'Mineflayer client', [StringComparison]::Ordinal)
+        })
+    }
+
+    $valid = $clientRecords.Count -eq 1
+    if ($valid) {
+        $record = $clientRecords[0]
+        $forced = & $getFieldValue $record 'forced'
+        $processExitVerified = & $getFieldValue $record 'processExitVerified'
+        $gracefulExitVerified = & $getFieldValue $record 'gracefulExitVerified'
+        $exitCode = & $getFieldValue $record 'exitCode'
+        $valid = $forced -is [bool] -and $forced -eq $false -and
+            $processExitVerified -is [bool] -and $processExitVerified -eq $true -and
+            $gracefulExitVerified -is [bool] -and $gracefulExitVerified -eq $true -and
+            $exitCode -is [long] -and $exitCode -eq 0
+    }
+
+    Assert-M10 $valid "$Label exactly one verified graceful Mineflayer client exit"
+    return $valid
+}
 function ConvertTo-M10WhitespaceNormalizedSource([string]$Source) {
     $normalized = $Source.Replace("`r`n", "`n").Replace("`r", "`n")
     $normalized = [regex]::Replace($normalized, '[\t ]+(?=\n)', '')
@@ -540,6 +589,7 @@ foreach ($entry in $matrix) {
         @($commandTexts | Where-Object { $_ -ceq 'stop' }).Count -eq 2) "$($entry.Label) required acceptance and shutdown commands"
     Assert-M10 ($report.shutdown.Count -eq 2 -and (@($report.shutdown | ForEach-Object node | Sort-Object) -join ',') -eq 'a,b') "$($entry.Label) both node shutdowns"
     Assert-M10 (@($report.shutdown | Where-Object { -not $_.processExitVerified -or -not $_.pluginDrainVerified -or $_.forced -or -not $_.listenerCheck.closed -or $_.recoveryJournal.pendingCount -ne 0 -or $_.recoveryJournal.validation -notin @('PASS_EMPTY','PASS_FORMAT_AND_CHECKSUM') }).Count -eq 0) "$($entry.Label) clean drain/journal/listener state"
+    $null = Assert-M10ClientCleanup $report $entry.Label
     Assert-M10 (@($report.cleanup | Where-Object { $_.forced }).Count -eq 0) "$($entry.Label) no forced cleanup"
     Assert-M10 ($report.redis.cleanShutdown -eq $true) "$($entry.Label) isolated Redis clean shutdown"
     Assert-M10 ($null -eq $report.failure -and $null -eq $report.cleanupFailure) "$($entry.Label) no failures"

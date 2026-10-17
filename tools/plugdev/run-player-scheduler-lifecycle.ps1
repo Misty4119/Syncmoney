@@ -67,7 +67,7 @@ foreach ($path in @($candidateJar, $acceptanceJar, $apiConsumerJar, $serverJar, 
 $serverSha = (Get-FileHash -LiteralPath $serverJar -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($serverSha -cne $pin.sha256) { throw "Exact server artifact hash mismatch: expected $($pin.sha256), observed $serverSha." }
 $candidateSha = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($candidateSha -cne '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662') {
+if ($candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354') {
     throw "Candidate artifact does not match the T21 source pin: $candidateSha"
 }
 
@@ -273,15 +273,36 @@ function Wait-ServerExit([int]$timeoutSeconds = 60) {
     throw 'The run-marked server JVM did not exit after normal stop.'
 }
 
+function Invoke-NodeWithMineflayerModulePath([string[]]$Arguments, [string]$MineflayerPath) {
+    $moduleSearchPath = [IO.Path]::GetFullPath((Join-Path $MineflayerPath 'node_modules'))
+    if (-not (Test-Path -LiteralPath $moduleSearchPath -PathType Container)) {
+        throw "Local Mineflayer node_modules directory was not found: $moduleSearchPath"
+    }
+    $previousNodePath = $env:NODE_PATH
+    try {
+        $env:NODE_PATH = $moduleSearchPath
+        $output = @(& node @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        if ($null -eq $previousNodePath) {
+            Remove-Item Env:NODE_PATH -ErrorAction SilentlyContinue
+        } else {
+            $env:NODE_PATH = $previousNodePath
+        }
+    }
+    return [ordered]@{ output = $output; exitCode = $exitCode; moduleSearchPath = $moduleSearchPath }
+}
+
 function Invoke-Client([string]$scenario) {
     $logPath = Join-Path $logsRoot "$scenario-mineflayer.log"
     $clientArgs = @($clientScript, $scenario, $pin.version, [string]$gamePort, [string]$redisPort,
         [string]$RedisPauseMilliseconds, $redisCli, $mineflayerRootPath)
-    $output = @(& node @clientArgs 2>&1)
-    $exitCode = $LASTEXITCODE
+    $nodeResult = Invoke-NodeWithMineflayerModulePath -Arguments $clientArgs -MineflayerPath $mineflayerRootPath
+    $output = @($nodeResult.output)
+    $exitCode = $nodeResult.exitCode
     $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $logPath -Encoding utf8
     if ($exitCode -ne 0) { throw "Mineflayer $scenario probe failed with exit $exitCode; see $logPath." }
-    return [ordered]@{ exitCode = $exitCode; logPath = $logPath; logSha256 = (Get-FileHash $logPath -Algorithm SHA256).Hash.ToLowerInvariant(); lines = @($output | ForEach-Object { $_.ToString() }) }
+    return [ordered]@{ exitCode = $exitCode; logPath = $logPath; logSha256 = (Get-FileHash $logPath -Algorithm SHA256).Hash.ToLowerInvariant(); moduleSearchPath = $nodeResult.moduleSearchPath; lines = @($output | ForEach-Object { $_.ToString() }) }
 }
 
 function Get-CanonicalTextSourceSha256([string]$path) {
@@ -883,8 +904,8 @@ plugins {
             crossOwner = if ($null -eq $crossOwnerClient) { $null } else { [ordered]@{ protocol = $pin.version; exitCode = $crossOwnerClient.exitCode; logSha256 = $crossOwnerClient.logSha256 } }
             guard = if ($null -eq $guardClient) { $null } else { [ordered]@{ scenario = $guardClientScenario; protocol = $pin.version; exitCode = $guardClient.exitCode; logSha256 = $guardClient.logSha256 } }
             globalBreaker = if ($null -eq $breakerClient) { $null } else { [ordered]@{ scenario = $breakerClientScenario; protocol = $pin.version; exitCode = $breakerClient.exitCode; logSha256 = $breakerClient.logSha256 } }
-            teleport = [ordered]@{ protocol = $pin.version; exitCode = $teleport.exitCode; logSha256 = $teleport.logSha256; observedNetherDimension = $true }
-            logout = [ordered]@{ protocol = $pin.version; exitCode = $logout.exitCode; logSha256 = $logout.logSha256; expectedKickReason = 'T15 accepted-write logout scenario'; clientObservedExpectedKickPacket = $scenarioEvidence.clientObservedExpectedKickPacket; clientObservedExpectedLogoutAbort = $scenarioEvidence.clientObservedExpectedLogoutAbort; exactServerKickReasonVerified = $scenarioEvidence.exactServerKickReasonVerified }
+            teleport = [ordered]@{ protocol = $pin.version; exitCode = $teleport.exitCode; logSha256 = $teleport.logSha256; moduleSearchPath = $teleport.moduleSearchPath; observedNetherDimension = $true }
+            logout = [ordered]@{ protocol = $pin.version; exitCode = $logout.exitCode; logSha256 = $logout.logSha256; moduleSearchPath = $logout.moduleSearchPath; expectedKickReason = 'T15 accepted-write logout scenario'; clientObservedExpectedKickPacket = $scenarioEvidence.clientObservedExpectedKickPacket; clientObservedExpectedLogoutAbort = $scenarioEvidence.clientObservedExpectedLogoutAbort; exactServerKickReasonVerified = $scenarioEvidence.exactServerKickReasonVerified }
         }
         observed = [ordered]@{ lifecycle = $scenarioEvidence; guard = $guardEvidence; globalBreaker = $breakerEvidence }
         forcedCleanup = $false
