@@ -186,7 +186,7 @@ Add `-IncompleteV10AuditTablePlayerRowPreservation` to seed one pre-existing `pl
 
 ### T21 V03 successful v10-to-v11 migration with an existing player row
 
-Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing MySQL `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. This additional E2 scenario is restricted to minimum Paper `1.21.6#48` and maximum Paper `26.3#166`, each with MySQL `8.0.42`. It observes one row in two Paper endpoint/backend cells and does not establish row preservation across Folia, Canvas, other SQL dialects, multiple rows, or whole-database atomicity.
+Use `-SuccessfulV10AuditSchemaPlayerRowPreservation` to run the normal successful v10-to-v11 audit-schema migration after seeding one existing `players` row. The report predicate requires the row count and normalized row JSON to remain identical before and after candidate startup, alongside the existing audit-schema sentinel, v11 columns/indexes, pinned artifact identity, and normal cleanup checks. Bounded E2 evidence covers MySQL `8.0.42` on minimum Paper `1.21.6#48` and maximum Paper `26.3#166`, plus MariaDB `12.3.3-MariaDB` on minimum Paper only. It observes one row in three Paper endpoint/backend cells and does not establish row preservation across MariaDB maximum Paper, PostgreSQL, Folia, Canvas, multiple rows, or whole-database atomicity.
 
 ```powershell
 $paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
@@ -198,6 +198,25 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Minimum `
   -DatabaseProduct MySQL `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+```
+
+For the additional minimum-Paper MariaDB cell, pass the MariaDB 12.3.3 binary directory explicitly when it is outside the runner's default Program Files path. Use a short absolute report root on Windows to avoid the MariaDB system-table path-length failure recorded in the validation plan:
+
+```powershell
+$paperJar = (Resolve-Path 'build\reports\foundation\T15-runtime-pins\artifacts\paper-1.21.6-48.jar').Path
+$mariaDbBin = 'C:\Users\margo\scoop\apps\mariadb\12.3.3\bin'
+$reportRoot = [IO.Path]::GetFullPath('build\r')
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar $paperJar `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
+  -RuntimeReportsRoot $reportRoot `
+  -MariaDbBin $mariaDbBin `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct MariaDB `
   -SuccessfulV10AuditSchemaPlayerRowPreservation
 ```
 
@@ -216,7 +235,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -SuccessfulV10AuditSchemaPlayerRowPreservation
 ```
 
-Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with `-PlatformEndpoint Minimum` or `Maximum` to match the selected run, `-DatabaseProduct MySQL`, and the pinned candidate SHA-256. It rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
+Run `t21-audit-schema-upgrade-offline-audit.ps1` against the emitted report with the matching `-PlatformEndpoint`, `-DatabaseProduct` (`MySQL` or `MariaDB`), and pinned candidate SHA-256. It rehashes the report, pinned artifacts, source pins, and every retained runtime log. The full report/audit identities and evidence boundaries belong in the foundation validation plan.
 
 For minimum Folia with MySQL `8.0.42`, use its exact pinned artifact and endpoint selector:
 

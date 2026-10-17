@@ -4998,3 +4998,60 @@ Both commands exited `0`; the runner emitted `PASS_BOUNDED_SUBCASE`, and the cur
 **Independent review:** Two read-only reviews checked the endpoint/report predicates and the planning/evidence scope; both returned no actionable findings. After the final validation-command edit, a targeted documentation re-review matched command arguments and the report/audit hashes to the retained outputs and verified the six validation-log paths/hashes. It found no discrepancy. Reviewers did not rerun the runtime.
 
 T21 remains **IN_PROGRESS**; lifecycle and other V03 mode/resource/failure gates remain open. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because the active license status is **UNKNOWN**.
+
+## T21 V03 successful v10-to-v11 migration with existing player-row preservation — minimum Paper / MariaDB (2026-10-17)
+
+**Result: `PASS_BOUNDED_SUBCASE (E2)` for minimum Paper / MariaDB.** This adds the first MariaDB cell to the successful audit-migration player-row preservation path, alongside the previously evidenced minimum/maximum Paper + MySQL cells. Formal bounds remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`; the observation uses only minimum Paper `1.21.6#48` and MariaDB `12.3.3-MariaDB`.
+
+**Decision and confirmed behavior:** Extend only the existing opt-in runner/report target and its fixtures to admit this one minimum-Paper/MariaDB cell. Keep MariaDB maximum Paper, PostgreSQL, Folia, Canvas, and supplemental CurrentStable rejected for this player-row case. The target regression first failed against the prior guard with `The successful-migration player-row case must admit the user-pinned minimum-Paper/MariaDB cell.`; the guard, report fixture, and runner failure text were then updated. The first runtime report (`mariadb-sync-minimum-paper-20261017-085446-59e4ee386e144890bf8c926bd3fff0b2`) was initially audited, then excluded after a one-line runner diagnostic edit made its source pin stale; the fresh report below was rerun and audited against the final current source. No Java product source, public contract, SQL schema, recovery format, or formal platform bound changed. Candidate startup left main SQL schema version `1` and its version row unchanged, migrated audit schema `10→11`, and preserved one pre-existing player row as identical normalized JSON (`1234.56`, version `73`, `updated_at=2026-10-16 12:34:56`). Paper, MariaDB, and Redis stopped normally; forced cleanup was false, cleanup failures were zero, and an independent process check found no process referencing this isolated run directory.
+
+| Evidence | Identity |
+|---|---|
+| Runtime report | `build/r/mariadb-sync-minimum-paper-20261017-090012-41d74f0edcd24e7eb273e90ef02c85a6/result.json`; 31,115 bytes; SHA-256 `8ecd18c1b759670d10a8c60ede862999d229811d509317caf8430f11996462ff` |
+| Report-specific offline audit | `build/r/mariadb-sync-minimum-paper-20261017-090012-41d74f0edcd24e7eb273e90ef02c85a6/validation/offline-audit.txt`; `PASS`, 25 logs; SHA-256 `b9d8547b05317df4e57534e0cb28f0aec56752cb6e4475dde2563a19822762f0`; JSON audit SHA-256 `0b002fff2c278cf9d86a8243756e6014bdb7890112f00435e9fb624897143ab2` |
+| Candidate Syncmoney JAR | `1.4.0-alpha.1`; SHA-256 `57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662` |
+| Minimum Paper JAR | Paper `1.21.6#48`; SHA-256 `35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214` |
+| Runtime | Java `25.0.4+7-LTS-189`; MariaDB `12.3.3-MariaDB`; Redis `8.10.1`; config schema `12`; isolated SYNC / SQL schema `syncmoney_t21_*` / Redis DB 15 |
+| Local PlugDev | clean local checkout at commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`; CLI SHA-256 `3a600872a3c95bb67b960bdbb5efcbb84eb675110f89146566bedb1835ad047d7`; distribution manifest SHA-256 `f57b296b2e4de10dec9dd7a83a51f3e0f95fb5ef27d5de2934e9b4ef56e0fc16` before and after |
+| Report source pins | runner `2296b5f41996b9fe3ab74ca4c195ea4c6ab90db094bdf96cc2f33b6cd5ff8ce8`; audit-schema validator `771d11150945864537787b0c8a8c3f2851b9b8634693c85ebe50abe548d1ff97`; audit-schema test `0a1c5b971806b0ee9738d23f55be60da1e965d14294f73734f4cb922cd6e1ec0`; shared validator/test and startup-failure validator/test were also matched by the independent verifier |
+
+**Commands and results:** The short report root `build/r` avoids the Windows MariaDB system-table path-length failure previously observed with a longer root; it remains inside ignored build output. Run from the repository root with the exact local PlugDev checkout:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
+$runtimeReportsRoot = [IO.Path]::GetFullPath('build\r')
+pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
+  -ServerJar 'build/reports/foundation/T15-runtime-pins/artifacts/paper-1.21.6-48.jar' `
+  -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -JavaHome $env:JAVA_HOME `
+  -RuntimeReportsRoot $runtimeReportsRoot `
+  -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\12.3.3\bin' `
+  -PlatformEndpoint Minimum `
+  -DatabaseProduct MariaDB `
+  -SuccessfulV10AuditSchemaPlayerRowPreservation
+
+pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-offline-audit.ps1 `
+  -ReportPath 'build/r/mariadb-sync-minimum-paper-20261017-090012-41d74f0edcd24e7eb273e90ef02c85a6/result.json' `
+  -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
+  -DatabaseProduct MariaDB `
+  -PlatformEndpoint Minimum
+```
+
+Both commands exited `0`; the runner emitted `PASS_BOUNDED_SUBCASE`, and the offline auditor rehashed all 25 declared logs. Validation outputs and hashes are retained under `build/reports/foundation/T21-mariadb-player-row-validation-20261017-minimum/`:
+
+| Check | Result / retained output |
+|---|---|
+| `t21-audit-schema-upgrade-validation.test.ps1` | PASS, exit 0; `audit-schema-validation.log`, SHA-256 `1b38c5ccb4c79c677459b53d4e8ba9b48478c259ff7d996ea60530b9b5cf299b` |
+| `t21-upgrade-validation.test.ps1` | PASS, 201 checks; `upgrade-validation.log`, SHA-256 `c09c999b8a148f40697816521947be4feabd5702ed87c7bb87387d8482a746f7` |
+| `t21-startup-failure-validation.test.ps1` | PASS, 176 checks; `startup-failure-validation.log`, SHA-256 `f8910a0f0986ce2c648bc1723ef107b362d2522a0b0450a185a81e9252483bbb` |
+| `node --test tools/plugdev/prepare.test.mjs` | PASS, 12/12; `plugdev-preparation.log`, SHA-256 `6920e9e9ecafbad9e3fcde81eb49ff1e7f1a2fd68b3fe11748a33b8fa9a2213b` |
+| PowerShell `Parser.ParseFile` over all `tools/plugdev/**/*.ps1` | PASS, 30 scripts, zero parse errors; `powershell-parse.log`, SHA-256 `2add6c8aba3b61751ba9965ba1fa0a7405a7fb8c1b0b55cc23dde994add531b9` |
+| Independent universal verification | PASS, 22 deterministic assertions over report identity/state, artifact/source pins, all 25 log hashes, PlugDev identity, cleanup, and process residue; `universal-verification.log`, SHA-256 `0ff134bd81f84c7589805397425c0e7ed50ae3948fe40624bc18a04733f16e02` |
+| `git diff --check` | PASS, exit 0; `git-diff-check.log`, SHA-256 `2e63dfd6acea147fcd9bcd6ed93cbad2279cf36bcd49794e4f152cf23d02b087` |
+| Java/product tests | **NOT RUN**; no Java/product source changed; the pinned candidate artifact was exercised in the E2 run |
+
+**Independent review:** Two read-only reviews found no actionable issues. The harness/scope review checked the target guards, negative controls, fixtures, and documentation scope; it did not rerun tests or runtime. The retained-evidence review independently rehashed the accepted 31,115-byte report, its text/JSON offline audits, all 25 runtime logs, four artifact hashes, all nine report-pinned runner/validator/test sources, the clean/current local PlugDev commit and CLI, all 26 distribution files plus manifest, and seven retained validation logs. It confirmed one identical player row (`1234.56`, version `73`, timestamp `2026-10-16 12:34:56`), unchanged main schema v1/version row, audit v10→v11, normal Paper/MariaDB/Redis exit 0, no forced cleanup/failures, and no process referencing the isolated run directory. README command fields and the plan scope matched the evidence. The reviewer did not rerun the live runtime. The report records Java `25.0.4+7-LTS-189` but omits the exact `-JavaHome` path; the offline audit does not record its own script hash. For traceability, the current `t21-audit-schema-upgrade-offline-audit.ps1` SHA-256 at review was `eb83d2f2bcf1085db3fad8f1fdfdb968ba52c5a1728f1c8a7c1983d0cb345e72`; this is reviewer-supplied supplemental identity, not a report-persisted source pin. The earlier `085446` report remains explicitly excluded because its runner pin predates the final source.
+
+This is one existing-player-row preservation observation on minimum Paper/MariaDB only. It does not establish MariaDB maximum Paper, PostgreSQL, Folia, Canvas, multiple-row preservation, or whole-database atomicity. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness scope; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because the active license status is **UNKNOWN**.
