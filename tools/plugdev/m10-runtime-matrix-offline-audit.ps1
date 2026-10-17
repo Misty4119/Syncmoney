@@ -27,7 +27,8 @@ if ($SupplementalCurrentStableOnly) {
 $runtimeRoot = Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/runtime'
 $reportTimeSourceRoot = Join-Path $runtimeRoot 'source-pins/report-time'
 $expectedReportRunner = '6c1a60d2fd2afe92b12f06f261ef27e8a6d9ea163c09f24d00db3b326d361164'
-$expectedCurrentRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'
+$expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'
+$expectedCurrentRunner = 'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c'
 $expectedReportObserver = 'd02ce11780123c00f1cddb3be20edd8b7fbf1d8d9c42ab9a5c7f44777fe177cf'
 $expectedCurrentObserver = 'edaf79362470be7b3961922ad6c0f687d4a6686c88f26948fbdb17ae53eb4593'
 $expectedCandidate = 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'
@@ -43,7 +44,7 @@ $matrix = @(
     [pscustomobject]@{ RunId='canvas-263-max-20261014-155301-4af1ed9de5574f36bd01edb5806a345a'; Label='Canvas 26.3#972'; ArtifactFile='canvas-26.3-972.jar'; Artifact='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
 )
 if ($SupplementalCurrentStableOnly) {
-    $expectedReportRunner = $expectedCurrentRunner
+    $expectedReportRunner = $expectedCurrentStableRunner
     $expectedCandidate = '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662'
     $expectedCommit = '3aa078203c659a8360791adececbfe40d0b8cdba'
     $expectedTree = 'd76026dfb7ed856a118305d815e0f121b1b1f75d'
@@ -326,7 +327,7 @@ $null = Assert-M10AuditNoReparsePath $reportObserverSourcePath
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedReportRunner) 'report-time runner source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $runnerPath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current runner sha'
 if ($SupplementalCurrentStableOnly) {
-    $null = Assert-M10ReportSourceEquivalent (Get-Content -LiteralPath $reportRunnerSourcePath -Raw) (Get-Content -LiteralPath $runnerPath -Raw) 'CurrentStable M10 runner'
+    Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedCurrentStableRunner) 'CurrentStable report-time runner snapshot sha'
 }
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportObserverSourcePath).Hash.ToLowerInvariant() -eq $expectedReportObserver) 'report-time observer source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant() -eq $expectedCurrentObserver) 'current observer sha'

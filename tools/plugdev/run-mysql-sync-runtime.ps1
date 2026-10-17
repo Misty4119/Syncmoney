@@ -11,7 +11,7 @@ param(
     [string]$PostgreSqlBin = 'C:\Program Files\PostgreSQL\18\bin',
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
     [string]$CandidateVersion = '1.4.0-alpha.1',
     [switch]$LegacySqlDataUpgrade,
@@ -1587,7 +1587,7 @@ WHERE d.datname = current_database();
 
 function Enable-T21MySqlGeneralLogCapture {
     if ($script:databaseProduct -notin @('MySQL', 'MariaDB') -or -not $script:requiredV11DdlPermissionDeniedStartupFailure -or
-        $PlatformEndpoint -cne 'Maximum') {
+        $PlatformEndpoint -notin @('Maximum', 'CurrentMaximum')) {
         throw 'MySQL/MariaDB general-log capture is scoped to the maximum-Paper required-v11-DDL denial cell.'
     }
     $stateRows = @(Invoke-MySqlQuery 'SELECT CONCAT(UPPER(@@GLOBAL.general_log), ''|'', UPPER(@@GLOBAL.log_output));' 'mysql-ddl-general-log-state-before' -asRoot)
@@ -1623,7 +1623,7 @@ function Disable-T21MySqlGeneralLogCapture {
 
 function Get-T21MySqlDeniedRequestIdDdlEvidence {
     if (-not $script:mysqlGeneralLogRestoreRequired -or $script:databaseProduct -notin @('MySQL', 'MariaDB') -or
-        $PlatformEndpoint -cne 'Maximum') {
+        $PlatformEndpoint -notin @('Maximum', 'CurrentMaximum')) {
         throw 'The maximum-Paper MySQL/MariaDB denied-request_id evidence capture was not initialized.'
     }
     try {
@@ -1735,7 +1735,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
     $pluginPin = Get-PinnedSyncmoneyPlugin $CandidateVersion $script:candidateSha256
     if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied' -and
-        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
+        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -in @('Maximum', 'CurrentMaximum')) {
         $script:deniedDdlEvidence = Get-T21MySqlDeniedRequestIdDdlEvidence
     }
     $processes = @(Get-T21ServerProcesses)
@@ -2286,7 +2286,7 @@ try {
             -SeedMultipleExistingPlayerRows:$script:successfulV10AuditSchemaMultiplePlayerRowPreservation
     }
     if ($script:requiredV11DdlPermissionDeniedStartupFailure -and
-        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
+        $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -in @('Maximum', 'CurrentMaximum')) {
         Enable-T21MySqlGeneralLogCapture
     }
 

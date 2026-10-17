@@ -42,7 +42,7 @@ function Assert-T21PlatformIdentity(
 }
 
 function Get-T21PlatformEndpoint(
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     switch -CaseSensitive ($PlatformEndpoint) {
@@ -62,6 +62,15 @@ function Get-T21PlatformEndpoint(
                 minecraftVersion = '26.3'
                 build = 166
                 sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+            }
+        }
+        'CurrentMaximum' {
+            return [ordered]@{
+                taskSuffix = 'current-maximum-Paper'
+                software = 'paper'
+                minecraftVersion = '26.3'
+                build = 200
+                sha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d'
             }
         }
         'CurrentStable' {
@@ -91,6 +100,15 @@ function Get-T21PlatformEndpoint(
                 sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
             }
         }
+        'CurrentMaximumFolia' {
+            return [ordered]@{
+                taskSuffix = 'current-maximum-Folia'
+                software = 'folia'
+                minecraftVersion = '26.3'
+                build = 3
+                sha256 = '0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022'
+            }
+        }
         'MinimumCanvas' {
             return [ordered]@{
                 taskSuffix = 'minimum-Canvas'
@@ -109,17 +127,26 @@ function Get-T21PlatformEndpoint(
                 sha256 = 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5'
             }
         }
+        'CurrentMaximumCanvas' {
+            return [ordered]@{
+                taskSuffix = 'current-maximum-Canvas'
+                software = 'canvas'
+                minecraftVersion = '26.3'
+                build = 984
+                sha256 = '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa'
+            }
+        }
     }
     throw "Unsupported T21 platform endpoint: $PlatformEndpoint"
 }
 
-function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
+function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
     return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
 function Test-T21M04PlatformEndpointReport(
     [object]$report,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ($null -eq $report) { return $false }
@@ -132,7 +159,7 @@ function Test-T21M04PlatformEndpointReport(
 
 function Test-T21M04PlatformStartupIdentity(
     [string]$serverLogText,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ([string]::IsNullOrWhiteSpace($serverLogText)) { return $false }
@@ -150,7 +177,7 @@ function Test-T21M04PlatformStartupIdentity(
 
 function Test-T21M04PaperEndpointReport(
     [object]$report,
-    [ValidateSet('Minimum', 'Maximum')][string]$PaperEndpoint = 'Minimum'
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum')][string]$PaperEndpoint = 'Minimum'
 ) {
     return Test-T21M04PlatformEndpointReport $report -PlatformEndpoint $PaperEndpoint
 }
@@ -800,7 +827,7 @@ function Test-T21SqlRuntimeReport(
     [string]$expectedCandidateSha256,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     try {
@@ -1194,7 +1221,7 @@ function Test-T21MySqlRuntimeReport(
     [string]$expectedCandidateSha256,
     [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
@@ -1205,7 +1232,7 @@ function Test-T21PostgresRuntimeReport(
     [string]$expectedServerSha256,
     [string]$expectedCandidateSha256,
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint

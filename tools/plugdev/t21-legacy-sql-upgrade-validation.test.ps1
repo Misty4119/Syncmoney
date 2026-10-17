@@ -443,7 +443,7 @@ try {
     )) { throw 'The runner does not expose the expected SQL products and configuration type on the supported Paper legacy-data endpoints.' }
     Write-Output 'PASS: route legacy SQL acceptance through the exact pinned platform and backend target guard'
 
-    $legacyTargets = @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    $legacyTargets = @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')
     $legacyProducts = @('MySQL', 'MariaDB', 'PostgreSQL')
     foreach ($product in $legacyProducts) {
         foreach ($targetName in $legacyTargets) {
@@ -456,9 +456,9 @@ try {
         (Test-T21LegacySqlRuntimeTarget -DatabaseProduct MySQL -PlatformEndpoint Unpinned)) {
         throw 'The legacy SQL runtime target guard accepted an unsupported backend or unpinned platform.'
     }
-    Write-Output 'PASS: accept all 21 pinned legacy SQL backend/platform targets and reject unsupported inputs'
+    Write-Output 'PASS: accept all 30 historical/current maximum, minimum, and supplemental legacy SQL backend/platform targets and reject unsupported inputs'
 
-    $foliaCanvasTargets = @('MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    $foliaCanvasTargets = @('MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')
     for ($targetIndex = 0; $targetIndex -lt $foliaCanvasTargets.Count; $targetIndex++) {
         $targetName = $foliaCanvasTargets[$targetIndex]
         $platform = Get-T21PlatformEndpoint -PlatformEndpoint $targetName

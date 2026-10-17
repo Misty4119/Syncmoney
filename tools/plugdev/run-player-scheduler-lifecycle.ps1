@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('paper-1216-min', 'paper-263-max', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')]
+    [ValidateSet('paper-1216-min', 'paper-263-max', 'paper-263-currentmax', 'folia-1216-min', 'folia-262-max', 'folia-263-currentmax', 'canvas-1218-min', 'canvas-263-max', 'canvas-263-currentmax')]
     [string]$Endpoint,
     [string]$JavaHome = 'C:\Program Files\Java\jdk-25.0.4',
     [string]$PlugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main',
@@ -18,10 +18,13 @@ Set-StrictMode -Version Latest
 $pins = @{
     'paper-1216-min' = [ordered]@{ software = 'paper'; version = '1.21.6'; build = 48; artifact = 'paper-1.21.6-48.jar'; sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' }
     'paper-263-max' = [ordered]@{ software = 'paper'; version = '26.3'; build = 166; artifact = 'paper-26.3-166.jar'; sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' }
+    'paper-263-currentmax' = [ordered]@{ software = 'paper'; version = '26.3'; build = 200; artifact = 'paper-26.3-200.jar'; sha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' }
     'folia-1216-min' = [ordered]@{ software = 'folia'; version = '1.21.6'; build = 6; artifact = 'folia-1.21.6-6.jar'; sha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' }
     'folia-262-max' = [ordered]@{ software = 'folia'; version = '26.2'; build = 7; artifact = 'folia-26.2-7.jar'; sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' }
+    'folia-263-currentmax' = [ordered]@{ software = 'folia'; version = '26.3'; build = 3; artifact = 'folia-26.3-3.jar'; sha256 = '0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' }
     'canvas-1218-min' = [ordered]@{ software = 'canvas'; version = '1.21.8'; build = 603; artifact = 'canvas-1.21.8-603.jar'; sha256 = '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' }
     'canvas-263-max' = [ordered]@{ software = 'canvas'; version = '26.3'; build = 972; artifact = 'canvas-26.3-972.jar'; sha256 = 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
+    'canvas-263-currentmax' = [ordered]@{ software = 'canvas'; version = '26.3'; build = 984; artifact = 'canvas-26.3-984.jar'; sha256 = '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
 }
 
 $pin = $pins[$Endpoint]
@@ -48,7 +51,11 @@ $candidateVersion = '1.4.0-alpha.1'
 $candidateJar = Join-Path $root "build\libs\Syncmoney-$candidateVersion.jar"
 $acceptanceJar = Join-Path $root 'build\acceptance\SyncmoneyAcceptance.jar'
 $apiConsumerJar = Join-Path $root 'build\acceptance\SyncmoneyApiConsumer.jar'
-$serverJar = Join-Path $root ('build\reports\foundation\T15-runtime-pins\artifacts\' + $pin.artifact)
+$serverJar = if ($Endpoint -in @('paper-263-currentmax', 'folia-263-currentmax', 'canvas-263-currentmax')) {
+    Join-Path $root ('build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\' + $pin.artifact)
+} else {
+    Join-Path $root ('build\reports\foundation\T15-runtime-pins\artifacts\' + $pin.artifact)
+}
 $prepareScript = Join-Path $root 'tools\plugdev\prepare.mjs'
 $clientScript = Join-Path $root 'tools\plugdev\player-scheduler-lifecycle.mjs'
 $assertionModule = Join-Path $root 'tools\plugdev\player-scheduler-lifecycle-assertions.mjs'

@@ -175,7 +175,7 @@ try {
         [string]$expectedAcceptanceSha,
         [string]$expectedApiConsumerSha,
         [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'PostgreSQL',
-        [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
+        [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
         [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
     ) {
         return Test-T21NewerAuditSchemaStartupFailureReport $candidateReport $expectedServerSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha `
@@ -293,7 +293,7 @@ try {
     $report.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$logInfo.Length
     $report.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
 
-    foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
+    foreach ($endpointName in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas', 'CurrentStable')) {
         $expectedEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointName
         $endpointReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
         $endpointSoftwareName = switch ($expectedEndpoint.software) {
@@ -340,7 +340,7 @@ try {
     $sqlShutdown[0].shutdownTargetVerified = $true
     Write-Output 'PASS: reject an unverified PostgreSQL shutdown target'
 
-    $startupFailureEndpoints = @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
+    $startupFailureEndpoints = @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas', 'CurrentStable')
     foreach ($endpointName in $startupFailureEndpoints) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
             if (-not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName)) {
@@ -357,18 +357,18 @@ try {
     if (-not $unsupportedEndpointRejected) { throw 'The startup-failure target guard accepted an endpoint outside the pinned platform set.' }
     Write-Output 'PASS: allow every pinned platform endpoint for all three SQL dialects and reject an unpinned endpoint'
 
-    foreach ($endpointName in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')) {
+    foreach ($endpointName in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas', 'CurrentStable')) {
         foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-            $shouldAccept = if ($endpointName -ceq 'MaximumFolia') {
+            $shouldAccept = if ($endpointName -in @('MaximumFolia', 'CurrentMaximumFolia')) {
                 $true
             } elseif ($endpointName -ceq 'MinimumCanvas') {
                 $true
-            } elseif ($endpointName -ceq 'MaximumCanvas') {
+            } elseif ($endpointName -in @('MaximumCanvas', 'CurrentMaximumCanvas')) {
                 $true
             } elseif ($endpointName -ceq 'CurrentStable') {
                 $true
             } else {
-                $endpointName -in @('Minimum', 'Maximum', 'MinimumFolia')
+                $endpointName -in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia')
             }
             $accepted = Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpointName
             if ($accepted -ne $shouldAccept) {
@@ -390,23 +390,32 @@ try {
     foreach ($preservationCase in @(
             @{ database='MySQL'; endpoint='Minimum'; expected=$true }
             @{ database='MySQL'; endpoint='Maximum'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$true }
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
             @{ database='MySQL'; endpoint='MinimumFolia'; expected=$true }
             @{ database='MySQL'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$true }
             @{ database='MySQL'; endpoint='MinimumCanvas'; expected=$true }
             @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$true }
             @{ database='MariaDB'; endpoint='Minimum'; expected=$true }
             @{ database='PostgreSQL'; endpoint='Minimum'; expected=$true }
             @{ database='MariaDB'; endpoint='Maximum'; expected=$true }
+            @{ database='MariaDB'; endpoint='CurrentMaximum'; expected=$true }
             @{ database='PostgreSQL'; endpoint='Maximum'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='CurrentMaximum'; expected=$true }
             @{ database='MariaDB'; endpoint='MinimumFolia'; expected=$true }
             @{ database='PostgreSQL'; endpoint='MinimumFolia'; expected=$true }
             @{ database='MariaDB'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='MariaDB'; endpoint='CurrentMaximumFolia'; expected=$true }
             @{ database='PostgreSQL'; endpoint='MaximumFolia'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='CurrentMaximumFolia'; expected=$true }
             @{ database='MariaDB'; endpoint='MinimumCanvas'; expected=$true }
             @{ database='PostgreSQL'; endpoint='MinimumCanvas'; expected=$true }
             @{ database='MariaDB'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$true }
             @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='CurrentMaximumCanvas'; expected=$true }
             @{ database='MariaDB'; endpoint='CurrentStable'; expected=$false }
             @{ database='PostgreSQL'; endpoint='CurrentStable'; expected=$false }
         )) {
@@ -1206,7 +1215,7 @@ try {
         return $copy
     }
 
-    $approvedV11Endpoints = @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentStable')
+    $approvedV11Endpoints = @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas', 'CurrentStable')
     $allV11Products = @('MySQL', 'MariaDB', 'PostgreSQL')
     $approvedV11Count = 0
     foreach ($approvedEndpoint in $approvedV11Endpoints) {
@@ -1217,8 +1226,8 @@ try {
             $approvedV11Count++
         }
     }
-    if ($approvedV11Count -ne 21) { throw "Expected 21 approved required-v11 product/endpoint combinations; observed $approvedV11Count." }
-    Write-Output 'PASS: admit the 21 required-v11 product/endpoint combinations, including supplemental current-stable Paper'
+    if ($approvedV11Count -ne 30) { throw "Expected 30 approved required-v11 product/endpoint combinations; observed $approvedV11Count." }
+    Write-Output 'PASS: admit the 30 historical/current maximum, minimum, and supplemental Paper product/endpoint combinations'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1348,6 +1357,13 @@ try {
         throw 'The maximum-Paper PostgreSQL v11 DDL-denial report accepted the minimum-Paper server SHA-256.'
     }
     Write-Output 'PASS: reject maximum-Paper PostgreSQL v11 DDL-denial evidence with the minimum-Paper server SHA-256'
+    $maximumPaperWrongExpectedHashReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperPostgreSqlDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $maximumPaperWrongExpectedHashReport.server.sha256 = 'd' * 64
+    if (Test-T21StartupFailureReportFixture $maximumPaperWrongExpectedHashReport ('d' * 64) ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
+        throw 'The maximum-Paper PostgreSQL v11 DDL-denial report accepted a caller-supplied server SHA-256 that was not the selected endpoint pin.'
+    }
+    Write-Output 'PASS: reject a matching but unpinned maximum-Paper PostgreSQL server SHA-256'
     $maximumPaperMariaDbDdlFailureMissingEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $maximumPaperMariaDbDdlFailureReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $maximumPaperMariaDbDdlFailureMissingEvidence.Remove('deniedDdlEvidence')
     if (Test-T21StartupFailureReportFixture $maximumPaperMariaDbDdlFailureMissingEvidence $maximumPaperMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `

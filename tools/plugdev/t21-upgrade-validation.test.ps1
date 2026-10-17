@@ -146,6 +146,32 @@ if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
+$currentMaximumEndpoints = @(
+    [ordered]@{ endpoint='CurrentMaximum'; taskSuffix='current-maximum-Paper'; software='paper'; minecraftVersion='26.3'; build=200; sha256='0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' },
+    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=3; sha256='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
+    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=984; sha256='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
+)
+foreach ($endpointCase in $currentMaximumEndpoints) {
+    $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointCase.endpoint
+    if ($endpoint.taskSuffix -cne $endpointCase.taskSuffix -or
+        $endpoint.software -cne $endpointCase.software -or
+        $endpoint.minecraftVersion -cne $endpointCase.minecraftVersion -or
+        $endpoint.build -ne $endpointCase.build -or
+        $endpoint.sha256 -cne $endpointCase.sha256) {
+        throw "The current T21 maximum endpoint is not pinned exactly: $($endpointCase.endpoint)."
+    }
+    $report = [ordered]@{
+        platform = $endpoint.software
+        minecraftVersion = $endpoint.minecraftVersion
+        buildNumber = $endpoint.build
+        expectedServerSha256 = $endpoint.sha256
+    }
+    if (-not (Test-T21M04PlatformEndpointReport $report -PlatformEndpoint $endpointCase.endpoint)) {
+        throw "The M04 offline auditor must accept the exact current maximum endpoint $($endpointCase.endpoint)."
+    }
+    Write-Output "PASS: pin and audit exact T21 current maximum endpoint $($endpointCase.endpoint)"
+}
+
 $currentStableM04Report = [ordered]@{
     platform = $currentStablePaper.software
     minecraftVersion = $currentStablePaper.minecraftVersion
@@ -197,7 +223,9 @@ $runtimePlatformEndpoints = @(
     [ordered]@{ endpoint='MinimumFolia'; taskSuffix='minimum-Folia'; software='folia'; minecraftVersion='1.21.6'; build=6; sha256='917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' },
     [ordered]@{ endpoint='MaximumFolia'; taskSuffix='maximum-Folia'; software='folia'; minecraftVersion='26.2'; build=7; sha256='128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' },
     [ordered]@{ endpoint='MinimumCanvas'; taskSuffix='minimum-Canvas'; software='canvas'; minecraftVersion='1.21.8'; build=603; sha256='6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' },
-    [ordered]@{ endpoint='MaximumCanvas'; taskSuffix='maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=972; sha256='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' }
+    [ordered]@{ endpoint='MaximumCanvas'; taskSuffix='maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=972; sha256='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' },
+    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=3; sha256='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
+    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=984; sha256='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
 )
 foreach ($endpointCase in $runtimePlatformEndpoints) {
     $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointCase.endpoint
@@ -1534,6 +1562,26 @@ if (Test-T21MySqlRuntimeReport $maximumPaperRuntimeReport $paperMaximumSha $cand
     throw 'A maximum-Paper runtime report was accepted under the default minimum-Paper expectation.'
 }
 Write-Output 'PASS: reject maximum-Paper evidence under the minimum-Paper expectation'
+
+$currentMaximumPaper = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximum
+$currentMaximumPaperRuntimeReport = $maximumPaperRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$currentMaximumPaperRuntimeReport.task = "T21-M05-SYNC-MariaDB-$($currentMaximumPaper.taskSuffix)"
+$currentMaximumPaperRuntimeReport.server.minecraftVersion = $currentMaximumPaper.minecraftVersion
+$currentMaximumPaperRuntimeReport.server.build = $currentMaximumPaper.build
+$currentMaximumPaperRuntimeReport.server.sha256 = $currentMaximumPaper.sha256
+foreach ($startup in $currentMaximumPaperRuntimeReport.startupObservations) {
+    $startup.runtimeIdentity.runtimeVersion = $currentMaximumPaper.minecraftVersion
+    $startup.runtimeIdentity.minecraftVersion = $currentMaximumPaper.minecraftVersion
+    $startup.runtimeIdentity.build = $currentMaximumPaper.build
+}
+if (-not (Test-T21MySqlRuntimeReport $currentMaximumPaperRuntimeReport $currentMaximumPaper.sha256 $candidateSha -DatabaseProduct MariaDB -PaperEndpoint CurrentMaximum)) {
+    throw 'The current Paper 26.3#200 MariaDB SYNC runtime report was rejected.'
+}
+Write-Output 'PASS: accept MariaDB runtime report for current maximum Paper 26.3#200'
+if (Test-T21MySqlRuntimeReport $currentMaximumPaperRuntimeReport $currentMaximumPaper.sha256 $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum) {
+    throw 'Current maximum Paper evidence was accepted under the historical maximum Paper selector.'
+}
+Write-Output 'PASS: reject current maximum Paper evidence under the historical maximum selector'
 
 $maximumPaperWrongReportedProduct = $maximumPaperRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $maximumPaperWrongReportedProduct.mysql.product = 'MySQL'

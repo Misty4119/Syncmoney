@@ -17,38 +17,38 @@ function Test-T21StartupRollbackCompletionLog([string]$LogText, [string]$PluginV
 
 function Test-T21NewerAuditSchemaStartupFailureTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+    return $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')
 }
 
 function Test-T21IncompleteAuditTableStartupFailureTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    if ($PlatformEndpoint -ceq 'MaximumFolia') {
+    if ($PlatformEndpoint -in @('MaximumFolia', 'CurrentMaximumFolia')) {
         return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')
     }
     if ($PlatformEndpoint -ceq 'MinimumCanvas') {
         return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')
     }
-    if ($PlatformEndpoint -ceq 'MaximumCanvas') {
+    if ($PlatformEndpoint -in @('MaximumCanvas', 'CurrentMaximumCanvas')) {
         return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL')
     }
 
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
-        $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia')
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia')
 }
 
 function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
     return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') -and
-        $PlatformEndpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')
+        $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')
 }
 
 function Test-T21IncompleteV10PlayerRowSentinel(
@@ -77,16 +77,16 @@ function Test-T21IncompleteV10PlayerRowSentinel(
 
 function Test-T21RequiredV11DdlFailureTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
     if ($DatabaseProduct -notin @('MySQL', 'MariaDB', 'PostgreSQL')) { return $false }
     if ($PlatformEndpoint -ceq 'Minimum') { return $true }
     if ($PlatformEndpoint -ceq 'MinimumFolia') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
-    if ($PlatformEndpoint -ceq 'MaximumFolia') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
+    if ($PlatformEndpoint -in @('MaximumFolia', 'CurrentMaximumFolia')) { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -ceq 'MinimumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
-    if ($PlatformEndpoint -ceq 'MaximumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
-    return $PlatformEndpoint -in @('Maximum', 'CurrentStable')
+    if ($PlatformEndpoint -in @('MaximumCanvas', 'CurrentMaximumCanvas')) { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
+    return $PlatformEndpoint -in @('Maximum', 'CurrentMaximum', 'CurrentStable')
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
@@ -438,7 +438,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedPlugDevCliSha256,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedPlugDevCliDistManifestSha256,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
     [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
 ) {
@@ -459,6 +459,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
         if (-not $targetAccepted) { return $false }
         $expectedPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+        if (([string]$expectedServerSha256).ToLowerInvariant() -cne ([string]$expectedPlatform.sha256).ToLowerInvariant()) { return $false }
         $expectedTask = switch ($FailureScenario) {
             'NewerAuditSchema' { 'T21-V03-SYNC-newer-audit-schema-startup-failure' }
             'IncompleteV10AuditTable' { 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure' }
@@ -1090,7 +1091,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                     }
                 }
             }
-            if ($DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -ceq 'Maximum') {
+            if ($DatabaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -in @('Maximum', 'CurrentMaximum')) {
                 $evidencePath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
                 $ddlEvidence = Get-T21ObservedValue $report 'deniedDdlEvidence'
                 $expectedEvidenceFields = @('source', 'databaseName', 'runtimeUser', 'eventCount', 'logPath')

@@ -133,6 +133,7 @@ tools/plugdev/*
 !tools/plugdev/README.md
 !tools/plugdev/run-upgrade-cycle.ps1
 !tools/plugdev/run-sync-upgrade-cycle.ps1
+!tools/plugdev/run-player-scheduler-lifecycle.test.ps1
 !tools/plugdev/t21-local-persistence-journal.ps1
 !tools/plugdev/t21-local-persistence-journal.test.ps1
 !tools/plugdev/t21-upgrade-cycle-audit-contract.test.ps1

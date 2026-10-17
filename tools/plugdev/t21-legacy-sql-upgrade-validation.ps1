@@ -239,7 +239,7 @@ function Test-T21LegacySqlDataUpgradeReport(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')]
     [string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     try {
@@ -557,7 +557,7 @@ function Test-T21MySqlLegacyDataUpgradeReport(
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
@@ -573,7 +573,7 @@ function Test-T21MariaDbLegacyDataUpgradeReport(
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
@@ -589,7 +589,7 @@ function Test-T21PostgresLegacyDataUpgradeReport(
     [string]$expectedAcceptanceSha256,
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `

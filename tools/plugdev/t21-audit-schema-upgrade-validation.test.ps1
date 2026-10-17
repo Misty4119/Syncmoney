@@ -467,7 +467,7 @@ Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $multiRowsBefore $mu
     'The existing single-row case accepted the three-row fixture.'
 
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-    foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+    foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')) {
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
             "The bounded positive-migration runner rejected pinned $databaseProduct endpoint $endpoint."
     }
@@ -476,8 +476,8 @@ foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
 $playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -ErrorAction SilentlyContinue
 Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
-    foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
-        $expectedTarget = ($endpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas'))
+    foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')) {
+        $expectedTarget = ($endpoint -in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas'))
         Assert-T21Upgrade ((Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) -eq $expectedTarget) `
             "The successful-migration player-row target contract returned the wrong result for $databaseProduct/$endpoint."
@@ -601,7 +601,7 @@ Syncmoney disabled.
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
                 "The complete successful $databaseProduct minimum-Paper report with its unchanged player row was rejected."
-            foreach ($endpoint in @('Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+            foreach ($endpoint in @('Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')) {
                 $endpointPlayerRowReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
                 $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
                 $endpointPlayerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$databaseProduct-$($endpointPlatform.taskSuffix)"
@@ -657,7 +657,7 @@ Syncmoney disabled.
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $reorderedMultiPlayerRowReport $platform.sha256 $candidateSha `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
                 "The complete successful $databaseProduct report rejected the same three player rows in a different SQL aggregate order."
-            foreach ($endpoint in @('Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+            foreach ($endpoint in @('Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')) {
                 $endpointMultiRowReport = $multiPlayerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
                 $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
                 $endpointMultiRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-multiple-player-row-preservation-$databaseProduct-$($endpointPlatform.taskSuffix)"
@@ -684,7 +684,7 @@ Syncmoney disabled.
                         -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
                 "The successful-migration $databaseProduct multi-row report predicate accepted a changed secondary row."
         }
-        foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+        foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')) {
             $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
             $endpointReport = $report | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $endpointReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($endpointPlatform.taskSuffix)"
@@ -783,7 +783,7 @@ foreach ($requiredRunnerContract in @(
     Assert-T21Upgrade ($runnerSource.Contains($requiredRunnerContract)) `
         "The runtime runner is missing successful v10-to-v11 migration contract: $requiredRunnerContract"
 }
-Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')][string]`$PlatformEndpoint") -and
+Assert-T21Upgrade ($offlineAuditSource.Contains("[ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')][string]`$PlatformEndpoint") -and
     $offlineAuditSource.Contains('Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint') -and
     $offlineAuditSource.Contains('-DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint') -and
     $offlineAuditSource.Contains('platform="$platformName $($platform.minecraftVersion)#$($platform.build)"')) `
