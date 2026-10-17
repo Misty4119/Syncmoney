@@ -58,6 +58,11 @@ if ($CurrentMaximumOnly) {
         throw 'CurrentMaximumSourceCommit must be a 40-character Git commit SHA.'
     }
     $CurrentMaximumSourceCommit = $CurrentMaximumSourceCommit.ToLowerInvariant()
+    $currentMaximumObjectType = (& git -C $RepositoryRoot cat-file -t $CurrentMaximumSourceCommit 2>$null | Out-String).Trim()
+    $currentMaximumObjectTypeExitCode = $LASTEXITCODE
+    if ($currentMaximumObjectTypeExitCode -ne 0 -or $currentMaximumObjectType -cne 'commit') {
+        throw 'CurrentMaximumSourceCommit must identify a commit object available in the repository.'
+    }
     $expectedCurrentMaximumTree = (& git -C $RepositoryRoot rev-parse "$CurrentMaximumSourceCommit^{tree}" 2>$null | Out-String).Trim()
     $expectedCurrentMaximumTreeExitCode = $LASTEXITCODE
     if ($expectedCurrentMaximumTreeExitCode -ne 0 -or $expectedCurrentMaximumTree -notmatch '^[0-9a-f]{40}$') {
@@ -71,9 +76,10 @@ $runtimeRoot = Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/runti
 $reportTimeSourceRoot = Join-Path $runtimeRoot 'source-pins/report-time'
 $expectedReportRunner = '6c1a60d2fd2afe92b12f06f261ef27e8a6d9ea163c09f24d00db3b326d361164'
 $expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'
-$expectedCurrentRunner = 'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c'
+$expectedCurrentRunner = '4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc'
+$acceptedCurrentMaximumReportRunnerShas = @('f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c', $expectedCurrentRunner)
 $expectedReportObserver = 'd02ce11780123c00f1cddb3be20edd8b7fbf1d8d9c42ab9a5c7f44777fe177cf'
-$expectedCurrentObserver = 'edaf79362470be7b3961922ad6c0f687d4a6686c88f26948fbdb17ae53eb4593'
+$expectedCurrentObserver = '1e1cd0b49e7eb2b8d2f26c04b57e8b43c20fbadfdf8e9b16f8cc6564baf0a60b'
 $expectedCandidate = 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'
 $expectedCommit = '54165c4de5a4b03aae830ba2e344a920814cf7a7'
 $expectedTree = '95eb700fca9f06d9e30efd47c3ddf52d9adc2404'
@@ -375,12 +381,17 @@ Assert-M10 (Test-Path -LiteralPath $reportRunnerSourcePath) 'report-time runner 
 Assert-M10 (Test-Path -LiteralPath $reportObserverSourcePath) 'report-time observer source snapshot exists'
 $null = Assert-M10AuditNoReparsePath $reportRunnerSourcePath
 $null = Assert-M10AuditNoReparsePath $reportObserverSourcePath
+if ($CurrentMaximumOnly) {
+    $currentMaximumReportRunnerSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant()
+    Assert-M10 ($acceptedCurrentMaximumReportRunnerShas -ccontains $currentMaximumReportRunnerSha) 'current-maximum report runner snapshot is on the audited allowlist'
+    $expectedReportRunner = $currentMaximumReportRunnerSha
+}
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedReportRunner) 'report-time runner source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $runnerPath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current runner sha'
 if ($SupplementalCurrentStableOnly) {
     Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedCurrentStableRunner) 'CurrentStable report-time runner snapshot sha'
 } elseif ($CurrentMaximumOnly) {
-    Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current-maximum report-time runner snapshot sha'
+    Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedReportRunner) 'current-maximum report-time runner snapshot sha'
 }
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportObserverSourcePath).Hash.ToLowerInvariant() -eq $expectedReportObserver) 'report-time observer source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant() -eq $expectedCurrentObserver) 'current observer sha'

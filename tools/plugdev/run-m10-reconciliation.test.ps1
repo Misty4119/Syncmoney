@@ -75,6 +75,16 @@ foreach ($endpoint in $expectedEndpoints) {
 if (-not $runnerSource.Contains("ValidateSet('paper-1216-min', 'paper-263-max', 'paper-263-currentmax', 'paper-263-currentstable', 'folia-1216-min', 'folia-262-max', 'folia-263-currentmax', 'canvas-1218-min', 'canvas-263-max', 'canvas-263-currentmax')", [StringComparison]::Ordinal)) {
     throw 'M10 runner parameter must preserve historical selectors and expose the three current formal maximum selectors plus supplemental CurrentStable Paper.'
 }
+foreach ($clientDiagnosticMarker in @(
+        'function Save-M10ClientProcessOutput',
+        'Save-M10ClientProcessOutput $nodes.client',
+        'mineflayer-client.stdout.log',
+        'mineflayer-client.stderr.log',
+        '$existingLog = [string](Get-Content -LiteralPath $nodes.client.logPath -Raw)')) {
+    if (-not $runnerSource.Contains($clientDiagnosticMarker, [StringComparison]::Ordinal)) {
+        throw "M10 runner does not preserve client exit diagnostics safely: $clientDiagnosticMarker"
+    }
+}
 if (-not $runnerSource.Contains('build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\'' + $selectedEndpoint.artifact', [StringComparison]::Ordinal)) {
     throw 'M10 current-maximum selectors must resolve their artifacts from the verified T21 current-maximum artifact directory.'
 }
@@ -149,13 +159,31 @@ $redisInfoProcessIdAst = $runnerAst.Find({
 if ($null -eq $redisInfoProcessIdAst) { throw 'M10 Redis INFO process id parser was not found in the runner.' }
 . ([scriptblock]::Create($redisInfoProcessIdAst.Extent.Text))
 
-foreach ($helperName in @('Assert-M10NoReparsePath', 'Assert-M10ExpectedLocalPlugDevRoot', 'Assert-M10ExpectedLocalMineflayerRoot', 'Get-M10ResolvedMineflayerEntry', 'Assert-M10ExpectedLocalMineflayerEntry', 'Get-Sha256', 'Get-PlugDevCliDistManifest', 'Assert-PlugDevCliDistManifest', 'Get-GitCheckoutProvenance')) {
+foreach ($helperName in @('Assert-M10NoReparsePath', 'Assert-M10ExpectedLocalPlugDevRoot', 'Assert-M10ExpectedLocalMineflayerRoot', 'Get-M10ResolvedMineflayerEntry', 'Assert-M10ExpectedLocalMineflayerEntry', 'Get-Sha256', 'Get-PlugDevCliDistManifest', 'Assert-PlugDevCliDistManifest', 'Get-GitCheckoutProvenance', 'Save-M10ClientProcessOutput')) {
     $helperAst = $runnerAst.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName
     }, $true)
     if ($null -eq $helperAst) { throw "M10 PlugDev provenance helper was not found: $helperName" }
     . ([scriptblock]::Create($helperAst.Extent.Text))
+}
+
+$clientOutputRoot = Join-Path ([IO.Path]::GetTempPath()) "syncmoney-m10-client-output-$([guid]::NewGuid().ToString('N'))"
+try {
+    $null = New-Item -ItemType Directory -Path $clientOutputRoot -Force
+    $clientOutput = [ordered]@{
+        stdoutTask = [System.Threading.Tasks.Task[string]]::FromResult("client stdout diagnostic`n")
+        stderrTask = [System.Threading.Tasks.Task[string]]::FromResult("client stderr diagnostic`n")
+        stdoutPath = Join-Path $clientOutputRoot 'stdout.log'
+        stderrPath = Join-Path $clientOutputRoot 'stderr.log'
+    }
+    Save-M10ClientProcessOutput $clientOutput
+    if ((Get-Content -LiteralPath $clientOutput.stdoutPath -Raw) -cne "client stdout diagnostic`n" -or
+        (Get-Content -LiteralPath $clientOutput.stderrPath -Raw) -cne "client stderr diagnostic`n") {
+        throw 'M10 client process diagnostic capture did not preserve stdout/stderr exactly.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $clientOutputRoot) { Remove-Item -LiteralPath $clientOutputRoot -Recurse -Force }
 }
 
 function New-TestRedisProcess([int]$processId, [int]$parentProcessId, [string]$commandLine) {

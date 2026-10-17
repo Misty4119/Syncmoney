@@ -7,6 +7,11 @@ $tokens = $null
 $parseErrors = $null
 $auditAst = [System.Management.Automation.Language.Parser]::ParseInput($auditSource, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw "M10 offline audit has PowerShell parse errors: $($parseErrors -join '; ')" }
+$observerPath = Join-Path $PSScriptRoot 'm10-redis-pubsub-observer.mjs'
+$actualObserverSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant()
+if (-not $auditSource.Contains("`$expectedCurrentObserver = '$actualObserverSha'", [StringComparison]::Ordinal)) {
+    throw 'M10 offline audit current-maximum observer pin is stale for the checked-in observer source.'
+}
 foreach ($stableAuditMarker in @(
         '[switch]$SupplementalCurrentStableOnly',
         '[string]$CurrentStableRunId',
@@ -31,7 +36,8 @@ foreach ($currentMaximumAuditMarker in @(
     }
 }
 if (-not $auditSource.Contains("`$expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'", [StringComparison]::Ordinal) -or
-    -not $auditSource.Contains("`$expectedCurrentRunner = 'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c'", [StringComparison]::Ordinal)) {
+    -not $auditSource.Contains("`$expectedCurrentRunner = '4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc'", [StringComparison]::Ordinal) -or
+    -not $auditSource.Contains("'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c', `$expectedCurrentRunner", [StringComparison]::Ordinal)) {
     throw 'M10 offline audit does not keep the historical CurrentStable runner snapshot pin separate from the current selector-capable runner pin.'
 }
 
@@ -306,6 +312,18 @@ try {
     $invalidCurrentMaximumCommitExitCode = $LASTEXITCODE
     if ($invalidCurrentMaximumCommitExitCode -eq 0 -or (($invalidCurrentMaximumCommitOutput -join ' ') -notmatch 'CurrentMaximumSourceCommit must be a 40-character Git commit SHA')) {
         throw 'M10 offline audit accepted an invalid current-maximum source commit.'
+    }
+    $treeShaOutput = @(& git -C $PSScriptRoot rev-parse 'HEAD^{tree}' 2>&1)
+    if ($LASTEXITCODE -ne 0 -or ($treeShaOutput -join '').Trim() -notmatch '^[0-9a-f]{40}$') {
+        throw 'M10 offline audit regression could not resolve the repository tree object.'
+    }
+    $treeSha = ($treeShaOutput -join '').Trim()
+    $treeAsCommitOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot `
+        -CurrentMaximumOnly -CurrentMaximumRunId 'paper-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
+        -CurrentMaximumCandidateSha256 ('0' * 64) -CurrentMaximumSourceCommit $treeSha 2>&1)
+    $treeAsCommitExitCode = $LASTEXITCODE
+    if ($treeAsCommitExitCode -eq 0 -or (($treeAsCommitOutput -join ' ') -notmatch 'must identify a commit object')) {
+        throw 'M10 offline audit accepted a Git tree SHA as the current-maximum source commit.'
     }
     $alternateRoot = Join-Path $tempRoot 'alternate-root'
     $alternateOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot -PlugDevRoot $alternateRoot 2>&1)
