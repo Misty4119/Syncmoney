@@ -780,7 +780,15 @@ All three SQL dialect cells have now passed as bounded observations on the curre
 
 All three report-specific offline audits and the focused audit-schema validator passed. The first MySQL attempt cc6d4ba762244a528c0b94aeb7902a3c is excluded: it failed during SQL seeding before Paper startup with MySQL error 3913 on a measured 261-character syncmoney_schema_version.ibd path, with zero cleanup failures. The accepted same-cell retry under build/r used the shorter 218-character path. This describes those local attempts, not a general Windows or database path limit.
 
-This evidence covers Paper 26.3#200 only and one seeded player row; current-maximum Folia and Canvas migration cells and the remaining V03 matrix are still open. The next selected cell is Folia 26.3#3 / MySQL 8.0.42; its JAR and local MySQL toolchain pins were verified, but its runtime has NOT RUN. Exact per-run audits, source pins, and failure disposition are in Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md.
+This evidence covers Paper 26.3#200 only and one seeded player row. Folia 26.3#3 / MySQL 8.0.42 has since passed as one additional bounded observation; its evidence is recorded below. The current-maximum Folia MariaDB/PostgreSQL and Canvas SQL cells, plus the remaining V03 matrix, remain open. Exact per-run audits, source pins, and failure disposition are in Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md.
+
+## T21 current-maximum V03 audit-schema migration: Folia 26.3#3 / MySQL
+
+The single-row preservation fixture passed on Folia `26.3#3` / MySQL `8.0.42` with Java `25.0.4+7-LTS-189`, Redis `8.10.1`, and candidate `1.4.0-alpha.1`. Main schema remained v1; audit schema advanced `10→11`, columns `13→15`, and indexes `1→4`; the seeded row remained `1234.56/v73`. The server, SQL, Redis, and isolated Gradle daemon stopped normally with zero cleanup failures.
+
+Accepted report: `build/r/mysql-sync-current-maximum-folia-20261017-231325-3863930da28a4aea8a9f01ea1f119168/result.json`, SHA-256 `dd460aa55c2a3d4ac15225d64cec60803348d9d0cddf485e2ca479eb61c5a8e6`. Its report-specific offline audit passed; an independent recheck matched all 24 retained logs / 50,391 bytes with zero mismatches. The focused audit-schema validator test passed. Folia artifact SHA-256 is `0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022`; candidate SHA-256 is `7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354`. Exact audit, test, source, acceptance/API Consumer artifact, and PlugDev manifest pins are in the validation plan.
+
+This is a bounded one-row Folia/MySQL observation; it does not establish all-row preservation or whole-database atomic rollback. The next selected cell is Folia `26.3#3` / MariaDB `12.3.3-MariaDB`; Folia/PostgreSQL and all current-maximum Canvas SQL cells remain open. Full Java/Gradle suites and the full PlugDev matrix were NOT RUN because no product source changed.
 
 ## T21 M05 minimum-Paper MariaDB SYNC runtime cell
 
