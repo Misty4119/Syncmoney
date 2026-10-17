@@ -376,7 +376,7 @@ $playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservatio
 Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
-        $expectedTarget = ($endpoint -in @('Minimum', 'Maximum'))
+        $expectedTarget = ($endpoint -in @('Minimum', 'Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas'))
         Assert-T21Upgrade ((Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) -eq $expectedTarget) `
             "The successful-migration player-row target contract returned the wrong result for $databaseProduct/$endpoint."
@@ -500,26 +500,25 @@ Syncmoney disabled.
             Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
                 "The complete successful $databaseProduct minimum-Paper report with its unchanged player row was rejected."
-            $maximumPlayerRowReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
-            $maximumPlatform = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
-            $maximumPlayerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$databaseProduct-$($maximumPlatform.taskSuffix)"
-            $maximumPlayerRowReport.server.software = $maximumPlatform.software
-            $maximumPlayerRowReport.server.minecraftVersion = $maximumPlatform.minecraftVersion
-            $maximumPlayerRowReport.server.build = $maximumPlatform.build
-            $maximumPlayerRowReport.server.sha256 = $maximumPlatform.sha256
-            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.software = $maximumPlatform.software
-            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.runtimeVersion = $maximumPlatform.minecraftVersion
-            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.minecraftVersion = $maximumPlatform.minecraftVersion
-            $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.build = $maximumPlatform.build
-            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
-                    -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum) `
-                "The complete successful $databaseProduct maximum-Paper report with its unchanged player row was rejected."
+            foreach ($endpoint in @('Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+                $endpointPlayerRowReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+                $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
+                $endpointPlayerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$databaseProduct-$($endpointPlatform.taskSuffix)"
+                $endpointPlayerRowReport.server.software = $endpointPlatform.software
+                $endpointPlayerRowReport.server.minecraftVersion = $endpointPlatform.minecraftVersion
+                $endpointPlayerRowReport.server.build = $endpointPlatform.build
+                $endpointPlayerRowReport.server.sha256 = $endpointPlatform.sha256
+                $endpointPlayerRowReport.startupObservations[0].runtimeIdentity.software = $endpointPlatform.software
+                $endpointPlayerRowReport.startupObservations[0].runtimeIdentity.runtimeVersion = $endpointPlatform.minecraftVersion
+                $endpointPlayerRowReport.startupObservations[0].runtimeIdentity.minecraftVersion = $endpointPlatform.minecraftVersion
+                $endpointPlayerRowReport.startupObservations[0].runtimeIdentity.build = $endpointPlatform.build
+                Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $endpointPlayerRowReport $endpointPlatform.sha256 $candidateSha `
+                        -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
+                    "The complete successful $databaseProduct $endpoint report with its unchanged player row was rejected."
+            }
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                         -DatabaseProduct $databaseProduct -PlatformEndpoint CurrentStable)) `
                 "The successful-migration $databaseProduct player-row report was accepted for supplemental CurrentStable Paper."
-            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
-                        -DatabaseProduct $databaseProduct -PlatformEndpoint MinimumFolia)) `
-                "The successful-migration $databaseProduct Paper player-row report was accepted for Folia."
             $changedPlayerReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
             $changedPlayerReport.schemaStateAfter.playerRowsJson = $productPlayerRowsJson.Replace('1234.56', '1234.57')
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedPlayerReport $platform.sha256 $candidateSha `

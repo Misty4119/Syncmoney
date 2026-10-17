@@ -62,7 +62,7 @@ if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum/maximum Paper only.'
+    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on the six exact user-pinned Paper, Folia, and Canvas endpoints only.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1126,7 +1126,7 @@ ORDER BY id;
 function Seed-T21AuditSchemaV10Upgrade([switch]$SeedExistingPlayerRow) {
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on minimum/maximum Paper only.'
+        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42, MariaDB 12.3.3-MariaDB, or PostgreSQL 18.1 on the six exact user-pinned Paper, Folia, and Canvas endpoints only.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (

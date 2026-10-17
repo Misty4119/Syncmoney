@@ -5205,3 +5205,86 @@ Post-review validation refreshed under `build/reports/foundation/T21-postgres-pl
 | `git diff --check` | PASS, exit 0; `git-diff-check.log`; SHA-256 `e2c62fa76f30cabb93cd9c29bd9520e79750658a43de90ccaad4c183e48b3e61` |
 
 Review disposition: the Minor assertion-isolation finding is fixed and retested. No Critical or Important findings were reported. The evidence supports only one-row preservation on minimum/maximum Paper with PostgreSQL `18.1`; Folia, Canvas, multiple rows, whole-database atomic rollback, and unrelated licensed CMI acceptance remain outside this result. Formal bounds remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`.
+
+## T21 V03 successful audit-schema migration with existing player-row preservation on Folia and Canvas (2026-10-17)
+
+**Result: PASS_BOUNDED_SUBCASE (E2) for the 12 remaining Folia/Canvas cells.** This adds minimum/maximum Folia and minimum/maximum Canvas to the six previously recorded minimum/maximum Paper cells, completing one-row preservation coverage across the 18 formal platform × SQL-product cells. The products were MySQL 8.0.42, MariaDB 12.3.3-MariaDB, and PostgreSQL 18.1; Redis was isolated at 8.10.1 DB 15. Candidate Syncmoney-1.4.0-alpha.1.jar SHA-256 was 57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662.
+
+Each new report observes normal v10→v11 audit-schema migration, main schema v1 retained, and one existing players sentinel row preserved JSON-identically before and after (00000000-0000-0000-0000-00000000cafe, T21-ROW-SENTINEL, balance 1234.56, version 73, last server t21-player-preservation, timestamp 2026-10-16 12:34:56; PostgreSQL snapshots retain .000000 microseconds). All 12 current report predicates and offline audits passed, with normal plugin/platform/backend stops and zero cleanup failures. Per report, the offline audit rehashed 24 MySQL, 25 MariaDB, or 32 PostgreSQL retained runtime logs. Across the batch, 324 runtime logs / 635,799 bytes were rehashed.
+
+The first MinimumFolia/MySQL attempt completed its product runtime, but the outer matrix aggregator failed while indexing a PowerShell PSObject as a string and stopped before the offline audit. That report is excluded from acceptance evidence. After correcting the aggregator, MinimumFolia/MySQL was rerun and its accepted report is the one listed below. This was a harness aggregation failure; it does not count as a product-runtime failure or a passing audited result.
+
+The ignored matrix manifest is build/reports/foundation/T21-folia-canvas-player-row-migration-20261017/matrix-evidence.json, SHA-256 da7b9e876060298751de5952a03134924eb0b05b4d501204e6457c3eceae000d. The report-specific audit JSONs bind each report identity and record hashes for runtime logs. These 12 identities complement the Paper cases recorded in the earlier minimum/maximum Paper successful-migration player-row subsections above.
+
+| Cell | Platform endpoint | SQL product | Report SHA-256 | Offline audit JSON SHA-256 | Runtime log SHA-256 | Offline audit invocation log SHA-256 |
+|---|---|---|---|---|---|---|
+| MinimumFolia-MySQL | Folia 1.21.6#6 | MySQL 8.0.42 | 1dc1d390a3a42571092d32337c9a40473083c95800bcf19c98b140c5cdcc707e | 729694fef6530606f90164228012d891c6b0ab6251bed7fd55824c87eb2f265a | 4cd059266600706e8da22c2efe5031989dcc7f9f3d4742b59164b0a9feec1d64 | 761b3962b72a8972f7c449d3fcfab4b1bff97990bdac8bdd7b18fff8cffe347e |
+| MinimumFolia-MariaDB | Folia 1.21.6#6 | MariaDB 12.3.3-MariaDB | 25e36548549370033693cc1ea6ddd4488652ded14f232bdf9fff9c4907aad9ef | 306c6048416e5372e02b081b1e30c10f7798a4eaafba5e1e3fb3c98d02016da6 | 07ee259143db893b1c8da4c03232c0f4bb2283b7b77a378f8cb219b7deb940ec | a8f657b147b3b37892606cc09ab155f8f6c214a6d7da8204707b39dfcd0252f2 |
+| MinimumFolia-PostgreSQL | Folia 1.21.6#6 | PostgreSQL 18.1 | c2487e548d538943f7da556a5ae6145cb2c0991381834719b39ba48c1d1007e3 | 04cc7b98f7d687f4ab45671ccbcfe3821f47f7b1c667ffdf0bb8d249476d4d44 | 4de7a11dbdd561f7d40a0ee6fc88e8fa646e7127d50178f02805286707e26d49 | 25605e62c652ffdcfab86b896c4c0409d087f0e696c78116fd988ec7889b9d53 |
+| MaximumFolia-MySQL | Folia 26.2#7 | MySQL 8.0.42 | 08e692c99ad2cfbe871613a4466118d8e4d1c0c1307a4cd465878c02e2772315 | 8f3ab371a1e200322c14c66c5a03c2e6dcc2586b571e7a3a64898ba74115b7fd | 4b91e241b9ce8c0f17bf39de5c39974da77cc45f3b4f1f8006d3065aa10a80be | 8f48e6a2b0c5b5f243b5c5757f472fed9009bc6e5f24399793513f01236f0891 |
+| MaximumFolia-MariaDB | Folia 26.2#7 | MariaDB 12.3.3-MariaDB | 88034a46463b4563c84b013a14a719b59e0364166d0eaee426aeb655a7d64e37 | 83459bee794629ec7ce6b5b9dea66ae232e4f0cc1152edeea87d7d94a62c488b | 2e6d5b9a06cfdf1f200517e045e801ebd435c968fe35b3b8dd182619efef8643 | 50a3057664f60a06ee0aa5fa85d45ef00f0ad2576ed7d15fb0d4a049dd9a318f |
+| MaximumFolia-PostgreSQL | Folia 26.2#7 | PostgreSQL 18.1 | 314e0747fe397f9545709c1383bfd844098117cb6f950baa66c65e0b99ffc007 | d3f2a2482fcffbffbe927bffff1fb14574650b06fa12032c29e0a29ac5d9fdaf | 514f1d3847cb8b0af6d135d31c3e3a21107d9d9bf6143069cfac487c01aa272d | 481bb8a63fe159a91471df6b9f1bed6cd93b5f8bf5a836ad048fb55895ec9744 |
+| MinimumCanvas-MySQL | Canvas 1.21.8#603 | MySQL 8.0.42 | 2aeecbbffe383292bf062bc3cb08c84cb1e41502d7da7922cf642d9e22bcca98 | 0ad2e0f55939a10c6056376ca610dde1e7fc2c69604927c3f8df3440c770cfd5 | 652df470ed189c76dc44f50daf4ce97d41f88c01a3f2235b116d34b6050408bf | 3e078bf6216310b499967183db1dbeb8b67f71b87638ec2aa45add19219b9a04 |
+| MinimumCanvas-MariaDB | Canvas 1.21.8#603 | MariaDB 12.3.3-MariaDB | d13e05f77bb54458edde8e02d59367af7c71fb015fd33e06910e7775f05571bd | c1edb27cb4e4daa26889e70a0b3f87b6b56187c92716ae8e6a1c71e4f32245be | 95c9258f8e78861fae65630247c514ad9827ba300c51fb39debc6a18bf78ac2e | 0886cc703dda2603283771a7c1df20602b33c58d42ecaf5a7863e4093cf1dd16 |
+| MinimumCanvas-PostgreSQL | Canvas 1.21.8#603 | PostgreSQL 18.1 | 8e30f83fb3f60846040d649b3d3ed5a398462a52fadc31a7a5b058edd4d1afa7 | 6bf50fee2ed95186e09583dea9d57f1a8cea504e850623e8902c8cf99f240faa | 322f99b7a4160074bdb0a7faa698535285f5412e79864baa1a9ca0170bbd585f | acc183a2ff7263f7f4084c5b739d147126ef36dead3983910abf1263981de348 |
+| MaximumCanvas-MySQL | Canvas 26.3#972 | MySQL 8.0.42 | d5eb53079c9ba9c2d6b08f81594842be9ff839da0965769940e6f46c361a8bf7 | 08a5b6775e56d2bb07a4281187e94779df303e664da7264c57bb381db2a215bf | d35dc8894b9204c11f583f242dc7d8c9c3742de757f020d31959dbf94f0f3cae | 199665242d5e4dcf772587043604788d2aa03dc50d2f9155e68b99d4dea19bcb |
+| MaximumCanvas-MariaDB | Canvas 26.3#972 | MariaDB 12.3.3-MariaDB | 32fd16e4683824e652ae2316f972ea5c2edf70c71a4172f76559a31117a351da | 1d4902985b3224d941ba1b6bb0f919c21b0e0b2e6712c65c793359172a8e6d24 | fbbe04f1b1b97e53104fb9e907b9bcfd85d83af84a1409b969b67b9c237d87bc | 3473dc8d8c97ef0c9b302421fd009331ff5c55f2a19be93a4cb4756a9af92d1f |
+| MaximumCanvas-PostgreSQL | Canvas 26.3#972 | PostgreSQL 18.1 | a9e096a30817f7804ea909dad45a1842fec9ad92220f1bfceb12418edcde5a4a | deef0e11e6c98d76e223bd6d3c02cadd491d33a2e36cd769e3c818f5eecdd838 | 03b3689af248e31286e723e84d0b2c5399f98d642bd722e58a757e916b55923b | 5915f6f14bb3dfd036306cb66eeb6388a418a407ac75cf3fd07d70b051bb4495 |
+
+Endpoint artifact SHA-256 values in the accepted reports:
+
+- MinimumFolia: Folia 1.21.6#6, SHA-256 917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234
+- MaximumFolia: Folia 26.2#7, SHA-256 128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3
+- MinimumCanvas: Canvas 1.21.8#603, SHA-256 6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b
+- MaximumCanvas: Canvas 26.3#972, SHA-256 aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5
+
+Current runtime/auditor source pins shared by the 12 accepted reports:
+
+| Source | SHA-256 |
+|---|---|
+| tools/plugdev/run-mysql-sync-runtime.ps1 | 78f120267de9bc31057a77ebf045b1729d85ad675366552a2fd2d28c3bb73786 |
+| tools/plugdev/t21-upgrade-validation.ps1 | 21d340699e13b586956b1a7b81f86ad53999b8e1d06942de46169f585355a814 |
+| tools/plugdev/t21-upgrade-validation.test.ps1 | fd3061b8875af2b13b812208845079959f8c7787a57f020545f144278ffb6cc4 |
+| tools/plugdev/t21-startup-failure-validation.ps1 | 6056396705652eaf48a2d040a0bda7750cb27e974bca45db30e0cb27c37cc45d |
+| tools/plugdev/t21-startup-failure-validation.test.ps1 | 955c46d59a324df583ba015de78423cabee82069e4589a55e354d66c9c8185c8 |
+| tools/plugdev/t21-legacy-sql-upgrade-validation.ps1 | 4eae14a8703626b881cde73cf9c4a5d6382350a246cdd6c50ee97cfba33fc420 |
+| tools/plugdev/t21-legacy-sql-upgrade-validation.test.ps1 | a0eb88cab09c32bb62ba856bfaa6680140b89ec4d88c87288a070390505d3443 |
+| tools/plugdev/t21-audit-schema-upgrade-validation.ps1 | 4206304fdfa1c8f34818b2259d71be01419c8e42a0f137b490cb386980ceef57 |
+| tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1 | 59eff60d793d80db851df1ce3867ab9daef23176b338a78ab9a0817509cdfc2d |
+
+PlugDev identity was held stable across the report-specific audit: commit b59871ae8d9f2731d2bcbca061a735edddd23eb2, CLI SHA-256 3a600872a3c95bb67b960bdb5efcbb84eb675110f89146566bedb1835ad047d7, distribution-manifest SHA-256 f57b296b2e4de10dec9dd7a83a51f3e0f95fb5ef27d5de2934e9b4ef56e0fc16 (before and after each invocation). The current-source report predicate and the independent matrix verifier rehashed the changed runner/validator/test pins against these recorded values.
+
+**Fresh validation after the endpoint expansion:**
+
+| Check | Result |
+|---|---|
+| pwsh -NoProfile -File tools/plugdev/t21-audit-schema-upgrade-validation.test.ps1 | PASS, exit 0; validation log SHA-256 1b38c5ccb4c79c677459b53d4e8ba9b48478c259ff7d996ea60530b9b5cf299b |
+| pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1 | PASS, exit 0; validation log SHA-256 c09c999b8a148f40697816521947be4feabd5702ed87c7bb87387d8482a746f7 |
+| pwsh -NoProfile -File tools/plugdev/t21-startup-failure-validation.test.ps1 | PASS, exit 0; validation log SHA-256 f8910a0f0986ce2c648bc1723ef107b362d2522a0b0450a185a81e9252483bbb |
+| node --test tools/plugdev/prepare.test.mjs | PASS, 12/12; validation log SHA-256 914d0131b6f951c8f58443b33e8d5c39e039cc3a46b2bc5c4dfd154ca1db3757 |
+| PowerShell Parser.ParseFile over tools/plugdev/**/*.ps1 | PASS, 30 scripts, zero errors, PowerShell 7.6.5; log SHA-256 7940e83565cebeafa6e457ddfa7e1bf63736f7a873a7c93c507bd957cb2461fd |
+| Independent 12-cell manifest/report/audit/log verifier | PASS, 12/12 reports, 324 runtime logs / 635,799 bytes, exact endpoint/artifact/source pins, schema/row invariants; verifier script SHA-256 71b7e63533b0aebec416d8a6ddc8a05becf9bfc494d9188cbc724e1d0fa9b176, output SHA-256 06b0097f7701ef8b117bc370c4c4b8e82c8fe16af84130603cac855632a52b85 |
+| Universal AI verifier over the task, checklist, README, matrix identities, and evidence limits | PASS, 20 deterministic assertions; script SHA-256 39517c39228d88967d6711d0fba7178b4762a31ddb315d7bf71945820f8345a4, output SHA-256 043f76c883f4d38c157f8dd2699de0186a2b98967ca89a7d31545f911dc97ba6 |
+| Java/product tests | NOT RUN; no Java/product source changed |
+| git diff --check | PASS, exit 0; no whitespace errors (Git emitted only LF-to-CRLF normalization notices); log SHA-256 2e63dfd6acea147fcd9bcd6ed93cbad2279cf36bcd49794e4f152cf23d02b087 |
+
+The initial retained-verifier invocation had an incorrect relative path to the shared validator and executed no assertions; the path was corrected and the verifier above passed. The independent matrix review found a P2 documentation defect: the last column described `offlineAuditLogSha256` values as audit-text hashes. The column is now labeled “Offline audit invocation log SHA-256”; the 12 recorded values were not changed. Targeted read-only re-review confirmed the label accurately identifies all 12 values and found no remaining actionable issue. Independent reviews found no actionable defect in the six-endpoint target/report guard or raw evidence. These results establish only one-row preservation on the formal endpoints; multiple-row behavior and whole-database atomic rollback remain unproven. T21 remains IN_PROGRESS; other lifecycle/V03 gates remain open.
+
+**Post-review documentation-label repair revalidation (2026-10-17):** The first two post-repair runs of the saved universal verifier stopped at its review-disposition assertion because that scratch verifier expected obsolete wording and then used a case-sensitive mismatch; no report, manifest, artifact, or matrix assertion failed. Only the verifier's text matcher was corrected. Its final pass includes checks for the P2 disposition, corrected label, targeted re-review, and persisted T21 progress entry.
+
+| Check | Result |
+|---|---|
+| Independent documentation/manifest/artifact verifier | PASS, 12/12 table rows match the matrix manifest; 60 report/audit/runtime/audit-text files rehashed; script SHA-256 `d18773d595aa933c7918520a1922e85b42f5fc6787230cc541ea039b27ac3240`, output SHA-256 `103d2f20113b19a84e1067ca65b893716f2234d4764b0a3a5bf820851741cfaa` |
+| Independent 12-cell report/source/log verifier | PASS, 12/12 reports and 324 runtime logs / 635,799 bytes; manifest and candidate pins matched; script SHA-256 `71b7e63533b0aebec416d8a6ddc8a05becf9bfc494d9188cbc724e1d0fa9b176`, output SHA-256 `06b0097f7701ef8b117bc370c4c4b8e82c8fe16af84130603cac855632a52b85` |
+| Universal checklist/evidence verifier | PASS, 24 deterministic assertions; script SHA-256 `d9dd834ffcb4ee49c708b55d6ac609e19bce6916129588c5925902fd7b5fe5ed`, output SHA-256 `4f1e37efaf74e7dc9b1cfd6f70fd271a07042fe99dd69e8934bde0625cd702fe` |
+| T21 audit-schema validator tests | PASS, exit 0; output SHA-256 `1b38c5ccb4c79c677459b53d4e8ba9b48478c259ff7d996ea60530b9b5cf299b` |
+| Shared T21 upgrade validator tests | PASS, 156/156; output SHA-256 `c09c999b8a148f40697816521947be4feabd5702ed87c7bb87387d8482a746f7` |
+| T21 startup-failure validator tests | PASS, exit 0; output SHA-256 `f8910a0f0986ce2c648bc1723ef107b362d2522a0b0450a185a81e9252483bbb` |
+| `node --test tools/plugdev/prepare.test.mjs` | PASS, 12/12; output SHA-256 `62f0731354153c1628c8b13d1903a27cec609ab79d8fa533ce561d17c0df026e` |
+| PowerShell `Parser.ParseFile` over `tools/plugdev/**/*.ps1` | PASS, 30 scripts, zero syntax errors; PowerShell 7.6.5; output SHA-256 `85fb99ddbc607db6f42eae2bd04cae316bbbfdfc58d1fb6c003f84bf66a8d63b` |
+| Java/product tests | NOT RUN; no Java/product source changed |
+| `git diff --check` | PASS, exit 0; output SHA-256 `2e63dfd6acea147fcd9bcd6ed93cbad2279cf36bcd49794e4f152cf23d02b087` |
+
+Validation log paths are under ignored `build/reports/foundation/T21-folia-canvas-player-row-migration-20261017/validation-label-repair-20261017/`.
+
+Validation log paths are under ignored build/reports/foundation/T21-folia-canvas-player-row-migration-20261017/validation-final/.
