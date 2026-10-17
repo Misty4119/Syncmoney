@@ -17,7 +17,7 @@ try {
         'java.lang.IllegalStateException: Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
         '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
         '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
-        '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+        '[07:44:02] [Server thread/INFO]: [Syncmoney] Disabling Syncmoney v1.4.0-alpha.1'
     )
     [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
     $logInfo = Get-Item -LiteralPath $platformLogPath
@@ -187,7 +187,27 @@ try {
     if (-not (Test-T21StartupFailureReportFixture $report $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum)) {
         throw 'The complete bounded newer-audit-schema failure report was rejected.'
     }
-    Write-Output 'PASS: accept a complete minimum-Paper PostgreSQL startup rollback report'
+    Write-Output 'PASS: accept startup rollback when Bukkit emits its disable marker after pool cleanup'
+
+    $withoutDisableRequest = @($platformLog | Where-Object { $_ -notmatch 'Disabling Syncmoney v1\.4\.0-alpha\.1' })
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$withoutDisableRequest, [Text.UTF8Encoding]::new($false))
+    $updatedLogInfo = Get-Item -LiteralPath $platformLogPath
+    $updatedLogHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $report.platformLogs[0].bytes = [long]$updatedLogInfo.Length
+    $report.platformLogs[0].sha256 = $updatedLogHash
+    $report.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$updatedLogInfo.Length
+    $report.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $updatedLogHash
+    if (Test-T21StartupFailureReportFixture $report $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) {
+        throw 'The report accepted startup rollback without Bukkit plugin-disable evidence.'
+    }
+    [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
+    $logInfo = Get-Item -LiteralPath $platformLogPath
+    $logHash = (Get-FileHash -LiteralPath $platformLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $report.platformLogs[0].bytes = [long]$logInfo.Length
+    $report.platformLogs[0].sha256 = $logHash
+    $report.logs['logs\platform-candidate-startup-failure.txt'].bytes = [long]$logInfo.Length
+    $report.logs['logs\platform-candidate-startup-failure.txt'].sha256 = $logHash
+    Write-Output 'PASS: reject startup rollback without Bukkit plugin-disable evidence'
 
     $incompleteReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $report -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $incompleteReport.task = 'T21-V03-SYNC-incomplete-v10-audit-table-startup-failure'
@@ -234,7 +254,7 @@ try {
         'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
         '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
         '[07:44:01] [Syncmoney-DbWriter/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
-        '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+        '[07:44:02] [Server thread/INFO]: [Syncmoney] Disabling Syncmoney v1.4.0-alpha.1'
     )
     [IO.File]::WriteAllLines($platformLogPath, [string[]]$incompleteLog, [Text.UTF8Encoding]::new($false))
     $incompleteLogInfo = Get-Item -LiteralPath $platformLogPath
@@ -661,7 +681,7 @@ try {
             'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
-            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+            '[07:44:02] [Server thread/INFO]: [Syncmoney] Disabling Syncmoney v1.4.0-alpha.1'
         )
         $platformLogPath = Join-Path $testRoot 'logs\platform-candidate-startup-failure.txt'
         [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
@@ -1173,7 +1193,7 @@ try {
             })
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
-            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+            '[07:44:02] [Server thread/INFO]: [Syncmoney] Disabling Syncmoney v1.4.0-alpha.1'
         )
         $platformLogPath = Join-Path $v11RunRoot 'logs\platform-candidate-startup-failure.txt'
         [IO.File]::WriteAllLines($platformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))
@@ -1770,7 +1790,7 @@ try {
             'Caused by: java.sql.SQLException: Required v10 audit columns are missing: [timestamp, type, player_uuid]'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown initiated...'
             '[07:44:01] [Server thread/INFO]: [noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.'
-            '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney disabled.'
+            '[07:44:02] [Server thread/INFO]: [Syncmoney] Disabling Syncmoney v1.4.0-alpha.1'
         )
         $postgresPlatformLogPath = Join-Path $postgresLogsRoot 'platform-candidate-startup-failure.txt'
         [IO.File]::WriteAllLines($postgresPlatformLogPath, [string[]]$platformLog, [Text.UTF8Encoding]::new($false))

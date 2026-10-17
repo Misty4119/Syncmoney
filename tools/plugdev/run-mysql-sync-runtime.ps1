@@ -781,8 +781,7 @@ function Stop-T21Server([string]$stage) {
     $stopLines = @($allLines | Select-Object -Skip $skip)
     $disabled = @($stopLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1)
     $startupFailureDisabled = $script:auditSchemaStartupFailure -and
-        (@($allLines | Select-String -Pattern 'Syncmoney initialization failed; rolling back initialized owners').Count -gt 0) -and
-        (@($allLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1).Count -gt 0)
+        (Test-T21StartupRollbackCompletionLog ($allLines -join "`n") $CandidateVersion)
     if ($disabled.Count -eq 0 -and -not $startupFailureDisabled) { throw "Syncmoney did not log its normal disable marker for $stage." }
     $failureMarkers = @(Get-T21ShutdownFailureMarkers ($stopLines -join "`n"))
     if ($failureMarkers.Count -gt 0) { throw "Server shutdown failure marker observed at ${stage}: $($failureMarkers -join '; ')." }
@@ -1688,7 +1687,8 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     $before = Get-ServerLogLineCount
     $start = Invoke-PlugDev @('server', 'start', '--config', '.plugdev/profile.yml') 'candidate-startup-failure-start'
     if ($start.exitCode -ne 0) { throw 'PlugDev could not keep the platform alive for the expected plugin startup failure.' }
-    $null = Wait-ServerLogMarker 'Syncmoney disabled\.' '' $before 90
+    $disableMarkerPattern = 'Disabling Syncmoney v' + [regex]::Escape($CandidateVersion)
+    $null = Wait-ServerLogMarker $disableMarkerPattern '' $before 90
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
     $expectedFailureMessage = switch ($FailureScenario) {
         'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
@@ -1723,10 +1723,13 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
             'Syncmoney initialization failed; rolling back initialized owners',
             $expectedFailureMessage) + $scenarioMarkers + @(
             '[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.',
-            'Syncmoney disabled.')) {
+            ('Disabling Syncmoney v' + $CandidateVersion))) {
         if (-not $fullLog.Contains($marker)) { throw "Expected startup-failure marker was absent: $marker" }
     }
     if (-not $sqlPoolShutdownObserved) { throw 'The INFO-level Syncmoney Hikari pool shutdown marker was absent after startup rollback.' }
+    if (-not (Test-T21StartupRollbackCompletionLog $fullLog $CandidateVersion)) {
+        throw 'Startup rollback completion requires ordered rollback, INFO-level SQL pool shutdown, and Bukkit plugin-disable markers.'
+    }
     if ($fullLog.Contains('Syncmoney enabled successfully')) { throw 'Syncmoney unexpectedly completed startup against the seeded audit schema failure.' }
     $identity = Get-T21PlatformIdentity $fullLog
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build

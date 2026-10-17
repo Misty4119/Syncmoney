@@ -1,6 +1,20 @@
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 
+function Test-T21StartupRollbackCompletionLog([string]$LogText, [string]$PluginVersion) {
+    if ([string]::IsNullOrWhiteSpace($LogText) -or [string]::IsNullOrWhiteSpace($PluginVersion)) { return $false }
+
+    $rollbackIndex = $LogText.IndexOf('Syncmoney initialization failed; rolling back initialized owners', [StringComparison]::Ordinal)
+    $poolShutdownIndex = $LogText.IndexOf('[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.', [StringComparison]::Ordinal)
+    $pluginDisableIndex = $LogText.IndexOf(('Disabling Syncmoney v' + $PluginVersion), [StringComparison]::Ordinal)
+    $infoLevelPoolShutdownPattern = '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
+
+    return $rollbackIndex -ge 0 -and
+        $poolShutdownIndex -gt $rollbackIndex -and
+        $pluginDisableIndex -gt $poolShutdownIndex -and
+        $LogText -match $infoLevelPoolShutdownPattern
+}
+
 function Test-T21NewerAuditSchemaStartupFailureTarget(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')]
@@ -1148,11 +1162,12 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 'Loading server plugin Syncmoney v1.4.0-alpha.1',
                 'Syncmoney initialization failed; rolling back initialized owners') + $scenarioMarkers + @(
                 '[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.',
-                'Syncmoney disabled.')) {
+                ('Disabling Syncmoney v' + [string](Get-T21ObservedValue $startup 'pluginVersion')))) {
             if (-not $logText.Contains($requiredMarker)) { return $false }
         }
         $infoLevelPoolShutdownPattern = '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
         if ($logText -notmatch $infoLevelPoolShutdownPattern) { return $false }
+        if (-not (Test-T21StartupRollbackCompletionLog $logText ([string](Get-T21ObservedValue $startup 'pluginVersion')))) { return $false }
         if ($logText.Contains('Syncmoney enabled successfully')) { return $false }
         $loggedRuntimeIdentity = Get-T21PlatformIdentity $logText
         Assert-T21PlatformIdentity $loggedRuntimeIdentity $expectedPlatform.software $expectedPlatform.minecraftVersion $expectedPlatform.build
