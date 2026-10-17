@@ -1,11 +1,13 @@
 package noietime.syncmoney.event;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.math.BigDecimal;
+import java.lang.reflect.Field;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -13,6 +15,7 @@ import org.mockito.MockedStatic;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -27,10 +30,26 @@ class SyncmoneyEventBusTest {
 
     @BeforeEach
     void setUp() {
+        resetSingleton();
         MockitoAnnotations.openMocks(this);
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
         SyncmoneyEventBus.init(mockPlugin);
         eventBus = SyncmoneyEventBus.getInstance();
+    }
+
+    @AfterEach
+    void tearDown() {
+        resetSingleton();
+    }
+
+    private static void resetSingleton() {
+        try {
+            Field instance = SyncmoneyEventBus.class.getDeclaredField("instance");
+            instance.setAccessible(true);
+            instance.set(null, null);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Unable to reset SyncmoneyEventBus test fixture", e);
+        }
     }
 
     @Test
@@ -118,6 +137,27 @@ class SyncmoneyEventBusTest {
         eventBus.callEvent(event);
 
         assertEquals(0, count.get(), "Listener should not be called after clearAll");
+    }
+
+    @Test
+    void clearIfOwnedByLeavesAnotherPluginInstancesListenersUntouched() {
+        SyncmoneyListener<PostTransactionEvent> sentinel = event -> { };
+        int listenersBefore = eventBus.getListenerCount(PostTransactionEvent.class);
+        eventBus.register(PostTransactionEvent.class, sentinel);
+
+        SyncmoneyEventBus.clearIfOwnedBy(mock(noietime.syncmoney.Syncmoney.class));
+
+        assertEquals(listenersBefore + 1, eventBus.getListenerCount(PostTransactionEvent.class));
+        eventBus.unregister(PostTransactionEvent.class, sentinel);
+    }
+
+    @Test
+    void clearIfOwnedByClearsListenersWhenPluginOwnsBus() {
+        eventBus.register(PostTransactionEvent.class, event -> { });
+
+        SyncmoneyEventBus.clearIfOwnedBy(mockPlugin);
+
+        assertEquals(0, eventBus.getListenerCount(PostTransactionEvent.class));
     }
 
     @Test

@@ -119,9 +119,65 @@ public final class Syncmoney extends JavaPlugin {
             initializePlugin();
         } catch (Throwable failure) {
             getLogger().log(Level.SEVERE, "Syncmoney initialization failed; rolling back initialized owners", failure);
-            onDisable();
+            rollbackStartup();
             getServer().getPluginManager().disablePlugin(this);
         }
+    }
+
+    private void rollbackStartup() {
+        if (!shutdownStarted.compareAndSet(false, true)) {
+            return;
+        }
+
+        // Stop externally reachable writes and inbound producers before draining accepted work.
+        ShutdownStepRunner.run(getLogger(),
+                new ShutdownStepRunner.Step("read-only API provider", () -> {
+                    if (apiProvider != null) apiProvider.close();
+                }),
+                new ShutdownStepRunner.Step("economy write quiescence", () -> {
+                    if (economyServiceManager != null) economyServiceManager.quiesce();
+                }),
+                new ShutdownStepRunner.Step("inbound sync producers", () -> {
+                    if (syncManager != null) syncManager.stopInboundProducers();
+                }));
+
+        // Startup rollback closes assigned handles in reverse construction order.
+        ShutdownStepRunner.run(getLogger(),
+                new ShutdownStepRunner.Step("plugin context", () -> pluginContext = null),
+                new ShutdownStepRunner.Step("web services", () -> {
+                    if (webServiceManager != null) webServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("event bus", () -> SyncmoneyEventBus.clearIfOwnedBy(this)),
+                new ShutdownStepRunner.Step("permissions", () -> {
+                    if (permissionManager != null) permissionManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("commands", () -> {
+                    if (commandServiceManager != null) commandServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("accepted economy write drain", () -> {
+                    if (eventConsumerManager != null) eventConsumerManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("audit owners", () -> {
+                    if (auditServiceManager != null) auditServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("listeners", () -> {
+                    if (listenerServiceManager != null) listenerServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("baltop persistence", () -> {
+                    if (baltopManager != null) baltopManager.saveToDatabase();
+                }),
+                new ShutdownStepRunner.Step("breaker owners", () -> {
+                    if (breakerManager != null) breakerManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("sync owners", () -> {
+                    if (syncManager != null) syncManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("economy owners", () -> {
+                    if (economyServiceManager != null) economyServiceManager.shutdown();
+                }),
+                new ShutdownStepRunner.Step("storage dependencies", () -> {
+                    if (storageManager != null) storageManager.shutdown();
+                }));
     }
 
     private void initializePlugin() {
@@ -425,7 +481,7 @@ public final class Syncmoney extends JavaPlugin {
                     if (storageManager != null) storageManager.shutdown();
                 }),
                 new ShutdownStepRunner.Step("event bus", () -> {
-                    if (SyncmoneyEventBus.isInitialized()) SyncmoneyEventBus.getInstance().clearAll();
+                    SyncmoneyEventBus.clearIfOwnedBy(this);
                 }));
         getLogger().info("Syncmoney disabled.");
     }

@@ -55,6 +55,16 @@ public final class SyncmoneyEventBus {
     }
 
     /**
+     * Clear listeners only when this plugin instance owns the singleton bus.
+     */
+    public static void clearIfOwnedBy(Syncmoney plugin) {
+        SyncmoneyEventBus current = instance;
+        if (current != null && current.plugin == plugin) {
+            current.clearAll();
+        }
+    }
+
+    /**
      * Register an event listener with a specific priority.
      * @param eventClass The event class to listen for
      * @param listener The listener to register

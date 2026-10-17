@@ -77,6 +77,15 @@ public class SyncManager {
      * Shutdown sync layer components.
      */
     public void shutdown() {
+        stopInboundProducers();
+        plugin.getLogger().fine("Sync layer shutdown complete");
+    }
+
+    /**
+     * Stop remote and scheduled producers before accepted writes are drained.
+     * The Redis owner remains open until storage shutdown.
+     */
+    public void stopInboundProducers() {
         ScheduledTask scheduled;
         synchronized (versionCheckLifecycleGate) {
             stopped = true;
@@ -92,7 +101,6 @@ public class SyncManager {
                     if (pubsubSubscriber != null) pubsubSubscriber.stopSubscription();
                 }),
                 new ShutdownStepRunner.Step("active version check", this::awaitVersionCheck));
-        plugin.getLogger().fine("Sync layer shutdown complete");
     }
 
     /**
