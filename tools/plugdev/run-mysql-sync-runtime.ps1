@@ -2697,9 +2697,9 @@ try {
             }
         } else {
             $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
-                Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint
+                Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256
             } else {
-                Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint
+                Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256
             }
             $script:finalReport = $script:report
         }

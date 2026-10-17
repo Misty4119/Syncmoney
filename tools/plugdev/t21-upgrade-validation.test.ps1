@@ -347,6 +347,7 @@ Write-Output 'PASS: reject minimum Folia endpoint with a mismatched server artif
 function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [Collections.IDictionary]$endpointCase, [string]$databaseProduct) {
     $report.schemaVersion = 4
     $report.task = "T21-M05-SYNC-$databaseProduct-$($endpointCase.taskSuffix)"
+    $report.apiConsumer = [ordered]@{ sha256 = $apiConsumerSha }
     $report.server.software = $endpointCase.software
     $report.server.minecraftVersion = $endpointCase.minecraftVersion
     $report.server.build = $endpointCase.build
@@ -356,6 +357,7 @@ function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [
         $startup.runtimeIdentity.runtimeVersion = $endpointCase.minecraftVersion
         $startup.runtimeIdentity.minecraftVersion = $endpointCase.minecraftVersion
         $startup.runtimeIdentity.build = $endpointCase.build
+        $startup.apiConsumerMarker = 'PASS'
     }
 
     $platformLogs = [Collections.Generic.List[object]]::new()
@@ -1099,6 +1101,7 @@ Write-Output 'PASS: require PostgreSQL process command line to bind the verified
 
 $paperMinimumSha = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
 $candidateSha = 'b' * 64
+$apiConsumerSha = 'c' * 64
 $accountA = '35c93f74-c540-3b38-8093-b5cb3c2263be'
 $accountB = 'b748781d-824c-36d9-9de4-59cee731f37f'
 $mysqlRuntimeTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney-t21-mysql-report-' + [guid]::NewGuid().ToString('N'))
@@ -1220,7 +1223,7 @@ Write-Output 'PASS: accept a schema-3 runtime report with verified isolated Grad
 foreach ($endpointCase in $runtimePlatformEndpoints) {
     $platformRuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $platformRuntimeReport = New-T21PlatformRuntimeReportFixture $platformRuntimeReport $endpointCase 'MySQL'
-    if (-not (Test-T21MySqlRuntimeReport $platformRuntimeReport $endpointCase.sha256 $candidateSha -PlatformEndpoint $endpointCase.endpoint)) {
+    if (-not (Test-T21MySqlRuntimeReport $platformRuntimeReport $endpointCase.sha256 $candidateSha -PlatformEndpoint $endpointCase.endpoint -ExpectedApiConsumerSha256 $apiConsumerSha)) {
         throw "A complete schema-4 SQL report for $($endpointCase.endpoint) was rejected."
     }
     Write-Output "PASS: accept schema-4 platform SQL runtime report for $($endpointCase.endpoint)"
@@ -1252,7 +1255,7 @@ $wrongFoliaRuntimeReport.server.build = 7
 foreach ($startup in $wrongFoliaRuntimeReport.startupObservations) {
     $startup.runtimeIdentity.build = 7
 }
-if (Test-T21MySqlRuntimeReport $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+if (Test-T21MySqlRuntimeReport $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A runtime report whose Folia build disagrees with its pinned endpoint was accepted.'
 }
 Write-Output 'PASS: reject SQL runtime report with a mismatched Folia build'
@@ -1300,14 +1303,40 @@ Write-Output 'PASS: accept PostgreSQL SYNC write, normal-restart, SQL/Redis pari
 $foliaPostgresRuntimeReport = $postgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $foliaPostgresRuntimeReport = New-T21PlatformRuntimeReportFixture $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0] 'PostgreSQL'
 $foliaPostgresRuntimeReport.configuration.databaseType = 'postgresql'
-if (-not (Test-T21PostgresRuntimeReport $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia)) {
+if (-not (Test-T21PostgresRuntimeReport $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha)) {
     throw 'The PostgreSQL report validator rejected a complete schema-4 Folia SQL runtime report.'
 }
 Write-Output 'PASS: accept schema-4 PostgreSQL SYNC runtime evidence for minimum Folia'
 
+if (Test-T21PostgresRuntimeReport $foliaPostgresRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+    throw 'The PostgreSQL runtime report accepted schema-4 evidence without a caller-supplied API-consumer SHA-256.'
+}
+Write-Output 'PASS: require a caller-supplied API-consumer SHA-256 for schema-4 runtime evidence'
+
+$failedApiConsumerMarker = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$failedApiConsumerMarker.startupObservations[0].apiConsumerMarker = 'FAIL'
+if (Test-T21PostgresRuntimeReport $failedApiConsumerMarker $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
+    throw 'The PostgreSQL runtime report accepted a failed API-consumer startup marker.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence with a failed API-consumer startup marker'
+
+$failedRestartApiConsumerMarker = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$failedRestartApiConsumerMarker.startupObservations[1].apiConsumerMarker = 'FAIL'
+if (Test-T21PostgresRuntimeReport $failedRestartApiConsumerMarker $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
+    throw 'The PostgreSQL runtime report accepted a failed restart API-consumer marker.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence with a failed restart API-consumer marker'
+
+$wrongApiConsumerSha = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$wrongApiConsumerSha.apiConsumer.sha256 = '0' * 64
+if (Test-T21PostgresRuntimeReport $wrongApiConsumerSha $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
+    throw 'The PostgreSQL runtime report accepted a mismatched API-consumer SHA-256.'
+}
+Write-Output 'PASS: reject PostgreSQL runtime evidence with a mismatched API-consumer SHA-256'
+
 $wrongPinnedHashReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $wrongPinnedHashReport.server.sha256 = $paperMinimumSha
-if (Test-T21PostgresRuntimeReport $wrongPinnedHashReport $paperMinimumSha $candidateSha -PlatformEndpoint MinimumFolia) {
+if (Test-T21PostgresRuntimeReport $wrongPinnedHashReport $paperMinimumSha $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A Folia report and caller that agreed on the wrong server hash were accepted.'
 }
 Write-Output 'PASS: reject runtime report whose caller/server hash disagrees with the selected platform pin'
@@ -1325,7 +1354,7 @@ foreach ($startup in $relabeledPlatformLogReport.startupObservations) {
     $startup.runtimeIdentity.minecraftVersion = $maximumCanvasEndpoint.minecraftVersion
     $startup.runtimeIdentity.build = $maximumCanvasEndpoint.build
 }
-if (Test-T21PostgresRuntimeReport $relabeledPlatformLogReport $maximumCanvasEndpoint.sha256 $candidateSha -PlatformEndpoint MaximumCanvas) {
+if (Test-T21PostgresRuntimeReport $relabeledPlatformLogReport $maximumCanvasEndpoint.sha256 $candidateSha -PlatformEndpoint MaximumCanvas -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A schema-4 Canvas report with retained Folia startup logs was accepted.'
 }
 Write-Output 'PASS: reject schema-4 report when retained logs identify a different platform'
@@ -1336,7 +1365,7 @@ $missingPlatformIdentityReport = $foliaPostgresRuntimeReport | ConvertTo-Json -D
 $missingPlatformIdentityContent = [regex]::Replace($foliaWritePlatformLogContent, '(?im)^.*Loading\s+(?:Paper|Folia|Canvas)\s+\d+(?:\.\d+){1,2}-\d+\b.*(?:\r?\n|$)', '')
 [IO.File]::WriteAllText($foliaWritePlatformLogPath, $missingPlatformIdentityContent, [Text.UTF8Encoding]::new($false))
 $missingPlatformIdentityReport = Update-T21PlatformRuntimeReportLogHashes $missingPlatformIdentityReport
-if (Test-T21PostgresRuntimeReport $missingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+if (Test-T21PostgresRuntimeReport $missingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A schema-4 report without platform identity in a retained server log was accepted.'
 }
 Write-Output 'PASS: reject schema-4 report when a retained server log has no platform identity'
@@ -1345,7 +1374,7 @@ $conflictingPlatformIdentityReport = $foliaPostgresRuntimeReport | ConvertTo-Jso
 $conflictingIdentityLine = '[ServerMain/INFO]: [bootstrap] Loading Canvas 26.3-972-main@fixture (2026-10-13T00:00:00Z) for Minecraft 26.3'
 [IO.File]::WriteAllText($foliaWritePlatformLogPath, $foliaWritePlatformLogContent + $conflictingIdentityLine + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 $conflictingPlatformIdentityReport = Update-T21PlatformRuntimeReportLogHashes $conflictingPlatformIdentityReport
-if (Test-T21PostgresRuntimeReport $conflictingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia) {
+if (Test-T21PostgresRuntimeReport $conflictingPlatformIdentityReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A schema-4 report with conflicting platform identities in a retained server log was accepted.'
 }
 Write-Output 'PASS: reject schema-4 report when a retained server log has conflicting platform identities'
@@ -1913,6 +1942,12 @@ if (@($runnerParseErrors).Count -gt 0) {
 Write-Output 'PASS: parse the isolated MySQL SYNC runtime runner'
 
 $runnerSource = Get-Content -LiteralPath $mysqlRunnerPath -Raw
+if ($runnerSource -notmatch 'Test-T21PostgresRuntimeReport \$script:report \$ExpectedServerSha256 \$ExpectedCandidateSha256 -PlatformEndpoint \$PlatformEndpoint -ExpectedApiConsumerSha256 \$apiConsumerSha256' -or
+    $runnerSource -notmatch 'Test-T21MySqlRuntimeReport \$script:report \$ExpectedServerSha256 \$ExpectedCandidateSha256 -DatabaseProduct \$script:databaseProduct -PlatformEndpoint \$PlatformEndpoint -ExpectedApiConsumerSha256 \$apiConsumerSha256' -or
+    $runnerSource -notmatch 'apiConsumerMarker = \$apiConsumerMarker') {
+    throw 'Schema-4 SQL runtime reports must validate both API-consumer startup markers and bind the recorded SHA-256 to the staged artifact.'
+}
+Write-Output 'PASS: bind SQL runtime API-consumer markers and SHA-256 to the staged artifact'
 if ($runnerSource -notmatch '\$requestedDatabaseProduct\s*=\s*\$DatabaseProduct' -or
     $runnerSource -notmatch '\$script:databaseProduct\s*=\s*Resolve-T21SqlRuntimeProduct\s+\$requestedDatabaseProduct') {
     throw 'The SQL runtime runner does not preserve its requested product before script-scope mapping.'

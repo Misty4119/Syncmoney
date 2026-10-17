@@ -828,7 +828,8 @@ function Test-T21SqlRuntimeReport(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [string]$ExpectedApiConsumerSha256
 ) {
     try {
         if ($null -eq $report) { return $false }
@@ -873,6 +874,13 @@ function Test-T21SqlRuntimeReport(
         $candidate = Get-T21ObservedValue $report 'candidate'
         $java = Get-T21ObservedValue $report 'java'
         $configuration = Get-T21ObservedValue $report 'configuration'
+        if ($schemaVersion -ge 4) {
+            $apiConsumer = Get-T21ObservedValue $report 'apiConsumer'
+            $reportedApiConsumerSha256 = [string](Get-T21ObservedValue $apiConsumer 'sha256')
+            if ($ExpectedApiConsumerSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+                $reportedApiConsumerSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+                $reportedApiConsumerSha256.ToLowerInvariant() -cne $ExpectedApiConsumerSha256.ToLowerInvariant()) { return $false }
+        }
         if ((Get-T21ObservedValue $server 'software') -cne $expectedPlatform.software -or
             (Get-T21ObservedValue $server 'minecraftVersion') -cne $expectedPlatform.minecraftVersion -or
             (Get-T21ObservedValue $server 'build') -ne $expectedPlatform.build -or
@@ -1012,6 +1020,7 @@ function Test-T21SqlRuntimeReport(
             if ((Get-T21ObservedValue $startup 'stage') -cne $expectedStages[$index] -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'enabled') $true) -or
                 (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
+                ($schemaVersion -ge 4 -and (Get-T21ObservedValue $startup 'apiConsumerMarker') -cne 'PASS') -or
                 [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
                 ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
                 (Get-T21ObservedValue $runtimeIdentity 'software') -cne $expectedPlatform.software -or
@@ -1222,9 +1231,10 @@ function Test-T21MySqlRuntimeReport(
     [ValidateSet('MySQL', 'MariaDB')][string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [string]$ExpectedApiConsumerSha256
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256
 }
 
 function Test-T21PostgresRuntimeReport(
@@ -1233,7 +1243,8 @@ function Test-T21PostgresRuntimeReport(
     [string]$expectedCandidateSha256,
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [string]$ExpectedApiConsumerSha256
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256
 }
