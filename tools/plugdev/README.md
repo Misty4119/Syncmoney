@@ -768,6 +768,20 @@ The current-formal-maximum Paper `26.3#200` M06 LOCAL_REDIS/AOF restart report i
 
 The bounded M12 old/new-plugin observations were recorded on Paper `1.21.6#48`, historical `26.3#166`, and current formal maximum `26.3#200`. The `26.3#200` report is `paper-26.3-200-20261017-202713-1d17f5e9c8ee458581827584b6259798` (SHA-256 `a8cda6211e09bf22f3030c8c0d8cecb22ee50df00661516ac28e6b168886c530`); after two near-simultaneous same-account admin writes and normal drains/stops, isolated Redis recorded `900.00/v10` and unchanged `520.00/v4`. Its 86-assertion audit rehashed 53 retained evidence files. The report-time runner and artifacts are retained in the originating workspace under `build/reports/foundation/T21-M12-currentmax/`; exact pins and limits are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. This remains one bounded Paper observation: it does not prove Redis commit ordering, live mixed-version write correctness, concurrent transfer safety, Redis/PostgreSQL dual-backend behavior, or the wider T21 matrix. M12 stays unsupported by default under 04§15. The historical `26.3#166` report can still be reproduced with `pwsh -NoProfile -File build/reports/foundation/T21-M12/run-m12-paper-26.3-166.ps1`; it verifies its exact Paper SHA before startup.
 
+## T21 current-maximum V03 audit-schema migration: Paper 26.3#200
+
+All three SQL dialect cells have now passed as bounded observations on the current-formal-maximum Paper endpoint. Each run kept the main schema at v1, advanced audit schema 10→11, added the expected two audit columns and three indexes, and preserved the single seeded player row 1234.56/v73.
+
+| SQL product | Accepted run | Report SHA-256 | Retained logs independently rechecked |
+|---|---|---|---|
+| MySQL 8.0.42 | e7e6c3f97d9446a7848cd018939dd7a1 | 548f26c9420a06905f872eca418c33e3812f23028a0c764beedb9e38fc7cc52e | 24 / 48,125 bytes; zero mismatches |
+| MariaDB 12.3.3-MariaDB | 6f289e21fa454e21b6c5a334f8aec6c6 | 45caad82224c28eba1c948da8271ab6d79202fc96f64d8f1652177e32c0820d8 | 25 / 49,919 bytes; zero mismatches |
+| PostgreSQL 18.1 | 37b6fb6ffab34a00958642a9635597ae | 2136ddba273223e624ae337a056de7eba08f0be1dc8de042a8aa86e06cb355da | 33 / 62,498 bytes; zero mismatches |
+
+All three report-specific offline audits and the focused audit-schema validator passed. The first MySQL attempt cc6d4ba762244a528c0b94aeb7902a3c is excluded: it failed during SQL seeding before Paper startup with MySQL error 3913 on a measured 261-character syncmoney_schema_version.ibd path, with zero cleanup failures. The accepted same-cell retry under build/r used the shorter 218-character path. This describes those local attempts, not a general Windows or database path limit.
+
+This evidence covers Paper 26.3#200 only and one seeded player row; current-maximum Folia and Canvas migration cells and the remaining V03 matrix are still open. The next selected cell is Folia 26.3#3 / MySQL 8.0.42; its JAR and local MySQL toolchain pins were verified, but its runtime has NOT RUN. Exact per-run audits, source pins, and failure disposition are in Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md.
+
 ## T21 M05 minimum-Paper MariaDB SYNC runtime cell
 
 The MariaDB sibling cell exercises Paper `1.21.6#48`, Java 25, MariaDB `12.3.3-MariaDB` through the MySQL protocol, and isolated Redis `8.10.1`/DB 15. It accepts two Vault deposits, stops normally, checks SQL/Redis balance and version parity, restarts for persisted reads, then stops normally again. This is one bounded runtime observation; it does not establish MariaDB coverage on other Paper/Folia/Canvas endpoints or close the wider T21 matrix.
