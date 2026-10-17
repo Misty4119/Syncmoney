@@ -125,7 +125,7 @@ node tools/plugdev/prepare.mjs folia 26.3 local off 1.4.0-alpha.1
 node tools/plugdev/prepare.mjs canvas 26.3 local off 1.4.0-alpha.1
 ```
 
-The current user-confirmed maximum endpoints are Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984`. Use `CurrentMaximum`, `CurrentMaximumFolia`, and `CurrentMaximumCanvas` for T21 SQL validation; use the `*-263-currentmax` selectors for the M10 and player-scheduler runners. The M10 and player-scheduler runners resolve these artifacts under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/` and verify each JAR against its endpoint pin. Existing `Maximum` and `*-max` selectors retain their previous exact-build mappings for report reproduction. Previously accepted T21 reports on Paper `26.3#166`, Folia `26.2#7`, and Canvas `26.3#972` remain historical bounded results for those exact builds. Supplemental Paper `26.3#194` reports remain outside the formal range. All nine current-maximum M05 SQL runtime cells now have bounded report-specific audits; current-maximum M10 and player-scheduler runtime reports and the other T21 scenarios remain separate. Selector support alone does not count as runtime evidence. The checked-in M10 offline matrix audit still targets its retained historical reports, so current-maximum M10 evidence still needs its own report-specific audit.
+The current user-confirmed maximum endpoints are Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984`. Use `CurrentMaximum`, `CurrentMaximumFolia`, and `CurrentMaximumCanvas` for T21 SQL validation; use the `*-263-currentmax` selectors for the M10 and player-scheduler runners. The M10 and player-scheduler runners resolve these artifacts under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/` and verify each JAR against its endpoint pin. Existing `Maximum` and `*-max` selectors retain their previous exact-build mappings for report reproduction. Previously accepted T21 reports on Paper `26.3#166`, Folia `26.2#7`, and Canvas `26.3#972` remain historical bounded results for those exact builds. Supplemental Paper `26.3#194` reports remain outside the formal range. All nine current-maximum M05 SQL cells and all three current-maximum M10 reconciliation cells have bounded report-specific audits. The three standard current-maximum player-scheduler cells also have bounded runtime evidence; the separate Folia current-maximum cross-owner gate and other T21 scenarios remain open. Selector support alone does not count as runtime evidence.
 
 `prepare.mjs` rejects Paper versions below 1.21.6. `local` disables Redis and SQL; `local_redis` and `sync` require isolated local services as described by the test profile, never production services. `features=on` enables optional test modules and creates a random local Web Admin key; do not expose that server.
 
@@ -153,6 +153,31 @@ pwsh -NoProfile -File tools/plugdev/m10-runtime-matrix-offline-audit.ps1 `
 ```
 
 This audit validates that supplemental run only and does not change the formal endpoint range. It verifies report, log, artifact/source, command-to-event, and cleanup provenance. It does not establish a bounded reconciliation deadline or live mixed-version safety.
+
+## T21 M10 current-maximum Paper, Folia, and Canvas reconciliation
+
+The current-maximum selectors are `paper-263-currentmax`, `folia-263-currentmax`, and `canvas-263-currentmax`. Each run uses the pinned server artifact under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/`, the `1.4.0-alpha.1` candidate, isolated Redis DB 15, and the local PlugDev and Mineflayer checkouts. The runner sets `NODE_PATH` to the local Mineflayer checkout's `node_modules` directory for the client process and retains its stdout/stderr logs for failure diagnosis.
+
+| Endpoint | Selector | Run ID | Runtime report SHA-256 | Offline audit |
+|---|---|---|---|---|
+| Paper `26.3#200` | `paper-263-currentmax` | `paper-263-currentmax-20261017-172728-4412e0d3111e4916aa9dc1f207c34632` | `ff62935f7f9172bc8e803ce194850a5ab1605801cf016608b4a604f210a67791` | PASS, 136 assertions |
+| Folia `26.3#3` | `folia-263-currentmax` | `folia-263-currentmax-20261017-173357-aa736efb81d143099d453a87636c29c2` | `e1c3b85be1c4f1e10007858af84d6aba83906a50354660803bcd7b988c7caea1` | PASS, 136 assertions |
+| Canvas `26.3#984` | `canvas-263-currentmax` | `canvas-263-currentmax-20261017-174026-4dda3dc3de654e9f9844e35d3be75127` | `cb62410cc59eb2a20a87d10798f22cce4a9d84173067d9bd62451bbfe8d79787` | PASS, 136 assertions |
+
+Each accepted report records a `MESSAGE_MISSED_NO_REPLAY` observation, then a five-minute periodic reconciliation to Redis authority `3.00/v3`. Both nodes stopped normally with drain verified and game/RCON listeners closed; Redis shut down cleanly, the Mineflayer client exited gracefully, and no cleanup was forced. All three results are bounded M10 observations; they do not establish the remaining T21 modes, backends, failure matrix, separate Folia current-maximum cross-owner scheduler gate, or licensed CMI behavior.
+
+Reproduce a report-specific offline audit by supplying its run ID, the pinned candidate hash, and the source commit recorded in that report:
+
+```powershell
+pwsh -NoProfile -File tools/plugdev/m10-runtime-matrix-offline-audit.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -CurrentMaximumOnly `
+  -CurrentMaximumRunId 'paper-263-currentmax-20261017-172728-4412e0d3111e4916aa9dc1f207c34632' `
+  -CurrentMaximumCandidateSha256 '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354' `
+  -CurrentMaximumSourceCommit 'e093d59d03bf55ddb607fb0a205d70a5c1cc3417'
+```
+
+Replace the endpoint run ID with the Folia or Canvas ID above to audit that report. The offline audit validates only the selected report and its retained provenance.
 
 ## T21 M05 SYNC SQL runtime cells by platform
 
@@ -670,7 +695,15 @@ Run both focused validators and the report-specific offline audit after a runtim
 
 ## T21 player lifecycle scheduler matrix
 
-This example retains the historical selectors for reproducing earlier reports: `paper-263-max` still means Paper `26.3#166`, `folia-262-max` means Folia `26.2#7`, and `canvas-263-max` means Canvas `26.3#972`. The current formal maximum endpoints (`26.3#200`, `26.3#3`, and `26.3#984`) are available through `paper-263-currentmax`, `folia-263-currentmax`, and `canvas-263-currentmax`; their runtime cells remain **NOT RUN**. Do not use the historical selectors below to claim current-maximum coverage.
+This example retains the historical selectors for reproducing earlier reports: `paper-263-max` still means Paper `26.3#166`, `folia-262-max` means Folia `26.2#7`, and `canvas-263-max` means Canvas `26.3#972`. The current formal maximum endpoints (`26.3#200`, `26.3#3`, and `26.3#984`) are available through `paper-263-currentmax`, `folia-263-currentmax`, and `canvas-263-currentmax`; all three standard lifecycle cells now have `PASS_BOUNDED_SUBCASE (E2)` reports below. Do not use the historical selectors below to claim current-maximum coverage.
+
+| Endpoint | Current-maximum run ID | Runtime report SHA-256 | Teleport path |
+|---|---|---|---|
+| Paper `26.3#200` | `paper-263-currentmax-20261017-180704-c49e728dfafb427ba793191ecba399f6` | `632dc3a06d2d035289beea1eadb4e7693f0e4e81f4f0f03d7bba7dbcd19ccd8b` | `direct-success` |
+| Folia `26.3#3` | `folia-263-currentmax-20261017-180832-999e20c045b34c4085f4548e483d50c5` | `f287ccb7c528a17b5e90b754e01b8b5088f593dee9cd7e61b55bde229eb8b31c` | `entity-scheduler-future` |
+| Canvas `26.3#984` | `canvas-263-currentmax-20261017-180939-594e0c34d8d64503929113440b5db08a` | `1bfbaaf9f589ba7265b72d1a1fe4107ac946452457f877b56b78262b7e53986e` | `entity-scheduler-future` |
+
+All three reports record `2/2` accepted writes pending at teleport and logout, followed by normal drain and Redis `4.00/v4`. The Mineflayer client process uses the configured local checkout's `node_modules` through a scoped `NODE_PATH`; each report records this path for both client actions. Exact endpoint, candidate, source, report pins, and limits are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
@@ -683,7 +716,7 @@ foreach ($endpoint in $endpoints) {
 }
 ```
 
-The runner verifies each exact server JAR SHA-256 and the pinned candidate plugin SHA-256, creates a unique run directory, and isolates the project, PlugDev home, Gradle user home, and Redis database 15. Each endpoint run starts one server in `LOCAL_REDIS`, pauses its isolated Redis for 2.5 seconds, and runs two offline Mineflayer clients using that endpoint's protocol version. Teleport passes only with exactly one successful `teleportAsync` future, a successful non-cancelled Bukkit teleport-event path or destination confirmation on the entity scheduler for an eventless path, and client observation of the Nether dimension. Logout passes only when the server log contains the exact expected kick reason for `AcceptanceA`; Mineflayer may report either the exact kick packet or `ECONNABORTED` after the command-triggered disconnect. The acceptance log must show four successful Vault deposits on the synthetic account (two before each action) and at least two accepted writes still incomplete at each player-scheduler action, including writes already dequeued by the worker; normal shutdown must log `Syncmoney disabled.` and leave Redis at `4.00/v4`. The runtime Redis server version and account version are reported separately. Server cleanup uses the unique run marker and PlugDev session PID; Redis cleanup uses the per-run config name and retained process ID. Results and logs are saved under ignored `build/reports/foundation/T21-player-scheduler/`.
+The runner verifies each exact server JAR SHA-256 and the pinned candidate plugin SHA-256, creates a unique run directory, and isolates the project, PlugDev home, Gradle user home, and Redis database 15. Each endpoint run starts one server in `LOCAL_REDIS`, pauses its isolated Redis for 2.5 seconds, and runs two offline Mineflayer clients using that endpoint's protocol version. The client process receives `NODE_PATH` scoped to the configured local Mineflayer `node_modules`; stdout and stderr are retained for diagnosis, and the result records the module search path. Teleport passes only with exactly one successful `teleportAsync` future, a successful non-cancelled Bukkit teleport-event path or destination confirmation on the entity scheduler for an eventless path, and client observation of the Nether dimension. Logout passes only when the server log contains the exact expected kick reason for `AcceptanceA`; Mineflayer may report either the exact kick packet or `ECONNABORTED` after the command-triggered disconnect. The acceptance log must show four successful Vault deposits on the synthetic account (two before each action) and at least two accepted writes still incomplete at each player-scheduler action, including writes already dequeued by the worker; normal shutdown must log `Syncmoney disabled.` and leave Redis at `4.00/v4`. The runtime Redis server version and account version are reported separately. Server cleanup uses the unique run marker and PlugDev session PID; Redis cleanup uses the per-run config name and retained process ID. Results and logs are saved under ignored `build/reports/foundation/T21-player-scheduler/`.
 
 The standard lifecycle run without `-CrossOwner` is bounded player lifecycle evidence. It does not establish Folia two-region cross-owner behavior, CMI callback retirement, hard-kill recovery, fleet-wide quiescence, or the remaining backend/failure matrix. The separate Folia gate below covers only its two-player current-region ownership assertions. Any unrun endpoint remains `NOT RUN`; a failed runner report is not acceptance evidence.
 
