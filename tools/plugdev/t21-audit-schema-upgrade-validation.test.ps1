@@ -376,8 +376,7 @@ $playerRowTarget = Get-Command Test-T21AuditSchemaV10UpgradePlayerRowPreservatio
 Assert-T21Upgrade ($null -ne $playerRowTarget) 'The successful-migration player-row target contract is missing.'
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
-        $expectedTarget = ($databaseProduct -ceq 'MySQL' -and $endpoint -in @('Minimum', 'Maximum')) -or
-            ($databaseProduct -ceq 'MariaDB' -and $endpoint -ceq 'Minimum')
+        $expectedTarget = ($databaseProduct -in @('MySQL', 'MariaDB') -and $endpoint -in @('Minimum', 'Maximum'))
         Assert-T21Upgrade ((Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget `
                     -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) -eq $expectedTarget) `
             "The successful-migration player-row target contract returned the wrong result for $databaseProduct/$endpoint."
@@ -500,15 +499,9 @@ Syncmoney disabled.
             $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.runtimeVersion = $maximumPlatform.minecraftVersion
             $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.minecraftVersion = $maximumPlatform.minecraftVersion
             $maximumPlayerRowReport.startupObservations[0].runtimeIdentity.build = $maximumPlatform.build
-            if ($databaseProduct -ceq 'MySQL') {
-                Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
-                        -DatabaseProduct MySQL -PlatformEndpoint Maximum) `
-                    'The complete successful MySQL maximum-Paper report with its unchanged player row was rejected.'
-            } else {
-                Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
-                            -DatabaseProduct MariaDB -PlatformEndpoint Maximum)) `
-                    'The successful-migration MariaDB player-row report was accepted for maximum Paper.'
-            }
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $maximumPlayerRowReport $maximumPlatform.sha256 $candidateSha `
+                    -DatabaseProduct $databaseProduct -PlatformEndpoint Maximum) `
+                "The complete successful $databaseProduct maximum-Paper report with its unchanged player row was rejected."
             Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $playerRowReport $platform.sha256 $candidateSha `
                         -DatabaseProduct $databaseProduct -PlatformEndpoint CurrentStable)) `
                 "The successful-migration $databaseProduct player-row report was accepted for supplemental CurrentStable Paper."

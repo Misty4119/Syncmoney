@@ -62,7 +62,7 @@ if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
 }
 if ($SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 on minimum/maximum Paper and MariaDB 12.3.3-MariaDB on minimum Paper only.'
+    throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on minimum/maximum Paper only.'
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -1126,7 +1126,7 @@ ORDER BY id;
 function Seed-T21AuditSchemaV10Upgrade([switch]$SeedExistingPlayerRow) {
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 on minimum/maximum Paper and MariaDB 12.3.3-MariaDB on minimum Paper only.'
+        throw 'Successful audit-schema migration with an existing player-row sentinel supports MySQL 8.0.42 or MariaDB 12.3.3-MariaDB on minimum/maximum Paper only.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
