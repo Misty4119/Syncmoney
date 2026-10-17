@@ -92,7 +92,7 @@ $script:manifest = [ordered]@{
         cliDistManifest = @(); commit = $null; version = $null; workingTreeClean = $false
         workingTreeStatusEntryCount = $null; packageJsonSha256 = $null
     }
-    mineflayer = [ordered]@{ root = [IO.Path]::GetFullPath($MineflayerRoot); version = $null; commit = $null; workingTreeClean = $false; packageJsonSha256 = $null; packageLockPath = $null; packageLockSha256 = $null; entrypointPath = $null; entrypointSha256 = $null; resolvedRequirePath = $null; clientLogPath = $null; clientStdoutPath = $null; clientStderrPath = $null; dependencyInstallation = 'LOCAL_NODE_MODULES_NOT_HASHED' }
+    mineflayer = [ordered]@{ root = [IO.Path]::GetFullPath($MineflayerRoot); version = $null; commit = $null; workingTreeClean = $false; packageJsonSha256 = $null; packageLockPath = $null; packageLockSha256 = $null; entrypointPath = $null; entrypointSha256 = $null; resolvedRequirePath = $null; moduleSearchPath = $null; clientLogPath = $null; clientStdoutPath = $null; clientStderrPath = $null; dependencyInstallation = 'LOCAL_NODE_MODULES_NOT_HASHED' }
     redis = [ordered]@{ host = '127.0.0.1'; port = $redisPort; database = 15; version = $null; pid = $null; infoPid = $null; launcherPid = $null; configPath = $redisConfig; initialDbSize = $null; finalDbSize = $null; cleanShutdown = $false }
     nodes = [ordered]@{}
     account = [ordered]@{ name = 'AcceptanceM10'; uuid = $null; initial = $null; missedPubSub = $null; authority = $null; reconciled = $null; elapsedFromPluginEnableSeconds = $null }
@@ -868,6 +868,17 @@ function Start-Node([string]$nodeName) {
     Save-Result
 }
 
+function Set-M10MineflayerModulePath([Diagnostics.ProcessStartInfo]$StartInfo, [string]$MineflayerPath) {
+    $moduleSearchPath = [IO.Path]::GetFullPath((Join-Path $MineflayerPath 'node_modules'))
+    $StartInfo.Environment['NODE_PATH'] = $moduleSearchPath
+    return $moduleSearchPath
+}
+
+function Get-M10ClientLogText([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return [string]::Empty }
+    return [IO.File]::ReadAllText($Path)
+}
+
 function Save-M10ClientProcessOutput([object]$Client) {
     if ($null -eq $Client) { return }
     foreach ($streamName in @('stdout', 'stderr')) {
@@ -896,6 +907,7 @@ function Start-M10Client {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $moduleSearchPath = Set-M10MineflayerModulePath $psi $MineflayerRoot
     foreach ($argument in @($clientTool, $endpointInfo.minecraftVersion, [string]$nodes.b.gamePort,
         'AcceptanceM10', "T21_M10_RUN=$runId-client", $MineflayerRoot, $clientLog)) { $psi.ArgumentList.Add($argument) }
     $clientStdout = Join-Path $runRoot 'mineflayer-client.stdout.log'
@@ -913,6 +925,7 @@ function Start-M10Client {
     $script:manifest.mineflayer.clientLogPath = $clientLog
     $script:manifest.mineflayer.clientStdoutPath = $clientStdout
     $script:manifest.mineflayer.clientStderrPath = $clientStderr
+    $script:manifest.mineflayer.moduleSearchPath = $moduleSearchPath
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
     while ([DateTime]::UtcNow -lt $deadline) {
         if ($proc.HasExited) {
@@ -938,10 +951,7 @@ function Stop-M10Client {
     if ($null -eq $script:clientProcess) { return }
     if ($script:clientProcess.HasExited) {
         Save-M10ClientProcessOutput $nodes.client
-        $existingLog = ''
-        if (Test-Path -LiteralPath $nodes.client.logPath -PathType Leaf) {
-            $existingLog = [string](Get-Content -LiteralPath $nodes.client.logPath -Raw)
-        }
+        $existingLog = Get-M10ClientLogText $nodes.client.logPath
         $gracefulExit = $existingLog.Contains('T21_M10_BOT_EXIT_PASS') -and
             -not $existingLog.Contains('T21_M10_BOT_EXIT_FAIL') -and -not $existingLog.Contains('T21_M10_BOT_FAIL')
         $script:manifest.cleanup.Add([ordered]@{
@@ -964,7 +974,7 @@ function Stop-M10Client {
         throw 'Mineflayer client required forced cleanup; runtime result is not a clean PASS.'
     }
     Save-M10ClientProcessOutput $nodes.client
-    $log = [string](Get-Content -LiteralPath $nodes.client.logPath -Raw)
+    $log = Get-M10ClientLogText $nodes.client.logPath
     if (-not $log.Contains('T21_M10_BOT_EXIT_PASS')) { throw 'Mineflayer client did not record a graceful quit marker.' }
     $script:manifest.cleanup.Add([ordered]@{
         target = 'Mineflayer client'; pid = $script:clientProcess.Id; forced = $false

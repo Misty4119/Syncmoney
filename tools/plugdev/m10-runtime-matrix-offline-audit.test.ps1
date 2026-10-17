@@ -36,8 +36,9 @@ foreach ($currentMaximumAuditMarker in @(
     }
 }
 if (-not $auditSource.Contains("`$expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'", [StringComparison]::Ordinal) -or
-    -not $auditSource.Contains("`$expectedCurrentRunner = '4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc'", [StringComparison]::Ordinal) -or
-    -not $auditSource.Contains("'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c', `$expectedCurrentRunner", [StringComparison]::Ordinal)) {
+    -not $auditSource.Contains("`$expectedCurrentRunner = '4a1ad84e3c62e5eb529c5b2cba4ed93a6c5f2b208f57c824709f4e0d8cee2707'", [StringComparison]::Ordinal) -or
+    -not $auditSource.Contains("'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c'", [StringComparison]::Ordinal) -or
+    -not $auditSource.Contains("'4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc'", [StringComparison]::Ordinal)) {
     throw 'M10 offline audit does not keep the historical CurrentStable runner snapshot pin separate from the current selector-capable runner pin.'
 }
 

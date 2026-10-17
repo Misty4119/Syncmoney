@@ -76,8 +76,12 @@ $runtimeRoot = Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/runti
 $reportTimeSourceRoot = Join-Path $runtimeRoot 'source-pins/report-time'
 $expectedReportRunner = '6c1a60d2fd2afe92b12f06f261ef27e8a6d9ea163c09f24d00db3b326d361164'
 $expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'
-$expectedCurrentRunner = '4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc'
-$acceptedCurrentMaximumReportRunnerShas = @('f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c', $expectedCurrentRunner)
+$expectedCurrentRunner = '4a1ad84e3c62e5eb529c5b2cba4ed93a6c5f2b208f57c824709f4e0d8cee2707'
+$acceptedCurrentMaximumReportRunnerShas = @(
+    'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c',
+    '4d659e7523816335cc0b7ea2620a4665307c9936e2b70164b3b7f4b7617401dc',
+    $expectedCurrentRunner
+)
 $expectedReportObserver = 'd02ce11780123c00f1cddb3be20edd8b7fbf1d8d9c42ab9a5c7f44777fe177cf'
 $expectedCurrentObserver = '1e1cd0b49e7eb2b8d2f26c04b57e8b43c20fbadfdf8e9b16f8cc6564baf0a60b'
 $expectedCandidate = 'f57bf8535c628e77d7b12edc4926899e28c99c30d7a08b9da3e0036f0e254452'

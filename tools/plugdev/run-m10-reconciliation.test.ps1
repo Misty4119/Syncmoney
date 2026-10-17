@@ -76,11 +76,16 @@ if (-not $runnerSource.Contains("ValidateSet('paper-1216-min', 'paper-263-max', 
     throw 'M10 runner parameter must preserve historical selectors and expose the three current formal maximum selectors plus supplemental CurrentStable Paper.'
 }
 foreach ($clientDiagnosticMarker in @(
+        'function Set-M10MineflayerModulePath',
+        'Set-M10MineflayerModulePath $psi $MineflayerRoot',
+        "`$StartInfo.Environment['NODE_PATH'] = `$moduleSearchPath",
+        'function Get-M10ClientLogText',
+        'Get-M10ClientLogText $nodes.client.logPath',
+        '[IO.File]::ReadAllText($Path)',
         'function Save-M10ClientProcessOutput',
         'Save-M10ClientProcessOutput $nodes.client',
         'mineflayer-client.stdout.log',
-        'mineflayer-client.stderr.log',
-        '$existingLog = [string](Get-Content -LiteralPath $nodes.client.logPath -Raw)')) {
+        'mineflayer-client.stderr.log')) {
     if (-not $runnerSource.Contains($clientDiagnosticMarker, [StringComparison]::Ordinal)) {
         throw "M10 runner does not preserve client exit diagnostics safely: $clientDiagnosticMarker"
     }
@@ -159,7 +164,7 @@ $redisInfoProcessIdAst = $runnerAst.Find({
 if ($null -eq $redisInfoProcessIdAst) { throw 'M10 Redis INFO process id parser was not found in the runner.' }
 . ([scriptblock]::Create($redisInfoProcessIdAst.Extent.Text))
 
-foreach ($helperName in @('Assert-M10NoReparsePath', 'Assert-M10ExpectedLocalPlugDevRoot', 'Assert-M10ExpectedLocalMineflayerRoot', 'Get-M10ResolvedMineflayerEntry', 'Assert-M10ExpectedLocalMineflayerEntry', 'Get-Sha256', 'Get-PlugDevCliDistManifest', 'Assert-PlugDevCliDistManifest', 'Get-GitCheckoutProvenance', 'Save-M10ClientProcessOutput')) {
+foreach ($helperName in @('Assert-M10NoReparsePath', 'Assert-M10ExpectedLocalPlugDevRoot', 'Assert-M10ExpectedLocalMineflayerRoot', 'Get-M10ResolvedMineflayerEntry', 'Assert-M10ExpectedLocalMineflayerEntry', 'Get-Sha256', 'Get-PlugDevCliDistManifest', 'Assert-PlugDevCliDistManifest', 'Get-GitCheckoutProvenance', 'Set-M10MineflayerModulePath', 'Get-M10ClientLogText', 'Save-M10ClientProcessOutput')) {
     $helperAst = $runnerAst.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName
@@ -171,6 +176,20 @@ foreach ($helperName in @('Assert-M10NoReparsePath', 'Assert-M10ExpectedLocalPlu
 $clientOutputRoot = Join-Path ([IO.Path]::GetTempPath()) "syncmoney-m10-client-output-$([guid]::NewGuid().ToString('N'))"
 try {
     $null = New-Item -ItemType Directory -Path $clientOutputRoot -Force
+    $clientProcessStartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $moduleSearchPath = Set-M10MineflayerModulePath $clientProcessStartInfo $clientOutputRoot
+    if ($moduleSearchPath -cne [IO.Path]::GetFullPath((Join-Path $clientOutputRoot 'node_modules')) -or
+        $clientProcessStartInfo.Environment['NODE_PATH'] -cne $moduleSearchPath) {
+        throw 'M10 client module lookup must be scoped to the local Mineflayer checkout.'
+    }
+    $emptyClientLogPath = Join-Path $clientOutputRoot 'empty-client.log'
+    [IO.File]::WriteAllText($emptyClientLogPath, '')
+    $emptyClientLog = Get-M10ClientLogText $emptyClientLogPath
+    $missingClientLog = Get-M10ClientLogText (Join-Path $clientOutputRoot 'missing-client.log')
+    if ($null -eq $emptyClientLog -or $emptyClientLog.Length -ne 0 -or
+        $null -eq $missingClientLog -or $missingClientLog.Length -ne 0) {
+        throw 'M10 empty/missing client logs must be returned as non-null empty strings.'
+    }
     $clientOutput = [ordered]@{
         stdoutTask = [System.Threading.Tasks.Task[string]]::FromResult("client stdout diagnostic`n")
         stderrTask = [System.Threading.Tasks.Task[string]]::FromResult("client stderr diagnostic`n")
