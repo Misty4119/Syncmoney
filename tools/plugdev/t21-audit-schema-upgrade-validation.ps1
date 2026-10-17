@@ -27,9 +27,10 @@ function Test-T21AuditUpgradeHasField([object]$observation, [string]$name) {
 function Get-T21AuditSchemaUpgradeJsonArray([object]$value) {
     if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) { return $null }
     try {
-        $decoded = ConvertFrom-Json -InputObject $value -AsHashtable -ErrorAction Stop
-        if ($null -eq $decoded) { return @() }
-        return ,@($decoded)
+        $decoded = ConvertFrom-Json -InputObject $value -NoEnumerate -AsHashtable -ErrorAction Stop
+        if ($decoded -is [array]) { return ,$decoded }
+        if ($decoded -is [Collections.IDictionary]) { return ,([object[]]@($decoded)) }
+        return $null
     } catch { return $null }
 }
 
@@ -53,6 +54,78 @@ function Test-T21AuditSchemaUpgradePlayerRowSentinel(
         if (-not $rows[0].Contains($key) -or [string]$rows[0][$key] -cne [string]$expected[$key]) { return $false }
     }
     return $true
+}
+
+function ConvertTo-T21AuditSchemaUpgradePlayerRowsJson([object]$RowsJson) {
+    $rows = Get-T21AuditSchemaUpgradeJsonArray $RowsJson
+    if ($null -eq $rows) { throw 'The player-row snapshot is not a JSON array.' }
+    $requiredKeys = @('player_uuid', 'player_name', 'balance', 'version', 'last_server', 'updated_at')
+    $canonicalRows = [Collections.Generic.SortedDictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($row in $rows) {
+        if ($row -isnot [Collections.IDictionary] -or $row.Count -ne $requiredKeys.Count) {
+            throw 'A player-row snapshot has an unexpected object shape.'
+        }
+        $canonical = [ordered]@{}
+        foreach ($key in $requiredKeys) {
+            if (-not $row.Contains($key) -or $row[$key] -isnot [string]) {
+                throw "A player-row snapshot is missing its string field '$key'."
+            }
+            $canonical[$key] = $row[$key]
+        }
+        $uuid = [string]$canonical.player_uuid
+        if ([string]::IsNullOrWhiteSpace($uuid)) { throw 'A player-row snapshot has a blank UUID.' }
+        $canonicalRows.Add($uuid, $canonical)
+    }
+    if ($canonicalRows.Count -eq 0) { return '[]' }
+    $sortedRows = [object[]]@($canonicalRows.Values)
+    return ConvertTo-Json -InputObject ([object[]]$sortedRows) -Depth 8 -Compress
+}
+
+function Test-T21AuditSchemaUpgradePlayerRowsPreserved(
+    [object]$RowsJson,
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [ValidateSet(1, 3)][int]$ExpectedRowCount
+) {
+    try {
+        $rows = Get-T21AuditSchemaUpgradeJsonArray $RowsJson
+        if ($null -eq $rows -or $rows.Count -ne $ExpectedRowCount) { return $false }
+        $expectedUpdatedAt = if ($DatabaseProduct -ceq 'PostgreSQL') {
+            @('2026-10-16 12:34:56.000000', '2026-10-16 12:34:57.000000', '2026-10-16 12:34:58.000000')
+        } else {
+            @('2026-10-16 12:34:56', '2026-10-16 12:34:57', '2026-10-16 12:34:58')
+        }
+        $fixtureRows = @(
+            [ordered]@{
+                player_uuid='00000000-0000-0000-0000-00000000cafe'
+                player_name='T21-ROW-SENTINEL'
+                balance='1234.56'
+                version='73'
+                last_server='t21-player-preservation'
+                updated_at=$expectedUpdatedAt[0]
+            }
+            [ordered]@{
+                player_uuid='00000000-0000-0000-0000-00000000caff'
+                player_name='T21-ROW-SECOND'
+                balance='987.65'
+                version='19'
+                last_server='t21-row-second'
+                updated_at=$expectedUpdatedAt[1]
+            }
+            [ordered]@{
+                player_uuid='00000000-0000-0000-0000-00000000cab0'
+                player_name='T21-ROW-THIRD'
+                balance='0.01'
+                version='0'
+                last_server='t21-row-third'
+                updated_at=$expectedUpdatedAt[2]
+            }
+        )
+        $expectedRows = [object[]]@($fixtureRows | Select-Object -First $ExpectedRowCount)
+        $expectedJson = ConvertTo-T21AuditSchemaUpgradePlayerRowsJson (
+            ConvertTo-Json -InputObject $expectedRows -Depth 8 -Compress)
+        $actualJson = ConvertTo-T21AuditSchemaUpgradePlayerRowsJson $RowsJson
+        return $actualJson -ceq $expectedJson
+    } catch { return $false }
 }
 
 function Test-T21AuditSchemaUpgradeColumnMetadata(
@@ -143,10 +216,12 @@ function Test-T21AuditSchemaV10UpgradeState(
     [object]$After,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [string]$ExpectedDatabaseName,
-    [switch]$PreserveExistingPlayerRow
+    [switch]$PreserveExistingPlayerRow,
+    [switch]$PreserveMultipleExistingPlayerRows
 ) {
     try {
         if ($null -eq $Before -or $null -eq $After) { return $false }
+        if ($PreserveExistingPlayerRow.IsPresent -and $PreserveMultipleExistingPlayerRows.IsPresent) { return $false }
         $playerStateValid = if ($PreserveExistingPlayerRow.IsPresent) {
             (Test-T21ObservedBoolean (Get-T21ObservedValue $Before 'playersTableExists') $true) -and
                 (Get-T21ObservedValue $Before 'playerRows') -eq 1 -and
@@ -155,6 +230,13 @@ function Test-T21AuditSchemaV10UpgradeState(
                 (Get-T21ObservedValue $After 'playerRows') -eq 1 -and
                 (Get-T21ObservedValue $Before 'playerRowsJson') -ceq (Get-T21ObservedValue $After 'playerRowsJson') -and
                 (Test-T21AuditSchemaUpgradePlayerRowSentinel (Get-T21ObservedValue $After 'playerRowsJson') $DatabaseProduct)
+        } elseif ($PreserveMultipleExistingPlayerRows.IsPresent) {
+            (Test-T21ObservedBoolean (Get-T21ObservedValue $Before 'playersTableExists') $true) -and
+                (Get-T21ObservedValue $Before 'playerRows') -eq 3 -and
+                (Test-T21AuditSchemaUpgradePlayerRowsPreserved (Get-T21ObservedValue $Before 'playerRowsJson') $DatabaseProduct 3) -and
+                (Test-T21ObservedBoolean (Get-T21ObservedValue $After 'playersTableExists') $true) -and
+                (Get-T21ObservedValue $After 'playerRows') -eq 3 -and
+                (Test-T21AuditSchemaUpgradePlayerRowsPreserved (Get-T21ObservedValue $After 'playerRowsJson') $DatabaseProduct 3)
         } else {
             (Test-T21ObservedBoolean (Get-T21ObservedValue $Before 'playersTableExists') $false) -and
                 (Get-T21ObservedValue $Before 'playerRows') -eq $null -and
@@ -323,11 +405,14 @@ function Test-T21AuditSchemaV10UpgradeReport(
         $platform = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
         $standardTask = "T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$DatabaseProduct-$($platform.taskSuffix)"
         $playerRowTask = "T21-V03-SYNC-v10-to-v11-audit-schema-player-row-preservation-$DatabaseProduct-$($platform.taskSuffix)"
-        $preserveExistingPlayerRow = (Get-T21ObservedValue $Report 'task') -ceq $playerRowTask
-        if ($preserveExistingPlayerRow -and
+        $multiplePlayerRowsTask = "T21-V03-SYNC-v10-to-v11-audit-schema-multiple-player-row-preservation-$DatabaseProduct-$($platform.taskSuffix)"
+        $reportTask = [string](Get-T21ObservedValue $Report 'task')
+        $preserveExistingPlayerRow = $reportTask -ceq $playerRowTask
+        $preserveMultipleExistingPlayerRows = $reportTask -ceq $multiplePlayerRowsTask
+        if (($preserveExistingPlayerRow -or $preserveMultipleExistingPlayerRows) -and
             -not (Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint)) { return $false }
         if ((Get-T21ObservedValue $Report 'schemaVersion') -ne 4 -or
-            ((Get-T21ObservedValue $Report 'task') -cne $standardTask -and -not $preserveExistingPlayerRow) -or
+            ($reportTask -cne $standardTask -and -not $preserveExistingPlayerRow -and -not $preserveMultipleExistingPlayerRows) -or
             (Get-T21ObservedValue $Report 'status') -cne 'PASS_BOUNDED_SUBCASE' -or
             (Get-T21ObservedValue $Report 'failure') -ne $null) { return $false }
         $cleanupFailures = $null
@@ -427,7 +512,8 @@ function Test-T21AuditSchemaV10UpgradeReport(
         $schemaAfter = Get-T21ObservedValue $Report 'schemaStateAfter'
         if (-not (Test-T21AuditSchemaV10UpgradeState $schemaBefore $schemaAfter -DatabaseProduct $DatabaseProduct `
                 -ExpectedDatabaseName ([string](Get-T21ObservedValue $configuration 'databaseName')) `
-                -PreserveExistingPlayerRow:$preserveExistingPlayerRow)) { return $false }
+                -PreserveExistingPlayerRow:$preserveExistingPlayerRow `
+                -PreserveMultipleExistingPlayerRows:$preserveMultipleExistingPlayerRows)) { return $false }
         $platformLogs = @(Get-T21ObservedValue $Report 'platformLogs')
         if ($platformLogs.Count -ne 1) { return $false }
         $platformLog = $platformLogs[0]

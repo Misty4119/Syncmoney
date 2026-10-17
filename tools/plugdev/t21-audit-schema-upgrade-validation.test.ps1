@@ -365,6 +365,107 @@ Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $ex
 Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $playerRowBefore $playerRowAfter -DatabaseProduct MySQL)) `
     'The ordinary empty-players migration predicate accepted the preservation fixture.'
 
+$multiPlayerRowsCommand = Get-Command Test-T21AuditSchemaUpgradePlayerRowsPreserved -ErrorAction SilentlyContinue
+Assert-T21Upgrade ($null -ne $multiPlayerRowsCommand) `
+    'The successful-migration validator does not expose exact multi-row player preservation.'
+$multiPlayerRows = [object[]]@(
+    [ordered]@{
+        player_uuid='00000000-0000-0000-0000-00000000cafe'
+        player_name='T21-ROW-SENTINEL'
+        balance='1234.56'
+        version='73'
+        last_server='t21-player-preservation'
+        updated_at='2026-10-16 12:34:56'
+    }
+    [ordered]@{
+        player_uuid='00000000-0000-0000-0000-00000000caff'
+        player_name='T21-ROW-SECOND'
+        balance='987.65'
+        version='19'
+        last_server='t21-row-second'
+        updated_at='2026-10-16 12:34:57'
+    }
+    [ordered]@{
+        player_uuid='00000000-0000-0000-0000-00000000cab0'
+        player_name='T21-ROW-THIRD'
+        balance='0.01'
+        version='0'
+        last_server='t21-row-third'
+        updated_at='2026-10-16 12:34:58'
+    }
+)
+$multiPlayerRowsBeforeNormalization = ConvertTo-Json -InputObject $multiPlayerRows -Depth 8 -Compress
+$emptyPlayerRows = Get-T21AuditSchemaUpgradeJsonArray '[]'
+Assert-T21Upgrade ($null -ne $emptyPlayerRows -and $emptyPlayerRows -is [array] -and $emptyPlayerRows.Count -eq 0) `
+    'The player-row JSON array parser did not preserve an empty array.'
+Assert-T21Upgrade ((ConvertTo-T21AuditSchemaUpgradePlayerRowsJson '[]') -ceq '[]') `
+    'An empty player-row snapshot did not canonicalize to an empty JSON array.'
+$nullPlayerRowsRejected = $false
+try { ConvertTo-T21AuditSchemaUpgradePlayerRowsJson 'null' | Out-Null } catch { $nullPlayerRowsRejected = $true }
+Assert-T21Upgrade $nullPlayerRowsRejected 'A JSON null player-row snapshot was treated as an empty array.'
+foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
+    $productRows = [object[]]@($multiPlayerRows | ForEach-Object {
+            $row = [ordered]@{}
+            foreach ($key in $_.Keys) { $row[$key] = $_[$key] }
+            if ($databaseProduct -ceq 'PostgreSQL') {
+                $row.updated_at = $row.updated_at + '.000000'
+            }
+            $row
+        })
+    $productRowsJson = ConvertTo-Json -InputObject $productRows -Depth 8 -Compress
+    $productCanonicalRows = [object[]]@($productRows[2], $productRows[0], $productRows[1])
+    $productCanonicalRowsJson = ConvertTo-Json -InputObject $productCanonicalRows -Depth 8 -Compress
+    Assert-T21Upgrade ((ConvertTo-T21AuditSchemaUpgradePlayerRowsJson $productRowsJson) -ceq $productCanonicalRowsJson) `
+        "$databaseProduct player-row snapshot normalization did not sort rows by UUID."
+    Assert-T21Upgrade (Test-T21AuditSchemaUpgradePlayerRowsPreserved $productRowsJson -DatabaseProduct $databaseProduct -ExpectedRowCount 3) `
+        "$databaseProduct successful migration validator rejected the exact three-row fixture."
+    $reorderedProductRowsJson = ConvertTo-Json -InputObject ([object[]]@($productRows[1], $productRows[2], $productRows[0])) -Depth 8 -Compress
+    Assert-T21Upgrade (Test-T21AuditSchemaUpgradePlayerRowsPreserved $reorderedProductRowsJson -DatabaseProduct $databaseProduct -ExpectedRowCount 3) `
+        "$databaseProduct successful migration validator treated SQL aggregate order as player-state change."
+    $changedSecondaryRow = [ordered]@{}
+    foreach ($key in $productRows[1].Keys) { $changedSecondaryRow[$key] = $productRows[1][$key] }
+    $changedSecondaryRow.balance = '987.66'
+    $changedRowsJson = ConvertTo-Json -InputObject ([object[]]@($productRows[0], $changedSecondaryRow, $productRows[2])) -Depth 8 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaUpgradePlayerRowsPreserved $changedRowsJson -DatabaseProduct $databaseProduct -ExpectedRowCount 3)) `
+        "$databaseProduct successful migration validator accepted a changed secondary player row."
+    $missingRowJson = ConvertTo-Json -InputObject ([object[]]@($productRows[0], $productRows[1])) -Depth 8 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaUpgradePlayerRowsPreserved $missingRowJson -DatabaseProduct $databaseProduct -ExpectedRowCount 3)) `
+        "$databaseProduct successful migration validator accepted a missing player row."
+    $duplicateRowJson = ConvertTo-Json -InputObject ([object[]]@($productRows[0], $productRows[0], $productRows[1])) -Depth 8 -Compress
+    Assert-T21Upgrade (-not (Test-T21AuditSchemaUpgradePlayerRowsPreserved $duplicateRowJson -DatabaseProduct $databaseProduct -ExpectedRowCount 3)) `
+        "$databaseProduct successful migration validator accepted a duplicate row in place of the third fixture."
+}
+$multiRowsBefore = New-T21UpgradeState 'MySQL' $false
+$multiRowsAfter = New-T21UpgradeState 'MySQL' $true
+foreach ($state in @($multiRowsBefore, $multiRowsAfter)) {
+    $state.playersTableExists = $true
+    $state.playerRows = [long]3
+    $state.playerRowsJson = $multiPlayerRowsBeforeNormalization
+}
+Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeState $multiRowsBefore $multiRowsAfter `
+        -DatabaseProduct MySQL -PreserveMultipleExistingPlayerRows) `
+    'The successful migration state predicate rejected the unchanged three-row fixture.'
+$changedMultiRowsAfter = Copy-T21UpgradeState $multiRowsAfter
+$changedMultiRows = [Collections.Generic.List[object]]::new()
+foreach ($row in $multiPlayerRows) {
+    $copy = [ordered]@{}
+    foreach ($key in $row.Keys) { $copy[$key] = $row[$key] }
+    if ($copy.player_uuid -ceq '00000000-0000-0000-0000-00000000caff') { $copy.balance = '987.66' }
+    $changedMultiRows.Add($copy)
+}
+$changedMultiRowsAfter.playerRowsJson = ConvertTo-Json -InputObject ([object[]]$changedMultiRows) -Depth 8 -Compress
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $multiRowsBefore $changedMultiRowsAfter `
+            -DatabaseProduct MySQL -PreserveMultipleExistingPlayerRows)) `
+    'The successful migration state predicate accepted a changed secondary player row.'
+$wrongMultiRowCount = Copy-T21UpgradeState $multiRowsAfter
+$wrongMultiRowCount.playerRows = [long]4
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $multiRowsBefore $wrongMultiRowCount `
+            -DatabaseProduct MySQL -PreserveMultipleExistingPlayerRows)) `
+    'The successful migration state predicate accepted a player-row count other than three.'
+Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeState $multiRowsBefore $multiRowsAfter `
+            -DatabaseProduct MySQL -PreserveExistingPlayerRow)) `
+    'The existing single-row case accepted the three-row fixture.'
+
 foreach ($databaseProduct in @('MySQL', 'MariaDB', 'PostgreSQL')) {
     foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
         Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
@@ -531,6 +632,57 @@ Syncmoney disabled.
                             -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
                     'The successful-migration PostgreSQL report predicate accepted a changed player timestamp microsecond.'
             }
+
+            $multiProductRows = [object[]]@($multiPlayerRows | ForEach-Object {
+                    $row = [ordered]@{}
+                    foreach ($key in $_.Keys) { $row[$key] = $_[$key] }
+                    if ($databaseProduct -ceq 'PostgreSQL') { $row.updated_at = $row.updated_at + '.000000' }
+                    $row
+                })
+            $multiProductRowsJson = ConvertTo-T21AuditSchemaUpgradePlayerRowsJson (
+                ConvertTo-Json -InputObject $multiProductRows -Depth 8 -Compress)
+            $multiPlayerRowReport = $playerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $multiPlayerRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-multiple-player-row-preservation-$databaseProduct-minimum-Paper"
+            foreach ($snapshotName in @('schemaStateBefore', 'schemaStateAfter')) {
+                $multiPlayerRowReport[$snapshotName].playerRows = [long]3
+                $multiPlayerRowReport[$snapshotName].playerRowsJson = $multiProductRowsJson
+            }
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $multiPlayerRowReport $platform.sha256 $candidateSha `
+                    -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
+                "The complete successful $databaseProduct minimum-Paper report with three unchanged player rows was rejected."
+            $reorderedMultiPlayerRowReport = $multiPlayerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $reorderedRows = @(ConvertFrom-Json -InputObject $multiProductRowsJson -AsHashtable)
+            [array]::Reverse($reorderedRows)
+            $reorderedMultiPlayerRowReport.schemaStateAfter.playerRowsJson = ConvertTo-Json -InputObject ([object[]]$reorderedRows) -Depth 8 -Compress
+            Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $reorderedMultiPlayerRowReport $platform.sha256 $candidateSha `
+                    -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum) `
+                "The complete successful $databaseProduct report rejected the same three player rows in a different SQL aggregate order."
+            foreach ($endpoint in @('Maximum', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
+                $endpointMultiRowReport = $multiPlayerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+                $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
+                $endpointMultiRowReport.task = "T21-V03-SYNC-v10-to-v11-audit-schema-multiple-player-row-preservation-$databaseProduct-$($endpointPlatform.taskSuffix)"
+                $endpointMultiRowReport.server.software = $endpointPlatform.software
+                $endpointMultiRowReport.server.minecraftVersion = $endpointPlatform.minecraftVersion
+                $endpointMultiRowReport.server.build = $endpointPlatform.build
+                $endpointMultiRowReport.server.sha256 = $endpointPlatform.sha256
+                $endpointMultiRowReport.startupObservations[0].runtimeIdentity.software = $endpointPlatform.software
+                $endpointMultiRowReport.startupObservations[0].runtimeIdentity.runtimeVersion = $endpointPlatform.minecraftVersion
+                $endpointMultiRowReport.startupObservations[0].runtimeIdentity.minecraftVersion = $endpointPlatform.minecraftVersion
+                $endpointMultiRowReport.startupObservations[0].runtimeIdentity.build = $endpointPlatform.build
+                Assert-T21Upgrade (Test-T21AuditSchemaV10UpgradeReport $endpointMultiRowReport $endpointPlatform.sha256 $candidateSha `
+                        -DatabaseProduct $databaseProduct -PlatformEndpoint $endpoint) `
+                    "The complete successful $databaseProduct $endpoint report with three unchanged player rows was rejected."
+            }
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $multiPlayerRowReport $platform.sha256 $candidateSha `
+                        -DatabaseProduct $databaseProduct -PlatformEndpoint CurrentStable)) `
+                "The successful-migration $databaseProduct multi-row report was accepted for supplemental CurrentStable Paper."
+            $changedMultiRowReport = $multiPlayerRowReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+            $changedReportRows = @(ConvertFrom-Json -InputObject $multiProductRowsJson -AsHashtable)
+            $changedReportRows[1].balance = '987.66'
+            $changedMultiRowReport.schemaStateAfter.playerRowsJson = ConvertTo-Json -InputObject ([object[]]$changedReportRows) -Depth 8 -Compress
+            Assert-T21Upgrade (-not (Test-T21AuditSchemaV10UpgradeReport $changedMultiRowReport $platform.sha256 $candidateSha `
+                        -DatabaseProduct $databaseProduct -PlatformEndpoint Minimum)) `
+                "The successful-migration $databaseProduct multi-row report predicate accepted a changed secondary row."
         }
         foreach ($endpoint in @('Minimum', 'Maximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'MinimumCanvas', 'MaximumCanvas')) {
             $endpointPlatform = Get-T21PlatformEndpoint -PlatformEndpoint $endpoint
@@ -611,9 +763,15 @@ $offlineAuditSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 't21-aud
 foreach ($requiredRunnerContract in @(
         '[switch]$SuccessfulV10AuditSchemaUpgrade',
         '[switch]$SuccessfulV10AuditSchemaPlayerRowPreservation',
+        '[switch]$SuccessfulV10AuditSchemaMultiplePlayerRowPreservation',
+        '$ordinarySuccessfulV10AuditSchemaUpgradeRequested = $SuccessfulV10AuditSchemaUpgrade.IsPresent',
+        '($ordinarySuccessfulV10AuditSchemaUpgradeRequested -and $script:successfulV10AuditSchemaPlayerRowPreservation)',
         'Test-T21AuditSchemaV10UpgradePlayerRowPreservationTarget -DatabaseProduct',
         'Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct',
-        'Seed-T21AuditSchemaV10Upgrade -SeedExistingPlayerRow:',
+        '-SeedMultipleExistingPlayerRows:$script:successfulV10AuditSchemaMultiplePlayerRowPreservation',
+        'Test-T21AuditSchemaUpgradePlayerRowsPreserved',
+        'ConvertTo-T21AuditSchemaUpgradePlayerRowsJson $rawPlayerRowsJson',
+        'audit-schema-multiple-player-row-preservation-',
         'Get-T21StartupFailureSchemaState -AfterAuditSchemaV10Upgrade',
         'Test-T21AuditSchemaV10UpgradeState',
         'Test-T21AuditSchemaV10UpgradeReport',
