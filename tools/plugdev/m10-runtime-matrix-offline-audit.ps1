@@ -3,9 +3,25 @@ param(
     [string]$PlugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main',
     [string]$MineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master',
     [switch]$SupplementalCurrentStableOnly,
-    [string]$CurrentStableRunId
+    [string]$CurrentStableRunId,
+    [switch]$CurrentMaximumOnly,
+    [string]$CurrentMaximumRunId,
+    [string]$CurrentMaximumCandidateSha256,
+    [string]$CurrentMaximumSourceCommit
 )
 $ErrorActionPreference = 'Stop'
+function Get-M10CurrentMaximumEntry([string]$RunId) {
+    if ($RunId -cnotmatch '^(?<platform>paper|folia|canvas)-263-currentmax-[0-9]{8}-[0-9]{6}-[0-9a-f]{32}$') {
+        throw 'CurrentMaximumOnly requires an exact current-maximum M10 run ID.'
+    }
+    $platform = $Matches['platform']
+    switch -CaseSensitive ($platform) {
+        'paper' { return [pscustomobject]@{ RunId=$RunId; Label='Paper 26.3#200'; ArtifactFile='paper-26.3-200.jar'; Artifact='0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' } }
+        'folia' { return [pscustomobject]@{ RunId=$RunId; Label='Folia 26.3#3'; ArtifactFile='folia-26.3-3.jar'; Artifact='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' } }
+        'canvas' { return [pscustomobject]@{ RunId=$RunId; Label='Canvas 26.3#984'; ArtifactFile='canvas-26.3-984.jar'; Artifact='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' } }
+        default { throw 'CurrentMaximumOnly requires an exact current-maximum M10 run ID.' }
+    }
+}
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
 $canonicalPlugDevRoot = [IO.Path]::GetFullPath('C:\Users\margo\IdeaProjects\plugdev-main')
 $canonicalMineflayerRoot = [IO.Path]::GetFullPath('C:\Users\margo\IdeaProjects\mineflayer-master')
@@ -23,6 +39,33 @@ if ($SupplementalCurrentStableOnly) {
     }
 } elseif (-not [string]::IsNullOrWhiteSpace($CurrentStableRunId)) {
     throw 'CurrentStableRunId is valid only with SupplementalCurrentStableOnly.'
+}
+if ($SupplementalCurrentStableOnly -and $CurrentMaximumOnly) {
+    throw 'Supplemental CurrentStable and current-maximum audit modes are mutually exclusive.'
+}
+$hasCurrentMaximumArguments = -not [string]::IsNullOrWhiteSpace($CurrentMaximumRunId) -or
+    -not [string]::IsNullOrWhiteSpace($CurrentMaximumCandidateSha256) -or
+    -not [string]::IsNullOrWhiteSpace($CurrentMaximumSourceCommit)
+if ($CurrentMaximumOnly) {
+    if (-not [string]::IsNullOrWhiteSpace($CurrentStableRunId)) {
+        throw 'CurrentStableRunId is valid only with SupplementalCurrentStableOnly.'
+    }
+    $currentMaximumEntry = Get-M10CurrentMaximumEntry $CurrentMaximumRunId
+    if ($CurrentMaximumCandidateSha256 -cnotmatch '^[0-9a-fA-F]{64}$') {
+        throw 'CurrentMaximumCandidateSha256 must be a 64-character SHA-256 hex value.'
+    }
+    if ($CurrentMaximumSourceCommit -cnotmatch '^[0-9a-fA-F]{40}$') {
+        throw 'CurrentMaximumSourceCommit must be a 40-character Git commit SHA.'
+    }
+    $CurrentMaximumSourceCommit = $CurrentMaximumSourceCommit.ToLowerInvariant()
+    $expectedCurrentMaximumTree = (& git -C $RepositoryRoot rev-parse "$CurrentMaximumSourceCommit^{tree}" 2>$null | Out-String).Trim()
+    $expectedCurrentMaximumTreeExitCode = $LASTEXITCODE
+    if ($expectedCurrentMaximumTreeExitCode -ne 0 -or $expectedCurrentMaximumTree -notmatch '^[0-9a-f]{40}$') {
+        throw 'CurrentMaximumSourceCommit must identify a commit available in the repository.'
+    }
+    $CurrentMaximumCandidateSha256 = $CurrentMaximumCandidateSha256.ToLowerInvariant()
+} elseif ($hasCurrentMaximumArguments) {
+    throw 'CurrentMaximumRunId, CurrentMaximumCandidateSha256, and CurrentMaximumSourceCommit are valid only with CurrentMaximumOnly.'
 }
 $runtimeRoot = Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/runtime'
 $reportTimeSourceRoot = Join-Path $runtimeRoot 'source-pins/report-time'
@@ -56,6 +99,13 @@ if ($SupplementalCurrentStableOnly) {
             Artifact='5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784'
         }
     )
+} elseif ($CurrentMaximumOnly) {
+    $expectedReportRunner = $expectedCurrentRunner
+    $expectedReportObserver = $expectedCurrentObserver
+    $expectedCandidate = $CurrentMaximumCandidateSha256
+    $expectedCommit = $CurrentMaximumSourceCommit
+    $expectedTree = $expectedCurrentMaximumTree
+    $matrix = @($currentMaximumEntry)
 }
 $script:assertions = 0
 function Assert-M10([bool]$Condition, [string]$Name) {
@@ -308,13 +358,14 @@ function ConvertTo-M10ObservationTime([string]$Value) {
     return $parsed.ToUniversalTime()
 }
 $runnerPath = Join-Path $RepositoryRoot 'tools/plugdev/run-m10-reconciliation.ps1'
-$reportRunnerSourcePath = if ($SupplementalCurrentStableOnly) {
-    Join-Path (Join-Path (Join-Path $runtimeRoot $CurrentStableRunId) 'source-pins') 'run-m10-reconciliation.ps1'
+$reportRunnerSourcePath = if ($SupplementalCurrentStableOnly -or $CurrentMaximumOnly) {
+    $selectedRunId = if ($CurrentMaximumOnly) { $CurrentMaximumRunId } else { $CurrentStableRunId }
+    Join-Path (Join-Path (Join-Path $runtimeRoot $selectedRunId) 'source-pins') 'run-m10-reconciliation.ps1'
 } else {
     Join-Path $reportTimeSourceRoot 'run-m10-reconciliation.ps1'
 }
 $observerPath = Join-Path $RepositoryRoot 'tools/plugdev/m10-redis-pubsub-observer.mjs'
-$reportObserverSourcePath = if ($SupplementalCurrentStableOnly) {
+$reportObserverSourcePath = if ($SupplementalCurrentStableOnly -or $CurrentMaximumOnly) {
     $expectedReportObserver = $expectedCurrentObserver
     $observerPath
 } else {
@@ -328,6 +379,8 @@ Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $runnerPath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current runner sha'
 if ($SupplementalCurrentStableOnly) {
     Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedCurrentStableRunner) 'CurrentStable report-time runner snapshot sha'
+} elseif ($CurrentMaximumOnly) {
+    Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportRunnerSourcePath).Hash.ToLowerInvariant() -eq $expectedCurrentRunner) 'current-maximum report-time runner snapshot sha'
 }
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $reportObserverSourcePath).Hash.ToLowerInvariant() -eq $expectedReportObserver) 'report-time observer source snapshot sha'
 Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $observerPath).Hash.ToLowerInvariant() -eq $expectedCurrentObserver) 'current observer sha'
@@ -342,6 +395,8 @@ foreach ($entry in $matrix) {
     Assert-M10 ($report.endpoint.serverSha256.ToLowerInvariant() -eq $entry.Artifact) "$($entry.Label) artifact pin"
     $expectedEndpointJar = if ($SupplementalCurrentStableOnly) {
         Join-Path $RepositoryRoot 'build/reports/foundation/T21-M10/artifacts/paper-26.3-194.jar'
+    } elseif ($CurrentMaximumOnly) {
+        Join-Path (Join-Path $RepositoryRoot 'build/reports/foundation/T21-sql-runtime/current-maximum-artifacts') $entry.ArtifactFile
     } else {
         Join-Path $RepositoryRoot ('build/reports/foundation/T15-runtime-pins/artifacts/' + $entry.ArtifactFile)
     }
@@ -354,7 +409,7 @@ foreach ($entry in $matrix) {
     $candidatePath = Assert-M10ReportedPath $report.candidate.path $expectedCandidatePath "$($entry.Label) candidate artifact"
     Assert-M10 ((Get-FileHash -Algorithm SHA256 -LiteralPath $candidatePath).Hash.ToLowerInvariant() -eq $expectedCandidate) "$($entry.Label) candidate bytes"
     Assert-M10 ($report.acceptance.runnerSha256.ToLowerInvariant() -eq $expectedReportRunner) "$($entry.Label) report runner pin"
-    if ($SupplementalCurrentStableOnly) {
+    if ($SupplementalCurrentStableOnly -or $CurrentMaximumOnly) {
         $null = Assert-M10ReportedPath $report.acceptance.runnerSourceSnapshotPath $reportRunnerSourcePath "$($entry.Label) runner snapshot path"
     }
     Assert-M10 ($report.java.version.Contains($expectedJavaMarker)) "$($entry.Label) Java runtime pin"

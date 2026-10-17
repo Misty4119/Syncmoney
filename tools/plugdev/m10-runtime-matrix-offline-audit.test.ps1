@@ -19,13 +19,24 @@ foreach ($stableAuditMarker in @(
         throw "M10 offline audit is missing the supplemental CurrentStable report contract: $stableAuditMarker"
     }
 }
+foreach ($currentMaximumAuditMarker in @(
+        '[switch]$CurrentMaximumOnly',
+        '[string]$CurrentMaximumRunId',
+        '[string]$CurrentMaximumCandidateSha256',
+        '[string]$CurrentMaximumSourceCommit',
+        'CurrentMaximumOnly requires an exact current-maximum M10 run ID.'
+    )) {
+    if (-not $auditSource.Contains($currentMaximumAuditMarker, [StringComparison]::Ordinal)) {
+        throw "M10 offline audit is missing the current-maximum report contract: $currentMaximumAuditMarker"
+    }
+}
 if (-not $auditSource.Contains("`$expectedCurrentStableRunner = 'a65c6c2e2515e2218b2793ad701cd3d378388edfb25e879348186d5c9a8f09e1'", [StringComparison]::Ordinal) -or
     -not $auditSource.Contains("`$expectedCurrentRunner = 'f0d184eebea376fc5a0d357ab81a8315f9506d12f6ff5696cbdd52a7920b094c'", [StringComparison]::Ordinal)) {
     throw 'M10 offline audit does not keep the historical CurrentStable runner snapshot pin separate from the current selector-capable runner pin.'
 }
 
 $script:assertions = 0
-foreach ($helperName in @('Assert-M10', 'ConvertTo-M10WhitespaceNormalizedSource', 'Assert-M10MissedPubSubTransition', 'Assert-M10ReportIdentity', 'Assert-M10MissedPubSubProvenance', 'Assert-M10ReportSourceEquivalent', 'Assert-M10ReportedPath', 'Assert-M10AuditNoReparsePath', 'Assert-M10AuditExpectedPlugDevRoot', 'Assert-M10AuditExpectedMineflayerRoot', 'Get-M10CliDistManifest', 'Assert-M10CliDistManifest')) {
+foreach ($helperName in @('Assert-M10', 'ConvertTo-M10WhitespaceNormalizedSource', 'Assert-M10MissedPubSubTransition', 'Assert-M10ReportIdentity', 'Assert-M10MissedPubSubProvenance', 'Assert-M10ReportSourceEquivalent', 'Assert-M10ReportedPath', 'Assert-M10AuditNoReparsePath', 'Assert-M10AuditExpectedPlugDevRoot', 'Assert-M10AuditExpectedMineflayerRoot', 'Get-M10CliDistManifest', 'Assert-M10CliDistManifest', 'Get-M10CurrentMaximumEntry')) {
     $helperAst = $auditAst.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName
@@ -39,6 +50,19 @@ function Assert-Throws([scriptblock]$Action, [string]$Message) {
     try { & $Action } catch { $thrown = $true }
     if (-not $thrown) { throw $Message }
 }
+
+foreach ($currentMaximumCase in @(
+        [pscustomobject]@{ RunId='paper-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; Label='Paper 26.3#200'; ArtifactFile='paper-26.3-200.jar'; Artifact='0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' },
+        [pscustomobject]@{ RunId='folia-263-currentmax-20261017-123456-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; Label='Folia 26.3#3'; ArtifactFile='folia-26.3-3.jar'; Artifact='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
+        [pscustomobject]@{ RunId='canvas-263-currentmax-20261017-123456-cccccccccccccccccccccccccccccccc'; Label='Canvas 26.3#984'; ArtifactFile='canvas-26.3-984.jar'; Artifact='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
+    )) {
+    $entry = Get-M10CurrentMaximumEntry $currentMaximumCase.RunId
+    if ($entry.RunId -cne $currentMaximumCase.RunId -or $entry.Label -cne $currentMaximumCase.Label -or
+        $entry.ArtifactFile -cne $currentMaximumCase.ArtifactFile -or $entry.Artifact -cne $currentMaximumCase.Artifact) {
+        throw "M10 current-maximum report mapping is incorrect for $($currentMaximumCase.RunId)."
+    }
+}
+Assert-Throws { Get-M10CurrentMaximumEntry 'PAPER-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } 'M10 current-maximum mapping accepted a noncanonical platform prefix.'
 
 $reportSource = "function Set-M10Probe { `r`n    return `$true`r`n}`r`n`r`n"
 $currentSource = "function Set-M10Probe {`n    return `$true`n}`n"
@@ -262,6 +286,27 @@ try {
     if ($invalidRunExitCode -eq 0 -or (($invalidRunOutput -join ' ') -notmatch 'requires the exact M10 paper-263-currentstable run ID')) {
         throw 'M10 offline audit accepted an invalid CurrentStable run identity.'
     }
+    $invalidCurrentMaximumRunOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot `
+        -CurrentMaximumOnly -CurrentMaximumRunId 'paper-263-currentmax-invalid' `
+        -CurrentMaximumCandidateSha256 ('0' * 64) -CurrentMaximumSourceCommit ('0' * 40) 2>&1)
+    $invalidCurrentMaximumRunExitCode = $LASTEXITCODE
+    if ($invalidCurrentMaximumRunExitCode -eq 0 -or (($invalidCurrentMaximumRunOutput -join ' ') -notmatch 'CurrentMaximumOnly requires an exact current-maximum M10 run ID')) {
+        throw 'M10 offline audit accepted an invalid current-maximum report identity.'
+    }
+    $invalidCurrentMaximumHashOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot `
+        -CurrentMaximumOnly -CurrentMaximumRunId 'paper-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
+        -CurrentMaximumCandidateSha256 'not-a-hash' -CurrentMaximumSourceCommit ('0' * 40) 2>&1)
+    $invalidCurrentMaximumHashExitCode = $LASTEXITCODE
+    if ($invalidCurrentMaximumHashExitCode -eq 0 -or (($invalidCurrentMaximumHashOutput -join ' ') -notmatch 'CurrentMaximumCandidateSha256 must be a 64-character SHA-256 hex value')) {
+        throw 'M10 offline audit accepted an invalid current-maximum candidate hash.'
+    }
+    $invalidCurrentMaximumCommitOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot `
+        -CurrentMaximumOnly -CurrentMaximumRunId 'paper-263-currentmax-20261017-123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
+        -CurrentMaximumCandidateSha256 ('0' * 64) -CurrentMaximumSourceCommit 'not-a-commit' 2>&1)
+    $invalidCurrentMaximumCommitExitCode = $LASTEXITCODE
+    if ($invalidCurrentMaximumCommitExitCode -eq 0 -or (($invalidCurrentMaximumCommitOutput -join ' ') -notmatch 'CurrentMaximumSourceCommit must be a 40-character Git commit SHA')) {
+        throw 'M10 offline audit accepted an invalid current-maximum source commit.'
+    }
     $alternateRoot = Join-Path $tempRoot 'alternate-root'
     $alternateOutput = @(& $pwsh -NoProfile -File $auditPath -RepositoryRoot $PSScriptRoot -PlugDevRoot $alternateRoot 2>&1)
     $alternateExitCode = $LASTEXITCODE
@@ -269,7 +314,7 @@ try {
         throw 'M10 offline audit entrypoint did not reject an alternate local PlugDev root before report inspection.'
     }
 
-    Write-Output 'PASS M10 offline audit provenance and transition regressions (run identity, current-stable selector, event/deposit/snapshot linkage, account UUIDs, canonical versions, and path/bundle provenance)'
+    Write-Output 'PASS M10 offline audit provenance and transition regressions (run identity, current-stable/current-maximum selectors, event/deposit/snapshot linkage, account UUIDs, canonical versions, and path/bundle provenance)'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }
