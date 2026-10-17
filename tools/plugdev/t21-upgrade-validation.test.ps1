@@ -369,7 +369,8 @@ function New-T21PlatformRuntimeReportFixture([Collections.IDictionary]$report, [
         $sourcePath = Join-Path $report.runDirectory $sourceRelativePath
         $targetPath = Join-Path $report.runDirectory $targetRelativePath
         $sourceContent = [IO.File]::ReadAllText($sourcePath)
-        [IO.File]::WriteAllText($targetPath, $identityLine + [Environment]::NewLine + $sourceContent.TrimStart([char[]]@("`r", "`n")), [Text.UTF8Encoding]::new($false))
+        $apiConsumerLine = '[Server thread/INFO]: [SyncmoneyApiConsumerFixture] API CLASSLOADER PASS provider=Syncmoney'
+        [IO.File]::WriteAllText($targetPath, $identityLine + [Environment]::NewLine + $apiConsumerLine + [Environment]::NewLine + $sourceContent.TrimStart([char[]]@("`r", "`n")), [Text.UTF8Encoding]::new($false))
         $targetFile = Get-Item -LiteralPath $targetPath
         $targetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
         $platformLogs.Add([ordered]@{ stage=$stage; path=$targetRelativePath; bytes=[long]$targetFile.Length; sha256=$targetHash })
@@ -1333,6 +1334,32 @@ if (Test-T21PostgresRuntimeReport $wrongApiConsumerSha $runtimePlatformEndpoints
     throw 'The PostgreSQL runtime report accepted a mismatched API-consumer SHA-256.'
 }
 Write-Output 'PASS: reject PostgreSQL runtime evidence with a mismatched API-consumer SHA-256'
+
+$missingApiConsumerLog = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$missingApiConsumerLogPath = Join-Path $missingApiConsumerLog.runDirectory $missingApiConsumerLog.platformLogs[0].path
+$missingApiConsumerLogOriginalContent = [IO.File]::ReadAllText($missingApiConsumerLogPath)
+$missingApiConsumerLogContent = $missingApiConsumerLogOriginalContent
+$missingApiConsumerLogContent = [regex]::Replace($missingApiConsumerLogContent, '(?im)^.*API CLASSLOADER PASS provider=Syncmoney.*(?:\r?\n|$)', '')
+[IO.File]::WriteAllText($missingApiConsumerLogPath, $missingApiConsumerLogContent, [Text.UTF8Encoding]::new($false))
+$missingApiConsumerLog = Update-T21PlatformRuntimeReportLogHashes $missingApiConsumerLog
+if (Test-T21PostgresRuntimeReport $missingApiConsumerLog $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
+    throw 'The PostgreSQL runtime report accepted schema-4 evidence without an API-consumer PASS marker in the corresponding startup log.'
+}
+[IO.File]::WriteAllText($missingApiConsumerLogPath, $missingApiConsumerLogOriginalContent, [Text.UTF8Encoding]::new($false))
+Write-Output 'PASS: reject schema-4 API-consumer report markers missing from a retained startup log'
+
+$failedApiConsumerLog = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$failedApiConsumerLogPath = Join-Path $failedApiConsumerLog.runDirectory $failedApiConsumerLog.platformLogs[1].path
+$failedApiConsumerLogOriginalContent = [IO.File]::ReadAllText($failedApiConsumerLogPath)
+$failedApiConsumerLogContent = $failedApiConsumerLogOriginalContent
+$failedApiConsumerLogContent += '[Server thread/INFO]: [SyncmoneyApiConsumerFixture] API CLASSLOADER FAIL provider=Syncmoney' + [Environment]::NewLine
+[IO.File]::WriteAllText($failedApiConsumerLogPath, $failedApiConsumerLogContent, [Text.UTF8Encoding]::new($false))
+$failedApiConsumerLog = Update-T21PlatformRuntimeReportLogHashes $failedApiConsumerLog
+if (Test-T21PostgresRuntimeReport $failedApiConsumerLog $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
+    throw 'The PostgreSQL runtime report accepted schema-4 evidence with an API-consumer failure marker in the corresponding startup log.'
+}
+[IO.File]::WriteAllText($failedApiConsumerLogPath, $failedApiConsumerLogOriginalContent, [Text.UTF8Encoding]::new($false))
+Write-Output 'PASS: reject schema-4 API-consumer report markers with a retained startup failure marker'
 
 $wrongPinnedHashReport = $foliaPostgresRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $wrongPinnedHashReport.server.sha256 = $paperMinimumSha

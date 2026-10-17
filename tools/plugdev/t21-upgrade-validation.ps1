@@ -1181,6 +1181,12 @@ function Test-T21SqlRuntimeReport(
             foreach ($requiredMarker in $requiredMarkers) {
                 if (-not ($actualLogLines -ccontains $requiredMarker)) { return $false }
             }
+            if ($schemaVersion -ge 4) {
+                $apiConsumerPassObserved = @($actualLogLines | Where-Object { $_ -cmatch 'API CLASSLOADER PASS provider=Syncmoney' }).Count -gt 0
+                $apiConsumerFailureObserved = @($actualLogLines | Where-Object { $_ -cmatch 'API CLASSLOADER FAIL' }).Count -gt 0
+                if ((Get-T21ObservedValue $startupObservations[$index] 'apiConsumerMarker') -cne 'PASS' -or
+                    -not $apiConsumerPassObserved -or $apiConsumerFailureObserved) { return $false }
+            }
         }
         $restartReadMarker = [string](Get-T21ObservedValue $report 'restartReadMarker')
         $restartReadObservation = [string](Get-T21ObservedValue $report 'restartReadObservation')
