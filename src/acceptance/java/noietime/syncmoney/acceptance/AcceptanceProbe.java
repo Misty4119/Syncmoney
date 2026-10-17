@@ -1239,6 +1239,28 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 getLogger().info("T21_READ_PASS expected-a=" + expectedA + " expected-b=" + expectedB);
                 return;
             }
+            if (args.length > 0 && args[0].equalsIgnoreCase("m12-admin-set")) {
+                require(args.length == 2, "usage: smaccept m12-admin-set <balance-a>");
+                BigDecimal target = new BigDecimal(args[1]);
+                require(target.compareTo(new BigDecimal("900.00")) == 0
+                                || target.compareTo(new BigDecimal("1100.00")) == 0,
+                        "M12 fixture target must be 900.00 or 1100.00");
+                facade.unlockPlayer(a);
+                awaitAccountReady(facade, a);
+                BigDecimal beforeA = facade.getBalance(a);
+                require(beforeA.compareTo(target) != 0,
+                        "M12 admin write must change disposable account A " + a);
+                var source = EconomyEvent.EventSource.COMMAND_ADMIN;
+                BigDecimal accepted = facade.setBalance(a, target, source);
+                require(accepted.compareTo(target) == 0,
+                        "M12 admin setBalance was rejected: expected=" + target + " actual=" + accepted);
+                getLogger().info("T21_M12_ADMIN_SET_PASS target=" + formatT21Amount(target)
+                        + " before=" + formatT21Amount(beforeA)
+                        + " returned=" + formatT21Amount(accepted)
+                        + " source=" + source.name()
+                        + " at=" + java.time.Instant.now());
+                return;
+            }
             if (args.length > 0 && args[0].equals("write")) {
                 require(args.length == 3, "usage: smaccept write <balance-a> <balance-b>");
                 BigDecimal expectedA = new BigDecimal(args[1]);
