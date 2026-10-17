@@ -4757,6 +4757,25 @@ Focused validation passed 1/1. The full `:syncmoney-bukkit:test` task completed 
 
 Coverage is intentionally narrow: `AuditLogCleanup.start()` succeeds; this does not cover every audit failure point, other module owners, shutdown-logger failure, or actual Paper/Folia/Canvas runtime behavior. It is lifecycle test evidence, not closure of the V03 mode/resource/failure matrix. T21 remains **IN_PROGRESS**; formal endpoints remain Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory correctness fixes; licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because active license status is `UNKNOWN`.
 
+## T21 AuditServiceManager cleanup-start failure test (2026-10-17)
+
+**Result: `PASS_BOUNDED_E1` for one concrete audit-owner initialization-failure path.** The new `AuditServiceManagerFailureTest.cleanupStartFailureStopsCreatedOwnersAndSkipsExporterConstruction` configures all audit owners, injects an exception from `AuditLogCleanup.start()`, and verifies the exception propagates. During the owning manager's shutdown, `HybridAuditManager.close()` and `AuditLogger.close()` each throw, but `AuditLogCleanup.stop()` still runs; `AuditLogExporter` is not constructed because initialization stopped at cleanup startup. This confirms the existing field-assignment and owner-shutdown behavior; no production source change or product-contract change was needed.
+
+Source inspection found that `Syncmoney` assigns `auditServiceManager` before calling `initialize()`, and `onEnable()` catches initialization failures and delegates rollback to `onDisable()`. The JUnit case exercises the concrete manager failure and cleanup but does not fault-inject the outer plugin lifecycle or a Bukkit scheduler.
+
+Validation used Java `25.0.4+7-LTS-189` and Gradle `9.8.0`:
+
+```powershell
+.\gradlew.bat :syncmoney-bukkit:test --tests noietime.syncmoney.audit.AuditServiceManagerFailureTest --rerun-tasks --no-daemon --console=plain
+.\gradlew.bat :syncmoney-bukkit:test --rerun-tasks --no-daemon --console=plain
+```
+
+Both commands exited 0. The focused `AuditServiceManagerFailureTest` XML contains 2 tests with 0 failures/errors. The full Bukkit run completed 18/18 actionable tasks; aggregate JUnit results contain 542 tests in 110 XML files, with 0 failures, errors, or skipped tests. Full log: `build/reports/foundation/T21-audit-cleanup-start-failure/bukkit-full-java25.log`, 3,720 bytes, SHA-256 `0c553b56548c2e3ec5d9f4a8a4d19c9b8c8de76f2f901a330400b17419a90283`. Focused class XML: `syncmoney-bukkit/build/test-results/test/TEST-noietime.syncmoney.audit.AuditServiceManagerFailureTest.xml`, SHA-256 `87b28ea0bb1cc321c5f892dfd6956873d1783125caf899be1de84a859a17195f`, 39,800 bytes. Test source SHA-256: `2d7802ad70b1e273b9b1f7684b223911d7b2e7740f7348503b5c28efad9cbee2`.
+
+Gradle emitted the repository's existing deprecated/unchecked compilation notes, ByteBuddy `Unsafe` warnings, and SQLite restricted-native-access warning; the build succeeded. This local E1 test does not establish Paper/Folia/Canvas runtime behavior, scheduler failure cleanup, every concrete module failure stage, or licensed CMI acceptance. T21 remains **IN_PROGRESS**; E07 remains P1; E08 remains **INCONCLUSIVE / P0-CANDIDATE** outside mandatory scope; full licensed CMI acceptance remains **BLOCKED / NOT VERIFIED** because license status is `UNKNOWN`.
+
+**Independent read-only review:** The lifecycle-test reviewer confirmed that the injected `AuditLogCleanup.start()` failure is reached and that shutdown continues through the hybrid/logger close failures to the cleanup owner; it found no actionable issue. The reviewer did not run the test or inspect Paper/Folia/Canvas runtime behavior. A separate documentation reviewer found no actionable findings in the evidence wording and scope. The recorded command results above are the execution evidence.
+
 ## T21 repository-wide Java verification after audit lifecycle test (2026-10-17)
 
 **Result: `PASS_BOUNDED_E1` for repository Java tests/build artifacts at HEAD `2b505a4`.** The verification used Oracle JDK `25.0.4+7-LTS-189` and Gradle `9.8.0`:
