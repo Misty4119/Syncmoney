@@ -305,6 +305,17 @@ function Invoke-Client([string]$scenario) {
     return [ordered]@{ exitCode = $exitCode; logPath = $logPath; logSha256 = (Get-FileHash $logPath -Algorithm SHA256).Hash.ToLowerInvariant(); moduleSearchPath = $nodeResult.moduleSearchPath; lines = @($output | ForEach-Object { $_.ToString() }) }
 }
 
+function Get-ClientPlayerUuid([object]$clientResult, [string]$playerName) {
+    $clientLog = @($clientResult.lines) -join "`n"
+    $output = @(& node $assertionModule '--extract-player-uuid' $clientLog $playerName 2>&1)
+    $exitCode = $LASTEXITCODE
+    $playerUuid = ($output | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim()
+    if ($exitCode -ne 0 -or $playerUuid -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+        throw "Mineflayer did not identify exactly one join UUID for $playerName."
+    }
+    return $playerUuid.ToLowerInvariant()
+}
+
 function Get-CanonicalTextSourceSha256([string]$path) {
     $sourceText = [IO.File]::ReadAllText($path)
     $normalizedText = $sourceText.Replace("`r`n", "`n").Replace("`r", "`n")
@@ -546,6 +557,25 @@ function Assert-ObservedScenario(
     $clientObservedKickReason = $logoutClientLog -match '(?m)^BOT_KICK_REASON_PASS reason=T15 accepted-write logout scenario$'
     $clientObservedTransportAbort = $logoutClientLog -match '(?m)^BOT_LOGOUT_ABORTED_AFTER_COMMAND code=ECONNABORTED$'
     if (-not $clientObservedKickReason -and -not $clientObservedTransportAbort) { throw 'Mineflayer observed neither the expected kick packet nor the logout socket-close race.' }
+    $logoutUuid = Get-ClientPlayerUuid $logout 'AcceptanceA'
+    $logoutRequestPattern = "T15_LOGOUT_REQUEST uuid=$([regex]::Escape($logoutUuid))(?:\s|$)"
+    $logoutQuitPattern = "T15_PLAYER_QUIT uuid=$([regex]::Escape($logoutUuid))(?:\s|$)"
+    $logoutEvidenceLines = @($serverLines | Where-Object {
+        $_ -match $logoutRequestPattern -or $_ -match $logoutQuitPattern -or $_ -match 'AcceptanceA lost connection: '
+    })
+    $logoutEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{
+        logLines = @($logoutEvidenceLines)
+        playerName = 'AcceptanceA'
+        playerUuid = $logoutUuid
+        clientObservedExpectedKickPacket = $clientObservedKickReason
+        clientObservedExpectedLogoutAbort = $clientObservedTransportAbort
+    }) -Compress
+    $logoutProofOutput = @(& node $assertionModule '--has-expected-logout-scenario-json' $logoutEvidenceJson 2>&1)
+    $logoutProofExit = $LASTEXITCODE
+    $logoutProofResult = ($logoutProofOutput | ForEach-Object { $_.ToString() } | Select-Object -Last 1).Trim()
+    if ($logoutProofExit -ne 0 -or $logoutProofResult -cne 'true') {
+        throw "Logout lifecycle evidence was incomplete or inconsistent: $($logoutProofOutput -join ' ')."
+    }
     $kickEvidenceLines = @($serverLines | Where-Object { $_ -match 'AcceptanceA lost connection: T15 accepted-write logout scenario' })
     $kickEvidenceJson = ConvertTo-Json -InputObject ([ordered]@{ logLines = @($kickEvidenceLines); playerName = 'AcceptanceA' }) -Compress
     $kickEvidenceOutput = @(& node $assertionModule '--has-exact-server-kick-json' $kickEvidenceJson 2>&1)
@@ -699,7 +729,8 @@ plugins {
     $null = Wait-ServerLog 'T15_TELEPORT_REACHED .* world=world_nether' 30 'server-reported Nether arrival'
     $null = Wait-ServerLog 'T15_PLAYER_QUIT' 30 'teleport client disconnect'
     $logout = Invoke-Client 'logout'
-    $null = Wait-ServerLog 'lost connection: T15 accepted-write logout scenario' 30 'expected server logout kick'
+    $logoutUuid = Get-ClientPlayerUuid $logout 'AcceptanceA'
+    $null = Wait-ServerLog ("T15_LOGOUT_REQUEST uuid=$([regex]::Escape($logoutUuid))(?:\s|$)") 30 'server logout request'
 
     $script:normalServerStopExitCode = Invoke-PlugDev @('server', 'command', 'stop') 'server-stop.txt'
     Wait-ServerExit

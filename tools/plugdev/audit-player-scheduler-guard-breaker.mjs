@@ -5,7 +5,13 @@ import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { hasGuardPairCircuitBreakerRuntimeProof } from "./player-scheduler-lifecycle-assertions.mjs";
+import {
+  hasExactExpectedServerKick,
+  hasExpectedLogoutScenarioEvidence,
+  extractPlayerUuidFromJoin,
+  hasGuardPairCircuitBreakerRuntimeProof,
+  hasSingleSuccessfulTeleportFuture,
+} from "./player-scheduler-lifecycle-assertions.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const reportsRoot = path.resolve(repositoryRoot, "build/reports/foundation/T21-player-scheduler");
@@ -21,6 +27,12 @@ const ENDPOINTS = {
     build: 972,
     serverJar: "canvas-26.3-972.jar",
     serverJarSha256: "aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5",
+  },
+  "canvas-263-currentmax": {
+    minecraftVersion: "26.3",
+    build: 984,
+    serverJar: "canvas-26.3-984.jar",
+    serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
   },
 };
 let assertionCount = 0;
@@ -58,6 +70,11 @@ export function validateGuardBreakerReport(report) {
   "global circuit breaker must be enabled and observed unlocked on each entity owner");
   requireCondition(report.client?.guard?.scenario === "guard-pair-breaker" && report.client.guard.exitCode === 0,
     "report must include the guard-pair-breaker client scenario");
+  requireCondition(report.client?.teleport?.exitCode === 0 && /^[a-f0-9]{64}$/i.test(report.client.teleport.logSha256 ?? ""),
+    "report must include the successful teleport lifecycle client log");
+  requireCondition(report.client?.logout?.exitCode === 0 && /^[a-f0-9]{64}$/i.test(report.client.logout.logSha256 ?? "") &&
+    report.observed?.lifecycle?.expectedLogoutKick === true,
+  "report must include accepted logout lifecycle evidence");
 
   const guardAccounts = report.redis?.guardAccounts;
   requireCondition(Array.isArray(guardAccounts) && guardAccounts.length === 2 &&
@@ -104,6 +121,15 @@ function verifyHash(bytes, expected, label) {
   return actual;
 }
 
+export function hasGuardBreakerProfileMarker(profileLogText) {
+  if (typeof profileLogText !== "string") return false;
+  const acceptedMarkers = new Set([
+    "BREAKER_GUARD_PROFILE_PASS profile=guard-breaker-on mode=local_redis circuit-breaker=on player-protection=on optional-modules=off",
+    "GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=on optional-modules=off",
+  ]);
+  return profileLogText.split(/\r?\n/).some((line) => acceptedMarkers.has(line));
+}
+
 function verifyGitSourcePin(sourceCommit, relativePath, expectedSha256) {
   const bytes = execFileSync("git", ["-C", repositoryRoot, "show", `${sourceCommit}:${relativePath}`]);
   const actualSha256 = canonicalTextSourceSha256(bytes);
@@ -133,8 +159,10 @@ function runAudit() {
   requireCondition(path.resolve(report.source.repository) === repositoryRoot, "report repository root mismatch");
 
   const endpointPin = ENDPOINTS[report.endpoint.label];
-  const expectedServerJar = path.resolve(repositoryRoot,
-    "build/reports/foundation/T15-runtime-pins/artifacts", endpointPin.serverJar);
+  const serverArtifactRoot = report.endpoint.label === "canvas-263-currentmax"
+    ? "build/reports/foundation/T21-sql-runtime/current-maximum-artifacts"
+    : "build/reports/foundation/T15-runtime-pins/artifacts";
+  const expectedServerJar = path.resolve(repositoryRoot, serverArtifactRoot, endpointPin.serverJar);
   requireCondition(path.resolve(report.endpoint.serverJar) === expectedServerJar, "report endpoint JAR path mismatch");
   const serverArtifact = readFileSync(expectedServerJar);
   verifyHash(serverArtifact, endpointPin.serverJarSha256, "pinned Canvas server JAR");
@@ -182,8 +210,7 @@ function runAudit() {
   requireCondition(configChecks.every(Boolean), "isolated guard profile config does not match the expected scope");
 
   const profileAuditBytes = readContainedFile(runRoot, "logs/guard-profile-audit.txt");
-  requireCondition(profileAuditBytes.toString("utf8").includes(
-    "GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=on optional-modules=off"),
+  requireCondition(hasGuardBreakerProfileMarker(profileAuditBytes.toString("utf8")),
   "guard profile audit marker is missing");
   const serverLogBytes = readContainedFile(runRoot, "logs/server.log");
   const serverLog = serverLogBytes.toString("utf8");
@@ -191,14 +218,49 @@ function runAudit() {
   requireCondition(serverLog.includes("Syncmoney enabled successfully.") && serverLog.includes("API CLASSLOADER PASS") &&
     serverLog.includes("Syncmoney disabled.") && serverLog.includes("T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB"),
   "server log lacks required startup, guard completion, or shutdown evidence");
+  const serverLines = serverLog.split(/\r?\n/);
+  requireCondition(hasSingleSuccessfulTeleportFuture(serverLines) && serverLog.includes("T15_TELEPORT_REACHED"),
+    "server log lacks successful teleport lifecycle evidence");
+
+  const teleportLogBytes = readContainedFile(runRoot, "logs/teleport-mineflayer.log");
+  verifyHash(teleportLogBytes, report.client.teleport.logSha256, "teleport lifecycle client log");
+  requireCondition(/BOT_NETHER_ARRIVAL dimension=(?:the_nether|nether)(?:\s|$)/.test(teleportLogBytes.toString("utf8")),
+    "teleport client did not confirm Nether arrival");
+  const logoutLogBytes = readContainedFile(runRoot, "logs/logout-mineflayer.log");
+  verifyHash(logoutLogBytes, report.client.logout.logSha256, "logout lifecycle client log");
+  const logoutLog = logoutLogBytes.toString("utf8");
+  const logoutClientLines = logoutLog.split(/\r?\n/);
+  const clientObservedExpectedKickPacket = logoutClientLines.includes("BOT_KICK_REASON_PASS reason=T15 accepted-write logout scenario");
+  const clientObservedExpectedLogoutAbort = logoutClientLines.includes("BOT_LOGOUT_ABORTED_AFTER_COMMAND code=ECONNABORTED");
+  requireCondition(report.client.logout.clientObservedExpectedKickPacket === clientObservedExpectedKickPacket &&
+    report.client.logout.clientObservedExpectedLogoutAbort === clientObservedExpectedLogoutAbort,
+  "report logout client observations do not match the retained Mineflayer log");
+  const playerUuid = extractPlayerUuidFromJoin(logoutLog, "AcceptanceA");
+  requireCondition(playerUuid, "logout client log does not identify AcceptanceA's UUID");
+  const escapedUuid = playerUuid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const logoutEvidenceLines = serverLines.filter((line) =>
+    new RegExp(`\\bT15_LOGOUT_REQUEST uuid=${escapedUuid}(?:\\s|$)`).test(line) ||
+    new RegExp(`\\bT15_PLAYER_QUIT uuid=${escapedUuid}(?:\\s|$)`).test(line) ||
+    /AcceptanceA lost connection: /.test(line));
+  const logoutEvidence = hasExpectedLogoutScenarioEvidence({
+    logLines: logoutEvidenceLines,
+    playerName: "AcceptanceA",
+    playerUuid,
+    clientObservedExpectedKickPacket,
+    clientObservedExpectedLogoutAbort,
+  });
+  requireCondition(logoutEvidence, "server/client logout evidence does not prove the requested kick reason");
+  const exactServerKickReasonVerified = hasExactExpectedServerKick(serverLines, "AcceptanceA");
+  requireCondition(report.client.logout.exactServerKickReasonVerified === exactServerKickReasonVerified,
+    "report's exact server kick-reason flag does not match the retained server log");
 
   const clientLogBytes = readContainedFile(runRoot, "logs/guard-pair-breaker-mineflayer.log");
   verifyHash(clientLogBytes, report.client.guard.logSha256, "guard-pair-breaker client log");
   const clientLines = clientLogBytes.toString("utf8").split(/\r?\n/);
-  const serverLines = serverLog.split(/\r?\n/).filter((line) =>
+  const guardServerLines = serverLog.split(/\r?\n/).filter((line) =>
     /T21_GUARD_(?:OWNER|TRANSACTIONS|BREAKER_STATE|FAIL)|Deposit rejected by PlayerTransactionGuard:/.test(line));
   const proof = {
-    serverLines,
+    serverLines: guardServerLines,
     clientLines: clientLines.filter((line) => /^BOT_GUARD_(?:RATE_LIMIT_NOTICE_PASS|FAIL)/.test(line)),
     participants: report.redis.guardAccounts,
   };
@@ -232,6 +294,8 @@ function runAudit() {
       playerProtectionOutcomes: "SSSSSF for both players",
       redisBalances: "5.00/v5 for both players",
       gracefulServerAndRedisShutdown: true,
+      logoutReasonConfirmed: true,
+      logoutReasonConfirmationSource: exactServerKickReasonVerified ? "server-log" : "client-kick-packet",
     },
     sources: verifiedSources,
     configChecks: configChecks.length,

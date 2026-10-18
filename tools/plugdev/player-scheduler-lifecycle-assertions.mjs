@@ -51,6 +51,54 @@ export function hasExactExpectedServerKick(logLines, expectedPlayer = "Acceptanc
   return relevantReasons.length === 1 && relevantReasons[0] === EXPECTED_LOGOUT_REASON;
 }
 
+export function extractPlayerUuidFromJoin(logText, playerName) {
+  if (typeof logText !== "string" || typeof playerName !== "string" || playerName.length === 0) return null;
+  const escapedPlayer = playerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const joinPattern = new RegExp(`^BOT_JOINED name=${escapedPlayer} uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\\s+dimension=[^\\s]+)?$`);
+  const matches = logText.split(/\r?\n/).map((line) => line.match(joinPattern)).filter(Boolean);
+  return matches.length === 1 ? matches[0][1].toLowerCase() : null;
+}
+
+export function hasExpectedLogoutScenarioEvidence({
+  logLines,
+  playerName = "AcceptanceA",
+  playerUuid,
+  clientObservedExpectedKickPacket,
+  clientObservedExpectedLogoutAbort,
+} = {}) {
+  if (!Array.isArray(logLines) || typeof playerName !== "string" || playerName.length === 0 ||
+      typeof playerUuid !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(playerUuid) ||
+      typeof clientObservedExpectedKickPacket !== "boolean" || typeof clientObservedExpectedLogoutAbort !== "boolean" ||
+      clientObservedExpectedKickPacket === clientObservedExpectedLogoutAbort) {
+    return false;
+  }
+
+  const escapedUuid = playerUuid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedPlayer = playerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const requestPattern = new RegExp(`\\bT15_LOGOUT_REQUEST uuid=${escapedUuid}(?:\\s|$)`);
+  const quitPattern = new RegExp(`\\bT15_PLAYER_QUIT uuid=${escapedUuid}(?:\\s|$)`);
+  const disconnectPattern = new RegExp(`(?:^|\\s)${escapedPlayer} lost connection: (.*)$`);
+  const requestIndexes = [];
+  for (let index = 0; index < logLines.length; index += 1) {
+    if (requestPattern.test(String(logLines[index] ?? ""))) requestIndexes.push(index);
+  }
+  if (requestIndexes.length !== 1) return false;
+
+  const requestIndex = requestIndexes[0];
+  const disconnects = [];
+  const quits = [];
+  for (let index = requestIndex + 1; index < logLines.length; index += 1) {
+    const line = String(logLines[index] ?? "");
+    const disconnect = line.match(disconnectPattern);
+    if (disconnect) disconnects.push({ index, reason: disconnect[1] });
+    if (quitPattern.test(line)) quits.push(index);
+  }
+  if (disconnects.length !== 1 || quits.length !== 1 || disconnects[0].index >= quits[0]) return false;
+
+  if (disconnects[0].reason === EXPECTED_LOGOUT_REASON) return true;
+  return disconnects[0].reason === "Disconnected" && clientObservedExpectedKickPacket;
+}
+
 export function classifyTeleportOutcome(
   cancelledStates,
   teleportFutureSucceeded = false,
@@ -468,6 +516,31 @@ if (process.argv[2] === "--has-exact-server-kick-json") {
   try {
     const evidence = JSON.parse(process.argv[3] ?? "");
     console.log(hasExactExpectedServerKick(evidence.logLines, evidence.playerName) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--has-expected-logout-scenario-json") {
+  try {
+    const evidence = JSON.parse(process.argv[3] ?? "");
+    console.log(hasExpectedLogoutScenarioEvidence(evidence) ? "true" : "false");
+  } catch (error) {
+    console.error(error?.message ?? error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[2] === "--extract-player-uuid") {
+  try {
+    const playerUuid = extractPlayerUuidFromJoin(process.argv[3] ?? "", process.argv[4] ?? "");
+    if (!playerUuid) {
+      console.error("Expected exactly one matching Mineflayer player join line.");
+      process.exitCode = 1;
+    } else {
+      console.log(playerUuid);
+    }
   } catch (error) {
     console.error(error?.message ?? error);
     process.exitCode = 1;

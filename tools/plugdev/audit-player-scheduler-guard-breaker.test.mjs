@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as guardBreakerAudit from "./audit-player-scheduler-guard-breaker.mjs";
 
 import { canonicalTextSourceSha256, validateGuardBreakerReport } from "./audit-player-scheduler-guard-breaker.mjs";
 
@@ -15,7 +16,17 @@ function reportFixture() {
       serverJarSha256: "6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b",
     },
     runtime: { java: 'java version "25.0.4"' },
-    client: { guard: { scenario: "guard-pair-breaker", exitCode: 0 } },
+    client: {
+      guard: { scenario: "guard-pair-breaker", exitCode: 0 },
+      teleport: { exitCode: 0, logSha256: "c".repeat(64) },
+      logout: {
+        exitCode: 0,
+        logSha256: "d".repeat(64),
+        clientObservedExpectedKickPacket: false,
+        clientObservedExpectedLogoutAbort: true,
+        exactServerKickReasonVerified: true,
+      },
+    },
     source: { candidateJarSha256: "a".repeat(64) },
     artifacts: { candidateJarSha256: "a".repeat(64) },
     isolation: { mode: "local_redis", playerProtection: true, circuitBreaker: true },
@@ -31,6 +42,7 @@ function reportFixture() {
       ],
     },
     observed: {
+      lifecycle: { expectedLogoutKick: true },
       guard: {
         ownerProofs: 2,
         independentRateLimitRejections: 2,
@@ -45,6 +57,37 @@ function reportFixture() {
 
 test("accepts a bounded user-pinned Canvas guard/breaker report with graceful cleanup", () => {
   assert.equal(validateGuardBreakerReport(reportFixture()), true);
+});
+
+test("accepts the pinned current-maximum Canvas 26.3#984 endpoint", () => {
+  const report = reportFixture();
+  report.endpoint = {
+    label: "canvas-263-currentmax",
+    software: "canvas",
+    minecraftVersion: "26.3",
+    build: 984,
+    serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
+  };
+  assert.equal(validateGuardBreakerReport(report), true);
+});
+
+test("requires the lifecycle client logs and accepted logout marker", () => {
+  const missingLog = reportFixture();
+  delete missingLog.client.logout;
+  assert.throws(() => validateGuardBreakerReport(missingLog), /accepted logout lifecycle evidence/);
+
+  const missingLogoutProof = reportFixture();
+  missingLogoutProof.observed.lifecycle.expectedLogoutKick = false;
+  assert.throws(() => validateGuardBreakerReport(missingLogoutProof), /accepted logout lifecycle evidence/);
+});
+
+test("recognizes only explicit guard-plus-breaker profile audit markers", () => {
+  const recognizes = guardBreakerAudit.hasGuardBreakerProfileMarker;
+  assert.equal(typeof recognizes, "function");
+  assert.equal(recognizes("BREAKER_GUARD_PROFILE_PASS profile=guard-breaker-on mode=local_redis circuit-breaker=on player-protection=on optional-modules=off"), true);
+  assert.equal(recognizes("GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=on optional-modules=off"), true);
+  assert.equal(recognizes("BREAKER_GUARD_PROFILE_PASS profile=guard-on mode=local_redis circuit-breaker=off player-protection=on optional-modules=off"), false);
+  assert.equal(recognizes("GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=off optional-modules=off"), false);
 });
 
 test("canonical source hashes ignore LF, CRLF, and mixed line endings", () => {

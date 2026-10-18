@@ -152,6 +152,74 @@ test("requires exactly one exact logout reason for the expected player", () => {
   ]), false);
 });
 
+test("accepts Canvas generic disconnect only when its client received the exact kick packet", () => {
+  const evidence = {
+    logLines: [
+      "[INFO]: AcceptanceA issued server command: /smaccept lifecycle logout",
+      "[SyncmoneyAcceptance] T15_LOGOUT_REQUEST uuid=35c93f74-c540-3b38-8093-b5cb3c2263be",
+      "[INFO]: AcceptanceA lost connection: Disconnected",
+      "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether",
+    ],
+    playerName: "AcceptanceA",
+    playerUuid: "35c93f74-c540-3b38-8093-b5cb3c2263be",
+    clientObservedExpectedKickPacket: true,
+    clientObservedExpectedLogoutAbort: false,
+  };
+
+  assert.equal(typeof lifecycleAssertions.hasExpectedLogoutScenarioEvidence, "function");
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), true);
+});
+
+test("requires an exact server kick reason when the client only reports a transport abort", () => {
+  const evidence = {
+    logLines: [
+      "[SyncmoneyAcceptance] T15_LOGOUT_REQUEST uuid=35c93f74-c540-3b38-8093-b5cb3c2263be",
+      "[INFO]: AcceptanceA lost connection: Disconnected",
+      "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether",
+    ],
+    playerName: "AcceptanceA",
+    playerUuid: "35c93f74-c540-3b38-8093-b5cb3c2263be",
+    clientObservedExpectedKickPacket: false,
+    clientObservedExpectedLogoutAbort: true,
+  };
+
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), false);
+  evidence.logLines[1] = "[INFO]: AcceptanceA lost connection: T15 accepted-write logout scenario";
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), true);
+});
+
+test("rejects logout evidence with an unrelated reason, duplicate disconnect, or missing server request", () => {
+  const evidence = {
+    logLines: [
+      "[SyncmoneyAcceptance] T15_LOGOUT_REQUEST uuid=35c93f74-c540-3b38-8093-b5cb3c2263be",
+      "[INFO]: AcceptanceA lost connection: Server closed",
+      "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether",
+    ],
+    playerName: "AcceptanceA",
+    playerUuid: "35c93f74-c540-3b38-8093-b5cb3c2263be",
+    clientObservedExpectedKickPacket: true,
+    clientObservedExpectedLogoutAbort: false,
+  };
+
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), false);
+  evidence.logLines.splice(2, 0, "[INFO]: AcceptanceA lost connection: Disconnected");
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), false);
+  evidence.logLines = [
+    "[INFO]: AcceptanceA lost connection: Disconnected",
+    "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether",
+  ];
+  assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), false);
+});
+
+test("extracts one player's UUID from Mineflayer join lines with optional dimension data", () => {
+  const extractUuid = lifecycleAssertions.extractPlayerUuidFromJoin;
+  assert.equal(typeof extractUuid, "function");
+  const joinLine = "BOT_JOINED name=AcceptanceA uuid=35c93f74-c540-3b38-8093-b5cb3c2263be dimension=the_nether\r\n";
+  assert.equal(extractUuid(joinLine, "AcceptanceA"), "35c93f74-c540-3b38-8093-b5cb3c2263be");
+  assert.equal(extractUuid(joinLine, "AcceptanceB"), null);
+  assert.equal(extractUuid(`${joinLine}BOT_JOINED name=AcceptanceA uuid=35c93f74-c540-3b38-8093-b5cb3c2263be dimension=the_nether`, "AcceptanceA"), null);
+});
+
 test("waits for both client dimension and server world-change confirmations", () => {
   const isTeleportArrivalConfirmed = lifecycleAssertions.isTeleportArrivalConfirmed;
   assert.equal(isTeleportArrivalConfirmed?.(true, false), false);
@@ -169,8 +237,19 @@ test("runner requires a successful teleport future, exact player kick, and disti
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
   assert.match(runner, /--has-single-successful-teleport-future-json/);
   assert.match(runner, /--has-exact-server-kick-json/);
+  assert.match(runner, /--has-expected-logout-scenario-json/);
+  assert.match(runner, /T15_LOGOUT_REQUEST uuid=/);
+  assert.doesNotMatch(runner, /Wait-ServerLog 'lost connection: T15 accepted-write logout scenario'/);
   assert.match(runner, /runtime = .*redis = \$redisServerVersion/);
   assert.match(runner, /version = \[int\]\$accountVersion/);
+});
+
+test("runner and auditor extract the logout player's UUID through the shared join parser", () => {
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
+  const auditor = readFileSync(new URL("./audit-player-scheduler-guard-breaker.mjs", import.meta.url), "utf8");
+  assert.match(runner, /--extract-player-uuid/);
+  assert.match(auditor, /extractPlayerUuidFromJoin\(/);
+  assert.doesNotMatch(runner, /BOT_JOINED name=AcceptanceA uuid=\(\[0-9a-f\]\{8\}/);
 });
 
 test("runner passes only focused lifecycle lines to Node instead of the full server log", () => {
