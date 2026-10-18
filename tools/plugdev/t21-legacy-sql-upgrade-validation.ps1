@@ -379,7 +379,7 @@ function Test-T21LegacySqlDataUpgradeReport(
                 $candidateAuditSchema = $auditSchema
                 if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.columns) @($candidateAuditSchema.columns))) { return $false }
                 if ($DatabaseProduct -ceq 'PostgreSQL') {
-                    $expectedPostgresIndexes = @(
+                    $expectedPostgresBaselineIndexes = @(
                         'idx_audit_player|0|1|1|player_uuid|A|BTREE|<NULL>',
                         'idx_audit_player|0|1|2|timestamp|D|BTREE|<NULL>',
                         'idx_audit_player|0|1|3|sequence|D|BTREE|<NULL>',
@@ -390,10 +390,15 @@ function Test-T21LegacySqlDataUpgradeReport(
                         'idx_audit_type|0|1|3|sequence|D|BTREE|<NULL>',
                         'syncmoney_audit_log_pkey|1|0|1|id|A|BTREE|<NULL>'
                     )
-                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedPostgresIndexes) -or
-                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedPostgresIndexes)) { return $false }
+                    $expectedPostgresCandidateIndexes = @($expectedPostgresBaselineIndexes + @(
+                        'idx_audit_type_timestamp_sequence|0|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|0|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|0|1|3|sequence|D|BTREE|<NULL>'
+                    ))
+                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedPostgresBaselineIndexes) -or
+                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedPostgresCandidateIndexes)) { return $false }
                 } elseif ($DatabaseProduct -ceq 'MariaDB') {
-                    $expectedMariaDbIndexes = @(
+                    $expectedMariaDbBaselineIndexes = @(
                         'idx_audit_player|1|1|player_uuid|A|BTREE|<NULL>',
                         'idx_audit_player|1|2|timestamp|D|BTREE|<NULL>',
                         'idx_audit_player|1|3|sequence|D|BTREE|<NULL>',
@@ -404,8 +409,13 @@ function Test-T21LegacySqlDataUpgradeReport(
                         'idx_audit_type|1|3|sequence|D|BTREE|<NULL>',
                         'PRIMARY|0|1|id|A|BTREE|<NULL>'
                     )
-                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedMariaDbIndexes) -or
-                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedMariaDbIndexes)) { return $false }
+                    $expectedMariaDbCandidateIndexes = @($expectedMariaDbBaselineIndexes + @(
+                        'idx_audit_type_timestamp_sequence|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|1|3|sequence|D|BTREE|<NULL>'
+                    ))
+                    if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.indexes) $expectedMariaDbBaselineIndexes) -or
+                        -not (Test-T21LegacyStringSetEqual @($candidateAuditSchema.indexes) $expectedMariaDbCandidateIndexes)) { return $false }
                 } else {
                     $removedIndexes = @($baselineAuditSchema.indexes | Where-Object { $_ -notin $candidateAuditSchema.indexes })
                     $addedIndexes = @($candidateAuditSchema.indexes | Where-Object { $_ -notin $baselineAuditSchema.indexes })
@@ -415,14 +425,14 @@ function Test-T21LegacySqlDataUpgradeReport(
                         'idx_audit_player|1|1|player_uuid|A|BTREE|<NULL>',
                         'idx_audit_player|1|2|timestamp|D|BTREE|<NULL>',
                         'idx_audit_player|1|3|sequence|D|BTREE|<NULL>',
-                        'idx_audit_type|1|1|type|A|BTREE|<NULL>',
-                        'idx_audit_type|1|2|timestamp|D|BTREE|<NULL>',
-                        'idx_audit_type|1|3|sequence|D|BTREE|<NULL>'
+                        'idx_audit_type_timestamp_sequence|1|1|type|A|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|1|2|timestamp|D|BTREE|<NULL>',
+                        'idx_audit_type_timestamp_sequence|1|3|sequence|D|BTREE|<NULL>'
                     )
                     if ($removedIndexes.Count -ne 0 -or -not (Test-T21LegacyStringSetEqual $addedIndexes $expectedAddedIndexes)) { return $false }
                 }
             } else {
-                $expectedRollbackIndexes = if ($DatabaseProduct -ceq 'PostgreSQL') { $baselineAuditSchema.indexes } else { $candidateAuditSchema.indexes }
+                $expectedRollbackIndexes = $candidateAuditSchema.indexes
                 if (-not (Test-T21LegacyStringSetEqual @($baselineAuditSchema.columns) @($auditSchema.columns)) -or
                     -not (Test-T21LegacyStringSetEqual @($expectedRollbackIndexes) @($auditSchema.indexes))) { return $false }
             }

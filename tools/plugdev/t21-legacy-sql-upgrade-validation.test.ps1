@@ -49,6 +49,51 @@ function New-T21FixtureSnapshotLog([string]$snapshotStage, [string]$suffix, [str
     }
 }
 
+function Test-T21FixtureLogManifestMatches([object]$report) {
+    foreach ($path in $report.logs.Keys) {
+        $fullPath = Join-Path $root ([string]$path)
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { return $false }
+        $item = Get-Item -LiteralPath $fullPath
+        $manifest = $report.logs[$path]
+        $sha = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([long]$item.Length -ne [long]$manifest.bytes -or $sha -cne [string]$manifest.sha256) { return $false }
+    }
+    return $true
+}
+
+function Backup-T21FixtureLogFiles([object]$report) {
+    $backup = [ordered]@{}
+    foreach ($path in $report.logs.Keys) {
+        $backup[[string]$path] = [IO.File]::ReadAllBytes((Join-Path $root ([string]$path)))
+    }
+    return ,$backup
+}
+
+function Restore-T21FixtureLogFiles([object]$backup) {
+    foreach ($path in $backup.Keys) {
+        [IO.File]::WriteAllBytes((Join-Path $root ([string]$path)), [byte[]]$backup[$path])
+    }
+}
+
+function Get-T21FixtureIndexNames([object]$stage, [string]$prefix) {
+    return @($stage.snapshot.auditSchema.indexes | ForEach-Object {
+        $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+        [string]$row[0]
+    } | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) } | Sort-Object -Unique)
+}
+
+function Assert-T21FixtureAuditTypeIndexLifecycle([object]$report, [string]$product) {
+    $expectedBaseline = @('idx_audit_type')
+    $expectedCandidate = @('idx_audit_type', 'idx_audit_type_timestamp_sequence')
+    for ($stageIndex = 0; $stageIndex -lt $report.stages.Count; $stageIndex++) {
+        $expected = if ($stageIndex -eq 0) { $expectedBaseline } else { $expectedCandidate }
+        $actual = Get-T21FixtureIndexNames $report.stages[$stageIndex] 'idx_audit_type'
+        if (-not (Test-T21LegacyStringSetEqual $actual $expected)) {
+            throw "$product fixture stage $stageIndex does not model the observed legacy/additive audit type indexes."
+        }
+    }
+}
+
 function New-T21FixtureAccounts([string]$balanceA = '1000.00', [string]$balanceB = '520.00') {
     return @(
         [ordered]@{ name='AcceptanceA'; uuid='35c93f74-c540-3b38-8093-b5cb3c2263be'; balance=$balanceA; version=1 },
@@ -128,9 +173,9 @@ function New-T21ValidFixtureReport {
         (ConvertTo-Json -InputObject @('idx_audit_player', 1, 1, 'player_uuid', 'A', 'BTREE', $null) -Compress),
         (ConvertTo-Json -InputObject @('idx_audit_player', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
         (ConvertTo-Json -InputObject @('idx_audit_player', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 1, 'type', 'A', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress)
+        (ConvertTo-Json -InputObject @('idx_audit_type_timestamp_sequence', 1, 1, 'type', 'A', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_type_timestamp_sequence', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
+        (ConvertTo-Json -InputObject @('idx_audit_type_timestamp_sequence', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress)
     )
     $candidateIndexes = @($baselineIndexes + $addedIndexes)
     $stages[0].snapshot.auditSchema = [ordered]@{ columns=@($columnRows); indexes=$baselineIndexes }
@@ -255,22 +300,43 @@ function Convert-T21FixtureToPostgreSql([object]$report) {
         backend='postgresql'; processId=1111; commandExitCode=0; shutdownTargetVerified=$true
         processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$false
     }
-    $postgresIndexes = @($report.stages[1].snapshot.auditSchema.indexes | ForEach-Object {
+    $mysqlCandidateIndexes = @($report.stages[1].snapshot.auditSchema.indexes)
+    $sharedMysqlIndexes = @($mysqlCandidateIndexes | Where-Object {
         $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
-        if ($row[0] -ceq 'PRIMARY') { $row[0] = 'syncmoney_audit_log_pkey' }
-        $postgresRow = @(
-            $row[0],
-            ([string]$row[0] -ceq 'syncmoney_audit_log_pkey'),
-            $row[1],
-            $row[2],
-            $row[3],
-            $row[4],
-            'BTREE',
-            $row[6]
-        )
-        ConvertTo-Json -InputObject $postgresRow -Compress
+        [string]$row[0] -notin @('idx_audit_type', 'idx_audit_type_timestamp_sequence')
     })
-    foreach ($stage in $report.stages) {
+    $currentTypeIndexes = @($mysqlCandidateIndexes | Where-Object {
+        (ConvertFrom-Json -InputObject ([string]$_) -AsHashtable)[0] -ceq 'idx_audit_type_timestamp_sequence'
+    })
+    $legacyTypeIndexes = @($currentTypeIndexes | ForEach-Object {
+        $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+        $row[0] = 'idx_audit_type'
+        ConvertTo-Json -InputObject $row -Compress
+    })
+    $postgresBaselineMysqlIndexes = @($sharedMysqlIndexes + $legacyTypeIndexes)
+    $postgresCandidateMysqlIndexes = @($postgresBaselineMysqlIndexes + $currentTypeIndexes)
+    $toPostgresIndexes = {
+        param([string[]]$mysqlIndexes)
+        @($mysqlIndexes | ForEach-Object {
+            $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+            if ($row[0] -ceq 'PRIMARY') { $row[0] = 'syncmoney_audit_log_pkey' }
+            $postgresRow = @(
+                $row[0],
+                ([string]$row[0] -ceq 'syncmoney_audit_log_pkey'),
+                $row[1],
+                $row[2],
+                $row[3],
+                $row[4],
+                'BTREE',
+                $row[6]
+            )
+            ConvertTo-Json -InputObject $postgresRow -Compress
+        })
+    }
+    $postgresBaselineIndexes = @(& $toPostgresIndexes $postgresBaselineMysqlIndexes)
+    $postgresCandidateIndexes = @(& $toPostgresIndexes $postgresCandidateMysqlIndexes)
+    for ($stageIndex = 0; $stageIndex -lt $report.stages.Count; $stageIndex++) {
+        $stage = $report.stages[$stageIndex]
         $schema = $stage.snapshot.auditSchema
         for ($index = 0; $index -lt $schema.columns.Count; $index++) {
             $row = ConvertFrom-Json -InputObject ([string]$schema.columns[$index]) -AsHashtable
@@ -279,7 +345,7 @@ function Convert-T21FixtureToPostgreSql([object]$report) {
             $row[8] = $null
             $schema.columns[$index] = ConvertTo-Json -InputObject $row -Compress
         }
-        $schema.indexes = @($postgresIndexes)
+        $schema.indexes = if ($stageIndex -eq 0) { @($postgresBaselineIndexes) } else { @($postgresCandidateIndexes) }
         $snapshotStage = [string]$stage.snapshot.stage
         foreach ($logBinding in @(
                 [ordered]@{ suffix='audit-columns-snapshot'; rows=@($schema.columns) },
@@ -308,19 +374,25 @@ function Convert-T21FixtureToMariaDb([object]$report) {
     $report.configuration.databaseType = 'mysql'
     $report.backendProcesses.mysql.product = 'MariaDB'
     $report.backendProcesses.mysql.version = '12.3.3-MariaDB'
-    $mariaDbIndexes = @(
-        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 1, 'player_uuid', 'A', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_player', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_timestamp', 1, 1, 'timestamp', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_timestamp', 1, 2, 'sequence', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 1, 'type', 'A', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 2, 'timestamp', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('idx_audit_type', 1, 3, 'sequence', 'D', 'BTREE', $null) -Compress),
-        (ConvertTo-Json -InputObject @('PRIMARY', 0, 1, 'id', 'A', 'BTREE', $null) -Compress)
-    )
-    foreach ($stage in $report.stages) {
-        $stage.snapshot.auditSchema.indexes = @($mariaDbIndexes)
+    $mysqlCandidateIndexes = @($report.stages[1].snapshot.auditSchema.indexes)
+    $sharedMysqlIndexes = @($mysqlCandidateIndexes | Where-Object {
+        $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+        [string]$row[0] -notin @('idx_audit_type', 'idx_audit_type_timestamp_sequence')
+    })
+    $currentTypeIndexes = @($mysqlCandidateIndexes | Where-Object {
+        (ConvertFrom-Json -InputObject ([string]$_) -AsHashtable)[0] -ceq 'idx_audit_type_timestamp_sequence'
+    })
+    $legacyTypeIndexes = @($currentTypeIndexes | ForEach-Object {
+        $row = ConvertFrom-Json -InputObject ([string]$_) -AsHashtable
+        $row[0] = 'idx_audit_type'
+        ConvertTo-Json -InputObject $row -Compress
+    })
+    $mariaDbBaselineIndexes = @($sharedMysqlIndexes + $legacyTypeIndexes)
+    $mariaDbCandidateIndexes = @($mariaDbBaselineIndexes + $currentTypeIndexes)
+    for ($stageIndex = 0; $stageIndex -lt $report.stages.Count; $stageIndex++) {
+        $stage = $report.stages[$stageIndex]
+        $mariaDbIndexes = if ($stageIndex -eq 0) { @($mariaDbBaselineIndexes) } else { @($mariaDbCandidateIndexes) }
+        $stage.snapshot.auditSchema.indexes = $mariaDbIndexes
         $snapshotStage = [string]$stage.snapshot.stage
         $sqlRows = @($stage.snapshot.sqlAccounts | Sort-Object -Property name | ForEach-Object {
             '{0}|{1}|{2}|{3}' -f $_.name, $_.uuid, $_.balance, $_.version
@@ -376,6 +448,7 @@ try {
     Write-Output 'PASS: reject current-stable Paper legacy-data evidence under the user-pinned maximum-Paper endpoint contract'
 
     $mariaDb = New-T21MariaDbFixtureReport
+    Assert-T21FixtureAuditTypeIndexLifecycle $mariaDb 'MariaDB'
     if (-not (Test-T21MariaDbLegacyDataUpgradeReport $mariaDb $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
         throw 'A complete minimum-Paper MariaDB legacy-data read/rollback report was rejected.'
     }
@@ -494,6 +567,7 @@ try {
 
     $postgresql = New-T21ValidFixtureReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $postgresql = Convert-T21FixtureToPostgreSql $postgresql
+    Assert-T21FixtureAuditTypeIndexLifecycle $postgresql 'PostgreSQL'
     if (-not (Test-T21PostgresLegacyDataUpgradeReport $postgresql $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha)) {
         throw 'A complete minimum-Paper PostgreSQL legacy-data read/rollback report with its initialized audit indexes preserved was rejected.'
     }
@@ -679,6 +753,62 @@ try {
         throw 'A candidate report that omitted the observed additive audit-index repair was accepted.'
     }
     Write-Output 'PASS: require exact additive audit-index repair evidence across candidate and rollback'
+
+    $valid = New-T21ValidFixtureReport
+    if (-not (Test-T21FixtureLogManifestMatches $valid)) { throw 'The base fixture log manifest was invalid before the audit-index negatives.' }
+    $fixtureLogBackup = Backup-T21FixtureLogFiles $valid
+    try {
+        $legacyTypeIndexName = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        foreach ($stageIndex in @(1, 2)) {
+            $indexRows = @($legacyTypeIndexName.stages[$stageIndex].snapshot.auditSchema.indexes)
+            for ($index = 0; $index -lt $indexRows.Count; $index++) {
+                $row = ConvertFrom-Json -InputObject ([string]$indexRows[$index]) -AsHashtable
+                if ([string]$row[0] -ceq 'idx_audit_type_timestamp_sequence') {
+                    $row[0] = 'idx_audit_type'
+                    $indexRows[$index] = ConvertTo-Json -InputObject $row -Compress
+                }
+            }
+            $legacyTypeIndexName.stages[$stageIndex].snapshot.auditSchema.indexes = $indexRows
+            $snapshotStage = [string]$legacyTypeIndexName.stages[$stageIndex].snapshot.stage
+            $indexLog = New-T21FixtureSnapshotLog $snapshotStage 'audit-indexes-snapshot' $indexRows
+            $legacyTypeIndexName.logs[$indexLog.path] = $indexLog.manifest
+        }
+        if (Test-T21MySqlLegacyDataUpgradeReport $legacyTypeIndexName $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+            throw 'A legacy SQL report using the obsolete audit type index name was accepted.'
+        }
+    } finally {
+        Restore-T21FixtureLogFiles $fixtureLogBackup
+    }
+    if (-not (Test-T21FixtureLogManifestMatches $valid)) {
+        throw 'The obsolete-index negative fixture changed logs owned by the untouched valid fixture.'
+    }
+    Write-Output 'PASS: require the current audit type index name and reject the obsolete name'
+
+    $fixtureLogBackup = Backup-T21FixtureLogFiles $valid
+    try {
+        $mixedTypeIndexNames = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+        $candidateIndexes = @($mixedTypeIndexNames.stages[1].snapshot.auditSchema.indexes)
+        for ($index = 0; $index -lt $candidateIndexes.Count; $index++) {
+            $row = ConvertFrom-Json -InputObject ([string]$candidateIndexes[$index]) -AsHashtable
+            if ([string]$row[0] -ceq 'idx_audit_type_timestamp_sequence' -and [int]$row[2] -eq 2) {
+                $row[0] = 'idx_audit_type'
+                $candidateIndexes[$index] = ConvertTo-Json -InputObject $row -Compress
+            }
+        }
+        $mixedTypeIndexNames.stages[1].snapshot.auditSchema.indexes = $candidateIndexes
+        $snapshotStage = [string]$mixedTypeIndexNames.stages[1].snapshot.stage
+        $indexLog = New-T21FixtureSnapshotLog $snapshotStage 'audit-indexes-snapshot' $candidateIndexes
+        $mixedTypeIndexNames.logs[$indexLog.path] = $indexLog.manifest
+        if (Test-T21MySqlLegacyDataUpgradeReport $mixedTypeIndexNames $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha) {
+            throw 'A legacy SQL report with mixed current and obsolete audit type index names was accepted.'
+        }
+    } finally {
+        Restore-T21FixtureLogFiles $fixtureLogBackup
+    }
+    if (-not (Test-T21FixtureLogManifestMatches $valid)) {
+        throw 'The mixed-index negative fixture changed logs owned by the untouched valid fixture.'
+    }
+    Write-Output 'PASS: reject mixed current and obsolete audit type index names'
 
     $auditColumnDrift = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $auditColumnDrift.stages[1].snapshot.auditSchema.columns += (ConvertTo-Json -InputObject @('syncmoney_audit_log', 16, 'unexpected', 'varchar(36)', 'YES', $null, '', 'utf8mb4', 'utf8mb4_0900_ai_ci', '') -Compress)
