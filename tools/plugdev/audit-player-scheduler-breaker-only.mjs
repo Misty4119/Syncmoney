@@ -23,6 +23,8 @@ const ENDPOINT = {
   serverJar: "canvas-26.3-984.jar",
   serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
 };
+const CANDIDATE_JAR_SHA256 = "7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354";
+const MAX_RUNNER_PENDING_COUNT = 2_147_483_647;
 let assertionCount = 0;
 
 function requireCondition(condition, message) {
@@ -41,6 +43,12 @@ function isSha256(value) {
 export function canonicalTextSourceSha256(bytes) {
   const text = bytes.toString("utf8").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   return sha256(Buffer.from(text, "utf8"));
+}
+
+export function validateApiClassloaderEvidence(serverLines) {
+  const passMarkers = serverLines.filter((line) => /API CLASSLOADER PASS/i.test(line));
+  requireCondition(passMarkers.length === 1, "server log must contain exactly one API CLASSLOADER PASS marker");
+  return passMarkers[0];
 }
 
 function isWithin(root, candidate) {
@@ -68,6 +76,73 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function isRunnerPendingCount(value) {
+  return Number.isInteger(value) && value >= 2 && value <= MAX_RUNNER_PENDING_COUNT;
+}
+
+export function validateLifecycleEvidence(report, serverLines) {
+  const lifecycle = report.observed?.lifecycle;
+  requireCondition(!serverLines.some((line) => /T15_LIFECYCLE_FAIL/i.test(line)),
+    "server log contains the T15 lifecycle failure marker");
+  const acceptedWriteLines = serverLines.filter((line) => /T15_ACCEPTED_WRITE /i.test(line));
+  requireCondition(acceptedWriteLines.length === 4, "server log lacks exactly four accepted-write markers");
+  const acceptedWrites = acceptedWriteLines.map((line) => {
+    const match = line.match(/\bT15_ACCEPTED_WRITE scenario=(teleport|logout) index=(1|2) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) amount=1\.00 response=SUCCESS(?:\s|$)/i);
+    return match ? { scenario: match[1].toLowerCase(), index: Number(match[2]), uuid: match[3].toLowerCase() } : null;
+  });
+  requireCondition(acceptedWrites.every(Boolean), "accepted-write server marker is malformed or unsuccessful");
+
+  const acceptedUuidByScenario = {};
+  for (const scenario of ["teleport", "logout"]) {
+    const writes = acceptedWrites.filter((write) => write.scenario === scenario);
+    requireCondition(writes.length === 2 && writes.map((write) => write.index).sort().join(",") === "1,2" &&
+      new Set(writes.map((write) => write.uuid)).size === 1,
+    "accepted-write markers do not prove both successful writes for " + scenario);
+    acceptedUuidByScenario[scenario] = writes[0].uuid;
+  }
+
+  const pendingLines = serverLines.filter((line) => /T15_PENDING_AT_BOUNDARY/i.test(line));
+  requireCondition(pendingLines.length === 2, "server log lacks exactly two pending-boundary markers");
+  const pendingRecords = pendingLines.map((line) => {
+    const match = line.match(/\bT15_PENDING_AT_BOUNDARY scenario=(teleport|logout) uuid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) pending=(\d+) pending-state=accepted-not-completed(?:\s|$)/i);
+    return match ? { scenario: match[1].toLowerCase(), uuid: match[2].toLowerCase(), pending: Number(match[3]) } : null;
+  });
+  requireCondition(pendingRecords.every(Boolean), "pending-boundary server marker is malformed");
+  const pendingByScenario = {};
+  for (const scenario of ["teleport", "logout"]) {
+    const records = pendingRecords.filter((record) => record.scenario === scenario);
+    requireCondition(records.length === 1 && isRunnerPendingCount(records[0].pending) &&
+      records[0].uuid === acceptedUuidByScenario[scenario],
+    "pending-boundary server marker does not match the accepted writes for " + scenario);
+    pendingByScenario[scenario] = records[0].pending;
+  }
+
+  const boundaryLines = serverLines.filter((line) => /T15_BOUNDARY_ACTION/i.test(line));
+  const boundaryRecords = boundaryLines.map((line) => {
+    const match = line.match(/T15_BOUNDARY_ACTION scenario=(teleport|logout) thread=(.*)$/i);
+    return match ? { scenario: match[1].toLowerCase(), thread: match[2].trim() } : null;
+  });
+  requireCondition(boundaryRecords.length === 2 && boundaryRecords.every(Boolean) &&
+    boundaryRecords.every((record) => record.thread.length > 0) &&
+    new Set(boundaryRecords.map((record) => record.scenario)).size === 2,
+  "server log lacks one non-empty boundary action thread for teleport and logout");
+  const boundaryActionThreads = Object.fromEntries(boundaryRecords.map((record) => [record.scenario, record.thread]));
+
+  requireCondition(lifecycle?.acceptedWriteMarkers === acceptedWriteLines.length &&
+    lifecycle.pendingBoundaries?.teleport === pendingByScenario.teleport &&
+    lifecycle.pendingBoundaries?.logout === pendingByScenario.logout,
+  "lifecycle report counts do not match retained accepted-write/pending-boundary markers");
+  requireCondition(lifecycle.actionThreads?.teleport === boundaryActionThreads.teleport &&
+    lifecycle.actionThreads?.logout === boundaryActionThreads.logout,
+  "lifecycle report boundary action threads do not match retained server markers");
+
+  return {
+    acceptedWriteMarkers: acceptedWriteLines.length,
+    pendingBoundaries: pendingByScenario,
+    boundaryActionThreads,
+  };
+}
+
 export function validateBreakerOnlyReport(report) {
   requireCondition(report && typeof report === "object" && !Array.isArray(report), "report must be an object");
   requireCondition(report.schemaVersion === 1 && report.status === "PASS" &&
@@ -90,6 +165,9 @@ export function validateBreakerOnlyReport(report) {
   requireCondition(isSha256(report.source?.candidateJarSha256) &&
     report.source.candidateJarSha256 === report.artifacts?.candidateJarSha256,
   "candidate JAR hash is missing or inconsistent");
+  requireCondition(report.source.candidateJarSha256 === CANDIDATE_JAR_SHA256 &&
+    report.artifacts.candidateJarSha256 === CANDIDATE_JAR_SHA256,
+  "candidate JAR hash does not match the independently pinned candidate JAR");
   for (const [name, value] of Object.entries({
     acceptanceJarSha256: report.artifacts?.acceptanceJarSha256,
     apiConsumerJarSha256: report.artifacts?.apiConsumerJarSha256,
@@ -116,7 +194,8 @@ export function validateBreakerOnlyReport(report) {
 
   const lifecycle = report.observed?.lifecycle;
   requireCondition(lifecycle?.acceptedWriteMarkers === 4 &&
-    lifecycle.pendingBoundaries?.teleport === 2 && lifecycle.pendingBoundaries?.logout === 2 &&
+    isRunnerPendingCount(lifecycle.pendingBoundaries?.teleport) &&
+    isRunnerPendingCount(lifecycle.pendingBoundaries?.logout) &&
     lifecycle.teleportFutureSucceeded === true && lifecycle.serverNetherArrival === true &&
     lifecycle.clientNetherArrival === true && lifecycle.expectedLogoutKick === true,
   "report lacks the accepted-write teleport/logout lifecycle evidence");
@@ -221,8 +300,9 @@ function runAudit() {
   verifyHash(readFileSync(expectedServerJar), ENDPOINT.serverJarSha256, "pinned Canvas 26.3#984 server JAR");
   const projectRoot = realpathSync(path.join(runRoot, "project"));
   requireCondition(path.resolve(report.isolation.projectRoot) === projectRoot, "isolated project root mismatch");
-  verifyHash(readContainedFile(projectRoot, "build/libs/Syncmoney-1.4.0-alpha.1.jar"),
-    report.artifacts.candidateJarSha256, "isolated candidate JAR");
+  const candidateJarBytes = readContainedFile(projectRoot, "build/libs/Syncmoney-1.4.0-alpha.1.jar");
+  verifyHash(candidateJarBytes, CANDIDATE_JAR_SHA256, "independently pinned candidate JAR");
+  verifyHash(candidateJarBytes, report.artifacts.candidateJarSha256, "reported candidate JAR");
   verifyHash(readContainedFile(projectRoot, "build/acceptance/SyncmoneyAcceptance.jar"),
     report.artifacts.acceptanceJarSha256, "isolated acceptance JAR");
   verifyHash(readContainedFile(projectRoot, "build/acceptance/SyncmoneyApiConsumer.jar"),
@@ -270,11 +350,13 @@ function runAudit() {
   const serverLog = serverLogBytes.toString("utf8");
   verifyHash(serverLogBytes, report.server.logSha256, "server log");
   requireCondition(serverLog.includes("Syncmoney enabled successfully.") &&
-    serverLog.includes("API CLASSLOADER PASS") && serverLog.includes("Syncmoney disabled."),
-  "server log lacks startup, API, or normal-shutdown evidence");
+    serverLog.includes("Syncmoney disabled."),
+  "server log lacks startup or normal-shutdown evidence");
   const serverLines = serverLog.split(/\r?\n/);
+  validateApiClassloaderEvidence(serverLines);
   requireCondition(hasSingleSuccessfulTeleportFuture(serverLines) && serverLog.includes("T15_TELEPORT_REACHED"),
     "server log lacks successful teleport lifecycle evidence");
+  const lifecycleEvidence = validateLifecycleEvidence(report, serverLines);
 
   const teleportLogBytes = readContainedFile(runRoot, "logs/teleport-mineflayer.log");
   verifyHash(teleportLogBytes, report.client.teleport.logSha256, "teleport client log");
@@ -364,6 +446,9 @@ function runAudit() {
         player: p.player, redisBalance: p.redisBalance, redisVersion: p.redisVersion,
       })),
       acceptedWriteTeleportLogoutLifecycle: true,
+      acceptedWriteMarkers: lifecycleEvidence.acceptedWriteMarkers,
+      pendingBoundaries: lifecycleEvidence.pendingBoundaries,
+      boundaryActionThreads: lifecycleEvidence.boundaryActionThreads,
       gracefulServerAndRedisShutdown: true,
       redisPersistenceHashesRecorded: true,
       redisAofReloadPerformed: false,

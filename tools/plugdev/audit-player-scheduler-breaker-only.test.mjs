@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateBreakerOnlyReport } from "./audit-player-scheduler-breaker-only.mjs";
+import {
+  validateBreakerOnlyReport,
+  validateApiClassloaderEvidence,
+  validateLifecycleEvidence,
+} from "./audit-player-scheduler-breaker-only.mjs";
 
 const uuidA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const uuidB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const hash = "a".repeat(64);
+const candidateHash = "7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354";
+const otherCandidateHash = "b".repeat(64);
+const lifecycleServerLines = [
+  "T15_ACCEPTED_WRITE scenario=teleport index=1 uuid=" + uuidA + " amount=1.00 response=SUCCESS",
+  "T15_ACCEPTED_WRITE scenario=teleport index=2 uuid=" + uuidA + " amount=1.00 response=SUCCESS",
+  "T15_PENDING_AT_BOUNDARY scenario=teleport uuid=" + uuidA + " pending=2 pending-state=accepted-not-completed",
+  "T15_BOUNDARY_ACTION scenario=teleport thread=Canvas Region Scheduler Thread #0",
+  "T15_ACCEPTED_WRITE scenario=logout index=1 uuid=" + uuidA + " amount=1.00 response=SUCCESS",
+  "T15_ACCEPTED_WRITE scenario=logout index=2 uuid=" + uuidA + " amount=1.00 response=SUCCESS",
+  "T15_PENDING_AT_BOUNDARY scenario=logout uuid=" + uuidA + " pending=2 pending-state=accepted-not-completed",
+  "T15_BOUNDARY_ACTION scenario=logout thread=Canvas Region Scheduler Thread #1",
+];
 const serverProofLines = [
   "T21_GLOBAL_BREAKER_STATE circuitBreaker=enabled circuitBreakerLocked=false playerProtection=disabled maxTransactionsPerSecond=5 player=AcceptanceGuardA",
   "T21_GLOBAL_BREAKER_OWNER player=AcceptanceGuardA uuid=" + uuidA + " selfOwned=true otherOwned=false scheduler=entity",
@@ -54,9 +70,9 @@ function makeReport() {
       serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
     },
     runtime: { java: 'openjdk version "25.0.4"' },
-    source: { commit: "1".repeat(40), repository: "C:\\\\repo", candidateJarSha256: hash },
+    source: { commit: "1".repeat(40), repository: "C:\\\\repo", candidateJarSha256: candidateHash },
     artifacts: {
-      candidateJarSha256: hash,
+      candidateJarSha256: candidateHash,
       acceptanceJarSha256: hash,
       apiConsumerJarSha256: hash,
       runnerSha256: hash,
@@ -115,6 +131,10 @@ function makeReport() {
       lifecycle: {
         acceptedWriteMarkers: 4,
         pendingBoundaries: { teleport: 2, logout: 2 },
+        actionThreads: {
+          teleport: "Canvas Region Scheduler Thread #0",
+          logout: "Canvas Region Scheduler Thread #1",
+        },
         teleportFutureSucceeded: true,
         serverNetherArrival: true,
         clientNetherArrival: true,
@@ -146,6 +166,126 @@ function makeReport() {
 
 test("validates the current-maximum breaker-only profile and both owner ACKs", () => {
   assert.equal(validateBreakerOnlyReport(makeReport()), true);
+});
+
+test("requires exactly one API classloader success marker", () => {
+  const marker = "API CLASSLOADER PASS provider=Syncmoney";
+  assert.equal(validateApiClassloaderEvidence([marker]), marker);
+  assert.equal(validateApiClassloaderEvidence([marker.toLowerCase()]), marker.toLowerCase());
+  assert.throws(() => validateApiClassloaderEvidence([]), /exactly one API CLASSLOADER PASS marker/);
+  assert.throws(() => validateApiClassloaderEvidence([marker, marker]), /exactly one API CLASSLOADER PASS marker/);
+});
+
+test("rejects coordinated replacement of the candidate source and artifact hashes", () => {
+  const report = makeReport();
+  report.source.candidateJarSha256 = otherCandidateHash;
+  report.artifacts.candidateJarSha256 = otherCandidateHash;
+  assert.throws(() => validateBreakerOnlyReport(report), /independently pinned candidate JAR/);
+});
+
+test("re-derives accepted writes, pending counts, and non-empty boundary threads from server logs", () => {
+  const report = makeReport();
+  assert.deepEqual(validateLifecycleEvidence(report, lifecycleServerLines), {
+    acceptedWriteMarkers: 4,
+    pendingBoundaries: { teleport: 2, logout: 2 },
+    boundaryActionThreads: {
+      teleport: "Canvas Region Scheduler Thread #0",
+      logout: "Canvas Region Scheduler Thread #1",
+    },
+  });
+});
+
+test("rejects a lifecycle failure marker even when positive evidence is present", () => {
+  const serverLines = [
+    ...lifecycleServerLines,
+    "prefix t15_lifecycle_fail_suffix scenario=logout reason=accepted-write-not-drained",
+  ];
+  assert.throws(() => validateLifecycleEvidence(makeReport(), serverLines),
+    /server log contains the T15 lifecycle failure marker/);
+});
+
+test("matches lifecycle failure and success markers case-insensitively like the runner", () => {
+  const caseVariantLines = lifecycleServerLines.map((line) => line
+    .replace(/T15_/g, "t15_")
+    .replace(/scenario=(teleport|logout)/g, (_match, scenario) => "scenario=" + scenario.toUpperCase())
+    .replace("pending-state=accepted-not-completed", "pending-state=ACCEPTED-NOT-COMPLETED"));
+  assert.equal(validateLifecycleEvidence(makeReport(), caseVariantLines).acceptedWriteMarkers, 4);
+});
+
+test("accepts and reports three pending writes when the server marker and report agree", () => {
+  const report = makeReport();
+  report.observed.lifecycle.pendingBoundaries.teleport = 3;
+  const serverLines = lifecycleServerLines.map((line) =>
+    line.includes("T15_PENDING_AT_BOUNDARY scenario=teleport") ? line.replace("pending=2", "pending=3") : line);
+  assert.equal(validateLifecycleEvidence(report, serverLines).pendingBoundaries.teleport, 3);
+});
+
+test("report validator allows pending-write counts greater than two", () => {
+  const largerCounts = makeReport();
+  largerCounts.observed.lifecycle.pendingBoundaries = { teleport: 3, logout: 4 };
+  assert.equal(validateBreakerOnlyReport(largerCounts), true);
+
+  const insufficientCounts = makeReport();
+  insufficientCounts.observed.lifecycle.pendingBoundaries = { teleport: 1, logout: 1 };
+  assert.throws(() => validateBreakerOnlyReport(insufficientCounts), /accepted-write teleport\/logout lifecycle evidence/);
+});
+
+test("rejects pending-write counts outside the runner's Int32 range", () => {
+  const overflowReport = makeReport();
+  overflowReport.observed.lifecycle.pendingBoundaries.teleport = 2_147_483_648;
+  const overflowLog = lifecycleServerLines.map((line) =>
+    line.includes("T15_PENDING_AT_BOUNDARY scenario=teleport") ? line.replace("pending=2", "pending=2147483648") : line);
+  assert.throws(() => validateLifecycleEvidence(overflowReport, overflowLog), /pending-boundary server marker/);
+  assert.throws(() => validateBreakerOnlyReport(overflowReport), /accepted-write teleport\/logout lifecycle evidence/);
+
+  const fractionalReport = makeReport();
+  fractionalReport.observed.lifecycle.pendingBoundaries.logout = 2.5;
+  assert.throws(() => validateBreakerOnlyReport(fractionalReport), /accepted-write teleport\/logout lifecycle evidence/);
+});
+
+test("rejects report-only lifecycle counts when retained server markers disagree", () => {
+  const report = makeReport();
+  const missingAcceptedWrite = lifecycleServerLines.filter((line) =>
+    line !== lifecycleServerLines[1]);
+  assert.throws(() => validateLifecycleEvidence(report, missingAcceptedWrite), /accepted-write markers/);
+
+  const wrongPendingCount = lifecycleServerLines.map((line) =>
+    line.includes("T15_PENDING_AT_BOUNDARY scenario=teleport") ? line.replace("pending=2", "pending=1") : line);
+  assert.throws(() => validateLifecycleEvidence(report, wrongPendingCount), /pending-boundary server marker/);
+
+  const reportCountDrift = makeReport();
+  reportCountDrift.observed.lifecycle.pendingBoundaries.teleport = 1;
+  assert.throws(() => validateLifecycleEvidence(reportCountDrift, lifecycleServerLines), /lifecycle report counts/);
+
+  const missingThreadReport = makeReport();
+  delete missingThreadReport.observed.lifecycle.actionThreads;
+  assert.throws(() => validateLifecycleEvidence(missingThreadReport, lifecycleServerLines), /report boundary action threads/);
+
+  const wrongThreadReport = makeReport();
+  wrongThreadReport.observed.lifecycle.actionThreads.teleport = "Global Scheduler Thread";
+  assert.throws(() => validateLifecycleEvidence(wrongThreadReport, lifecycleServerLines), /report boundary action threads/);
+});
+
+test("rejects missing scheduler boundary thread evidence", () => {
+  const missingThread = lifecycleServerLines.map((line) =>
+    line.includes("T15_BOUNDARY_ACTION scenario=logout") ? line.replace("thread=Canvas Region Scheduler Thread #1", "thread=") : line);
+  assert.throws(() => validateLifecycleEvidence(makeReport(), missingThread), /boundary action thread/);
+});
+
+test("rejects malformed and mismatched lifecycle UUIDs", () => {
+  const malformedUuid = lifecycleServerLines.map((line) =>
+    line.includes("T15_ACCEPTED_WRITE scenario=teleport index=1")
+      ? line.replace(uuidA, "z".repeat(36))
+      : line);
+  assert.throws(() => validateLifecycleEvidence(makeReport(), malformedUuid), /accepted-write server marker is malformed/);
+
+  const mismatchedAcceptedUuid = lifecycleServerLines.map((line) =>
+    line.includes("T15_ACCEPTED_WRITE scenario=teleport index=2") ? line.replace(uuidA, uuidB) : line);
+  assert.throws(() => validateLifecycleEvidence(makeReport(), mismatchedAcceptedUuid), /both successful writes/);
+
+  const mismatchedPendingUuid = lifecycleServerLines.map((line) =>
+    line.includes("T15_PENDING_AT_BOUNDARY scenario=logout") ? line.replace(uuidA, uuidB) : line);
+  assert.throws(() => validateLifecycleEvidence(makeReport(), mismatchedPendingUuid), /pending-boundary server marker/);
 });
 
 test("rejects a non-current endpoint", () => {
