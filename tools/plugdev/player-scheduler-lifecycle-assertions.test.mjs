@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import * as lifecycleAssertions from "./player-scheduler-lifecycle-assertions.mjs";
 import {
@@ -211,6 +213,55 @@ test("rejects logout evidence with an unrelated reason, duplicate disconnect, or
   assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence(evidence), false);
 });
 
+test("rejects logout evidence with duplicate requests, missing lifecycle events, duplicate quits, or reversed order", () => {
+  const request = "[SyncmoneyAcceptance] T15_LOGOUT_REQUEST uuid=35c93f74-c540-3b38-8093-b5cb3c2263be";
+  const disconnect = "[INFO]: AcceptanceA lost connection: Disconnected";
+  const quit = "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether";
+  const cases = [
+    ["duplicate requests", [request, request, disconnect, quit]],
+    ["missing disconnect", [request, quit]],
+    ["missing quit", [request, disconnect]],
+    ["duplicate quits", [request, disconnect, quit, quit]],
+    ["disconnect after quit", [request, quit, disconnect]],
+  ];
+
+  for (const [description, logLines] of cases) {
+    assert.equal(lifecycleAssertions.hasExpectedLogoutScenarioEvidence({
+      logLines,
+      playerName: "AcceptanceA",
+      playerUuid: "35c93f74-c540-3b38-8093-b5cb3c2263be",
+      clientObservedExpectedKickPacket: true,
+      clientObservedExpectedLogoutAbort: false,
+    }), false, description);
+  }
+});
+
+test("runner accepts predicate-validated Canvas disconnects and records exact server reason only as optional evidence", () => {
+  const evidence = {
+    logLines: [
+      "[SyncmoneyAcceptance] T15_LOGOUT_REQUEST uuid=35c93f74-c540-3b38-8093-b5cb3c2263be",
+      "[INFO]: AcceptanceA lost connection: Disconnected",
+      "[SyncmoneyAcceptance] T15_PLAYER_QUIT uuid=35c93f74-c540-3b38-8093-b5cb3c2263be world=world_nether",
+    ],
+    playerName: "AcceptanceA",
+    playerUuid: "35c93f74-c540-3b38-8093-b5cb3c2263be",
+    clientObservedExpectedKickPacket: true,
+    clientObservedExpectedLogoutAbort: false,
+  };
+  const assertionPath = fileURLToPath(new URL("./player-scheduler-lifecycle-assertions.mjs", import.meta.url));
+  const result = execFileSync(process.execPath, [
+    assertionPath,
+    "--has-expected-logout-scenario-json",
+    JSON.stringify(evidence),
+  ], { encoding: "utf8" }).trim();
+  const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
+
+  assert.equal(result, "true");
+  assert.match(runner, /--has-expected-logout-scenario-json/);
+  assert.match(runner, /exactServerKickReasonVerified = \$exactKickVerified/);
+  assert.doesNotMatch(runner, /if \(\$kickEvidenceExit -ne 0 -or -not \$exactKickVerified\)\s*\{\s*throw/);
+});
+
 test("extracts one player's UUID from Mineflayer join lines with optional dimension data", () => {
   const extractUuid = lifecycleAssertions.extractPlayerUuidFromJoin;
   assert.equal(typeof extractUuid, "function");
@@ -233,7 +284,7 @@ test("closes isolated Redis before hashing its append-only files", () => {
   assert.ok(runner.includes("\n    Stop-IsolatedRedis\n    $redisFiles = @(Get-ChildItem -LiteralPath $redisData"));
 });
 
-test("runner requires a successful teleport future, exact player kick, and distinct Redis versions", () => {
+test("runner requires a successful teleport future, valid logout lifecycle evidence, and distinct Redis versions", () => {
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8");
   assert.match(runner, /--has-single-successful-teleport-future-json/);
   assert.match(runner, /--has-exact-server-kick-json/);
