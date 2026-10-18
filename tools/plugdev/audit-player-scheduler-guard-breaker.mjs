@@ -130,6 +130,12 @@ export function hasGuardBreakerProfileMarker(profileLogText) {
   return profileLogText.split(/\r?\n/).some((line) => acceptedMarkers.has(line));
 }
 
+export function extractGuardBreakerServerLines(serverLogText) {
+  if (typeof serverLogText !== "string") return [];
+  return serverLogText.split(/\r?\n/).filter((line) =>
+    /T21_GUARD_(?:OWNER|TRANSACTIONS|NOTICE_ACK|BREAKER_STATE|BREAKER_FAIL|FAIL)|Deposit rejected by PlayerTransactionGuard:/.test(line));
+}
+
 function verifyGitSourcePin(sourceCommit, relativePath, expectedSha256) {
   const bytes = execFileSync("git", ["-C", repositoryRoot, "show", `${sourceCommit}:${relativePath}`]);
   const actualSha256 = canonicalTextSourceSha256(bytes);
@@ -257,8 +263,7 @@ function runAudit() {
   const clientLogBytes = readContainedFile(runRoot, "logs/guard-pair-breaker-mineflayer.log");
   verifyHash(clientLogBytes, report.client.guard.logSha256, "guard-pair-breaker client log");
   const clientLines = clientLogBytes.toString("utf8").split(/\r?\n/);
-  const guardServerLines = serverLog.split(/\r?\n/).filter((line) =>
-    /T21_GUARD_(?:OWNER|TRANSACTIONS|BREAKER_STATE|FAIL)|Deposit rejected by PlayerTransactionGuard:/.test(line));
+  const guardServerLines = extractGuardBreakerServerLines(serverLog);
   const proof = {
     serverLines: guardServerLines,
     clientLines: clientLines.filter((line) => /^BOT_GUARD_(?:RATE_LIMIT_NOTICE_PASS|FAIL)/.test(line)),

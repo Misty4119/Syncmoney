@@ -572,6 +572,7 @@ test("Canvas breaker/guard proof requires both active managers and an unlocked g
       ? line.replace("circuitBreakerLocked=false", "circuitBreakerLocked=true")
       : line),
   }), false);
+  assert.equal(hasProof({ ...evidence, serverLines: [...evidence.serverLines, "T21_GUARD_BREAKER_FAIL player=AcceptanceGuardA reason=locked"] }), false);
   assert.equal(hasProof({ ...evidence, serverLines: [...evidence.serverLines, evidence.serverLines[0]] }), false);
   assert.equal(hasProof({
     ...evidence,

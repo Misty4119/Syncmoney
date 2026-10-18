@@ -90,6 +90,22 @@ test("recognizes only explicit guard-plus-breaker profile audit markers", () => 
   assert.equal(recognizes("GUARD_PROFILE_PASS mode=local_redis circuit-breaker=on player-protection=off optional-modules=off"), false);
 });
 
+test("keeps notice and breaker failure markers in owner-boundary audit evidence", () => {
+  const extract = guardBreakerAudit.extractGuardBreakerServerLines;
+  assert.equal(typeof extract, "function");
+  const ownerLine = "[INFO]: [SyncmoneyAcceptance] T21_GUARD_OWNER player=AcceptanceGuardA uuid=35c93f74-c540-3b38-8093-b5cb3c2263be selfOwned=true otherOwned=false scheduler=entity";
+  const acknowledgementLine = "[INFO]: [SyncmoneyAcceptance] T21_GUARD_NOTICE_ACK stage=1 player=AcceptanceGuardA uuid=35c93f74-c540-3b38-8093-b5cb3c2263be recipient=AcceptanceGuardA";
+  const breakerFailureLine = "[WARN]: [SyncmoneyAcceptance] T21_GUARD_BREAKER_FAIL player=AcceptanceGuardA reason=locked";
+
+  assert.deepEqual(extract([
+    ownerLine,
+    "[INFO]: unrelated server startup line",
+    acknowledgementLine,
+    breakerFailureLine,
+  ].join("\n")), [ownerLine, acknowledgementLine, breakerFailureLine]);
+  assert.deepEqual(extract(null), []);
+});
+
 test("canonical source hashes ignore LF, CRLF, and mixed line endings", () => {
   const lfBytes = Buffer.from("first line\nsecond line\n", "utf8");
   const crlfBytes = Buffer.from("first line\r\nsecond line\r\n", "utf8");
