@@ -812,6 +812,12 @@ The single-row migration fixture passed on Canvas `26.3#984` with Java `25.0.4+7
 
 This is one bounded Canvas/MariaDB one-row observation and does not establish all-row preservation or whole-database atomic rollback. Current-maximum Canvas/PostgreSQL `18.1` has since passed as a bounded one-row observation. Full Java/Gradle suites and the full PlugDev matrix were NOT RUN because no product source changed. Exact audit, source, server/candidate, and PlugDev manifest pins are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
 
+## T21 current-maximum v12 audit-schema startup rejection
+
+The current formal maxima Paper 26.3#200, Folia 26.3#3, and Canvas 26.3#984 each passed the newer-audit-schema v12 startup-rejection scenario with MySQL 8.0.42, MariaDB 12.3.3-MariaDB, and PostgreSQL 18.1 (nine bounded E2 cells). Candidate startup rejected v12, preserved the audit schema and sentinel, and completed rollback and plugin disable. Startup created main schema v1 and an empty players table; this does not establish whole-database atomic rollback.
+
+The matrix re-audited 267 retained logs / 566,794 bytes. The nine-report manifest, report/audit hashes, source and artifact pins, focused validation outputs, and evidence limits are in Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md. This closes only current-maximum v12 startup-rejection coverage; T21 remains IN_PROGRESS, and the full PlugDev matrix and full Java/Gradle suites were not run because no product source changed.
+
 ## T21 M05 minimum-Paper MariaDB SYNC runtime cell
 
 The MariaDB sibling cell exercises Paper `1.21.6#48`, Java 25, MariaDB `12.3.3-MariaDB` through the MySQL protocol, and isolated Redis `8.10.1`/DB 15. It accepts two Vault deposits, stops normally, checks SQL/Redis balance and version parity, restarts for persisted reads, then stops normally again. This is one bounded runtime observation; it does not establish MariaDB coverage on other Paper/Folia/Canvas endpoints or close the wider T21 matrix.
