@@ -29,6 +29,12 @@ export const T21_NETWORK_ENDPOINTS = Object.freeze({
     build: 3,
     serverJarSha256: "0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022",
   }),
+  "canvas-1218-603": Object.freeze({
+    product: "Canvas",
+    version: "1.21.8",
+    build: 603,
+    serverJarSha256: "6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b",
+  }),
 });
 // Keep existing Paper-only consumers scoped to Paper while the network map
 // admits additional products such as Folia.
@@ -144,6 +150,14 @@ export const T21_FOLIA_NETWORK_ARTIFACT_PATHS = Object.freeze(
     })
     : artifact),
 );
+export const T21_CANVAS_NETWORK_ARTIFACT_PATHS = Object.freeze(
+  T21_PAPER_NETWORK_ARTIFACT_PATHS.map(artifact => artifact.kind === "paper"
+    ? Object.freeze({
+      kind: "server",
+      path: artifact.path.replace("inputs/paper.jar", "inputs/canvas.jar"),
+    })
+    : artifact),
+);
 
 export class NetworkAuditError extends Error {
   constructor(failures) {
@@ -155,19 +169,21 @@ export class NetworkAuditError extends Error {
 
 export function endpointServerArtifactKind(endpoint) {
   if (endpoint?.product === "Paper") return "paper";
-  if (endpoint?.product === "Folia") return "server";
+  if (endpoint?.product === "Folia" || endpoint?.product === "Canvas") return "server";
   return null;
 }
 
 export function endpointServerJarFileName(endpoint) {
   if (endpoint?.product === "Paper") return "paper.jar";
   if (endpoint?.product === "Folia") return "folia.jar";
+  if (endpoint?.product === "Canvas") return "canvas.jar";
   return null;
 }
 
 export function networkArtifactPathsForEndpoint(endpoint) {
   if (endpoint?.product === "Paper") return T21_PAPER_NETWORK_ARTIFACT_PATHS;
   if (endpoint?.product === "Folia") return T21_FOLIA_NETWORK_ARTIFACT_PATHS;
+  if (endpoint?.product === "Canvas") return T21_CANVAS_NETWORK_ARTIFACT_PATHS;
   throw new NetworkAuditError([`unsupported network endpoint product ${String(endpoint?.product)}`]);
 }
 
@@ -565,7 +581,9 @@ function validateServerLogs(logABytes, logBBytes, runnerEvents, uuidA, uuidB, ex
   const logBytes = [logABytes, logBBytes];
   const logs = logBytes.map(bytes => bytes.toString("utf8"));
   for (const [name, log] of [["backend A", logs[0]], ["backend B", logs[1]]]) {
-    const identity = `This server is running ${expectedEndpoint.product} version ${expectedEndpoint.version}-${expectedEndpoint.build}-`;
+    const identity = expectedEndpoint.product === "Canvas"
+      ? `[bootstrap] Loading Canvas ${expectedEndpoint.version}-${expectedEndpoint.build}-`
+      : `This server is running ${expectedEndpoint.product} version ${expectedEndpoint.version}-${expectedEndpoint.build}-`;
     if (!log.includes(identity)) {
       fail(`${name} log lacks exact ${expectedEndpoint.product} ${expectedEndpoint.version}#${expectedEndpoint.build} startup identity marker`);
     }
@@ -717,6 +735,7 @@ function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes,
   const shutdownMarkers = {
     Paper: Buffer.from("[Server thread/INFO]: Stopping server", "utf8"),
     Folia: Buffer.from("[Region shutdown thread/INFO]: Stopping server", "utf8"),
+    Canvas: Buffer.from("[Region shutdown thread/INFO]: Stopping server", "utf8"),
   };
   const stopping = shutdownMarkers[expectedEndpoint.product];
   if (!stopping) {
@@ -1163,6 +1182,8 @@ export function resolvePinnedArtifactSources(workspaceRoot, endpointId) {
     server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "folia-1.21.6-6.jar");
   } else if (endpoint.product === "Folia" && endpointId === "folia-263-3") {
     server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "folia-26.3-3.jar");
+  } else if (endpoint.product === "Canvas" && endpointId === "canvas-1218-603") {
+    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "canvas-1.21.8-603.jar");
   } else {
     throw new NetworkAuditError([`no trusted server artifact source is configured for ${endpoint.product} endpoint ${endpointId}`]);
   }

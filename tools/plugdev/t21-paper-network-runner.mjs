@@ -141,7 +141,7 @@ function parseArguments(argv) {
     throw new Error("Unsupported runner argument: " + value);
   }
   if (!endpointId || !Object.hasOwn(T21_NETWORK_ENDPOINTS, endpointId)) {
-    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, --endpoint folia-1216-6, or --endpoint folia-263-3.");
+    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, --endpoint folia-1216-6, --endpoint folia-263-3, or --endpoint canvas-1218-603.");
   }
   return { endpointId, preflightOnly };
 }
@@ -602,7 +602,7 @@ async function createRunDirectories(runRoot) {
 async function copyInputArtifacts(runRoot, preflight) {
   const names = {
     paper: "paper.jar",
-    server: "folia.jar",
+    server: endpointServerJarFileName(preflight.endpoint),
     candidate: "Syncmoney.jar",
     acceptance: "SyncmoneyAcceptance.jar",
     vaultUnlocked: "VaultUnlocked.jar",
@@ -2131,6 +2131,7 @@ export {
   encodeRconPacket,
   runCapture,
   waitForRedisProcess,
+  copyInputArtifacts,
   stopPostgres,
   waitForSqlRetryEvidence,
   ensurePostgresAvailableForNetworkShutdown,

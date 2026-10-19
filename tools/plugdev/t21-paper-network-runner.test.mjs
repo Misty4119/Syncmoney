@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -440,6 +441,81 @@ test("runner selects the exact current-maximum Folia endpoint and its retained C
     "current-maximum-artifacts",
     "folia-26.3-3.jar",
   ));
+});
+
+test("runner selects the exact minimum Canvas endpoint and its retained C: artifact", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  let parsed;
+  let parseError;
+  try { parsed = parse(["--endpoint", "canvas-1218-603"]); }
+  catch (error) { parseError = error; }
+  assert.equal(parseError, undefined, parseError?.message);
+  assert.deepEqual(parsed, { endpointId: "canvas-1218-603", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-1218-603"], {
+    product: "Canvas",
+    version: "1.21.8",
+    build: 603,
+    serverJarSha256: "6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b",
+  });
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-1218-603");
+  assert.equal(sources.server, path.join(
+    WORKSPACE_ROOT,
+    "build",
+    "reports",
+    "foundation",
+    "T21-sql-runtime",
+    "minimum-artifacts",
+    "canvas-1.21.8-603.jar",
+  ));
+});
+
+test("PlugDev launches both minimum Canvas backends from the exact run-owned Canvas JAR", () => {
+  const runRoot = path.resolve("C:/t21-canvas-network-run-test");
+  const ports = {
+    proxy: 25565,
+    backendA: 25566,
+    backendB: 25567,
+    postgres: 25432,
+    redis: 26379,
+    rconA: 28000,
+    rconB: 28001,
+    bridge: 28100,
+  };
+  const endpoint = T21_NETWORK_ENDPOINTS["canvas-1218-603"];
+  const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
+  assert.equal(config.backends.length, 2);
+  for (const backend of config.backends) {
+    assert.equal(backend.software, "custom");
+    assert.equal(backend.version, "1.21.8");
+    assert.equal(backend.jar, path.join(runRoot, "inputs", "canvas.jar"));
+  }
+});
+
+test("stages the pinned Canvas server JAR under the input filename consumed by PlugDev", async () => {
+  const copyInputs = paperNetworkRunner.copyInputArtifacts;
+  assert.equal(typeof copyInputs, "function",
+    "the runner must expose its input-copy boundary so endpoint filenames can be tested");
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the artifact-copy fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-canvas-input-copy-"));
+  const artifactPath = path.join(runRoot, "trusted-canvas.jar");
+  const artifactBytes = Buffer.from("pinned canvas test jar");
+  try {
+    await mkdir(path.join(runRoot, "inputs"));
+    await writeFile(artifactPath, artifactBytes);
+    await copyInputs(runRoot, {
+      endpoint: T21_NETWORK_ENDPOINTS["canvas-1218-603"],
+      artifactSources: { server: artifactPath },
+      expectedHashes: {
+        server: crypto.createHash("sha256").update(artifactBytes).digest("hex"),
+      },
+    });
+    assert.deepEqual(await readFile(path.join(runRoot, "inputs", "canvas.jar")), artifactBytes);
+    await assert.rejects(readFile(path.join(runRoot, "inputs", "folia.jar")), { code: "ENOENT" });
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
 });
 
 test("PlugDev launches both Folia backends from the exact run-owned Folia JAR", () => {

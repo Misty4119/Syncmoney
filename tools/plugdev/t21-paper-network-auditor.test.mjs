@@ -16,6 +16,10 @@ import {
   T21_PAPER_NETWORK_HARNESS_SOURCES,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
   collectDirectoryManifest,
+  endpointServerArtifactKind,
+  endpointServerJarFileName,
+  networkArtifactPathsForEndpoint,
+  resolvePinnedArtifactSources,
   validateNetworkReport,
 } from "./t21-paper-network-auditor.mjs";
 
@@ -74,13 +78,14 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
   const serverNameB = "t21-net-b";
   const endpoint = T21_NETWORK_ENDPOINTS[endpointId];
   if (!endpoint) throw new Error(`unknown fixture endpoint ${endpointId}`);
-  const shutdownMarker = endpoint.product === "Folia"
+  const shutdownMarker = endpoint.product !== "Paper"
     ? "[Region shutdown thread/INFO]: Stopping server"
     : "[Server thread/INFO]: Stopping server";
   const serverKind = endpoint.product === "Paper" ? "paper" : "server";
-  const artifactPaths = endpoint.product === "Paper"
-    ? T21_PAPER_NETWORK_ARTIFACT_PATHS
-    : T21_FOLIA_NETWORK_ARTIFACT_PATHS;
+  const artifactPaths = networkArtifactPathsForEndpoint(endpoint);
+  const serverStartupIdentity = endpoint.product === "Canvas"
+    ? `[ServerMain/INFO]: [bootstrap] Loading Canvas ${endpoint.version}-${endpoint.build}-fixture`
+    : `[Server thread/INFO]: This server is running ${endpoint.product} version ${endpoint.version}-${endpoint.build}-fixture`;
   const contents = {
     [serverKind]: Buffer.from(`fixture-${endpoint.product.toLowerCase()}-jar`),
     candidate: Buffer.from("fixture-candidate-jar"),
@@ -134,7 +139,7 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
   } };
 
   const serverA = [
-    `[Server thread/INFO]: This server is running ${endpoint.product} version ${endpoint.version}-${endpoint.build}-fixture`,
+    serverStartupIdentity,
     "[Server thread/INFO]: Done (10.0s)! For help, type \"help\"",
     "AcceptanceA joined the game",
     "Failed to process batch to DB",
@@ -151,7 +156,7 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
   const serverAOutageStart = Buffer.byteLength(serverA.split("AcceptanceA joined the game\n")[0] + "AcceptanceA joined the game\n");
   const serverARecovered = Buffer.byteLength(serverA.split("T21_DRAIN owner=economy")[0]);
   const serverB = [
-    `[Server thread/INFO]: This server is running ${endpoint.product} version ${endpoint.version}-${endpoint.build}-fixture`,
+    serverStartupIdentity,
     "[Server thread/INFO]: Done (10.0s)! For help, type \"help\"",
     "AcceptanceB joined the game",
     "AcceptanceB joined the game",
@@ -487,6 +492,58 @@ test("accepts the current-maximum Folia network report with the exact endpoint i
     const result = audit(fixture);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
     assert.equal(result.endpoint, "Folia 26.3#3");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("accepts the minimum Canvas network report with its exact bootstrap identity", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  try {
+    assert.equal(fixture.report.endpoint.product, "Canvas");
+    assert.equal(fixture.report.endpoint.version, "1.21.8");
+    assert.equal(fixture.report.endpoint.build, 603);
+    assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
+    assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
+    assert.equal(endpointServerArtifactKind(fixture.expectedEndpoint), "server");
+    assert.equal(endpointServerJarFileName(fixture.expectedEndpoint), "canvas.jar");
+    assert.deepEqual(networkArtifactPathsForEndpoint(fixture.expectedEndpoint).filter(entry => entry.kind === "server").map(entry => entry.path), [
+      "inputs/canvas.jar",
+      "workspace/.plugdev/network/backends/backend-a/server.jar",
+      "workspace/.plugdev/network/backends/backend-b/server.jar",
+    ]);
+    const result = audit(fixture);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
+    assert.equal(result.endpoint, "Canvas 1.21.8#603");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a minimum Canvas server log with the wrong build identity", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  try {
+    await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
+      "[bootstrap] Loading Canvas 1.21.8-603-fixture",
+      "[bootstrap] Loading Canvas 1.21.8-604-fixture",
+    ));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 1\.21\.8#603 startup identity marker/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a minimum Canvas run when its copied server artifact changes", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  try {
+    await fs.writeFile(path.join(fixture.root, "inputs", "canvas.jar"), Buffer.from("tampered-canvas-server-jar"));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /artifact copy SHA-256 mismatch for inputs\/canvas\.jar/i.test(error.message),
+    );
   } finally {
     await fixture.close();
   }
