@@ -1342,20 +1342,62 @@ async function collectCleanupEvidence(ports, childEvents, checkPortOpen = isPort
       errors.push(`${name} port liveness probe failed: ${error?.message ?? error}`);
     }
   }
+  const processIdentityValid = event => Number.isSafeInteger(event.pid) && event.pid > 0 &&
+    typeof event.executable === "string" && event.executable.trim().length > 0 &&
+    Array.isArray(event.args) && event.args.every(argument => typeof argument === "string");
   const childEventsValid = Array.isArray(childEvents) && childEvents.every(event =>
-    event && typeof event === "object" && !Array.isArray(event) && typeof event.event === "string" &&
-    (!["spawn", "exit"].includes(event.event) || Number.isSafeInteger(event.pid)) &&
-    (event.event !== "spawn" || (typeof event.executable === "string" && Array.isArray(event.args))));
+    event && typeof event === "object" && !Array.isArray(event) &&
+    ["spawn", "exit", "kill"].includes(event.event) && processIdentityValid(event) &&
+    (event.event !== "exit" ||
+      ((Number.isSafeInteger(event.code) && event.signal === null) ||
+       (event.code === null && typeof event.signal === "string" && event.signal.trim().length > 0))) &&
+    (event.event !== "kill" || event.requestedSignal === null || typeof event.requestedSignal === "string"));
   if (!childEventsValid) errors.push("child-process liveness evidence is unavailable or malformed");
-  const spawns = (childEventsValid ? childEvents : []).filter(event =>
-    event.event === "spawn" && Array.isArray(event.args) && event.args.includes("-jar"));
-  const liveJavaChildren = spawns.filter(spawnEvent =>
-    !childEvents.some(event => event.event === "exit" && event.pid === spawnEvent.pid));
+  const processEvents = Array.isArray(childEvents)
+    ? childEvents.filter(event => event && typeof event === "object" && !Array.isArray(event))
+    : [];
+  const spawns = processEvents.filter(event => event.event === "spawn");
+  const exits = processEvents.filter(event => event.event === "exit");
+  const kills = processEvents.filter(event => event.event === "kill");
+  const isJavaChild = event => {
+    const executableName = typeof event.executable === "string"
+      ? path.basename(event.executable.replace(/\\/g, "/"))
+      : "";
+    return /^javaw?(?:\.exe)?$/i.test(executableName) ||
+      (Array.isArray(event.args) && event.args.includes("-jar"));
+  };
+  const hasInspectableJavaLaunch = event => {
+    if (!Array.isArray(event.args)) return false;
+    const jarIndex = event.args.indexOf("-jar");
+    const jarPath = jarIndex >= 0 ? event.args[jarIndex + 1] : null;
+    return typeof jarPath === "string" && jarPath.trim().length > 0 && path.isAbsolute(jarPath);
+  };
+  const sameCommandIdentity = (left, right) => left.pid === right.pid &&
+    left.executable === right.executable && JSON.stringify(left.args) === JSON.stringify(right.args);
+  const matchedSpawnPids = new Set();
+  for (const spawnEvent of spawns) {
+    const samePidSpawns = spawns.filter(event => event.pid === spawnEvent.pid);
+    const samePidExits = exits.filter(event => event.pid === spawnEvent.pid);
+    if ((isJavaChild(spawnEvent) && !hasInspectableJavaLaunch(spawnEvent)) ||
+        !childEventsValid || samePidSpawns.length !== 1 || samePidExits.length !== 1 ||
+        !sameCommandIdentity(spawnEvent, samePidExits[0])) {
+      errors.push(`child process ${String(spawnEvent.pid)} does not have complete command and matching identity-pinned exit evidence`);
+      continue;
+    }
+    matchedSpawnPids.add(spawnEvent.pid);
+  }
+  for (const exitEvent of exits) {
+    const samePidSpawns = spawns.filter(event => event.pid === exitEvent.pid);
+    if (samePidSpawns.length !== 1 || !sameCommandIdentity(samePidSpawns[0], exitEvent)) {
+      errors.push(`child process exit ${String(exitEvent.pid)} has no unique matching launch identity`);
+    }
+  }
+  const runOwnedProcessesRemaining = spawns.filter(event => !matchedSpawnPids.has(event.pid)).length;
   const evidenceComplete = errors.length === 0;
   return {
-    forcedCleanup: !evidenceComplete || liveJavaChildren.length > 0 || openPorts.length > 0,
+    forcedCleanup: !evidenceComplete || runOwnedProcessesRemaining > 0 || openPorts.length > 0 || kills.length > 0,
     evidenceComplete,
-    runOwnedProcessesRemaining: liveJavaChildren.length,
+    runOwnedProcessesRemaining,
     runOwnedPortsOpen: openPorts.length,
     openPorts,
     errors,

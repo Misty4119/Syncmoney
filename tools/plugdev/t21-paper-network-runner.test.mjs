@@ -90,6 +90,41 @@ test("cleanup evidence fails closed when child-process or port liveness evidence
   assert.match(failedPortProbe.errors.join(" "), /probe unavailable/i);
 });
 
+test("cleanup evidence rejects malformed or mismatched Java child exit records", async () => {
+  const javaExecutable = "C:/Program Files/Java/jdk-25.0.4/bin/java.exe";
+  const validSpawn = { event: "spawn", pid: 401, executable: javaExecutable, args: ["-jar", "C:/run/server.jar"] };
+  const missingExitIdentity = await collectCleanupEvidence({ bridge: 25003 }, [
+    validSpawn,
+    { event: "exit", pid: 401 },
+  ], async () => false);
+  assert.equal(missingExitIdentity.evidenceComplete, false);
+  assert.equal(missingExitIdentity.forcedCleanup, true);
+  assert.equal(missingExitIdentity.runOwnedProcessesRemaining, 1);
+
+  const missingExitStatus = await collectCleanupEvidence({ bridge: 25003 }, [
+    validSpawn,
+    { event: "exit", pid: 401, executable: javaExecutable, args: ["-jar", "C:/run/server.jar"], code: null, signal: null },
+  ], async () => false);
+  assert.equal(missingExitStatus.evidenceComplete, false);
+  assert.equal(missingExitStatus.forcedCleanup, true);
+  assert.equal(missingExitStatus.runOwnedProcessesRemaining, 1);
+
+  const mismatchedExitArguments = await collectCleanupEvidence({ bridge: 25003 }, [
+    validSpawn,
+    { event: "exit", pid: 401, executable: javaExecutable, args: ["-jar", "C:/run/other.jar"], code: 0, signal: null },
+  ], async () => false);
+  assert.equal(mismatchedExitArguments.evidenceComplete, false);
+  assert.equal(mismatchedExitArguments.forcedCleanup, true);
+
+  const javaWithoutInspectableArguments = await collectCleanupEvidence({ bridge: 25003 }, [
+    { event: "spawn", pid: 402, executable: javaExecutable, args: [] },
+    { event: "exit", pid: 402, executable: javaExecutable, args: [], code: 0, signal: null },
+  ], async () => false);
+  assert.equal(javaWithoutInspectableArguments.evidenceComplete, false);
+  assert.equal(javaWithoutInspectableArguments.forcedCleanup, true);
+  assert.equal(javaWithoutInspectableArguments.runOwnedProcessesRemaining, 1);
+});
+
 test("failed-run cleanup status cannot claim clean teardown without complete liveness evidence", () => {
   const state = { postgresStopped: false, redisStopped: false, networkStopped: false, clientStopped: false };
   const missingEvidence = buildFailureCleanupRecord(null, [], state);
@@ -139,8 +174,9 @@ test("cleanup evidence ignores exited Java children and non-Java helpers", async
   const redisExecutable = "C:/tools/redis-server.exe";
   const childEvents = [
     { event: "spawn", pid: 301, executable: javaExecutable, args: ["-jar", "C:/run/server.jar"] },
-    { event: "exit", pid: 301, executable: javaExecutable, args: ["-jar", "C:/run/server.jar"] },
+    { event: "exit", pid: 301, executable: javaExecutable, args: ["-jar", "C:/run/server.jar"], code: 0, signal: null },
     { event: "spawn", pid: 302, executable: redisExecutable, args: ["redis-server.exe", "redis.conf"] },
+    { event: "exit", pid: 302, executable: redisExecutable, args: ["redis-server.exe", "redis.conf"], code: 0, signal: null },
   ];
   const evidence = await collectCleanupEvidence({ bridge: 25003 }, childEvents, async () => false);
 
