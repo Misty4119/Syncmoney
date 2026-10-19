@@ -36,7 +36,7 @@ Assert-Predicate ($runnerSource -notmatch 'if \(\$script:sourceWorkingTreeDirty\
 $databaseManagerGuardPosition = $runnerSource.IndexOf('if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and')
 $runtimeSetupPosition = $runnerSource.IndexOf('$script:root = (Resolve-Path')
 Assert-Predicate ($databaseManagerGuardPosition -ge 0 -and $runtimeSetupPosition -gt $databaseManagerGuardPosition) 'A blocked DatabaseManager case must be rejected before runtime artifact, port, or service setup.'
-Assert-Predicate ($runnerSource.Contains('The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, or current-maximum Paper; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.')) 'The runner must explain the selected endpoint support and why the MySQL cell is blocked before runtime.'
+Assert-Predicate ($runnerSource.Contains('The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, current-maximum Paper, or current-maximum Folia; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.')) 'The runner must explain the selected endpoint support and why the MySQL cell is blocked before runtime.'
 Assert-Predicate ($runnerSource -match 'The completed report did not satisfy Test-T21DatabaseManagerInitFailureReport\.') 'DatabaseManager report failures must name their own validator.'
 foreach ($catalog in @('pg_catalog\.pg_class', 'pg_catalog\.pg_proc', 'pg_catalog\.pg_type')) {
     Assert-Predicate ($runnerSource -match $catalog) "PostgreSQL schema snapshot must count objects from $catalog."
@@ -51,14 +51,19 @@ Assert-Predicate ($runnerSource -match '(?s)if \(\$script:databaseManagerInitFai
 
 $auditPath = Join-Path $PSScriptRoot 'audit-t21-database-manager-init-failure.ps1'
 $auditSource = Get-Content -LiteralPath $auditPath -Raw
-Assert-Predicate ($auditSource -match "\[ValidateSet\('Minimum', 'MinimumFolia', 'CurrentMaximum'\)\]\[string\]\`$PlatformEndpoint = 'CurrentMaximum'") 'The offline auditor must support minimum Paper and minimum Folia while keeping CurrentMaximum as its default endpoint.'
-Assert-Predicate ($auditSource.Contains('$serverJarPinName = if ($PlatformEndpoint -ceq ''MinimumFolia'')')) 'The offline auditor must require the server-neutral JAR pin for Folia.'
+$auditLogHelperSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 't21-database-manager-init-audit-log.ps1') -Raw
+Assert-Predicate ($auditSource -match "\[ValidateSet\('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia'\)\]\[string\]\`$PlatformEndpoint = 'CurrentMaximum'") 'The offline auditor must support minimum Paper and Folia plus current-maximum Paper and Folia while keeping CurrentMaximum as its default endpoint.'
+Assert-Predicate ($auditSource.Contains('$serverJarPinName = Get-T21DatabaseManagerInitServerJarPinName -PlatformEndpoint $PlatformEndpoint -SourcePins $sourcePins')) 'The offline auditor must use the tested server-JAR pin selector.'
+Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'Minimum' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'paperJarSha256') 'A historical Paper report without serverJarSha256 must retain its paperJarSha256 fallback.'
+Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'CurrentMaximum' ([pscustomobject]@{serverJarSha256='a'*64})) -ceq 'serverJarSha256') 'A current Paper report must select serverJarSha256 when present.'
+Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'MinimumFolia' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'serverJarSha256') 'Minimum Folia must require the server-neutral JAR pin even if paperJarSha256 is present.'
+Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'CurrentMaximumFolia' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'serverJarSha256') 'Current-maximum Folia must require the server-neutral JAR pin even if paperJarSha256 is present.'
 Assert-Predicate ($auditSource.Contains('[ValidateSet(''PostgreSQL'', ''MySQL'')][string]$DatabaseProduct = ''PostgreSQL''')) 'The offline auditor must select the expected SQL product explicitly.'
 Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$PlatformEndpoint\s+\$DatabaseProduct\s*$') 'The offline auditor must pass its selected endpoint and SQL product to the report predicate.'
 Assert-Predicate ($auditSource -match 'Test-T21DatabaseManagerInitFailureStartupLog .*MySqlAppRole \(\[string\]\(Get-T21ObjectField \$observedPrivileges ''appRole''\)\)') 'The offline audit must bind the exact MySQL denial log line to its retained authenticated account.'
 Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$DatabaseProduct\s*$') 'The offline auditor must pass its selected database product to the report predicate.'
 foreach ($log in @('mysql-database-manager-init-authenticated-identity.txt', 'mysql-database-manager-init-grants.txt')) {
-    Assert-Predicate ($auditSource.Contains($log)) "The offline auditor must independently check the retained MySQL evidence log: $log"
+    Assert-Predicate ($auditLogHelperSource.Contains($log)) "The offline audit helper must construct the retained MySQL evidence log path: $log"
 }
 Assert-Predicate ($auditSource.Contains("`$databaseLogPrefix = if (`$DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }")) 'The offline auditor must select product-specific schema snapshot logs.'
 foreach ($stage in @('before', 'after')) {
@@ -152,13 +157,15 @@ function New-ValidMySqlCleanupEvidence {
 }
 
 function New-ValidDatabaseManagerInitFailureReport(
-    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum')][string]$PlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia')][string]$PlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
 ) {
     $server = if ($PlatformEndpoint -ceq 'Minimum') {
         [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48; sha256 = '0' * 64 }
     } elseif ($PlatformEndpoint -ceq 'MinimumFolia') {
         [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6; sha256 = '0' * 64 }
+    } elseif ($PlatformEndpoint -ceq 'CurrentMaximumFolia') {
+        [pscustomobject]@{ software = 'folia'; minecraftVersion = '26.3'; build = 3; sha256 = '0' * 64 }
     } else {
         [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200; sha256 = '0' * 64 }
     }
@@ -425,6 +432,7 @@ Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureCleanup $mySqlCleanup 
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'CurrentMaximum') 'The pinned PostgreSQL current-maximum cell should remain enabled.'
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Minimum') 'The pinned PostgreSQL minimum Paper cell should be enabled.'
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MinimumFolia') 'The pinned PostgreSQL minimum-Folia cell should be enabled.'
+Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'CurrentMaximumFolia') 'The pinned PostgreSQL current-maximum Folia cell should be enabled.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'Minimum')) 'MySQL minimum-Paper must remain disabled while CREATE DATABASE runs before the main pool and cannot be separated from CREATE TABLE denial.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Maximum')) 'The historical Paper maximum must not be accepted for this case.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MaximumFolia')) 'An unselected Folia endpoint must remain rejected.'
@@ -438,6 +446,21 @@ Assert-Predicate $minimumFoliaReportPassed 'The exactly pinned minimum-Folia/Pos
 $minimumFoliaReport.server.software = 'paper'
 $minimumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumFolia'
 Assert-Predicate (-not $minimumFoliaReportPassed) 'A minimum-Folia report identifying itself as Paper must be rejected.'
+
+$currentMaximumFoliaReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint CurrentMaximumFolia
+$currentMaximumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $currentMaximumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'CurrentMaximumFolia'
+Assert-Predicate $currentMaximumFoliaReportPassed 'The exactly pinned current-maximum Folia/PostgreSQL startup-failure report should pass.'
+$currentMaximumFoliaReport.server.software = 'paper'
+$currentMaximumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $currentMaximumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'CurrentMaximumFolia'
+Assert-Predicate (-not $currentMaximumFoliaReportPassed) 'A current-maximum Folia report identifying itself as Paper must be rejected.'
+$currentMaximumFoliaReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint CurrentMaximumFolia
+$currentMaximumFoliaReport.server.build = 2
+$currentMaximumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $currentMaximumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'CurrentMaximumFolia'
+Assert-Predicate (-not $currentMaximumFoliaReportPassed) 'A current-maximum Folia report with the wrong build must be rejected.'
+$currentMaximumFoliaReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint CurrentMaximumFolia
+$currentMaximumFoliaReport.server.sha256 = 'f' * 64
+$currentMaximumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $currentMaximumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'CurrentMaximumFolia'
+Assert-Predicate (-not $currentMaximumFoliaReportPassed) 'A current-maximum Folia report with the wrong pinned server SHA-256 must be rejected.'
 
 $legacyMinimumReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint Minimum
 $legacyPaperJarSha256 = $legacyMinimumReport.sourcePins.serverJarSha256
