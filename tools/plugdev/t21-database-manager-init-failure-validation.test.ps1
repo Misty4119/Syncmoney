@@ -27,23 +27,42 @@ $reportCallArguments = @($databaseManagerReportCalls[0].CommandElements | Select
 $expectedReportCallArguments = @(
     '$script:finalReport', '$ExpectedServerSha256', '$ExpectedCandidateSha256',
     '$script:plugDevSourceCommit', '$script:plugDevCliSha256', '$script:plugDevCliDistManifest.sha256',
-    '$acceptanceSha256', '$apiConsumerSha256', '$script:sourceCommit', '$PlatformEndpoint'
+    '$acceptanceSha256', '$apiConsumerSha256', '$script:sourceCommit', '$PlatformEndpoint', '$script:databaseProduct'
 )
 Assert-Predicate (($reportCallArguments -join "`n") -ceq ($expectedReportCallArguments -join "`n")) 'The runtime runner must pass all report pins and the selected Paper endpoint to the DatabaseManager predicate.'
-Assert-Predicate (([regex]::Matches($runnerSource, 'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-\$PlatformEndpoint')).Count -eq 2) 'Both in-progress and final DatabaseManager reports must use the endpoint identifier accepted by the report predicate.'
+Assert-Predicate (([regex]::Matches($runnerSource, 'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-\$script:databaseProduct-\$PlatformEndpoint')).Count -eq 2) 'Both in-progress and final DatabaseManager reports must use the selected SQL product and endpoint identifiers accepted by the report predicate.'
 Assert-Predicate ($runnerSource -match '\$DatabaseManagerInitFailureStartupFailure\.IsPresent -and\s+\$script:sourceWorkingTreeDirty') 'The clean-source guard must be limited to the DatabaseManager initialization-failure case.'
 Assert-Predicate ($runnerSource -notmatch 'if \(\$script:sourceWorkingTreeDirty\)') 'The clean-source guard must not change behavior for other T21 runner modes.'
+$databaseManagerGuardPosition = $runnerSource.IndexOf('if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and')
+$runtimeSetupPosition = $runnerSource.IndexOf('$script:root = (Resolve-Path')
+Assert-Predicate ($databaseManagerGuardPosition -ge 0 -and $runtimeSetupPosition -gt $databaseManagerGuardPosition) 'A blocked DatabaseManager case must be rejected before runtime artifact, port, or service setup.'
+Assert-Predicate ($runnerSource.Contains('The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum/current-maximum Paper; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.')) 'The runner must explain why the selected MySQL cell is blocked before runtime.'
 Assert-Predicate ($runnerSource -match 'The completed report did not satisfy Test-T21DatabaseManagerInitFailureReport\.') 'DatabaseManager report failures must name their own validator.'
 foreach ($catalog in @('pg_catalog\.pg_class', 'pg_catalog\.pg_proc', 'pg_catalog\.pg_type')) {
     Assert-Predicate ($runnerSource -match $catalog) "PostgreSQL schema snapshot must count objects from $catalog."
 }
 Assert-Predicate ($runnerSource -match "'publicObjectCount'") 'PostgreSQL schema snapshot must expose its public object count.'
+foreach ($catalog in @('information_schema\.tables', 'information_schema\.routines', 'information_schema\.triggers', 'information_schema\.events')) {
+    Assert-Predicate ($runnerSource -match $catalog) "MySQL schema snapshot must count objects from $catalog."
+}
+Assert-Predicate ($runnerSource -match 'databaseObjectCount') 'MySQL schema snapshot must expose its database object count.'
+Assert-Predicate ($runnerSource -match 'GRANT SELECT, INSERT, UPDATE, DELETE ON \$\(\$script:databaseName\)\.\* TO') 'The MySQL initial-schema case must provision only the exact DML grants needed to connect and inspect the empty database.'
 Assert-Predicate ($runnerSource -match '(?s)if \(\$script:databaseManagerInitFailureStartupFailure\)\s*\{\s*\$script:finalReport\.runner\s*=\s*\$script:report\.runner\s*\}') 'Only the DatabaseManager report should retain the runner provenance object consumed by its validator and offline auditor.'
 
 $auditPath = Join-Path $PSScriptRoot 'audit-t21-database-manager-init-failure.ps1'
 $auditSource = Get-Content -LiteralPath $auditPath -Raw
 Assert-Predicate ($auditSource -match "\[ValidateSet\('Minimum', 'CurrentMaximum'\)\]\[string\]\`$PlatformEndpoint = 'CurrentMaximum'") 'The offline auditor must support minimum Paper while keeping CurrentMaximum as its default endpoint.'
-Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$PlatformEndpoint\s*$') 'The offline auditor must pass its selected endpoint to the report predicate.'
+Assert-Predicate ($auditSource.Contains('[ValidateSet(''PostgreSQL'', ''MySQL'')][string]$DatabaseProduct = ''PostgreSQL''')) 'The offline auditor must select the expected SQL product explicitly.'
+Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$PlatformEndpoint\s+\$DatabaseProduct\s*$') 'The offline auditor must pass its selected endpoint and SQL product to the report predicate.'
+Assert-Predicate ($auditSource -match 'Test-T21DatabaseManagerInitFailureStartupLog .*MySqlAppRole \(\[string\]\(Get-T21ObjectField \$observedPrivileges ''appRole''\)\)') 'The offline audit must bind the exact MySQL denial log line to its retained authenticated account.'
+Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$DatabaseProduct\s*$') 'The offline auditor must pass its selected database product to the report predicate.'
+foreach ($log in @('mysql-database-manager-init-authenticated-identity.txt', 'mysql-database-manager-init-grants.txt')) {
+    Assert-Predicate ($auditSource.Contains($log)) "The offline auditor must independently check the retained MySQL evidence log: $log"
+}
+Assert-Predicate ($auditSource.Contains("`$databaseLogPrefix = if (`$DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }")) 'The offline auditor must select product-specific schema snapshot logs.'
+foreach ($stage in @('before', 'after')) {
+    Assert-Predicate ($auditSource.Contains("{0}-database-manager-schema-$stage.txt")) "The offline auditor must check the $stage MySQL schema snapshot log."
+}
 Assert-Predicate ($auditSource -match 'Test-T21DatabaseManagerInitFailureStringFields \$sourcePins \$sourcePinExpected') 'The offline auditor must validate source pins as scalar strings.'
 foreach ($field in @('databaseManagerSourceSha256', 'storageManagerSourceSha256', 'syncmoneyLifecycleSourceSha256')) {
     Assert-Predicate ($auditSource -match ('{0} = \$sourceHashes\.' -f [regex]::Escape($field))) "The offline auditor must compare the Java source pin against its current file hash: $field"
@@ -92,14 +111,64 @@ function New-ValidCleanupEvidence {
     }
 }
 
-function New-ValidDatabaseManagerInitFailureReport([ValidateSet('Minimum', 'CurrentMaximum')][string]$PlatformEndpoint = 'CurrentMaximum') {
+function New-ValidMySqlPrivilegeEvidence {
+    $appRole = 'sm_t21_89abcdef'
+    $targetDatabase = 'syncmoney_t21_89abcdef'
+    $account = [char]96 + $appRole + [char]96 + '@' + [char]96 + '127.0.0.1' + [char]96
+    $database = [char]96 + $targetDatabase + [char]96
+    [pscustomobject]@{
+        product = 'MySQL'
+        appRole = $appRole
+        targetDatabase = $targetDatabase
+        authenticatedIdentity = $appRole + '@127.0.0.1' + [char]9 + $targetDatabase
+        grantStatements = @(
+            "GRANT USAGE ON *.* TO $account"
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON $database.* TO $account"
+        )
+    }
+}
+
+function New-ValidMySqlSchemaEvidence {
+    [pscustomobject]@{
+        before = [pscustomobject]@{ playersTableExists = $false; schemaVersionTableExists = $false; databaseTableCount = 0; databaseObjectCount = 0 }
+        after = [pscustomobject]@{ playersTableExists = $false; schemaVersionTableExists = $false; databaseTableCount = 0; databaseObjectCount = 0 }
+    }
+}
+
+function New-ValidMySqlCleanupEvidence {
+    [pscustomobject]@{
+        forcedCleanup = $false
+        serverStopped = $true
+        serverProcessCount = 0
+        mysqlStopped = $true
+        redisStopped = $true
+        runOwnedPortsClosed = $true
+        sqlOtherConnections = 0
+        redisOtherClients = 0
+        redisDbSize = 0
+        cleanupFailures = @()
+    }
+}
+
+function New-ValidDatabaseManagerInitFailureReport(
+    [ValidateSet('Minimum', 'CurrentMaximum')][string]$PlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
+) {
     $server = if ($PlatformEndpoint -ceq 'Minimum') {
         [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48; sha256 = '0' * 64 }
     } else {
         [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200; sha256 = '0' * 64 }
     }
+    $databaseName = 'syncmoney_t21_89abcdef'
+    $startupFailureMessage = if ($DatabaseProduct -ceq 'PostgreSQL') {
+        'Failed to initialize database schema: ERROR: permission denied for schema public'
+    } else {
+        "Failed to initialize database schema: CREATE command denied to user 'sm_t21_89abcdef'@'127.0.0.1' for table 'players'"
+    }
+    $schemaEvidence = if ($DatabaseProduct -ceq 'PostgreSQL') { New-ValidSchemaEvidence } else { New-ValidMySqlSchemaEvidence }
+    $cleanupEvidence = if ($DatabaseProduct -ceq 'PostgreSQL') { New-ValidCleanupEvidence } else { New-ValidMySqlCleanupEvidence }
     [pscustomobject]@{
-        task = "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$PlatformEndpoint"
+        task = "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$DatabaseProduct-$PlatformEndpoint"
         status = 'PASS_BOUNDED_SUBCASE'
         sourceCommit = 'd' * 40
         sourceCommitAfter = 'd' * 40
@@ -109,23 +178,28 @@ function New-ValidDatabaseManagerInitFailureReport([ValidateSet('Minimum', 'Curr
         server = $server
         candidate = [pscustomobject]@{ version = '1.4.0-alpha.1'; sha256 = '1' * 64 }
         artifacts = [pscustomobject]@{ acceptanceSha256 = '4' * 64; apiConsumerSha256 = '5' * 64 }
-        sqlBackend = [pscustomobject]@{ product = 'PostgreSQL'; version = '18.1' }
+        sqlBackend = if ($DatabaseProduct -ceq 'PostgreSQL') {
+            [pscustomobject]@{ product = 'PostgreSQL'; version = '18.1' }
+        } else {
+            [pscustomobject]@{ product = 'MySQL'; version = '8.0.42' }
+        }
         redis = [pscustomobject]@{ version = '8.10.1' }
         configuration = [pscustomobject]@{
-            mode = 'sync'; databaseType = 'postgresql'; databaseEnabled = $true; databaseIsolated = $true
+            mode = 'sync'; databaseType = $(if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
+            databaseName = $databaseName; databaseEnabled = $true; databaseIsolated = $true
             redisEnabled = $true; redisIsolated = $true; redisDatabase = 15
         }
         startupObservation = [pscustomobject]@{
             stage = 'candidate-startup-failure'; pluginVersion = '1.4.0-alpha.1'
             expectedFailure = 'database-manager-initial-schema-failure'
-            failureMessage = 'Failed to initialize database schema: ERROR: permission denied for schema public'
+            failureMessage = $startupFailureMessage
             enabled = $false; failureObserved = $true; rollbackComplete = $true; sqlPoolStartObserved = $true
             sqlPoolShutdownObserved = $true; disabledMarker = $true; successMarkerObserved = $false
         }
-        databaseDdlPrivileges = New-ValidPrivilegeEvidence
-        schemaStateBefore = (New-ValidSchemaEvidence).before
-        schemaStateAfter = (New-ValidSchemaEvidence).after
-        resourceCleanup = New-ValidCleanupEvidence
+        databaseDdlPrivileges = if ($DatabaseProduct -ceq 'PostgreSQL') { New-ValidPrivilegeEvidence } else { New-ValidMySqlPrivilegeEvidence }
+        schemaStateBefore = $schemaEvidence.before
+        schemaStateAfter = $schemaEvidence.after
+        resourceCleanup = $cleanupEvidence
         cleanupFailures = @()
         plugDev = [pscustomobject]@{
             sourceCommit = 'a' * 40; cliSha256 = 'b' * 64
@@ -176,6 +250,28 @@ $validLog = @'
 $result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $validLog -CandidateVersion '1.4.0-alpha.1'
 Assert-Predicate $result.passed 'The ordered PostgreSQL schema-denial startup log should pass.'
 Assert-Predicate ($null -ne (Get-Command Get-T21PlugDevCliDistManifest -ErrorAction SilentlyContinue)) 'The startup-failure validator must expose the PlugDev manifest helper consumed by the offline auditor.'
+
+$validMySqlLog = @'
+[Syncmoney] Loading server plugin Syncmoney v1.4.0-alpha.1
+[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Start completed.
+[Syncmoney] Failed to initialize database schema: CREATE command denied to user 'sm_t21_89abcdef'@'127.0.0.1' for table 'players'
+[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.
+[Syncmoney] Syncmoney initialization failed; rolling back initialized owners
+[Server thread/INFO]: Disabling Syncmoney v1.4.0-alpha.1
+'@
+$result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $validMySqlLog -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct MySQL -MySqlAppRole 'sm_t21_89abcdef'
+Assert-Predicate $result.passed 'The ordered MySQL CREATE-denial startup log should pass.'
+$wrongMySqlFailure = $validMySqlLog.Replace('CREATE command denied to user', 'Access denied for user')
+$result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $wrongMySqlFailure -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct MySQL -MySqlAppRole 'sm_t21_89abcdef'
+Assert-Predicate (-not $result.passed) 'A MySQL connection failure must not impersonate a schema CREATE denial.'
+$wrongMySqlAccountLog = $validMySqlLog.Replace("user 'sm_t21_89abcdef'@'127.0.0.1'", "user 'sm_t21_01234567'@'127.0.0.1'")
+$result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $wrongMySqlAccountLog -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct MySQL -MySqlAppRole 'sm_t21_89abcdef'
+Assert-Predicate (-not $result.passed) 'A MySQL denial for a different account must fail the retained-log predicate.'
+$wrongMySqlTableLog = $validMySqlLog.Replace("for table 'players'", "for table 'other'")
+$result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $wrongMySqlTableLog -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct MySQL -MySqlAppRole 'sm_t21_89abcdef'
+Assert-Predicate (-not $result.passed) 'A MySQL denial for a different table must fail the retained-log predicate.'
+$result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $validMySqlLog -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct MySQL
+Assert-Predicate (-not $result.passed) 'A MySQL retained-log audit must require its pinned application account.'
 
 $missingPoolClose = $validLog.Replace('[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.', '')
 $result = Test-T21DatabaseManagerInitFailureStartupLog -LogText $missingPoolClose -CandidateVersion '1.4.0-alpha.1'
@@ -244,6 +340,21 @@ $privileges = New-ValidPrivilegeEvidence
 $privileges.appRoleHasPublicCreate = 'false'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailurePrivileges $privileges).passed) 'String-shaped privilege evidence must fail closed.'
 
+$mySqlPrivileges = New-ValidMySqlPrivilegeEvidence
+Assert-Predicate ((Test-T21DatabaseManagerInitFailureMySqlPrivileges $mySqlPrivileges).passed) 'The isolated MySQL account with only target-database DML privileges should pass.'
+$mySqlPrivileges = New-ValidMySqlPrivilegeEvidence
+$mySqlPrivileges.grantStatements[1] = $mySqlPrivileges.grantStatements[1].Replace('SELECT, INSERT, UPDATE, DELETE', 'SELECT, INSERT, UPDATE, DELETE, CREATE')
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureMySqlPrivileges $mySqlPrivileges).passed) 'A MySQL CREATE privilege on the isolated database must be rejected.'
+$mySqlPrivileges = New-ValidMySqlPrivilegeEvidence
+$mySqlPrivileges.grantStatements += 'GRANT CREATE ON *.* TO sm_t21_89abcdef@127.0.0.1'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureMySqlPrivileges $mySqlPrivileges).passed) 'An extra global MySQL grant must be rejected.'
+$mySqlPrivileges = New-ValidMySqlPrivilegeEvidence
+$mySqlPrivileges.authenticatedIdentity = 'sm_t21_89abcdef@localhost' + [char]9 + 'syncmoney_t21_89abcdef'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureMySqlPrivileges $mySqlPrivileges).passed) 'A MySQL connection authenticated as a different host account must be rejected.'
+$mySqlPrivileges = New-ValidMySqlPrivilegeEvidence
+$mySqlPrivileges.grantStatements = 'GRANT USAGE ON *.*'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureMySqlPrivileges $mySqlPrivileges).passed) 'Scalar MySQL grant evidence must fail closed.'
+
 $schema = New-ValidSchemaEvidence
 Assert-Predicate ((Test-T21DatabaseManagerInitFailureSchemaState $schema).passed) 'An unchanged empty initial schema should pass.'
 
@@ -262,6 +373,18 @@ Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureSchemaState $schema).p
 $schema = New-ValidSchemaEvidence
 $schema.after.publicTableCount = '0'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureSchemaState $schema).passed) 'String-shaped table counts must fail closed.'
+
+$mySqlSchema = New-ValidMySqlSchemaEvidence
+Assert-Predicate ((Test-T21DatabaseManagerInitFailureSchemaState $mySqlSchema MySQL).passed) 'An unchanged empty MySQL database schema should pass.'
+$mySqlSchema = New-ValidMySqlSchemaEvidence
+$mySqlSchema.after.databaseObjectCount = 1
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureSchemaState $mySqlSchema MySQL).passed) 'A MySQL routine, trigger, event, view, or other schema object must fail the empty-schema assertion.'
+$mySqlSchema = New-ValidMySqlSchemaEvidence
+$mySqlSchema.before.playersTableExists = $true
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureSchemaState $mySqlSchema MySQL).passed) 'A pre-existing MySQL players table must be rejected.'
+$mySqlSchema = New-ValidMySqlSchemaEvidence
+$mySqlSchema.after.databaseTableCount = '0'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureSchemaState $mySqlSchema MySQL).passed) 'String-shaped MySQL schema counts must fail closed.'
 
 $cleanup = New-ValidCleanupEvidence
 Assert-Predicate ((Test-T21DatabaseManagerInitFailureCleanup $cleanup).passed) 'Graceful, zero-residue cleanup should pass.'
@@ -290,15 +413,32 @@ $cleanup = New-ValidCleanupEvidence
 $cleanup.cleanupFailures = 'none'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureCleanup $cleanup).passed) 'Scalar cleanup evidence must fail closed.'
 
+$mySqlCleanup = New-ValidMySqlCleanupEvidence
+Assert-Predicate ((Test-T21DatabaseManagerInitFailureCleanup $mySqlCleanup MySQL).passed) 'Graceful MySQL cleanup with zero residual resources should pass.'
+$mySqlCleanup = New-ValidMySqlCleanupEvidence
+$mySqlCleanup.mysqlStopped = $false
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureCleanup $mySqlCleanup MySQL).passed) 'A MySQL backend that did not stop must fail closed.'
+
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'CurrentMaximum') 'The pinned PostgreSQL current-maximum cell should remain enabled.'
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Minimum') 'The pinned PostgreSQL minimum Paper cell should be enabled.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'Minimum')) 'MySQL minimum-Paper must remain disabled while CREATE DATABASE runs before the main pool and cannot be separated from CREATE TABLE denial.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Maximum')) 'The historical Paper maximum must not be accepted for this case.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MinimumFolia')) 'An unselected Folia endpoint must remain rejected.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'CurrentMaximum')) 'A different SQL product must not be accepted for this cell.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MariaDB' 'Minimum')) 'The unselected MariaDB product must remain rejected for this bounded cell.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'MinimumFolia')) 'The unselected Folia platform must remain rejected for this bounded cell.'
 
 $report = New-ValidDatabaseManagerInitFailureReport
 $reportPassed = Test-T21DatabaseManagerInitFailureReport $report ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40)
 Assert-Predicate $reportPassed 'The pinned Paper/PostgreSQL startup-failure report should pass.'
+
+$mySqlReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint Minimum -DatabaseProduct MySQL
+$mySqlReportPassed = Test-T21DatabaseManagerInitFailureReport $mySqlReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) -ExpectedPlatformEndpoint Minimum -ExpectedDatabaseProduct MySQL
+Assert-Predicate (-not $mySqlReportPassed) 'A MySQL report must remain unaccepted while the minimum-Paper case is blocked before runtime.'
+
+$mySqlMaximumReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint CurrentMaximum -DatabaseProduct MySQL
+$mySqlMaximumReportPassed = Test-T21DatabaseManagerInitFailureReport $mySqlMaximumReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) -ExpectedPlatformEndpoint CurrentMaximum -ExpectedDatabaseProduct MySQL
+Assert-Predicate (-not $mySqlMaximumReportPassed) 'A MySQL CurrentMaximum report must be rejected by the minimum-Paper-only case predicate.'
 
 $minimumReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint Minimum
 $reportPassed = Test-T21DatabaseManagerInitFailureReport $minimumReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40)

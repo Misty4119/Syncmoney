@@ -8,6 +8,7 @@ param(
     [string]$CandidateJar = 'build\libs\Syncmoney-1.4.0-alpha.1.jar',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedServerSha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d',
     [ValidateSet('Minimum', 'CurrentMaximum')][string]$PlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256 = '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedAcceptanceSha256 = '4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedApiConsumerSha256 = '49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e',
@@ -180,7 +181,7 @@ Assert-T21DatabaseManagerInitFailure $artifactPinsMatch 'Runtime report source, 
 $server = Get-T21ObjectField $report 'server'
 Assert-T21DatabaseManagerInitFailure (Test-T21DatabaseManagerInitFailureStringField $server 'path' $serverJarPath) 'Runtime report server path differs from the pinned input artifact.'
 Assert-T21DatabaseManagerInitFailure (Test-T21DatabaseManagerInitFailureInteger $server 'bytes' ([long](Get-Item -LiteralPath $serverJarPath).Length)) 'Runtime report Paper artifact byte count differs from the pinned input.'
-$reportPredicate = Test-T21DatabaseManagerInitFailureReport $report $serverHash $candidateHash $plugDevCommit $plugDevCliHash $plugDevManifest.sha256 $acceptanceHash $apiConsumerHash $syncmoneySourceCommit $PlatformEndpoint
+$reportPredicate = Test-T21DatabaseManagerInitFailureReport $report $serverHash $candidateHash $plugDevCommit $plugDevCliHash $plugDevManifest.sha256 $acceptanceHash $apiConsumerHash $syncmoneySourceCommit $PlatformEndpoint $DatabaseProduct
 Assert-T21DatabaseManagerInitFailure ([bool]$reportPredicate) 'The report-specific DatabaseManager initial-schema predicate rejected the runtime report.'
 
 $logs = Get-T21ObjectField $report 'logs'
@@ -202,27 +203,49 @@ foreach ($relativePath in $logs.Keys) {
     $auditedLogCount++
 }
 
-$privilegeLog = Join-Path $runRoot 'logs\postgresql-database-manager-init-privileges.txt'
-$beforeLog = Join-Path $runRoot 'logs\postgresql-database-manager-schema-before.txt'
-$afterLog = Join-Path $runRoot 'logs\postgresql-database-manager-schema-after.txt'
-foreach ($path in @($privilegeLog, $beforeLog, $afterLog)) {
+$databaseLogPrefix = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
+$beforeLog = Join-Path $runRoot ("logs\{0}-database-manager-schema-before.txt" -f $databaseLogPrefix)
+$afterLog = Join-Path $runRoot ("logs\{0}-database-manager-schema-after.txt" -f $databaseLogPrefix)
+$privilegeLogPaths = if ($DatabaseProduct -ceq 'PostgreSQL') {
+    @((Join-Path $runRoot 'logs\postgresql-database-manager-init-privileges.txt'))
+} else {
+    @(
+        (Join-Path $runRoot 'logs\mysql-database-manager-init-authenticated-identity.txt')
+        (Join-Path $runRoot 'logs\mysql-database-manager-init-grants.txt')
+    )
+}
+$requiredEvidenceLogs = @($privilegeLogPaths) + @($beforeLog, $afterLog)
+foreach ($path in $requiredEvidenceLogs) {
     $relativePath = $path.Substring($runRoot.Length).TrimStart('\')
-    Assert-T21DatabaseManagerInitFailure ($logs.Contains($relativePath)) "Required PostgreSQL evidence log is absent from the report manifest: $relativePath"
+    Assert-T21DatabaseManagerInitFailure ($logs.Contains($relativePath)) "Required $DatabaseProduct evidence log is absent from the report manifest: $relativePath"
 }
 $reportPrivileges = Get-T21ObjectField $report 'databaseDdlPrivileges'
-$observedPrivileges = Get-Content -LiteralPath $privilegeLog -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedPrivileges $reportPrivileges) 'PostgreSQL privilege JSON log differs from the report evidence.'
+if ($DatabaseProduct -ceq 'PostgreSQL') {
+    $observedPrivileges = Get-Content -LiteralPath $privilegeLogPaths[0] -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+} else {
+    $identityLines = @(Get-Content -LiteralPath $privilegeLogPaths[0] -ErrorAction Stop)
+    $grantLines = @(Get-Content -LiteralPath $privilegeLogPaths[1] -ErrorAction Stop)
+    Assert-T21DatabaseManagerInitFailure ($identityLines.Count -eq 1 -and $grantLines.Count -eq 2) 'MySQL must retain exactly one authenticated-identity row and two grant rows.'
+    $observedPrivileges = [ordered]@{
+        product = 'MySQL'
+        appRole = Get-T21ObjectField $reportPrivileges 'appRole'
+        targetDatabase = Get-T21ObjectField $reportPrivileges 'targetDatabase'
+        authenticatedIdentity = $identityLines[0]
+        grantStatements = [string[]]$grantLines
+    }
+}
+Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedPrivileges $reportPrivileges) "$DatabaseProduct privilege logs differ from the report evidence."
 $reportBefore = Get-T21ObjectField $report 'schemaStateBefore'
 $observedBefore = Get-Content -LiteralPath $beforeLog -Raw | ConvertFrom-Json -ErrorAction Stop
-Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedBefore $reportBefore) 'Pre-start PostgreSQL schema JSON log differs from the report evidence.'
+Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedBefore $reportBefore) "Pre-start $DatabaseProduct schema JSON log differs from the report evidence."
 $reportAfter = Get-T21ObjectField $report 'schemaStateAfter'
 $observedAfter = Get-Content -LiteralPath $afterLog -Raw | ConvertFrom-Json -ErrorAction Stop
-Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedAfter $reportAfter) 'Post-failure PostgreSQL schema JSON log differs from the report evidence.'
+Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedAfter $reportAfter) "Post-failure $DatabaseProduct schema JSON log differs from the report evidence."
 
 $serverLogEvidence = Get-T21DatabaseManagerInitAuditLogEvidence -Report $report -Logs $logs
 $serverLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $serverLogEvidence.path))
 $serverLogText = Get-Content -LiteralPath $serverLogPath -Raw -ErrorAction Stop
-$startupLogAudit = Test-T21DatabaseManagerInitFailureStartupLog -LogText $serverLogText -CandidateVersion '1.4.0-alpha.1'
+$startupLogAudit = Test-T21DatabaseManagerInitFailureStartupLog -LogText $serverLogText -CandidateVersion '1.4.0-alpha.1' -DatabaseProduct $DatabaseProduct -MySqlAppRole ([string](Get-T21ObjectField $observedPrivileges 'appRole'))
 Assert-T21DatabaseManagerInitFailure ([bool]$startupLogAudit.passed) "Retained Paper startup log failed the ordered startup/cleanup predicate: $($startupLogAudit.failures -join '; ')"
 
 $runDirectory = [IO.Path]::GetFullPath([string](Get-T21ObjectField $report 'runDirectory'))
@@ -239,6 +262,7 @@ $resultLines = @(
     "reportBytes=$((Get-Item -LiteralPath $reportFullPath).Length)",
     "platformLogStage=$($serverLogEvidence.stage)",
     "serverLog=$serverLogPath",
+    "databaseProduct=$DatabaseProduct",
     "serverLogSha256=$(Get-T21Hash $serverLogPath)",
     "retainedLogsAudited=$auditedLogCount",
     "sourceCommit=$syncmoneySourceCommit",

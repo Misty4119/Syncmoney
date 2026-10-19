@@ -92,7 +92,12 @@ function New-T21DatabaseManagerInitFailureResult([string[]]$Failures) {
     }
 }
 
-function Test-T21DatabaseManagerInitFailureStartupLog([string]$LogText, [string]$CandidateVersion) {
+function Test-T21DatabaseManagerInitFailureStartupLog(
+    [string]$LogText,
+    [string]$CandidateVersion,
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL',
+    [string]$MySqlAppRole
+) {
     $failures = [System.Collections.Generic.List[string]]::new()
     if ([string]::IsNullOrWhiteSpace($LogText)) {
         $failures.Add('server log is empty')
@@ -103,10 +108,19 @@ function Test-T21DatabaseManagerInitFailureStartupLog([string]$LogText, [string]
         return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
     }
 
+    $databaseFailureMarker = if ($DatabaseProduct -ceq 'PostgreSQL') {
+        'Failed to initialize database schema: ERROR: permission denied for schema public'
+    } else {
+        if ($MySqlAppRole -notmatch '^sm_t21_[0-9a-f]{8}$') {
+            $failures.Add('MySQL application account is missing or malformed')
+            return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
+        }
+        "Failed to initialize database schema: CREATE command denied to user '$MySqlAppRole'@'127.0.0.1' for table 'players'"
+    }
     $markers = @(
         'Loading server plugin Syncmoney v' + $CandidateVersion
         'Syncmoney-HikariCP - Start completed.'
-        'Failed to initialize database schema: ERROR: permission denied for schema public'
+    ) + @($databaseFailureMarker) + @(
         'Syncmoney-HikariCP - Shutdown completed.'
         'Syncmoney initialization failed; rolling back initialized owners'
         'Disabling Syncmoney v' + $CandidateVersion
@@ -126,7 +140,7 @@ function Test-T21DatabaseManagerInitFailureStartupLog([string]$LogText, [string]
     if (@($positions | Where-Object { $_ -lt 0 }).Count -eq 0) {
         for ($index = 1; $index -lt $positions.Count; $index++) {
             if ($positions[$index] -le $positions[$index - 1]) {
-                $failures.Add('startup, PostgreSQL denial, pool close, rollback, and plugin disable markers are out of order')
+                $failures.Add('startup, database denial, pool close, rollback, and plugin disable markers are out of order')
                 break
             }
         }
@@ -178,20 +192,77 @@ function Test-T21DatabaseManagerInitFailurePrivileges([object]$Privileges) {
     return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
 }
 
+function Test-T21DatabaseManagerInitFailureMySqlPrivileges([object]$Privileges) {
+    $expectedFields = @('product', 'appRole', 'targetDatabase', 'authenticatedIdentity', 'grantStatements')
+    $failures = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-T21DatabaseManagerInitFailureFields $Privileges $expectedFields)) {
+        $failures.Add('MySQL privilege evidence fields are missing, extra, or malformed')
+        return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
+    }
+
+    $appRole = Get-T21DatabaseManagerInitFailureValue $Privileges 'appRole'
+    $targetDatabase = Get-T21DatabaseManagerInitFailureValue $Privileges 'targetDatabase'
+    $identity = Get-T21DatabaseManagerInitFailureValue $Privileges 'authenticatedIdentity'
+    $grants = Get-T21DatabaseManagerInitFailureValue $Privileges 'grantStatements'
+    if (-not (Test-T21DatabaseManagerInitFailureStringField $Privileges 'product' 'MySQL')) {
+        $failures.Add('privilege evidence is not for MySQL')
+    }
+    if ($appRole -isnot [string] -or $appRole -notmatch '^sm_t21_[0-9a-f]{8}$') {
+        $failures.Add('MySQL application account is not the isolated run account')
+    }
+    if ($targetDatabase -isnot [string] -or $targetDatabase -notmatch '^syncmoney_t21_[0-9a-f]{8}$') {
+        $failures.Add('MySQL target database is not the isolated run database')
+    }
+    if ($appRole -is [string] -and $targetDatabase -is [string]) {
+        $account = [char]96 + $appRole + [char]96 + '@' + [char]96 + '127.0.0.1' + [char]96
+        $database = [char]96 + $targetDatabase + [char]96
+        $expectedIdentity = $appRole + '@127.0.0.1' + [char]9 + $targetDatabase
+        $expectedGrants = @(
+            "GRANT USAGE ON *.* TO $account"
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON $database.* TO $account"
+        )
+        if (-not (Test-T21DatabaseManagerInitFailureString $identity $expectedIdentity)) {
+            $failures.Add('MySQL application connection did not authenticate to the isolated database as the pinned loopback account')
+        }
+        if ($grants -isnot [System.Array] -or $grants.Count -ne $expectedGrants.Count) {
+            $failures.Add('MySQL grant evidence must contain exactly the isolated USAGE and DML grants')
+        } else {
+            for ($index = 0; $index -lt $expectedGrants.Count; $index++) {
+                if ($grants[$index] -isnot [string] -or $grants[$index] -cne $expectedGrants[$index]) {
+                    $failures.Add('MySQL grants include unexpected privileges or do not match the isolated account/database')
+                    break
+                }
+            }
+        }
+    }
+
+    return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
+}
+
 function Test-T21DatabaseManagerInitFailureTarget([string]$DatabaseProduct, [string]$PlatformEndpoint) {
     return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'CurrentMaximum')
 }
 
-function Test-T21DatabaseManagerInitFailureSchemaState([object]$SchemaState) {
+function Test-T21DatabaseManagerInitFailureSchemaState(
+    [object]$SchemaState,
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
+) {
     $failures = [System.Collections.Generic.List[string]]::new()
     if (-not (Test-T21DatabaseManagerInitFailureFields $SchemaState @('before', 'after'))) {
         $failures.Add('schema evidence must contain exactly before and after snapshots')
         return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
     }
 
+    $snapshotFields = if ($DatabaseProduct -ceq 'PostgreSQL') {
+        @('playersTableExists', 'schemaVersionTableExists', 'publicTableCount', 'publicObjectCount')
+    } else {
+        @('playersTableExists', 'schemaVersionTableExists', 'databaseTableCount', 'databaseObjectCount')
+    }
+    $tableCountField = if ($DatabaseProduct -ceq 'PostgreSQL') { 'publicTableCount' } else { 'databaseTableCount' }
+    $objectCountField = if ($DatabaseProduct -ceq 'PostgreSQL') { 'publicObjectCount' } else { 'databaseObjectCount' }
     foreach ($stage in @('before', 'after')) {
         $snapshot = Get-T21DatabaseManagerInitFailureValue $SchemaState $stage
-        if (-not (Test-T21DatabaseManagerInitFailureFields $snapshot @('playersTableExists', 'schemaVersionTableExists', 'publicTableCount', 'publicObjectCount'))) {
+        if (-not (Test-T21DatabaseManagerInitFailureFields $snapshot $snapshotFields)) {
             $failures.Add("$stage schema snapshot fields are missing, extra, or malformed")
             continue
         }
@@ -201,20 +272,24 @@ function Test-T21DatabaseManagerInitFailureSchemaState([object]$SchemaState) {
         if (-not (Test-T21DatabaseManagerInitFailureBoolean $snapshot 'schemaVersionTableExists' $false)) {
             $failures.Add("schema-version table exists in the $stage schema snapshot")
         }
-        if (-not (Test-T21DatabaseManagerInitFailureZeroInteger $snapshot 'publicTableCount')) {
-            $failures.Add("public schema table count is not the integer zero in the $stage snapshot")
+        if (-not (Test-T21DatabaseManagerInitFailureZeroInteger $snapshot $tableCountField)) {
+            $failures.Add("database schema table count is not the integer zero in the $stage snapshot")
         }
-        if (-not (Test-T21DatabaseManagerInitFailureZeroInteger $snapshot 'publicObjectCount')) {
-            $failures.Add("public schema object count is not the integer zero in the $stage snapshot")
+        if (-not (Test-T21DatabaseManagerInitFailureZeroInteger $snapshot $objectCountField)) {
+            $failures.Add("database schema object count is not the integer zero in the $stage snapshot")
         }
     }
 
     return New-T21DatabaseManagerInitFailureResult $failures.ToArray()
 }
 
-function Test-T21DatabaseManagerInitFailureCleanup([object]$Cleanup) {
+function Test-T21DatabaseManagerInitFailureCleanup(
+    [object]$Cleanup,
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
+) {
+    $sqlStoppedField = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresStopped' } else { 'mysqlStopped' }
     $expectedFields = @(
-        'forcedCleanup', 'serverStopped', 'serverProcessCount', 'postgresStopped', 'redisStopped',
+        'forcedCleanup', 'serverStopped', 'serverProcessCount', $sqlStoppedField, 'redisStopped',
         'runOwnedPortsClosed', 'sqlOtherConnections', 'redisOtherClients', 'redisDbSize', 'cleanupFailures'
     )
     $failures = [System.Collections.Generic.List[string]]::new()
@@ -228,7 +303,7 @@ function Test-T21DatabaseManagerInitFailureCleanup([object]$Cleanup) {
             $failures.Add("$field must be the Boolean value false")
         }
     }
-    foreach ($field in @('serverStopped', 'postgresStopped', 'redisStopped', 'runOwnedPortsClosed')) {
+    foreach ($field in @('serverStopped', $sqlStoppedField, 'redisStopped', 'runOwnedPortsClosed')) {
         if (-not (Test-T21DatabaseManagerInitFailureBoolean $Cleanup $field $true)) {
             $failures.Add("$field must be the Boolean value true")
         }
@@ -256,7 +331,8 @@ function Test-T21DatabaseManagerInitFailureReport(
     [string]$ExpectedAcceptanceSha256,
     [string]$ExpectedApiConsumerSha256,
     [string]$ExpectedSourceCommit,
-    [ValidateSet('Minimum', 'CurrentMaximum')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum'
+    [ValidateSet('Minimum', 'CurrentMaximum')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('PostgreSQL', 'MySQL')][string]$ExpectedDatabaseProduct = 'PostgreSQL'
 ) {
     $expectedServer = switch ($ExpectedPlatformEndpoint) {
         'Minimum' { [pscustomobject]@{ minecraftVersion = '1.21.6'; build = 48 } }
@@ -264,7 +340,8 @@ function Test-T21DatabaseManagerInitFailureReport(
     }
     $failure = Get-T21DatabaseManagerInitFailureValue $Report 'failure'
     if ($null -eq $Report -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $Report 'task' "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$ExpectedPlatformEndpoint") -or
+        -not (Test-T21DatabaseManagerInitFailureTarget $ExpectedDatabaseProduct $ExpectedPlatformEndpoint) -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $Report 'task' "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$ExpectedDatabaseProduct-$ExpectedPlatformEndpoint") -or
         -not (Test-T21DatabaseManagerInitFailureStringField $Report 'status' 'PASS_BOUNDED_SUBCASE') -or
         $null -ne $failure) { return $false }
 
@@ -290,25 +367,42 @@ function Test-T21DatabaseManagerInitFailureReport(
         -not (Test-T21DatabaseManagerInitFailureStringField $artifacts 'apiConsumerSha256' $ExpectedApiConsumerSha256.ToLowerInvariant())) { return $false }
 
     $sqlBackend = Get-T21DatabaseManagerInitFailureValue $Report 'sqlBackend'
-    if (-not (Test-T21DatabaseManagerInitFailureStringField $sqlBackend 'product' 'PostgreSQL') -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $sqlBackend 'version' '18.1')) { return $false }
+    $expectedSqlVersion = if ($ExpectedDatabaseProduct -ceq 'PostgreSQL') { '18.1' } else { '8.0.42' }
+    if (-not (Test-T21DatabaseManagerInitFailureStringField $sqlBackend 'product' $ExpectedDatabaseProduct) -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $sqlBackend 'version' $expectedSqlVersion)) { return $false }
     $redis = Get-T21DatabaseManagerInitFailureValue $Report 'redis'
     if (-not (Test-T21DatabaseManagerInitFailureStringField $redis 'version' '8.10.1')) { return $false }
 
     $configuration = Get-T21DatabaseManagerInitFailureValue $Report 'configuration'
+    $expectedDatabaseType = if ($ExpectedDatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
     if (-not (Test-T21DatabaseManagerInitFailureStringField $configuration 'mode' 'sync') -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $configuration 'databaseType' 'postgresql') -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $configuration 'databaseType' $expectedDatabaseType) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $configuration 'databaseEnabled' $true) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $configuration 'databaseIsolated' $true) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $configuration 'redisEnabled' $true) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $configuration 'redisIsolated' $true) -or
         -not (Test-T21DatabaseManagerInitFailureInteger $configuration 'redisDatabase' 15)) { return $false }
 
+    $privileges = Get-T21DatabaseManagerInitFailureValue $Report 'databaseDdlPrivileges'
+    $privilegeResult = if ($ExpectedDatabaseProduct -ceq 'PostgreSQL') {
+        Test-T21DatabaseManagerInitFailurePrivileges $privileges
+    } else {
+        Test-T21DatabaseManagerInitFailureMySqlPrivileges $privileges
+    }
+    if (-not $privilegeResult.passed) { return $false }
+
+    $expectedFailureMessage = if ($ExpectedDatabaseProduct -ceq 'PostgreSQL') {
+        'Failed to initialize database schema: ERROR: permission denied for schema public'
+    } else {
+        $appRole = Get-T21DatabaseManagerInitFailureValue $privileges 'appRole'
+        if ($appRole -isnot [string] -or $appRole -notmatch '^sm_t21_[0-9a-f]{8}$') { return $false }
+        "Failed to initialize database schema: CREATE command denied to user '$appRole'@'127.0.0.1' for table 'players'"
+    }
     $startup = Get-T21DatabaseManagerInitFailureValue $Report 'startupObservation'
     if (-not (Test-T21DatabaseManagerInitFailureStringField $startup 'stage' 'candidate-startup-failure') -or
         -not (Test-T21DatabaseManagerInitFailureStringField $startup 'pluginVersion' '1.4.0-alpha.1') -or
         -not (Test-T21DatabaseManagerInitFailureStringField $startup 'expectedFailure' 'database-manager-initial-schema-failure') -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $startup 'failureMessage' 'Failed to initialize database schema: ERROR: permission denied for schema public') -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $startup 'failureMessage' $expectedFailureMessage) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $startup 'enabled' $false) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $startup 'failureObserved' $true) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $startup 'rollbackComplete' $true) -or
@@ -317,15 +411,15 @@ function Test-T21DatabaseManagerInitFailureReport(
         -not (Test-T21DatabaseManagerInitFailureBoolean $startup 'disabledMarker' $true) -or
         -not (Test-T21DatabaseManagerInitFailureBoolean $startup 'successMarkerObserved' $false)) { return $false }
 
-    $privilegeResult = Test-T21DatabaseManagerInitFailurePrivileges (Get-T21DatabaseManagerInitFailureValue $Report 'databaseDdlPrivileges')
-    if (-not $privilegeResult.passed) { return $false }
+    if ($ExpectedDatabaseProduct -ceq 'MySQL' -and
+        -not (Test-T21DatabaseManagerInitFailureStringField $configuration 'databaseName' (Get-T21DatabaseManagerInitFailureValue (Get-T21DatabaseManagerInitFailureValue $Report 'databaseDdlPrivileges') 'targetDatabase'))) { return $false }
     $schemaPair = [pscustomobject]@{
         before = Get-T21DatabaseManagerInitFailureValue $Report 'schemaStateBefore'
         after = Get-T21DatabaseManagerInitFailureValue $Report 'schemaStateAfter'
     }
-    if (-not (Test-T21DatabaseManagerInitFailureSchemaState $schemaPair).passed) { return $false }
+    if (-not (Test-T21DatabaseManagerInitFailureSchemaState $schemaPair $ExpectedDatabaseProduct).passed) { return $false }
 
-    $cleanupResult = Test-T21DatabaseManagerInitFailureCleanup (Get-T21DatabaseManagerInitFailureValue $Report 'resourceCleanup')
+    $cleanupResult = Test-T21DatabaseManagerInitFailureCleanup (Get-T21DatabaseManagerInitFailureValue $Report 'resourceCleanup') $ExpectedDatabaseProduct
     if (-not $cleanupResult.passed) { return $false }
     $cleanupFailures = Get-T21DatabaseManagerInitFailureValue $Report 'cleanupFailures'
     if ($cleanupFailures -isnot [System.Array] -or $cleanupFailures.Count -ne 0) { return $false }

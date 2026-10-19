@@ -48,7 +48,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and
     -not (Test-T21DatabaseManagerInitFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The DatabaseManager initial-schema failure case is limited to PostgreSQL 18.1 on the pinned minimum or current-maximum Paper endpoints.'
+    throw 'The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum/current-maximum Paper; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.'
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -434,7 +434,24 @@ function Invoke-PostgresQuery([string]$sql, [string]$label, [switch]$asRoot, [st
 
 function Get-T21DatabaseManagerInitFailurePrivileges {
     if ($script:databaseUser -notmatch '^sm_t21_[0-9a-f]{8}$' -or $script:databaseName -notmatch '^syncmoney_t21_[0-9a-f]{8}$') {
-        throw 'Refusing to query PostgreSQL privileges for an unexpected isolated role or database name.'
+        throw "Refusing to query $script:databaseProduct privileges for an unexpected isolated role or database name."
+    }
+    if ($script:databaseProduct -ceq 'MySQL') {
+        $identityLines = @(Invoke-MySqlQuery 'SELECT CONCAT(CURRENT_USER(), CHAR(9), DATABASE());' 'mysql-database-manager-init-authenticated-identity')
+        $grantLines = @(Invoke-MySqlQuery 'SHOW GRANTS;' 'mysql-database-manager-init-grants')
+        if ($identityLines.Count -ne 1 -or $grantLines.Count -ne 2) {
+            throw 'MySQL returned incomplete authenticated-identity or grant evidence for the initial-schema failure case.'
+        }
+        $privileges = [pscustomobject]@{
+            product='MySQL'
+            appRole=$script:databaseUser
+            targetDatabase=$script:databaseName
+            authenticatedIdentity=$identityLines[0]
+            grantStatements=[string[]]$grantLines
+        }
+        $validation = Test-T21DatabaseManagerInitFailureMySqlPrivileges $privileges
+        if (-not $validation.passed) { throw "MySQL initial-schema privilege boundary failed: $($validation.failures -join '; ')" }
+        return $privileges
     }
     $sql = @"
 SELECT json_build_object(
@@ -472,6 +489,29 @@ WHERE app.rolname = '$script:databaseUser';
 }
 
 function Get-T21DatabaseManagerInitFailureSchemaSnapshot([ValidateSet('before', 'after')][string]$Stage) {
+    if ($script:databaseProduct -ceq 'MySQL') {
+        if ($script:databaseName -notmatch '^syncmoney_t21_[0-9a-f]{8}$') {
+            throw 'Refusing to inspect a schema outside the isolated T21 MySQL database.'
+        }
+        $sql = @"
+SELECT CONCAT(
+    '{"playersTableExists":', IF(EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = '$script:databaseName' AND table_name = 'players' AND table_type = 'BASE TABLE'), 'true', 'false'),
+    ',"schemaVersionTableExists":', IF(EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = '$script:databaseName' AND table_name = 'syncmoney_schema_version' AND table_type = 'BASE TABLE'), 'true', 'false'),
+    ',"databaseTableCount":', (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$script:databaseName'),
+    ',"databaseObjectCount":', (
+        (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$script:databaseName') +
+        (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = '$script:databaseName') +
+        (SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = '$script:databaseName') +
+        (SELECT COUNT(*) FROM information_schema.events WHERE event_schema = '$script:databaseName')
+    ),
+    '}'
+);
+"@
+        $lines = @(Invoke-MySqlQuery $sql ("mysql-database-manager-schema-" + $Stage) -asRoot)
+        if ($lines.Count -ne 1) { throw "MySQL returned no unique $Stage initial-schema snapshot." }
+        try { return ConvertFrom-Json -InputObject $lines[0] -ErrorAction Stop }
+        catch { throw "MySQL $Stage initial-schema snapshot was not valid JSON." }
+    }
     $sql = @'
 SELECT json_build_object(
     'playersTableExists', to_regclass('public.players') IS NOT NULL,
@@ -871,7 +911,7 @@ function Stop-T21Server([string]$stage) {
     $stopLines = @($allLines | Select-Object -Skip $skip)
     $disabled = @($stopLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1)
     $startupFailureDisabled = if ($script:databaseManagerInitFailureStartupFailure) {
-        (Test-T21DatabaseManagerInitFailureStartupLog -LogText ($allLines -join "`n") -CandidateVersion $CandidateVersion).passed
+        (Test-T21DatabaseManagerInitFailureStartupLog -LogText ($allLines -join "`n") -CandidateVersion $CandidateVersion -DatabaseProduct $script:databaseProduct -MySqlAppRole $script:databaseUser).passed
     } else {
         $script:auditSchemaStartupFailure -and
             (Test-T21StartupRollbackCompletionLog ($allLines -join "`n") $CandidateVersion)
@@ -1770,28 +1810,29 @@ function Get-T21DatabaseManagerInitFailureFinalCleanup {
     $afterDisable = $script:resourceCleanupObservation
     if ($null -eq $afterDisable) { throw 'The post-disable SQL/Redis resource snapshot is absent.' }
     $serverProcesses = @(Get-T21ServerProcesses)
-    $postgresShutdown = @($script:backendShutdowns | Where-Object { [string]$_.backend -ceq 'postgresql' })
+    $sqlBackendName = if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
+    $sqlStoppedField = if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresStopped' } else { 'mysqlStopped' }
+    $sqlShutdown = @($script:backendShutdowns | Where-Object { [string]$_.backend -ceq $sqlBackendName })
     $redisShutdown = @($script:backendShutdowns | Where-Object { [string]$_.backend -ceq 'redis' })
     $normalStopForced = @($script:normalStops | Where-Object { $_.forced -eq $true }).Count -gt 0
     $backendStopForced = @($script:backendShutdowns | Where-Object { $_.forced -eq $true }).Count -gt 0
-    $postgresListenerCount = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue).Count
+    $sqlListenerCount = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue).Count
     $redisListenerCount = @(Get-NetTCPConnection -State Listen -LocalPort $script:redisPort -ErrorAction SilentlyContinue).Count
     $serverListenerCount = 0
     foreach ($port in @($script:gamePort, ($script:gamePort + 10000))) {
         $serverListenerCount += @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue).Count
     }
-    $postgresProcessExited = $null -ne $script:mysqlProcess -and $script:mysqlProcess.HasExited
+    $sqlProcessExited = $null -ne $script:mysqlProcess -and $script:mysqlProcess.HasExited
     $redisProcessExited = $null -ne $script:redisProcess -and $script:redisProcess.HasExited
-    $postgresStopped = $postgresProcessExited -and $postgresShutdown.Count -eq 1 -and
-        [bool]$postgresShutdown[0].processExited -and -not [bool]$postgresShutdown[0].forced -and $postgresListenerCount -eq 0
+    $sqlStopped = $sqlProcessExited -and $sqlShutdown.Count -eq 1 -and
+        [bool]$sqlShutdown[0].processExited -and -not [bool]$sqlShutdown[0].forced -and $sqlListenerCount -eq 0
     $redisStopped = $redisProcessExited -and $redisShutdown.Count -eq 1 -and
         [bool]$redisShutdown[0].processExited -and -not [bool]$redisShutdown[0].forced -and $redisListenerCount -eq 0
-    $runOwnedPortsClosed = $postgresListenerCount -eq 0 -and $redisListenerCount -eq 0 -and $serverListenerCount -eq 0
-    return [ordered]@{
+    $runOwnedPortsClosed = $sqlListenerCount -eq 0 -and $redisListenerCount -eq 0 -and $serverListenerCount -eq 0
+    $cleanup = [ordered]@{
         forcedCleanup = [bool]($normalStopForced -or $backendStopForced)
         serverStopped = [bool]($serverProcesses.Count -eq 0)
         serverProcessCount = [int]$serverProcesses.Count
-        postgresStopped = [bool]$postgresStopped
         redisStopped = [bool]$redisStopped
         runOwnedPortsClosed = [bool]$runOwnedPortsClosed
         sqlOtherConnections = [int]$afterDisable.sqlOtherConnections
@@ -1799,6 +1840,8 @@ function Get-T21DatabaseManagerInitFailureFinalCleanup {
         redisDbSize = [int]$afterDisable.redisDbSize
         cleanupFailures = @($script:cleanupFailures.ToArray())
     }
+    $cleanup[$sqlStoppedField] = [bool]$sqlStopped
+    return $cleanup
 }
 
 function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'DatabaseManagerInitFailure', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario) {
@@ -1812,7 +1855,10 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
     $expectedFailureMessage = switch ($FailureScenario) {
         'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
-        'DatabaseManagerInitFailure' { 'Failed to initialize database schema: ERROR: permission denied for schema public' }
+        'DatabaseManagerInitFailure' {
+            if ($script:databaseProduct -ceq 'PostgreSQL') { 'Failed to initialize database schema: ERROR: permission denied for schema public' }
+            else { 'Failed to initialize database schema:' }
+        }
         'IncompleteV10AuditTable' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
         default { 'Failed audit schema migration to version 11; version metadata was not advanced past 10' }
@@ -1825,7 +1871,10 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         default { 'required-v11-audit-ddl-permission-failure' }
     }
     $failureDetailMarker = switch ($FailureScenario) {
-        'DatabaseManagerInitFailure' { 'permission denied for schema public' }
+        'DatabaseManagerInitFailure' {
+            if ($script:databaseProduct -ceq 'PostgreSQL') { 'permission denied for schema public' }
+            else { 'CREATE command denied to user' }
+        }
         'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }
         'RequiredV11DdlPermissionDenied' {
@@ -1838,7 +1887,10 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     $sqlPoolStartObserved = $fullLog.Contains('Syncmoney-HikariCP - Start completed.')
     $scenarioMarkers = switch ($FailureScenario) {
         'NewerAuditSchema' { @() }
-        'DatabaseManagerInitFailure' { @('Syncmoney-HikariCP - Start completed.') }
+        'DatabaseManagerInitFailure' {
+            if ($script:databaseProduct -ceq 'PostgreSQL') { @('Syncmoney-HikariCP - Start completed.') }
+            else { @('Syncmoney-HikariCP - Start completed.', $failureDetailMarker) }
+        }
         'IncompleteV10AuditTable' { @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker) }
         'IncompleteV10AuditTablePlayerRowPreservation' { @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker) }
         default { @('Syncmoney audit schema version: current 10, target 11', $failureDetailMarker) }
@@ -1853,7 +1905,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     }
     if (-not $sqlPoolShutdownObserved) { throw 'The INFO-level Syncmoney Hikari pool shutdown marker was absent after startup rollback.' }
     if ($FailureScenario -ceq 'DatabaseManagerInitFailure') {
-        $startupLogResult = Test-T21DatabaseManagerInitFailureStartupLog -LogText $fullLog -CandidateVersion $CandidateVersion
+        $startupLogResult = Test-T21DatabaseManagerInitFailureStartupLog -LogText $fullLog -CandidateVersion $CandidateVersion -DatabaseProduct $script:databaseProduct -MySqlAppRole $script:databaseUser
         if (-not $startupLogResult.passed) {
             throw "DatabaseManager initial-schema failure log was not accepted: $($startupLogResult.failures -join '; ')"
         }
@@ -1870,6 +1922,19 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     }
     $processes = @(Get-T21ServerProcesses)
     if ($processes.Count -ne 1) { throw "Expected one run-owned platform process after rollback; observed $($processes.Count)." }
+    $failureMessage = $expectedFailureMessage
+    if ($FailureScenario -ceq 'DatabaseManagerInitFailure' -and $script:databaseProduct -ceq 'MySQL') {
+        $messageLines = @($fullLog -split "`r?`n" | ForEach-Object {
+            $syncmoneyMarker = '[Syncmoney] '
+            $markerOffset = $_.IndexOf($syncmoneyMarker, [StringComparison]::Ordinal)
+            if ($markerOffset -ge 0) {
+                $message = $_.Substring($markerOffset + $syncmoneyMarker.Length)
+                if ($message.StartsWith('Failed to initialize database schema: ', [StringComparison]::Ordinal)) { $message }
+            }
+        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($messageLines.Count -ne 1) { throw 'MySQL startup log did not contain exactly one Syncmoney initial-schema error message.' }
+        $failureMessage = $messageLines[0]
+    }
     $observation = [ordered]@{
         stage = 'candidate-startup-failure'
         pluginVersion = $CandidateVersion
@@ -1879,7 +1944,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         runtimeIdentity = $identity
         expectedFailure = $expectedFailureKind
         failureObserved = $true
-        failureMessage = $expectedFailureMessage
+        failureMessage = $failureMessage
         # This flag records Syncmoney owner cleanup after startup failure; SQL preservation is measured by the explicit schema/row snapshots.
         rollbackComplete = $true
         sqlPoolStartObserved = [bool]$sqlPoolStartObserved
@@ -2251,11 +2316,9 @@ $script:report = [ordered]@{
     sourceCommit = $script:sourceCommit
     sourceWorkingTreeDirty = $script:sourceWorkingTreeDirty
     task = if ($script:databaseManagerInitFailureStartupFailure) {
-        "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$PlatformEndpoint"
+        "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$script:databaseProduct-$PlatformEndpoint"
     } elseif ($script:newerAuditSchemaStartupFailure) {
         "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
-    } elseif ($script:databaseManagerInitFailureStartupFailure) {
-        "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
         "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
@@ -2415,7 +2478,11 @@ try {
     $script:report.mysql.serverVersion = $mysqlVersion[0]
 
     $collation = if ($script:databaseProduct -ceq 'MariaDB') { 'utf8mb4_general_ci' } else { 'utf8mb4_0900_ai_ci' }
-    $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE $collation; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; CREATE USER '$($script:databaseUser)'@'localhost' IDENTIFIED BY '$($script:databasePassword)'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
+    if ($script:databaseManagerInitFailureStartupFailure) {
+        $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE $collation; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; GRANT SELECT, INSERT, UPDATE, DELETE ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; FLUSH PRIVILEGES;"
+    } else {
+        $sql = "CREATE DATABASE $($script:databaseName) CHARACTER SET utf8mb4 COLLATE $collation; CREATE USER '$($script:databaseUser)'@'127.0.0.1' IDENTIFIED BY '$($script:databasePassword)'; CREATE USER '$($script:databaseUser)'@'localhost' IDENTIFIED BY '$($script:databasePassword)'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $($script:databaseName).* TO '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
+    }
     $null = Invoke-MySqlQuery $sql 'mysql-create-isolated-schema' -asRoot
     }
 
@@ -2426,9 +2493,9 @@ try {
         $initialSchemaCheck = Test-T21DatabaseManagerInitFailureSchemaState ([pscustomobject]@{
             before = $script:databaseManagerInitFailureSchemaBefore
             after = $script:databaseManagerInitFailureSchemaBefore
-        })
+        }) $script:databaseProduct
         if (-not $initialSchemaCheck.passed) {
-            throw "PostgreSQL initial schema was not empty before startup: $($initialSchemaCheck.failures -join '; ')"
+            throw "$script:databaseProduct initial schema was not empty before startup: $($initialSchemaCheck.failures -join '; ')"
         }
     } elseif ($script:newerAuditSchemaStartupFailure) {
         $script:schemaStateBefore = Seed-T21NewerAuditSchema
@@ -2508,9 +2575,9 @@ try {
             $schemaCheck = Test-T21DatabaseManagerInitFailureSchemaState ([pscustomobject]@{
                 before = $script:databaseManagerInitFailureSchemaBefore
                 after = $script:databaseManagerInitFailureSchemaAfter
-            })
+            }) $script:databaseProduct
             if (-not $schemaCheck.passed) {
-                throw "PostgreSQL initial schema changed during the denied CREATE TABLE attempt: $($schemaCheck.failures -join '; ')"
+                throw "$script:databaseProduct initial schema changed during the denied CREATE TABLE attempt: $($schemaCheck.failures -join '; ')"
             }
             $script:resourceCleanupObservation = Get-T21StartupFailureResourceCleanup
             if ($script:resourceCleanupObservation.sqlOtherConnections -ne 0 -or
@@ -2720,7 +2787,7 @@ try {
                 sourceWorkingTreeDirty=$script:sourceWorkingTreeDirty
                 sourceWorkingTreeDirtyAfter=$script:report.sourceWorkingTreeDirtyAfter
                 task=if ($script:databaseManagerInitFailureStartupFailure) {
-                    "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$PlatformEndpoint"
+                    "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$script:databaseProduct-$PlatformEndpoint"
                 } elseif ($script:newerAuditSchemaStartupFailure) {
                     'T21-V03-SYNC-newer-audit-schema-startup-failure'
                 } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
@@ -2815,7 +2882,8 @@ try {
             if ($script:databaseManagerInitFailureStartupFailure) {
                 $reportAccepted = Test-T21DatabaseManagerInitFailureReport $script:finalReport `
                     $ExpectedServerSha256 $ExpectedCandidateSha256 $script:plugDevSourceCommit $script:plugDevCliSha256 `
-                    $script:plugDevCliDistManifest.sha256 $acceptanceSha256 $apiConsumerSha256 $script:sourceCommit $PlatformEndpoint
+                    $script:plugDevCliDistManifest.sha256 $acceptanceSha256 $apiConsumerSha256 $script:sourceCommit `
+                    $PlatformEndpoint $script:databaseProduct
             } else {
                 $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
                     $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
