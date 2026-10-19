@@ -655,6 +655,8 @@ function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes,
   const held = events.find(event => event.type === "shutdown_drain_lock_held");
   const released = events.find(event => event.type === "accepted_write_lock_released_for_shutdown");
   const marker = "T21_ROW_LOCK_RELEASED_FOR_SHUTDOWN";
+  const economyDrain = "T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0";
+  const databaseDrain = "T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0";
   const rowLockLog = rowLockLogBytes.toString("utf8");
   if (!held || held.pending !== 2 || held.rowLockHeld !== true) fail("shutdown did not begin while both accepted writes remained behind the SQL row lock");
   if (!released || released.rowLockReleased !== true || released.rowLockReleaseMarkerObserved !== true || released.rowLockReleaseMarker !== marker) {
@@ -678,15 +680,20 @@ function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes,
       fail(`${backend} shutdown log byte offset does not include its Stopping server marker`);
       continue;
     }
+    const economyDrainOffset = bytes.indexOf(Buffer.from(economyDrain, "utf8"));
+    const databaseDrainOffset = bytes.indexOf(Buffer.from(databaseDrain, "utf8"));
+    if (economyDrainOffset < stopEnd || databaseDrainOffset < stopEnd) {
+      fail(`${backend} queue drain markers precede its Stopping server marker`);
+    }
     const beforeRelease = bytes.subarray(0, offset).toString("utf8");
     const afterShutdownBoundary = bytes.subarray(offset).toString("utf8");
-    if (beforeRelease.includes("T21_DRAIN owner=economy status=drained") ||
-        beforeRelease.includes("T21_DRAIN owner=database status=drained")) {
-      fail(`${backend} queue drained before the runner recorded the held-lock shutdown boundary`);
-    }
-    if (!afterShutdownBoundary.includes("T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0") ||
-        !afterShutdownBoundary.includes("T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0")) {
-      fail(`${backend} queues did not drain after the held-lock shutdown boundary`);
+    if (backend === "backendA") {
+      if (beforeRelease.includes(economyDrain) || beforeRelease.includes(databaseDrain)) {
+        fail(`${backend} queue drained before the runner recorded the held-lock shutdown boundary`);
+      }
+      if (!afterShutdownBoundary.includes(economyDrain) || !afterShutdownBoundary.includes(databaseDrain)) {
+        fail(`${backend} queues did not drain after the held-lock shutdown boundary`);
+      }
     }
   }
 }

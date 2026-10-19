@@ -845,3 +845,69 @@ test("requires server-stop byte offsets and a SQL lock-release marker before net
     await missingMarker.close();
   }
 });
+
+test("accepts the idle backend drain after its own stop marker and before the shared held-lock boundary", async () => {
+  const fixture = await createFixture();
+  try {
+    const serverB = await fs.readFile(path.join(fixture.root, "logs", "server-b.log"));
+    const databaseDrain = Buffer.from("T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0", "utf8");
+    const drainEnd = serverB.indexOf(databaseDrain) + databaseDrain.length;
+    assert.ok(drainEnd > databaseDrain.length);
+
+    await rewriteJsonEvidence(fixture, "events/runner-events.jsonl", events => {
+      events.find(event => event.type === "shutdown_drain_lock_held")
+        .serverLogByteOffsets.backendB = drainEnd;
+    });
+    assert.equal(audit(fixture).accepted, true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects AcceptanceA drain markers before the shared held-lock boundary", async () => {
+  const fixture = await createFixture();
+  try {
+    const serverA = await fs.readFile(path.join(fixture.root, "logs", "server-a.log"));
+    const databaseDrain = Buffer.from("T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0", "utf8");
+    const drainEnd = serverA.indexOf(databaseDrain) + databaseDrain.length;
+    assert.ok(drainEnd > databaseDrain.length);
+
+    await rewriteJsonEvidence(fixture, "events/runner-events.jsonl", events => {
+      events.find(event => event.type === "shutdown_drain_lock_held")
+        .serverLogByteOffsets.backendA = drainEnd;
+    });
+    assert.throws(() => audit(fixture), error =>
+      error instanceof NetworkAuditError && /backendA queue drained before the runner recorded the held-lock shutdown boundary/.test(error.message));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects backend B drain markers that precede its own server-stop marker", async () => {
+  const fixture = await createFixture();
+  try {
+    const serverBPath = path.join(fixture.root, "logs", "server-b.log");
+    const original = await fs.readFile(serverBPath, "utf8");
+    const stopping = "[Server thread/INFO]: Stopping server\n";
+    const economyDrain = "T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0\n";
+    const databaseDrain = "T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0\n";
+    const ordered = `${stopping}${economyDrain}${databaseDrain}`;
+    assert.ok(original.includes(ordered));
+    const reordered = original.replace(ordered, `${economyDrain}${databaseDrain}${stopping}`);
+    const reorderedBytes = Buffer.from(reordered, "utf8");
+    await fs.writeFile(serverBPath, reorderedBytes);
+    const serverBManifest = fixture.report.files.find(entry => entry.path === "logs/server-b.log");
+    serverBManifest.bytes = reorderedBytes.length;
+    serverBManifest.sha256 = hash(reorderedBytes);
+    const stoppingEnd = reorderedBytes.indexOf(Buffer.from(stopping, "utf8")) + Buffer.byteLength(stopping);
+
+    await rewriteJsonEvidence(fixture, "events/runner-events.jsonl", events => {
+      events.find(event => event.type === "shutdown_drain_lock_held")
+        .serverLogByteOffsets.backendB = stoppingEnd;
+    });
+    assert.throws(() => audit(fixture), error =>
+      error instanceof NetworkAuditError && /backendB queue drain markers precede its Stopping server marker/.test(error.message));
+  } finally {
+    await fixture.close();
+  }
+});
