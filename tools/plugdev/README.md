@@ -845,3 +845,9 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
 ```
 
 The runner limits the database to loopback and explicitly disables MariaDB's default server-certificate verification option so its warning cannot contaminate machine-parsed query output. This option is used only for MariaDB client calls in this isolated local runtime; it does not provide remote TLS coverage. Run `pwsh -NoProfile -File tools/plugdev/t21-upgrade-validation.test.ps1` for the report-predicate and runner regression checks. The final minimum-Paper report and offline audit are recorded in the T21 M05 MariaDB section of `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. Other untested combinations remain `NOT RUN`.
+
+## T21 DatabaseManager initial-schema permission-denial runtime
+
+The current-maximum Paper `26.3#200` / PostgreSQL `18.1` initial-schema DDL denial scenario passed as one `PASS_BOUNDED_SUBCASE (E2)`. The candidate plugin failed startup with `permission denied for schema public`; the public schema remained empty before and after, SQL-pool shutdown and plugin disable were observed, and all run-owned services stopped normally without forced cleanup. The report-specific R9 offline audit passed 83 assertions across 30 retained logs. Exact report, audit, focused-test hashes, server/candidate pins, and the independent review result are recorded in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
+
+This evidence covers only this Paper/PostgreSQL endpoint. It does not establish the same failure path on minimum Paper, Folia, Canvas, MySQL, or MariaDB and does not close T21. The exact attempted DDL statement was not separately captured.
