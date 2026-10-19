@@ -522,6 +522,140 @@ test("failed-run cleanup still stops the network when PostgreSQL restoration fai
   assert.equal(state.redisStopped, true);
 });
 
+test("failure cleanup stops PostgreSQL when its cleanup restart started but readiness failed", async () => {
+  const ensurePostgres = paperNetworkRunner.ensurePostgresAvailableForNetworkShutdown;
+  const cleanup = paperNetworkRunner.cleanupFailedRunResources;
+  assert.equal(typeof ensurePostgres, "function");
+  assert.equal(typeof cleanup, "function");
+
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the partial-start cleanup fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-pg-cleanup-partial-start-"));
+  const order = [];
+  try {
+    await mkdir(path.join(runRoot, "logs"));
+    const pgState = {
+      dataDirectory: "C:/isolated/postgres", port: 25083, started: false,
+      cleanupStartAttemptedForCleanup: false, cleanupMayBeRunningForCleanup: false,
+    };
+    const state = {
+      postgres: pgState,
+      postgresStopped: true,
+      postgresRecoveredForCleanup: false,
+      postgresStartedForCleanup: false,
+      postgresStartAttemptedForCleanup: false,
+      redis: { child: { exitCode: null } },
+      redisStopped: false,
+      controller: { child: { exitCode: null } },
+      networkStopped: false,
+      clientStopped: true,
+    };
+    const errors = await cleanup(state, {
+      restorePostgres: () => ensurePostgres(runRoot, { postgres: { pgCtlExe: "C:/PostgreSQL/pg_ctl.exe" } }, pgState, {
+        capture: async () => {
+          order.push("status");
+          return { code: 3, error: null, timedOut: false, stdout: "server is not running", stderr: "" };
+        },
+        waitPort: async (port, open) => {
+          order.push(open ? "port-open" : "port-closed");
+          assert.equal(port, 25083);
+          assert.equal(open, false);
+        },
+        startPostgres: async stage => {
+          order.push("start-" + stage);
+          assert.equal(stage, "cleanup");
+          pgState.started = true;
+          throw new Error("port readiness timed out");
+        },
+      }),
+      stopNetwork: async () => { order.push("stop-network"); },
+      stopRedis: async () => { order.push("stop-redis"); },
+      stopPostgres: async () => { order.push("stop-postgres"); pgState.started = false; },
+    });
+
+    assert.deepEqual(order, ["status", "port-closed", "start-cleanup", "stop-network", "stop-redis", "stop-postgres"]);
+    assert.deepEqual(errors, ["postgres restore before network shutdown: port readiness timed out"]);
+    assert.equal(state.postgresRecoveredForCleanup, false);
+    assert.equal(state.postgresStartedForCleanup, false,
+      "a readiness timeout must not be reported as a successfully restored PostgreSQL service");
+    assert.equal(state.postgresStartAttemptedForCleanup, true);
+    assert.equal(state.postgresCleanupStopRequired, true);
+    assert.equal(state.postgresStopped, true);
+    const cleanupRecord = buildFailureCleanupRecord({
+      evidenceComplete: true,
+      forcedCleanup: false,
+      runOwnedProcessesRemaining: 0,
+      runOwnedPortsOpen: 0,
+      openPorts: [],
+      errors: [],
+    }, errors, state);
+    assert.equal(cleanupRecord.postgresStartAttemptedForCleanup, true);
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("failed final PostgreSQL stop clears a stale stopped claim after cleanup restart failure", async () => {
+  const cleanup = paperNetworkRunner.cleanupFailedRunResources;
+  const calls = [];
+  const state = {
+    postgres: { cleanupStartAttemptedForCleanup: true, cleanupMayBeRunningForCleanup: true },
+    postgresStopped: true,
+    postgresRecoveredForCleanup: false,
+    postgresStartedForCleanup: false,
+    postgresStartAttemptedForCleanup: false,
+    postgresCleanupStopRequired: false,
+    redis: { child: { exitCode: null } },
+    redisStopped: false,
+    controller: { child: { exitCode: null } },
+    networkStopped: false,
+    clientStopped: true,
+  };
+  const errors = await cleanup(state, {
+    restorePostgres: async () => { calls.push("restore-postgres"); throw new Error("readiness timed out"); },
+    stopNetwork: async () => { calls.push("stop-network"); },
+    stopRedis: async () => { calls.push("stop-redis"); },
+    stopPostgres: async () => { calls.push("stop-postgres"); throw new Error("status inspection failed"); },
+  });
+
+  assert.deepEqual(calls, ["restore-postgres", "stop-network", "stop-redis", "stop-postgres"]);
+  assert.deepEqual(errors, [
+    "postgres restore before network shutdown: readiness timed out",
+    "postgres: status inspection failed",
+  ]);
+  assert.equal(state.postgresStartAttemptedForCleanup, true);
+  assert.equal(state.postgresCleanupStopRequired, true);
+  assert.equal(state.postgresStopped, false,
+    "failed final inspection must not preserve the pre-restart stopped claim");
+});
+
+test("PostgreSQL stop treats only pg_ctl exit code 3 as a stopped service", async () => {
+  const stopPostgres = paperNetworkRunner.stopPostgres;
+  assert.equal(typeof stopPostgres, "function");
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the pg_ctl status fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-pg-stop-status-"));
+  let portProbeCalled = false;
+  const pgState = { dataDirectory: "C:/isolated/postgres", port: 25084, started: true };
+  try {
+    await mkdir(path.join(runRoot, "logs"));
+    await assert.rejects(stopPostgres(runRoot, {
+      postgres: { pgCtlExe: "C:/PostgreSQL/pg_ctl.exe" },
+    }, pgState, "cleanup", {
+      capture: async () => ({ code: 2, error: null, timedOut: false, stdout: "bad data directory", stderr: "" }),
+      waitPort: async () => { portProbeCalled = true; },
+    }), /unexpected exit code/i);
+    assert.equal(portProbeCalled, false,
+      "an unexpected pg_ctl result is not evidence that the service has stopped");
+    assert.equal(pgState.started, true,
+      "an unverified status must not clear the in-memory running state");
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
 test("cleanup PostgreSQL recovery trusts a running isolated service without starting it again", async () => {
   const ensurePostgres = paperNetworkRunner.ensurePostgresAvailableForNetworkShutdown;
   assert.equal(typeof ensurePostgres, "function",

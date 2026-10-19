@@ -1241,24 +1241,31 @@ async function buildPostgresLog(runRoot, preflight, pgState) {
   await fsp.writeFile(logPath, parts.join("\n"), { flag: "wx", encoding: "utf8" });
 }
 
-async function stopPostgres(runRoot, preflight, pgState, stage) {
-  const status = await runCapture(preflight.postgres.pgCtlExe, [
+async function stopPostgres(runRoot, preflight, pgState, stage, {
+  capture = runCapture,
+  captureChecked = checkedCapture,
+  waitPort = waitForPort,
+} = {}) {
+  const status = await capture(preflight.postgres.pgCtlExe, [
     "-D", pgState.dataDirectory, "status",
   ], { timeoutMs: 15_000, cwd: runRoot });
   await appendCommandLog(runRoot, "pg_ctl-status-before-stop-" + stage, status);
   if (status.error || status.timedOut) {
     throw new Error("Unable to inspect isolated PostgreSQL before stop.");
   }
-  if (status.code !== 0) {
-    await waitForPort(pgState.port, false, 20_000);
+  if (status.code === 3) {
+    await waitPort(pgState.port, false, 20_000);
     pgState.started = false;
     return { code: 0, alreadyStopped: true };
   }
-  const result = await checkedCapture(preflight.postgres.pgCtlExe, [
+  if (status.code !== 0) {
+    throw new Error("Isolated PostgreSQL status returned an unexpected exit code before stop: " + String(status.code));
+  }
+  const result = await captureChecked(preflight.postgres.pgCtlExe, [
     "-D", pgState.dataDirectory, "-m", "fast", "-w", "-t", "90", "stop",
   ], "isolated PostgreSQL " + stage + " stop", { timeoutMs: 120_000, cwd: runRoot });
   await appendCommandLog(runRoot, "pg_ctl-stop-" + stage, result);
-  await waitForPort(pgState.port, false, 20_000);
+  await waitPort(pgState.port, false, 20_000);
   pgState.started = false;
   return result;
 }
@@ -1287,6 +1294,7 @@ async function ensurePostgresAvailableForNetworkShutdown(runRoot, preflight, pgS
   waitPort = waitForPort,
   startPostgres = stage => startPostgresAgain(runRoot, preflight, pgState, stage),
 } = {}) {
+  pgState.cleanupMayBeRunningForCleanup = true;
   const status = await capture(preflight.postgres.pgCtlExe, [
     "-D", pgState.dataDirectory, "status",
   ], { timeoutMs: 15_000, cwd: runRoot });
@@ -1303,6 +1311,7 @@ async function ensurePostgresAvailableForNetworkShutdown(runRoot, preflight, pgS
     throw new Error("Isolated PostgreSQL status returned an unexpected exit code before network cleanup: " + String(status.code));
   }
   await waitPort(pgState.port, false, 20_000);
+  pgState.cleanupStartAttemptedForCleanup = true;
   await startPostgres("cleanup");
   pgState.started = true;
   return { startedForCleanup: true };
@@ -1528,6 +1537,7 @@ function buildFailureCleanupRecord(livenessEvidence, cleanupErrors, reportState)
     postgresStopped: reportState.postgresStopped,
     postgresRecoveredForCleanup: reportState.postgresRecoveredForCleanup === true,
     postgresStartedForCleanup: reportState.postgresStartedForCleanup === true,
+    postgresStartAttemptedForCleanup: reportState.postgresStartAttemptedForCleanup === true,
     redisStopped: reportState.redisStopped,
     networkStopped: reportState.networkStopped,
     clientStopped: reportState.clientStopped,
@@ -1544,8 +1554,12 @@ async function cleanupFailedRunResources(reportState, actions) {
       reportState.postgresStopped = false;
       reportState.postgresRecoveredForCleanup = true;
       reportState.postgresStartedForCleanup = restoration?.startedForCleanup === true;
+      reportState.postgresStartAttemptedForCleanup = reportState.postgres?.cleanupStartAttemptedForCleanup === true;
       await actions.onPostgresRestored?.();
     } catch (error) {
+      reportState.postgresStartAttemptedForCleanup = reportState.postgres?.cleanupStartAttemptedForCleanup === true;
+      reportState.postgresCleanupStopRequired = reportState.postgres?.cleanupMayBeRunningForCleanup === true;
+      if (reportState.postgresCleanupStopRequired) reportState.postgresStopped = false;
       cleanupErrors.push("postgres restore before network shutdown: " + error.message);
     }
   }
@@ -1567,7 +1581,7 @@ async function cleanupFailedRunResources(reportState, actions) {
       cleanupErrors.push("redis: " + error.message);
     }
   }
-  if (reportState.postgres && !reportState.postgresStopped) {
+  if (reportState.postgres && (!reportState.postgresStopped || reportState.postgresCleanupStopRequired)) {
     try {
       await actions.stopPostgres();
       reportState.postgresStopped = true;
@@ -1667,6 +1681,8 @@ async function runCell(endpointId) {
     postgresRestarted: false,
     postgresRecoveredForCleanup: false,
     postgresStartedForCleanup: false,
+    postgresStartAttemptedForCleanup: false,
+    postgresCleanupStopRequired: false,
     redisStopped: false,
     networkStopped: false,
     clientStopped: false,
@@ -2096,6 +2112,7 @@ export {
   encodeRconPacket,
   runCapture,
   waitForRedisProcess,
+  stopPostgres,
   waitForSqlRetryEvidence,
   ensurePostgresAvailableForNetworkShutdown,
   cleanupFailedRunResources,
