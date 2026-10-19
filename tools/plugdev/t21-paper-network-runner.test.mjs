@@ -20,6 +20,25 @@ import {
 } from "./t21-paper-network-auditor.mjs";
 import * as paperNetworkRunner from "./t21-paper-network-runner.mjs";
 
+test("accepts exact outage pay completion after the recovery barrier when a chat receipt arrived earlier", () => {
+  const predicate = paperNetworkRunner.isOutagePayCompletionAfterRecoveryBarrier;
+  assert.equal(typeof predicate, "function");
+  const receipt = {
+    type: "pay_response_pass",
+    id: "db-outage-pay",
+    seq: 44,
+    senderReceiptEventSequence: 43,
+    receiverReceiptEventSequence: 41,
+  };
+  assert.equal(predicate(receipt, 42), true);
+  assert.equal(predicate({ ...receipt, seq: 42 }, 42), false,
+    "the pay completion itself must follow the recovery barrier");
+  assert.equal(predicate({ ...receipt, receiverReceiptEventSequence: 44 }, 42), false,
+    "the exact receipt chat must precede the completion event");
+  assert.equal(predicate({ ...receipt, id: "cross-server-pay" }, 42), false,
+    "only the exact outage payment action is accepted");
+});
+
 test("waits for an account-specific SQL retry marker that arrives after the outage starts", async () => {
   const temporaryBase = os.tmpdir();
   assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",

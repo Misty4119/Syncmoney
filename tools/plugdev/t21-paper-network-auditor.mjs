@@ -327,6 +327,15 @@ function validateSnapshots(root, report, fail) {
   return { seed, afterPay, outage, recovered, final };
 }
 
+export function isOutagePayCompletionAfterRecoveryBarrier(event, barrierSequence) {
+  return event?.type === "pay_response_pass" && event.id === "db-outage-pay" &&
+    Number.isSafeInteger(barrierSequence) && barrierSequence > 0 &&
+    Number.isSafeInteger(event.seq) && event.seq > barrierSequence &&
+    Number.isSafeInteger(event.senderReceiptEventSequence) && event.senderReceiptEventSequence > 0 &&
+    Number.isSafeInteger(event.receiverReceiptEventSequence) && event.receiverReceiptEventSequence > 0 &&
+    event.senderReceiptEventSequence < event.seq && event.receiverReceiptEventSequence < event.seq;
+}
+
 function validateClientEvents(events, backendB, fail) {
   const ofType = type => events.filter(event => event.type === type);
   events.forEach((event, index) => {
@@ -356,8 +365,8 @@ function validateClientEvents(events, backendB, fail) {
   const recoveryBarrier = recoveryBarriers[0];
   if (outagePayEvents.length !== 1) fail("client must contain exactly one outage payment receipt event");
   if (recoveryBarriers.length !== 1) fail("client must contain exactly one PostgreSQL recovery barrier event");
-  if (outagePay && recoveryBarrier && outagePay.seq <= recoveryBarrier.seq) {
-    fail("outage payment client receipt event did not follow the PostgreSQL recovery barrier");
+  if (outagePay && recoveryBarrier && !isOutagePayCompletionAfterRecoveryBarrier(outagePay, recoveryBarrier.seq)) {
+    fail("outage payment completion did not follow the PostgreSQL recovery barrier with sequenced receipts");
   }
   const paySubmissions = ofType("pay_submitted");
   for (const [event, label, amount, id] of [
@@ -379,17 +388,22 @@ function validateClientEvents(events, backendB, fail) {
     if (!receiverChat || receiverChat.type !== "bot_chat" || receiverChat.name !== "AcceptanceB" || receiverChat.text !== event.receiverText) {
       fail(`${label} receiver receipt is not linked to the exact client chat event`);
     }
-    if (id === "db-outage-pay" && recoveryBarrier &&
-        (!Number.isSafeInteger(event.senderReceiptEventSequence) || !Number.isSafeInteger(event.receiverReceiptEventSequence) ||
-         event.senderReceiptEventSequence <= recoveryBarrier.seq || event.receiverReceiptEventSequence <= recoveryBarrier.seq)) {
-      fail("outage payment receipt client chat events did not follow the PostgreSQL recovery barrier");
-    }
     const submissions = paySubmissions.filter(submission => submission.id === id);
     if (submissions.length !== 1 || submissions[0]?.sender !== "AcceptanceA" ||
-        submissions[0]?.target !== "AcceptanceB" || submissions[0]?.amount !== amount) {
+        submissions[0]?.target !== "AcceptanceB" || submissions[0]?.amount !== amount ||
+        !Number.isSafeInteger(submissions[0]?.seq)) {
       fail(`${label} does not have one exact submitted client action`);
-    } else if (events.indexOf(event) <= events.indexOf(submissions[0])) {
-      fail(`${label} success receipt preceded its submitted client action`);
+    } else {
+      if (events.indexOf(event) <= events.indexOf(submissions[0])) {
+        fail(`${label} success receipt preceded its submitted client action`);
+      }
+      if (!Number.isSafeInteger(event.senderReceiptEventSequence) ||
+          !Number.isSafeInteger(event.receiverReceiptEventSequence) ||
+          event.senderReceiptEventSequence <= submissions[0].seq ||
+          event.receiverReceiptEventSequence <= submissions[0].seq ||
+          event.senderReceiptEventSequence >= event.seq || event.receiverReceiptEventSequence >= event.seq) {
+        fail(`${label} receipt chat events are not sequenced between the exact submitted action and its completion`);
+      }
     }
   }
   const reconnectRequests = ofType("reconnect_submitted").filter(event => event.name === "AcceptanceB" && event.target === backendB);
@@ -451,8 +465,18 @@ function validateRecoveryReceiptLink(runnerEvents, clientEvidence, fail) {
   if (clientBarrier && runnerReceipt?.recoveryBarrierEventSequence !== clientBarrier.seq) {
     fail("runner outage receipt references a different client recovery barrier");
   }
-  if (clientReceipt && clientBarrier && clientReceipt.seq <= clientBarrier.seq) {
-    fail("client receipt event did not follow the PostgreSQL recovery barrier");
+  if (clientReceipt && clientBarrier &&
+      !isOutagePayCompletionAfterRecoveryBarrier(clientReceipt, clientBarrier.seq)) {
+    fail("client outage payment completion did not follow the PostgreSQL recovery barrier with sequenced receipts");
+  }
+  if (runnerReceipt && !isOutagePayCompletionAfterRecoveryBarrier({
+    type: "pay_response_pass",
+    id: runnerReceipt.id,
+    seq: runnerReceipt.receiptEventSequence,
+    senderReceiptEventSequence: runnerReceipt.senderReceiptEventSequence,
+    receiverReceiptEventSequence: runnerReceipt.receiverReceiptEventSequence,
+  }, runnerReceipt.recoveryBarrierEventSequence)) {
+    fail("runner outage payment completion did not follow the recovery barrier with sequenced receipts");
   }
 }
 
@@ -597,15 +621,15 @@ function validateRunnerEvents(events, fail) {
     fail("no SQL retry was observed before PostgreSQL recovery");
   }
   if (!outageReceipt || outageReceipt.id !== "db-outage-pay" || outageReceipt.receiptObserved !== true ||
-      !Number.isSafeInteger(outageReceipt.receiptEventSequence) ||
-      !Number.isSafeInteger(outageReceipt.senderReceiptEventSequence) ||
-      !Number.isSafeInteger(outageReceipt.receiverReceiptEventSequence) ||
-      !Number.isSafeInteger(outageReceipt.recoveryBarrierEventSequence) ||
-      outageReceipt.senderReceiptEventSequence <= outageReceipt.recoveryBarrierEventSequence ||
-      outageReceipt.receiverReceiptEventSequence <= outageReceipt.recoveryBarrierEventSequence ||
-      outageReceipt.receiptEventSequence <= outageReceipt.recoveryBarrierEventSequence ||
+      !isOutagePayCompletionAfterRecoveryBarrier({
+        type: "pay_response_pass",
+        id: outageReceipt.id,
+        seq: outageReceipt.receiptEventSequence,
+        senderReceiptEventSequence: outageReceipt.senderReceiptEventSequence,
+        receiverReceiptEventSequence: outageReceipt.receiverReceiptEventSequence,
+      }, outageReceipt.recoveryBarrierEventSequence) ||
       events.indexOf(outageReceipt) <= events.indexOf(restart)) {
-    fail("outage payment receipt was not sequenced after PostgreSQL recovery");
+    fail("outage payment completion was not sequenced after PostgreSQL recovery with exact receipt references");
   }
   const recoveryBarrier = events.find(event => event.type === "client_recovery_barrier");
   if (!recoveryBarrier || recoveryBarrier.actionId !== "postgres-recovery-barrier" ||

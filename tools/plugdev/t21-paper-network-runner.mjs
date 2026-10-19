@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import {
   auditRunDirectory,
+  isOutagePayCompletionAfterRecoveryBarrier,
   collectDirectoryManifest,
   resolvePinnedArtifactSources,
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
@@ -1848,11 +1849,8 @@ async function runCell(endpointId) {
       actionId: "postgres-recovery-barrier",
       clientEventSequence: recoveryBarrier.seq,
     });
-    const outageReceipt = await waitClientEvent(runRoot, "outage pay receipts after PostgreSQL recovery barrier",
-      event => event.type === "pay_response_pass" && event.id === "db-outage-pay" &&
-        Number.isSafeInteger(event.seq) && Number.isSafeInteger(event.senderReceiptEventSequence) &&
-        Number.isSafeInteger(event.receiverReceiptEventSequence) &&
-        event.senderReceiptEventSequence > recoveryBarrier.seq && event.receiverReceiptEventSequence > recoveryBarrier.seq, 135_000);
+    const outageReceipt = await waitClientEvent(runRoot, "outage pay completion after PostgreSQL recovery barrier",
+      event => isOutagePayCompletionAfterRecoveryBarrier(event, recoveryBarrier.seq), 135_000);
     appendEvent(runRoot, "outage_pay_receipt_after_recovery", {
       id: "db-outage-pay",
       receiptObserved: true,
@@ -2116,6 +2114,7 @@ export {
   waitForSqlRetryEvidence,
   ensurePostgresAvailableForNetworkShutdown,
   cleanupFailedRunResources,
+  isOutagePayCompletionAfterRecoveryBarrier,
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

@@ -497,13 +497,13 @@ test("rejects an outage receipt whose real client event sequence predates the re
       receipt.recoveryBarrierEventSequence = barrierSequence;
     });
     assert.throws(() => audit(fixture), error =>
-      error instanceof NetworkAuditError && /client receipt event did not follow the PostgreSQL recovery barrier/i.test(error.message));
+      error instanceof NetworkAuditError && /outage payment completion did not follow the PostgreSQL recovery barrier/i.test(error.message));
   } finally {
     await fixture.close();
   }
 });
 
-test("rejects a delayed pass event when the underlying outage chat receipts arrived before recovery", async () => {
+test("accepts an outage pay completion after recovery when its exact chat receipts arrived earlier", async () => {
   const fixture = await createFixture();
   try {
     let senderReceiptSequence;
@@ -535,8 +535,9 @@ test("rejects a delayed pass event when the underlying outage chat receipts arri
       receipt.receiverReceiptEventSequence = receiverReceiptSequence;
       receipt.recoveryBarrierEventSequence = barrierSequence;
     });
-    assert.throws(() => audit(fixture), error =>
-      error instanceof NetworkAuditError && /outage payment receipt client chat events did not follow the PostgreSQL recovery barrier/i.test(error.message));
+    const result = audit(fixture);
+    assert.equal(result.accepted, true);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
   } finally {
     await fixture.close();
   }
