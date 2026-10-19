@@ -163,19 +163,38 @@ function runCapture(executable, args, options = {}) {
     let stderr = "";
     let timedOut = false;
     let settled = false;
-    const child = spawn(executable, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let outputFileDescriptor = null;
+    const captureOutput = options.captureOutput !== false;
+    if (!captureOutput && options.outputFile) {
+      outputFileDescriptor = fs.openSync(options.outputFile, "wx");
+    }
+    let child;
+    try {
+      child = spawn(executable, args, {
+        cwd: options.cwd,
+        env: options.env ?? process.env,
+        windowsHide: true,
+        stdio: captureOutput
+          ? ["ignore", "pipe", "pipe"]
+          : outputFileDescriptor === null ? "ignore" : ["ignore", outputFileDescriptor, outputFileDescriptor],
+      });
+    } catch (error) {
+      if (outputFileDescriptor !== null) {
+        try { fs.closeSync(outputFileDescriptor); } catch { /* preserve the spawn failure */ }
+        outputFileDescriptor = null;
+      }
+      resolve({ code: null, signal: null, error, stdout, stderr, timedOut });
+      return;
+    }
     const maxOutput = options.maxOutputBytes ?? 2 * 1024 * 1024;
     const appendBounded = (current, chunk) => {
       const next = current + chunk.toString("utf8");
       return next.length > maxOutput ? next.slice(-maxOutput) : next;
     };
-    child.stdout.on("data", chunk => { stdout = appendBounded(stdout, chunk); });
-    child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
+    if (captureOutput) {
+      child.stdout.on("data", chunk => { stdout = appendBounded(stdout, chunk); });
+      child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
+    }
     const timeout = setTimeout(() => {
       timedOut = true;
       try { child.kill(); } catch { /* only this short-lived command is owned here */ }
@@ -184,6 +203,15 @@ function runCapture(executable, args, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (outputFileDescriptor !== null) {
+        try { fs.closeSync(outputFileDescriptor); }
+        catch (error) { result = { ...result, error: result.error ?? error }; }
+        outputFileDescriptor = null;
+      }
+      if (!captureOutput && options.outputFile) {
+        try { stdout = fs.readFileSync(options.outputFile, "utf8"); }
+        catch (error) { result = { ...result, error: result.error ?? error }; }
+      }
       resolve({ ...result, stdout, stderr, timedOut });
     };
     child.once("error", error => finish({ code: null, signal: null, error }));
@@ -684,13 +712,17 @@ async function startPostgres(runRoot, preflight, port, postgresState) {
     "--no-instructions",
   ], "isolated PostgreSQL initdb", { timeoutMs: 120_000, cwd: runRoot });
   await appendCommandLog(runRoot, "initdb", init);
+  const initialControlOutput = path.join(runRoot, "services", "postgres", "pg_ctl-initial-start-output.log");
   const start = await checkedCapture(preflight.postgres.pgCtlExe, [
     "-D", dataDirectory,
     "-l", initialLog,
     "-o", "-p " + port + " -h 127.0.0.1 -c listen_addresses=127.0.0.1",
     "-w", "-t", "90", "start",
-  ], "isolated PostgreSQL initial start", { timeoutMs: 120_000, cwd: runRoot });
+  ], "isolated PostgreSQL initial start", {
+    timeoutMs: 120_000, cwd: runRoot, captureOutput: false, outputFile: initialControlOutput,
+  });
   await appendCommandLog(runRoot, "pg_ctl-start-initial", start);
+  await fsp.rm(initialControlOutput, { force: true });
   postgresState.started = true;
   await waitForPort(port, true, 20_000);
   await checkedCapture(preflight.postgres.psqlExe, [
@@ -1191,13 +1223,17 @@ async function stopPostgres(runRoot, preflight, pgState, stage) {
 
 async function startPostgresAgain(runRoot, preflight, pgState) {
   const restartLog = path.join(runRoot, "services", "postgres", "postgres-restart.log");
+  const recoveryControlOutput = path.join(runRoot, "services", "postgres", "pg_ctl-recovery-start-output.log");
   const result = await checkedCapture(preflight.postgres.pgCtlExe, [
     "-D", pgState.dataDirectory,
     "-l", restartLog,
     "-o", "-p " + pgState.port + " -h 127.0.0.1 -c listen_addresses=127.0.0.1",
     "-w", "-t", "90", "start",
-  ], "isolated PostgreSQL recovery start", { timeoutMs: 120_000, cwd: runRoot });
+  ], "isolated PostgreSQL recovery start", {
+    timeoutMs: 120_000, cwd: runRoot, captureOutput: false, outputFile: recoveryControlOutput,
+  });
   await appendCommandLog(runRoot, "pg_ctl-start-recovery", result);
+  await fsp.rm(recoveryControlOutput, { force: true });
   pgState.started = true;
   await waitForPort(pgState.port, true, 20_000);
   pgState.restartLog = restartLog;
@@ -1948,6 +1984,7 @@ export {
   parseArguments,
   redisConfigArgument,
   encodeRconPacket,
+  runCapture,
   waitForRedisProcess,
 };
 

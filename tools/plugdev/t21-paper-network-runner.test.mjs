@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -9,12 +11,107 @@ import {
   createRunRootDirectory,
   encodeRconPacket,
   redisConfigArgument,
+  runCapture,
   waitForRedisProcess,
 } from "./t21-paper-network-runner.mjs";
 import {
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
 } from "./t21-paper-network-auditor.mjs";
+
+test("runCapture avoids inherited stdio handles for service-start commands", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the subprocess fixture must stay on the C: SSD");
+  const temporaryRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-capture-"));
+  const childPidFile = path.join(temporaryRoot, "child.pid");
+  const outputFile = path.join(temporaryRoot, "control.log");
+  const launcherPath = path.join(temporaryRoot, "launch-child.mjs");
+  const childProgram = "require('node:fs').writeFileSync(process.env.T21_CAPTURE_CHILD_PID_FILE,String(process.pid));setTimeout(()=>{},4000)";
+  const launcherSource = [
+    "import { spawn } from 'node:child_process';",
+    "process.stdout.write('service-start stdout marker');",
+    "process.stderr.write('service-start stderr marker');",
+    `const child = spawn(process.execPath, ["-e", ${JSON.stringify(childProgram)}], { detached: true, stdio: "inherit", windowsHide: true });`,
+    "child.unref();",
+    "",
+  ].join("\n");
+  const startedAt = Date.now();
+  let result;
+  let childPid = null;
+  try {
+    await writeFile(launcherPath, launcherSource, "utf8");
+    result = await runCapture(process.execPath, [launcherPath], {
+      captureOutput: false,
+      outputFile,
+      env: { ...process.env, T21_CAPTURE_CHILD_PID_FILE: childPidFile },
+      timeoutMs: 1_000,
+    });
+  } finally {
+    let childPidContent = null;
+    const pidDeadline = Date.now() + 1_000;
+    while (!childPidContent && Date.now() < pidDeadline) {
+      try { childPidContent = await readFile(childPidFile, "utf8"); }
+      catch (error) { if (error?.code !== "ENOENT") throw error; }
+      if (!childPidContent) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    childPid = Number(childPidContent);
+    if (Number.isSafeInteger(childPid) && childPid > 0) {
+      try { process.kill(childPid); }
+      catch (error) { if (error?.code !== "ESRCH") throw error; }
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+
+  assert.ok(Number.isSafeInteger(childPid) && childPid > 0,
+    "the service-start fixture must launch its long-lived child");
+  assert.equal(result.timedOut, false,
+    "the command wrapper must finish before the long-lived service child exits");
+  assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
+  assert.equal(result.stderr, "");
+  assert.ok(result.stdout.includes("service-start stdout marker"));
+  assert.ok(result.stdout.includes("service-start stderr marker"));
+  assert.ok(Date.now() - startedAt < 2_000,
+    "a short-lived command must finish without waiting for its long-lived service child");
+});
+
+test("runCapture captures command output by default", async () => {
+  const result = await runCapture(process.execPath, ["-e", "process.stdout.write('stdout marker');process.stderr.write('stderr marker')"], {
+    timeoutMs: 5_000,
+  });
+  assert.equal(result.error, null);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
+  assert.equal(result.stdout, "stdout marker");
+  assert.equal(result.stderr, "stderr marker");
+});
+
+test("runCapture redirects service output to a run-owned file when capture is disabled", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the subprocess fixture must stay on the C: SSD");
+  const temporaryRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-control-output-"));
+  const outputFile = path.join(temporaryRoot, "control.log");
+  try {
+    const result = await runCapture(process.execPath, ["-e", "process.stdout.write('pg_ctl stdout');process.stderr.write('pg_ctl stderr')"], {
+      captureOutput: false,
+      outputFile,
+      timeoutMs: 5_000,
+    });
+    assert.equal(result.error, null);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.code, 0);
+    assert.equal(result.signal, null);
+    assert.equal(result.stderr, "");
+    assert.ok(result.stdout.includes("pg_ctl stdout"));
+    assert.ok(result.stdout.includes("pg_ctl stderr"));
+    assert.equal(result.stdout, await readFile(outputFile, "utf8"));
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 
 test("PlugDev network artifact paths stay pinned while plugin configs stay inside its workspace", () => {
   const runRoot = path.resolve("C:/t21-paper-network-run-test");
