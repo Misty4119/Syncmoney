@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -25,6 +25,13 @@ import {
 
 const FIXTURE_PARENT = "C:\\Users\\margo\\AppData\\Local\\Temp";
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+test("auditor usage lists the current-maximum Canvas endpoint", () => {
+  const auditorPath = fileURLToPath(new URL("./t21-paper-network-auditor.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [auditorPath], { encoding: "utf8" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /canvas-263-984/);
+});
 
 function hash(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -515,6 +522,76 @@ test("accepts the minimum Canvas network report with its exact bootstrap identit
     const result = audit(fixture);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
     assert.equal(result.endpoint, "Canvas 1.21.8#603");
+  } finally {
+    await fixture.close();
+  }
+});
+
+
+test("accepts the current-maximum Canvas network report with its exact endpoint identity", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  try {
+    assert.equal(fixture.report.endpoint.product, "Canvas");
+    assert.equal(fixture.report.endpoint.version, "26.3");
+    assert.equal(fixture.report.endpoint.build, 984);
+    assert.equal(T21_NETWORK_ENDPOINTS["canvas-263-984"].serverJarSha256,
+      "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa");
+    assert.equal(fixture.report.endpoint.serverJarSha256, fixture.expectedEndpoint.serverJarSha256);
+    assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
+    assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
+    assert.equal(endpointServerArtifactKind(fixture.expectedEndpoint), "server");
+    assert.equal(endpointServerJarFileName(fixture.expectedEndpoint), "canvas.jar");
+    assert.deepEqual(networkArtifactPathsForEndpoint(fixture.expectedEndpoint)
+      .filter(entry => entry.kind === "server").map(entry => entry.path), [
+      "inputs/canvas.jar",
+      "workspace/.plugdev/network/backends/backend-a/server.jar",
+      "workspace/.plugdev/network/backends/backend-b/server.jar",
+    ]);
+    const result = audit(fixture);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
+    assert.equal(result.endpoint, "Canvas 26.3#984");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a current-maximum Canvas report when its endpoint build pin changes", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  try {
+    fixture.report.endpoint.build = 983;
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /endpoint build pin mismatch/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a current-maximum Canvas server log with the wrong build identity", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  try {
+    await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
+      "[bootstrap] Loading Canvas 26.3-984-fixture",
+      "[bootstrap] Loading Canvas 26.3-983-fixture",
+    ));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 26\.3#984 startup identity marker/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a current-maximum Canvas run when its copied server artifact changes", async () => {
+  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  try {
+    await fs.writeFile(path.join(fixture.root, "inputs", "canvas.jar"), Buffer.from("tampered-current-maximum-canvas-server-jar"));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /artifact copy SHA-256 mismatch for inputs\/canvas\.jar/i.test(error.message),
+    );
   } finally {
     await fixture.close();
   }

@@ -469,6 +469,62 @@ test("runner selects the exact minimum Canvas endpoint and its retained C: artif
   ));
 });
 
+
+test("runner argument usage includes the current-maximum Canvas endpoint", () => {
+  assert.throws(
+    () => paperNetworkRunner.parseArguments([]),
+    /canvas-263-984/,
+  );
+});
+
+test("runner selects the exact current-maximum Canvas endpoint and its retained C: artifact", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  let parsed;
+  let parseError;
+  try { parsed = parse(["--endpoint", "canvas-263-984"]); }
+  catch (error) { parseError = error; }
+  assert.equal(parseError, undefined, parseError?.message);
+  assert.deepEqual(parsed, { endpointId: "canvas-263-984", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-263-984"], {
+    product: "Canvas",
+    version: "26.3",
+    build: 984,
+    serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
+  });
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-263-984");
+  assert.equal(sources.server, path.join(
+    WORKSPACE_ROOT,
+    "build",
+    "reports",
+    "foundation",
+    "T21-sql-runtime",
+    "current-maximum-artifacts",
+    "canvas-26.3-984.jar",
+  ));
+});
+
+test("PlugDev launches both current-maximum Canvas backends from the exact run-owned Canvas JAR", () => {
+  const runRoot = path.resolve("C:/t21-canvas-currentmax-network-run-test");
+  const ports = {
+    proxy: 25565,
+    backendA: 25566,
+    backendB: 25567,
+    postgres: 25432,
+    redis: 26379,
+    rconA: 28000,
+    rconB: 28001,
+    bridge: 28100,
+  };
+  const endpoint = T21_NETWORK_ENDPOINTS["canvas-263-984"];
+  const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
+  assert.equal(config.backends.length, 2);
+  for (const backend of config.backends) {
+    assert.equal(backend.software, "custom");
+    assert.equal(backend.version, "26.3");
+    assert.equal(backend.jar, path.join(runRoot, "inputs", "canvas.jar"));
+  }
+});
+
 test("PlugDev launches both minimum Canvas backends from the exact run-owned Canvas JAR", () => {
   const runRoot = path.resolve("C:/t21-canvas-network-run-test");
   const ports = {
