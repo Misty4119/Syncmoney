@@ -20,6 +20,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'The DatabaseManager initiali
 $script:repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 . (Join-Path $PSScriptRoot 't21-database-manager-init-failure-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-startup-failure-validation.ps1')
+. (Join-Path $PSScriptRoot 't21-database-manager-init-audit-log.ps1')
 
 function Assert-T21DatabaseManagerInitFailure([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -106,12 +107,27 @@ foreach ($name in $sourcePaths.Keys) { $sourceHashes[$name] = Get-T21Hash $sourc
 
 $syncmoneySourceCommit = (& git -C $script:repoRoot rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
 if ($LASTEXITCODE -ne 0 -or $syncmoneySourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not read the current Syncmoney source commit.' }
-$syncmoneySourceDirty = @(& git -C $script:repoRoot status --porcelain --untracked-files=all 2>$null)
+$syncmoneySourceWorktreeDelta = @(& git -C $script:repoRoot status --porcelain --untracked-files=all 2>$null)
 $syncmoneySourceStatusExitCode = $LASTEXITCODE
+if ($syncmoneySourceStatusExitCode -ne 0) { throw 'Could not inspect the Syncmoney checkout status during offline audit.' }
+$auditOnlyPaths = @(
+    'tools/plugdev/audit-t21-database-manager-init-failure.ps1',
+    'tools/plugdev/t21-database-manager-init-audit-log.ps1',
+    'tools/plugdev/t21-database-manager-init-audit-log.test.ps1'
+)
+$syncmoneySourceDirty = @($syncmoneySourceWorktreeDelta | Where-Object {
+    if ($_ -isnot [string] -or $_.Length -lt 4) {
+        $true
+    } else {
+        $path = $_.Substring(3).Trim().Replace('\', '/')
+        $path -notin $auditOnlyPaths
+    }
+})
 if (-not (Test-T21DatabaseManagerInitFailureCleanGitStatus -StatusEntries $syncmoneySourceDirty -ExitCode $syncmoneySourceStatusExitCode)) {
-    throw 'Could not verify that the Syncmoney checkout is clean during offline audit.'
+    throw 'Could not verify that the Syncmoney checkout contains no product-source changes during offline audit.'
 }
-Assert-T21DatabaseManagerInitFailure ($syncmoneySourceDirty.Count -eq 0) 'Syncmoney checkout must be clean while its runtime evidence is audited.'
+$auditWorktreeDeltaValid = Test-T21DatabaseManagerInitAuditWorktreeDelta $syncmoneySourceWorktreeDelta
+Assert-T21DatabaseManagerInitFailure ([bool]$auditWorktreeDeltaValid) 'Syncmoney checkout contains changes outside the pinned offline-auditor implementation and focused test.'
 
 $javaExe = Join-Path $javaHomePath 'bin\java.exe'
 $javaVersionOutput = @(& $javaExe -version 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
@@ -202,9 +218,8 @@ $reportAfter = Get-T21ObjectField $report 'schemaStateAfter'
 $observedAfter = Get-Content -LiteralPath $afterLog -Raw | ConvertFrom-Json -ErrorAction Stop
 Assert-T21DatabaseManagerInitFailure (Compare-T21JsonValue $observedAfter $reportAfter) 'Post-failure PostgreSQL schema JSON log differs from the report evidence.'
 
-$latestLogs = @($logs.Keys | Where-Object { [string]$_ -match '(?i)(^|[\\/])workspace[\\/]\.plugdev[\\/]run[\\/]logs[\\/]latest\.log$' })
-if ($latestLogs.Count -ne 1) { throw 'Runtime report must contain exactly one PlugDev latest.log entry.' }
-$serverLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot ([string]$latestLogs[0])))
+$serverLogEvidence = Get-T21DatabaseManagerInitAuditLogEvidence -Report $report -Logs $logs
+$serverLogPath = [IO.Path]::GetFullPath((Join-Path $runRoot $serverLogEvidence.path))
 $serverLogText = Get-Content -LiteralPath $serverLogPath -Raw -ErrorAction Stop
 $startupLogAudit = Test-T21DatabaseManagerInitFailureStartupLog -LogText $serverLogText -CandidateVersion '1.4.0-alpha.1'
 Assert-T21DatabaseManagerInitFailure ([bool]$startupLogAudit.passed) "Retained Paper startup log failed the ordered startup/cleanup predicate: $($startupLogAudit.failures -join '; ')"
@@ -221,9 +236,16 @@ $resultLines = @(
     "report=$reportFullPath",
     "reportSha256=$(Get-T21Hash $reportFullPath)",
     "reportBytes=$((Get-Item -LiteralPath $reportFullPath).Length)",
+    "platformLogStage=$($serverLogEvidence.stage)",
     "serverLog=$serverLogPath",
     "serverLogSha256=$(Get-T21Hash $serverLogPath)",
     "retainedLogsAudited=$auditedLogCount",
+    "sourceCommit=$syncmoneySourceCommit",
+    "runtimeSourceWorkingTreeDirty=$([bool](Get-T21ObjectField $report 'sourceWorkingTreeDirty'))",
+    "auditWorktreeDelta=$($syncmoneySourceWorktreeDelta -join ';')",
+    "auditLogHelperSha256=$(Get-T21Hash (Join-Path $PSScriptRoot 't21-database-manager-init-audit-log.ps1'))",
+    "auditScriptSha256=$(Get-T21Hash $PSCommandPath)",
+    "auditLogHelperTestSha256=$(Get-T21Hash (Join-Path $PSScriptRoot 't21-database-manager-init-audit-log.test.ps1'))",
     "plugDevCommit=$plugDevCommit",
     "plugDevCliSha256=$plugDevCliHash",
     "plugDevManifestSha256=$($plugDevManifest.sha256)",
