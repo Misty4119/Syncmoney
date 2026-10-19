@@ -2802,6 +2802,9 @@ try {
                     candidateJarSha256=$script:candidateSha256
                 }
             }
+            if ($script:databaseManagerInitFailureStartupFailure) {
+                $script:finalReport.runner = $script:report.runner
+            }
             $failureScenario = switch ($true) {
                 $script:databaseManagerInitFailureStartupFailure { 'DatabaseManagerInitFailure'; break }
                 $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }

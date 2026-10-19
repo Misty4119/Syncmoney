@@ -37,6 +37,7 @@ foreach ($catalog in @('pg_catalog\.pg_class', 'pg_catalog\.pg_proc', 'pg_catalo
     Assert-Predicate ($runnerSource -match $catalog) "PostgreSQL schema snapshot must count objects from $catalog."
 }
 Assert-Predicate ($runnerSource -match "'publicObjectCount'") 'PostgreSQL schema snapshot must expose its public object count.'
+Assert-Predicate ($runnerSource -match '(?s)if \(\$script:databaseManagerInitFailureStartupFailure\)\s*\{\s*\$script:finalReport\.runner\s*=\s*\$script:report\.runner') 'Only the DatabaseManager report should retain the runner provenance object consumed by its validator and offline auditor.'
 
 $auditPath = Join-Path $PSScriptRoot 'audit-t21-database-manager-init-failure.ps1'
 $auditSource = Get-Content -LiteralPath $auditPath -Raw
@@ -97,7 +98,7 @@ function New-ValidDatabaseManagerInitFailureReport {
         sourceWorkingTreeDirty = $false
         sourceWorkingTreeDirtyAfter = $false
         failure = $null
-        server = [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = '200'; sha256 = '0' * 64 }
+        server = [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200; sha256 = '0' * 64 }
         candidate = [pscustomobject]@{ version = '1.4.0-alpha.1'; sha256 = '1' * 64 }
         artifacts = [pscustomobject]@{ acceptanceSha256 = '4' * 64; apiConsumerSha256 = '5' * 64 }
         sqlBackend = [pscustomobject]@{ product = 'PostgreSQL'; version = '18.1' }
@@ -288,6 +289,11 @@ Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'Curren
 $report = New-ValidDatabaseManagerInitFailureReport
 $reportPassed = Test-T21DatabaseManagerInitFailureReport $report ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40)
 Assert-Predicate $reportPassed 'The pinned Paper/PostgreSQL startup-failure report should pass.'
+
+$report = New-ValidDatabaseManagerInitFailureReport
+$report.server.build = '200'
+$reportPassed = Test-T21DatabaseManagerInitFailureReport $report ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40)
+Assert-Predicate (-not $reportPassed) 'A string-shaped Paper build number must be rejected.'
 
 foreach ($field in @('software', 'minecraftVersion', 'build')) {
     $report = New-ValidDatabaseManagerInitFailureReport

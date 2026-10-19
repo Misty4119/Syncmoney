@@ -273,7 +273,7 @@ function Test-T21DatabaseManagerInitFailureReport(
     $server = Get-T21DatabaseManagerInitFailureValue $Report 'server'
     if (-not (Test-T21DatabaseManagerInitFailureStringField $server 'software' 'paper') -or
         -not (Test-T21DatabaseManagerInitFailureStringField $server 'minecraftVersion' '26.3') -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $server 'build' '200') -or
+        -not (Test-T21DatabaseManagerInitFailureInteger $server 'build' 200) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $server 'sha256' $ExpectedServerSha256.ToLowerInvariant())) { return $false }
 
     $candidate = Get-T21DatabaseManagerInitFailureValue $Report 'candidate'
