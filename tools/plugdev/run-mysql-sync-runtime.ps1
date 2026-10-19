@@ -48,7 +48,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and
     -not (Test-T21DatabaseManagerInitFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum/current-maximum Paper; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.'
+    throw 'The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, or current-maximum Paper; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.'
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -2865,7 +2865,7 @@ try {
                     databaseManagerSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\storage\db\DatabaseManager.java') -Algorithm SHA256).Hash.ToLowerInvariant()
                     storageManagerSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\storage\StorageManager.java') -Algorithm SHA256).Hash.ToLowerInvariant()
                     syncmoneyLifecycleSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\Syncmoney.java') -Algorithm SHA256).Hash.ToLowerInvariant()
-                    paperJarSha256=$serverSha256
+                    serverJarSha256=$serverSha256
                     candidateJarSha256=$script:candidateSha256
                 }
             }

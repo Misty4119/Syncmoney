@@ -240,7 +240,7 @@ function Test-T21DatabaseManagerInitFailureMySqlPrivileges([object]$Privileges) 
 }
 
 function Test-T21DatabaseManagerInitFailureTarget([string]$DatabaseProduct, [string]$PlatformEndpoint) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'CurrentMaximum')
+    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'MinimumFolia', 'CurrentMaximum')
 }
 
 function Test-T21DatabaseManagerInitFailureSchemaState(
@@ -331,12 +331,13 @@ function Test-T21DatabaseManagerInitFailureReport(
     [string]$ExpectedAcceptanceSha256,
     [string]$ExpectedApiConsumerSha256,
     [string]$ExpectedSourceCommit,
-    [ValidateSet('Minimum', 'CurrentMaximum')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$ExpectedDatabaseProduct = 'PostgreSQL'
 ) {
     $expectedServer = switch ($ExpectedPlatformEndpoint) {
-        'Minimum' { [pscustomobject]@{ minecraftVersion = '1.21.6'; build = 48 } }
-        'CurrentMaximum' { [pscustomobject]@{ minecraftVersion = '26.3'; build = 200 } }
+        'Minimum' { [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48 } }
+        'MinimumFolia' { [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6 } }
+        'CurrentMaximum' { [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200 } }
     }
     $failure = Get-T21DatabaseManagerInitFailureValue $Report 'failure'
     if ($null -eq $Report -or
@@ -353,7 +354,7 @@ function Test-T21DatabaseManagerInitFailureReport(
         -not (Test-T21DatabaseManagerInitFailureBoolean $Report 'sourceWorkingTreeDirtyAfter' $false)) { return $false }
 
     $server = Get-T21DatabaseManagerInitFailureValue $Report 'server'
-    if (-not (Test-T21DatabaseManagerInitFailureStringField $server 'software' 'paper') -or
+    if (-not (Test-T21DatabaseManagerInitFailureStringField $server 'software' $expectedServer.software) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $server 'minecraftVersion' $expectedServer.minecraftVersion) -or
         -not (Test-T21DatabaseManagerInitFailureInteger $server 'build' $expectedServer.build) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $server 'sha256' $ExpectedServerSha256.ToLowerInvariant())) { return $false }
@@ -453,11 +454,16 @@ function Test-T21DatabaseManagerInitFailureReport(
         $sourceHash = Get-T21DatabaseManagerInitFailureValue $sourcePins $field
         if ($sourceHash -isnot [string] -or $sourceHash -notmatch '^[0-9a-f]{64}$') { return $false }
     }
+    $serverJarSha256 = Get-T21DatabaseManagerInitFailureValue $sourcePins 'serverJarSha256'
+    if ($null -eq $serverJarSha256 -and $expectedServer.software -ceq 'paper') {
+        # Preserve reports written before the server-neutral pin name was introduced.
+        $serverJarSha256 = Get-T21DatabaseManagerInitFailureValue $sourcePins 'paperJarSha256'
+    }
+    if (-not (Test-T21DatabaseManagerInitFailureString $serverJarSha256 $ExpectedServerSha256.ToLowerInvariant())) { return $false }
     if (-not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'sourceCommit' $sourceCommit) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'plugDevCommit' $ExpectedPlugDevSourceCommit.ToLowerInvariant()) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'plugDevCliSha256' $ExpectedPlugDevCliSha256.ToLowerInvariant()) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'plugDevCliDistManifestSha256' $ExpectedPlugDevCliDistManifestSha256.ToLowerInvariant()) -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'paperJarSha256' $ExpectedServerSha256.ToLowerInvariant()) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'candidateJarSha256' $ExpectedCandidateSha256.ToLowerInvariant()) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'acceptanceJarSha256' $ExpectedAcceptanceSha256.ToLowerInvariant()) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $sourcePins 'apiConsumerJarSha256' $ExpectedApiConsumerSha256.ToLowerInvariant())) { return $false }
