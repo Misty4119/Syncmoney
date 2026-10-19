@@ -72,9 +72,8 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
   const backendB = "backend-b";
   const serverNameA = "t21-net-a";
   const serverNameB = "t21-net-b";
-  const endpoint = endpointId === "folia-1216-6"
-    ? { product: "Folia", version: "1.21.6", build: 6 }
-    : { product: "Paper", version: "1.21.6", build: 48 };
+  const endpoint = T21_NETWORK_ENDPOINTS[endpointId];
+  if (!endpoint) throw new Error(`unknown fixture endpoint ${endpointId}`);
   const shutdownMarker = endpoint.product === "Folia"
     ? "[Region shutdown thread/INFO]: Stopping server"
     : "[Server thread/INFO]: Stopping server";
@@ -472,6 +471,38 @@ test("accepts the minimum Folia network report using generic server artifact ide
     assert.equal(error, undefined, error?.message);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
     assert.equal(result.endpoint, "Folia 1.21.6#6");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("accepts the current-maximum Folia network report with the exact endpoint identity", async () => {
+  const fixture = await createFixture({ endpointId: "folia-263-3" });
+  try {
+    assert.equal(fixture.report.endpoint.product, "Folia");
+    assert.equal(fixture.report.endpoint.version, "26.3");
+    assert.equal(fixture.report.endpoint.build, 3);
+    assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
+    assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
+    const result = audit(fixture);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
+    assert.equal(result.endpoint, "Folia 26.3#3");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a current-maximum Folia server log with the wrong build identity", async () => {
+  const fixture = await createFixture({ endpointId: "folia-263-3" });
+  try {
+    await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
+      "This server is running Folia version 26.3-3-fixture",
+      "This server is running Folia version 26.3-4-fixture",
+    ));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 26\.3#3 startup identity marker/i.test(error.message),
+    );
   } finally {
     await fixture.close();
   }

@@ -416,6 +416,32 @@ test("runner selects the exact minimum Folia endpoint and its retained C: artifa
   ));
 });
 
+test("runner selects the exact current-maximum Folia endpoint and its retained C: artifact", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  let parsed;
+  let parseError;
+  try { parsed = parse(["--endpoint", "folia-263-3"]); }
+  catch (error) { parseError = error; }
+  assert.equal(parseError, undefined, parseError?.message);
+  assert.deepEqual(parsed, { endpointId: "folia-263-3", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-263-3"], {
+    product: "Folia",
+    version: "26.3",
+    build: 3,
+    serverJarSha256: "0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022",
+  });
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-263-3");
+  assert.equal(sources.server, path.join(
+    WORKSPACE_ROOT,
+    "build",
+    "reports",
+    "foundation",
+    "T21-sql-runtime",
+    "current-maximum-artifacts",
+    "folia-26.3-3.jar",
+  ));
+});
+
 test("PlugDev launches both Folia backends from the exact run-owned Folia JAR", () => {
   const runRoot = path.resolve("C:/t21-folia-network-run-test");
   const ports = {

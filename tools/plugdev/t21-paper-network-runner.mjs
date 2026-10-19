@@ -141,7 +141,7 @@ function parseArguments(argv) {
     throw new Error("Unsupported runner argument: " + value);
   }
   if (!endpointId || !Object.hasOwn(T21_NETWORK_ENDPOINTS, endpointId)) {
-    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, or --endpoint folia-1216-6.");
+    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, --endpoint folia-1216-6, or --endpoint folia-263-3.");
   }
   return { endpointId, preflightOnly };
 }

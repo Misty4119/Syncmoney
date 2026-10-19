@@ -23,6 +23,12 @@ export const T21_NETWORK_ENDPOINTS = Object.freeze({
     build: 6,
     serverJarSha256: "917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234",
   }),
+  "folia-263-3": Object.freeze({
+    product: "Folia",
+    version: "26.3",
+    build: 3,
+    serverJarSha256: "0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022",
+  }),
 });
 // Keep existing Paper-only consumers scoped to Paper while the network map
 // admits additional products such as Folia.
@@ -1155,6 +1161,8 @@ export function resolvePinnedArtifactSources(workspaceRoot, endpointId) {
     server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "paper-26.3-200.jar");
   } else if (endpoint.product === "Folia" && endpointId === "folia-1216-6") {
     server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "folia-1.21.6-6.jar");
+  } else if (endpoint.product === "Folia" && endpointId === "folia-263-3") {
+    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "folia-26.3-3.jar");
   } else {
     throw new NetworkAuditError([`no trusted server artifact source is configured for ${endpoint.product} endpoint ${endpointId}`]);
   }
@@ -1281,7 +1289,7 @@ export function auditRunDirectory(runRoot, endpointId, workspaceRoot) {
 function main(argv) {
   const [runRoot, endpointId, workspaceRoot] = argv;
   if (!runRoot || !endpointId || !workspaceRoot || argv.length !== 3) {
-    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-1216-48|paper-263-200|folia-1216-6> <C:-workspace-root>\n");
+    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-1216-48|paper-263-200|folia-1216-6|folia-263-3> <C:-workspace-root>\n");
     process.exitCode = 2;
     return;
   }
