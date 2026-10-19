@@ -209,7 +209,7 @@ async function createFixture() {
       { type: "bot_login", name: "AcceptanceA", uuid: uuidA },
       { type: "bot_login", name: "AcceptanceB", uuid: uuidB },
       { type: "hop_submitted", name: "AcceptanceB", target: backendB, uuid: uuidB },
-      { type: "hop_pass", name: "AcceptanceB", target: backendB, uuid: uuidB, serverReply: `Connecting you to ${backendB}...` },
+      { type: "hop_pass", name: "AcceptanceB", target: backendB, uuid: uuidB, serverReply: `Connecting you to ${backendB}...`, routeConfirmation: "velocity-message" },
       { type: "pay_submitted", id: "cross-server-pay", sender: "AcceptanceA", target: "AcceptanceB", amount: "5.00" },
       { type: "bot_chat", name: "AcceptanceA", text: "Transaction Authorized. 5.00 routed to AcceptanceB" },
       { type: "bot_chat", name: "AcceptanceB", text: "Acquired +5.00 from AcceptanceA" },
@@ -218,7 +218,7 @@ async function createFixture() {
         senderReceiptEventSequence: 6, receiverReceiptEventSequence: 7 },
       { type: "bot_login", name: "AcceptanceB", uuid: uuidB },
       { type: "reconnect_submitted", name: "AcceptanceB", uuid: uuidB, priorUuid: uuidB, target: backendB },
-      { type: "reconnect_pass", name: "AcceptanceB", uuid: uuidB, priorUuid: uuidB, target: backendB, serverReply: `Connecting you to ${backendB}...` },
+      { type: "reconnect_pass", name: "AcceptanceB", uuid: uuidB, priorUuid: uuidB, target: backendB, serverReply: `Connecting you to ${backendB}...`, routeConfirmation: "velocity-message" },
       { type: "pay_submitted", id: "db-outage-pay", sender: "AcceptanceA", target: "AcceptanceB", amount: "3.00" },
       { type: "recovery_barrier", id: "postgres-recovery-barrier" },
       { type: "bot_chat", name: "AcceptanceA", text: "Transaction Authorized. 3.00 routed to AcceptanceB" },
@@ -621,6 +621,43 @@ test("rejects a route reply that only contains the requested backend name as a s
     });
     assert.throws(() => audit(fixture), error =>
       error instanceof NetworkAuditError && /backend-b route acknowledgement/i.test(error.message));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("accepts exact player join notices when the backend-position evidence confirms both routes", async () => {
+  const fixture = await createFixture();
+  try {
+    await rewriteJsonEvidence(fixture, "events/client-events.jsonl", events => {
+      for (const event of events.filter(item => item.type === "hop_pass" || item.type === "reconnect_pass")) {
+        event.serverReply = "§7AcceptanceB joined the game";
+        event.routeConfirmation = "backend-join-notice";
+      }
+    });
+    const result = audit(fixture);
+    assert.equal(result.accepted, true);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a join notice when backend-position evidence does not place AcceptanceB on backend B", async () => {
+  const fixture = await createFixture();
+  try {
+    await rewriteJsonEvidence(fixture, "events/client-events.jsonl", events => {
+      for (const event of events.filter(item => item.type === "hop_pass" || item.type === "reconnect_pass")) {
+        event.serverReply = "AcceptanceB joined the game";
+        event.routeConfirmation = "backend-join-notice";
+      }
+    });
+    await rewriteJsonEvidence(fixture, "evidence/backend-position.json", positions => {
+      positions.initial.backendB = "There are 1 players online: AcceptanceA";
+      positions.afterReconnect.backendB = "There are 1 players online: AcceptanceA";
+    });
+    assert.throws(() => audit(fixture), error =>
+      error instanceof NetworkAuditError && /backend B roster is not exclusive to AcceptanceB/i.test(error.message));
   } finally {
     await fixture.close();
   }

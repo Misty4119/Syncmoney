@@ -108,6 +108,12 @@ export function matchesBackendRouteAcknowledgement(message, backendName) {
   return normalized === `${expected}...` || normalized === `${expected}…`;
 }
 
+export function matchesBackendJoinNotice(message, username) {
+  const player = String(username ?? "").trim();
+  if (!/^[a-zA-Z0-9_]{1,16}$/.test(player)) return false;
+  return normalizeChatMessage(message).toLowerCase() === `${player.toLowerCase()} joined the game`;
+}
+
 export async function routeToBackend(state, target, emit, {
   submittedEventType = "hop_submitted",
   passedEventType = "hop_pass",
@@ -130,14 +136,18 @@ export async function routeToBackend(state, target, emit, {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     const serverReply = state.chatMessages.slice(firstFreshMessage)
-      .find(message => matchesBackendRouteAcknowledgement(message, target));
+      .find(message => matchesBackendRouteAcknowledgement(message, target) ||
+        matchesBackendJoinNotice(message, state.username));
     if (serverReply) {
-      emit(passedEventType, { ...eventFields, serverReply });
+      const routeConfirmation = matchesBackendRouteAcknowledgement(serverReply, target)
+        ? "velocity-message"
+        : "backend-join-notice";
+      emit(passedEventType, { ...eventFields, serverReply, routeConfirmation });
       return serverReply;
     }
     await delay(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
   }
-  throw new Error(`Timed out waiting for a route acknowledgement to ${target}.`);
+  throw new Error(`Timed out waiting for a route confirmation to ${target}.`);
 }
 
 export function matchesExpectedLifecycleLogoutKick(reason) {

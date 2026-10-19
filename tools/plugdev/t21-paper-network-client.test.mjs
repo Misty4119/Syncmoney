@@ -103,6 +103,15 @@ test("backend route acknowledgement must name the exact requested Velocity serve
   ), false);
 });
 
+test("backend join notice confirmation requires the exact player name", () => {
+  assert.equal(typeof client.matchesBackendJoinNotice, "function");
+  assert.equal(client.matchesBackendJoinNotice("AcceptanceB joined the game", "AcceptanceB"), true);
+  assert.equal(client.matchesBackendJoinNotice("§7AcceptanceB joined the game", "AcceptanceB"), true);
+  assert.equal(client.matchesBackendJoinNotice("AcceptanceA joined the game", "AcceptanceB"), false);
+  assert.equal(client.matchesBackendJoinNotice("AcceptanceB joined the game today", "AcceptanceB"), false);
+  assert.equal(client.matchesBackendJoinNotice("AcceptanceB joined the game", "AcceptanceB_extra"), false);
+});
+
 test("route pass is emitted only after a fresh backend acknowledgement arrives", async () => {
   const events = [];
   const messages = ["Connecting you to backend-b..."];
@@ -125,6 +134,28 @@ test("route pass is emitted only after a fresh backend acknowledgement arrives",
   assert.equal(events[1].target, "backend-b");
 });
 
+test("route pass accepts a fresh exact player join notice when the Velocity reply is not delivered", async () => {
+  const events = [];
+  const messages = ["AcceptanceB joined the game"];
+  const state = {
+    username: "AcceptanceB",
+    uuid: "b2345678-1234-4234-8234-1234567890ab",
+    chatMessages: messages,
+    bot: { chat: command => assert.equal(command, "/server backend-b") },
+  };
+  const routing = client.routeToBackend(state, "backend-b", (type, fields) => events.push({ type, ...fields }), {
+    timeoutMs: 100,
+    pollIntervalMs: 1,
+  });
+
+  assert.deepEqual(events.map(event => event.type), ["hop_submitted"]);
+  messages.push("AcceptanceB joined the game");
+  assert.equal(await routing, "AcceptanceB joined the game");
+  assert.deepEqual(events.map(event => event.type), ["hop_submitted", "hop_pass"]);
+  assert.equal(events[1].serverReply, "AcceptanceB joined the game");
+  assert.equal(events[1].routeConfirmation, "backend-join-notice");
+});
+
 test("route timeout does not emit a backend acknowledgement pass", async () => {
   const events = [];
   const state = {
@@ -139,7 +170,7 @@ test("route timeout does not emit a backend acknowledgement pass", async () => {
       timeoutMs: 10,
       pollIntervalMs: 1,
     }),
-    /Timed out waiting for a route acknowledgement to backend-b/i,
+    /Timed out waiting for a route confirmation to backend-b/i,
   );
   assert.deepEqual(events.map(event => event.type), ["hop_submitted"]);
 });

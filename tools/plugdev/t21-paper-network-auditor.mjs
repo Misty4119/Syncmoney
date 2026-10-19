@@ -344,8 +344,8 @@ function validateClientEvents(events, backendB, fail) {
   const hop = hopRequests[0];
   const hopPass = hopPasses[0];
   if (hopRequests.length !== 1) fail("client must submit exactly one AcceptanceB route request to backend B");
-  if (hopPasses.length !== 1 || !isVelocityRouteAcknowledgement(hopPass?.serverReply, backendB)) {
-    fail("client did not observe a backend-B route acknowledgement");
+  if (hopPasses.length !== 1 || !isBackendRouteConfirmation(hopPass, backendB, "AcceptanceB")) {
+    fail("client did not observe an exact backend-B route acknowledgement or join transition");
   }
   if (hop && hopPass && events.indexOf(hopPass) <= events.indexOf(hop)) fail("backend-B route acknowledgement preceded its submitted request");
   const payPasses = ofType("pay_response_pass");
@@ -399,8 +399,8 @@ function validateClientEvents(events, backendB, fail) {
   if (reconnectRequests.length !== 1) fail("AcceptanceB reconnect must submit exactly one backend-B route request");
   if (reconnectPasses.length !== 1) fail("AcceptanceB reconnect must contain exactly one backend-B route pass");
   if (!reconnect || reconnect.uuid !== (loginsB[0]?.uuid ?? null) || reconnect.priorUuid !== reconnect.uuid ||
-      !isVelocityRouteAcknowledgement(reconnect.serverReply, backendB)) {
-    fail("AcceptanceB reconnect is not proven with a stable UUID and backend-B route acknowledgement");
+      !isBackendRouteConfirmation(reconnect, backendB, "AcceptanceB")) {
+    fail("AcceptanceB reconnect is not proven with a stable UUID and backend-B route acknowledgement or join transition");
   }
   if (reconnectRequest && reconnect && events.indexOf(reconnect) <= events.indexOf(reconnectRequest)) fail("reconnect route acknowledgement preceded its submitted request");
   if (reconnectRequest && reconnect && (reconnectRequest.uuid !== reconnect.uuid || reconnectRequest.priorUuid !== reconnect.priorUuid)) {
@@ -459,7 +459,7 @@ function validateRecoveryReceiptLink(runnerEvents, clientEvidence, fail) {
 function isVelocityRouteAcknowledgement(value, target) {
   if (typeof value !== "string" || typeof target !== "string" || !/^[a-zA-Z][a-zA-Z0-9_-]{0,62}$/.test(target)) return false;
   const normalized = value
-    .replace(/\u00a7[0-9a-fk-or]/gi, "")
+    .replace(/§[0-9a-fk-or]/gi, "")
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
@@ -467,6 +467,28 @@ function isVelocityRouteAcknowledgement(value, target) {
     .toLowerCase();
   const expected = `connecting you to ${target.toLowerCase()}`;
   return normalized === `${expected}...` || normalized === `${expected}…`;
+}
+
+function isBackendJoinNotice(value, username) {
+  const player = String(username ?? "").trim();
+  if (!/^[a-zA-Z0-9_]{1,16}$/.test(player)) return false;
+  const normalized = String(value ?? "")
+    .replace(/\u00a7[0-9a-fk-or]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return normalized === `${player.toLowerCase()} joined the game`;
+}
+
+function isBackendRouteConfirmation(event, target, username) {
+  if (!isRecord(event)) return false;
+  if (event.routeConfirmation === "velocity-message") {
+    return isVelocityRouteAcknowledgement(event.serverReply, target);
+  }
+  if (event.routeConfirmation === "backend-join-notice") {
+    return isBackendJoinNotice(event.serverReply, username);
+  }
+  return false;
 }
 
 function validateServerLogs(logABytes, logBBytes, runnerEvents, uuidA, uuidB, fail) {
