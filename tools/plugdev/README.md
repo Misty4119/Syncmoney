@@ -90,7 +90,7 @@ For Folia or Canvas, pass the matching `-PlatformEndpoint` selector. Historical 
 
 This verifies the selected profile and lifecycle only; the M04 probe does not exercise a player's rate-limit decision.
 
-As of 2026-10-20, guard-on LOCAL SQLite normal-drain/rollback and shutdown-timeout-handoff/replay have separate reports on the formal current maxima. Seeded duplicate-receipt replay evidence covers the then-pinned Paper 1.21.6#48 / 26.3#166, Folia 1.21.6#6 / 26.2#7, and Canvas 1.21.8#603 / 26.3#972 endpoints. The first uncovered formal-maximum cell for that replay scenario is Paper 26.3#200; the accepted normal-drain report on Paper 26.3#200 does not cover it.
+As of 2026-10-20, guard-on LOCAL SQLite normal-drain/rollback and shutdown-timeout-handoff/replay have separate reports on the formal current maxima. Seeded duplicate-receipt replay is accepted on the then-pinned Paper 1.21.6#48 / 26.3#166, Folia 1.21.6#6 / 26.2#7, and Canvas 1.21.8#603 / 26.3#972 endpoints, and on current-maximum Paper 26.3#200. The current-maximum Folia 26.3#3 cell is next, followed by current-maximum Canvas 26.3#984. The Paper report-specific audit passed 446 assertions; it does not substitute for the distinct no-pre-existing-receipt schema-migration case.
 
 Example for the minimum endpoint (use the verified local artifacts from the T15 manifest):
 
