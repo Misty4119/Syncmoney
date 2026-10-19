@@ -48,7 +48,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and
     -not (Test-T21DatabaseManagerInitFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, current-maximum Paper, current-maximum Folia, or minimum Canvas; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.'
+    throw 'The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, current-maximum Paper, current-maximum Folia, minimum Canvas, or current-maximum Canvas; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.'
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {

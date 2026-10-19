@@ -7,7 +7,7 @@ param(
     [string]$ServerJar = 'build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\paper-26.3-200.jar',
     [string]$CandidateJar = 'build\libs\Syncmoney-1.4.0-alpha.1.jar',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedServerSha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d',
-    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas')][string]$PlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas', 'CurrentMaximumCanvas')][string]$PlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256 = '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedAcceptanceSha256 = '4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df',
