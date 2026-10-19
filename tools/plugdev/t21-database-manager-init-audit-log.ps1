@@ -1,5 +1,16 @@
 Set-StrictMode -Version Latest
 
+function Get-T21DatabaseManagerInitPrivilegeLogPaths([string]$RunRoot, [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct) {
+    if ($DatabaseProduct -ceq 'PostgreSQL') {
+        return (Join-Path $RunRoot 'logs\postgresql-database-manager-init-privileges.txt')
+    }
+    return @(
+        (Join-Path $RunRoot 'logs\mysql-database-manager-init-authenticated-identity.txt')
+        (Join-Path $RunRoot 'logs\mysql-database-manager-init-grants.txt')
+    )
+}
+
+
 function Get-T21DatabaseManagerInitAuditLogField([object]$Value, [string]$Name) {
     if ($null -eq $Value) { return $null }
     if ($Value -is [System.Collections.IDictionary]) {
@@ -34,7 +45,7 @@ function Test-T21DatabaseManagerInitAuditWorktreeDelta([string[]]$StatusEntries)
         'tools/plugdev/t21-database-manager-init-audit-log.test.ps1'
     )
     foreach ($entry in @($StatusEntries)) {
-        if ($entry -isnot [string] -or $entry.Length -lt 4) { return $false }
+        if (-not (Test-T21DatabaseManagerInitAuditPorcelainSeparator $entry)) { return $false }
         $status = $entry.Substring(0, 2)
         $path = $entry.Substring(3).Trim()
         if ($path.StartsWith('"') -and $path.EndsWith('"')) { $path = $path.Substring(1, $path.Length - 2) }
@@ -43,13 +54,18 @@ function Test-T21DatabaseManagerInitAuditWorktreeDelta([string[]]$StatusEntries)
 
         $allowedStatuses = switch ($path) {
             'tools/plugdev/audit-t21-database-manager-init-failure.ps1' { @(' M', 'M ') }
-            'tools/plugdev/t21-database-manager-init-audit-log.ps1' { @('??', 'A ', ' A') }
-            'tools/plugdev/t21-database-manager-init-audit-log.test.ps1' { @('??', 'A ', ' A') }
+            'tools/plugdev/t21-database-manager-init-audit-log.ps1' { @(' M', 'M ', '??', 'A ', ' A') }
+            'tools/plugdev/t21-database-manager-init-audit-log.test.ps1' { @(' M', 'M ', '??', 'A ', ' A') }
             default { @() }
         }
         if ($status -notin $allowedStatuses) { return $false }
     }
     return $true
+}
+
+function Test-T21DatabaseManagerInitAuditPorcelainSeparator([object]$Entry) {
+    if ($Entry -isnot [string] -or $Entry.Length -lt 4) { return $false }
+    return $Entry[2] -ceq ' '
 }
 
 function Get-T21DatabaseManagerInitAuditLogEvidence([object]$Report, [System.Collections.IDictionary]$Logs) {

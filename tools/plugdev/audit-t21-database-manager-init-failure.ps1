@@ -118,7 +118,7 @@ $auditOnlyPaths = @(
     'tools/plugdev/t21-database-manager-init-audit-log.test.ps1'
 )
 $syncmoneySourceDirty = @($syncmoneySourceWorktreeDelta | Where-Object {
-    if ($_ -isnot [string] -or $_.Length -lt 4) {
+    if (-not (Test-T21DatabaseManagerInitAuditPorcelainSeparator $_)) {
         $true
     } else {
         $path = $_.Substring(3).Trim().Replace('\', '/')
@@ -207,14 +207,7 @@ foreach ($relativePath in $logs.Keys) {
 $databaseLogPrefix = if ($DatabaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' }
 $beforeLog = Join-Path $runRoot ("logs\{0}-database-manager-schema-before.txt" -f $databaseLogPrefix)
 $afterLog = Join-Path $runRoot ("logs\{0}-database-manager-schema-after.txt" -f $databaseLogPrefix)
-$privilegeLogPaths = if ($DatabaseProduct -ceq 'PostgreSQL') {
-    @((Join-Path $runRoot 'logs\postgresql-database-manager-init-privileges.txt'))
-} else {
-    @(
-        (Join-Path $runRoot 'logs\mysql-database-manager-init-authenticated-identity.txt')
-        (Join-Path $runRoot 'logs\mysql-database-manager-init-grants.txt')
-    )
-}
+$privilegeLogPaths = @(Get-T21DatabaseManagerInitPrivilegeLogPaths -RunRoot $runRoot -DatabaseProduct $DatabaseProduct)
 $requiredEvidenceLogs = @($privilegeLogPaths) + @($beforeLog, $afterLog)
 foreach ($path in $requiredEvidenceLogs) {
     $relativePath = $path.Substring($runRoot.Length).TrimStart('\')
