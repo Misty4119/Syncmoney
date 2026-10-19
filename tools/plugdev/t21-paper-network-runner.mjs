@@ -1263,23 +1263,49 @@ async function stopPostgres(runRoot, preflight, pgState, stage) {
   return result;
 }
 
-async function startPostgresAgain(runRoot, preflight, pgState) {
-  const restartLog = path.join(runRoot, "services", "postgres", "postgres-restart.log");
-  const recoveryControlOutput = path.join(runRoot, "services", "postgres", "pg_ctl-recovery-start-output.log");
+async function startPostgresAgain(runRoot, preflight, pgState, stage = "recovery") {
+  const restartLog = path.join(runRoot, "services", "postgres", "postgres-" + stage + "-restart.log");
+  const recoveryControlOutput = path.join(runRoot, "services", "postgres", "pg_ctl-" + stage + "-start-output.log");
   const result = await checkedCapture(preflight.postgres.pgCtlExe, [
     "-D", pgState.dataDirectory,
     "-l", restartLog,
     "-o", "-p " + pgState.port + " -h 127.0.0.1 -c listen_addresses=127.0.0.1",
     "-w", "-t", "90", "start",
-  ], "isolated PostgreSQL recovery start", {
+  ], "isolated PostgreSQL " + stage + " start", {
     timeoutMs: 120_000, cwd: runRoot, captureOutput: false, outputFile: recoveryControlOutput,
   });
-  await appendCommandLog(runRoot, "pg_ctl-start-recovery", result);
+  await appendCommandLog(runRoot, "pg_ctl-start-" + stage, result);
   await fsp.rm(recoveryControlOutput, { force: true });
   pgState.started = true;
   await waitForPort(pgState.port, true, 20_000);
   pgState.restartLog = restartLog;
   return result;
+}
+
+async function ensurePostgresAvailableForNetworkShutdown(runRoot, preflight, pgState, {
+  capture = runCapture,
+  waitPort = waitForPort,
+  startPostgres = stage => startPostgresAgain(runRoot, preflight, pgState, stage),
+} = {}) {
+  const status = await capture(preflight.postgres.pgCtlExe, [
+    "-D", pgState.dataDirectory, "status",
+  ], { timeoutMs: 15_000, cwd: runRoot });
+  await appendCommandLog(runRoot, "pg_ctl-status-before-network-cleanup", status);
+  if (status.error || status.timedOut) {
+    throw new Error("Unable to inspect isolated PostgreSQL before network cleanup.");
+  }
+  if (status.code === 0) {
+    await waitPort(pgState.port, true, 20_000);
+    pgState.started = true;
+    return { startedForCleanup: false };
+  }
+  if (status.code !== 3) {
+    throw new Error("Isolated PostgreSQL status returned an unexpected exit code before network cleanup: " + String(status.code));
+  }
+  await waitPort(pgState.port, false, 20_000);
+  await startPostgres("cleanup");
+  pgState.started = true;
+  return { startedForCleanup: true };
 }
 
 function startSqlRowLock(runRoot, preflight, port, uuid) {
@@ -1500,10 +1526,56 @@ function buildFailureCleanupRecord(livenessEvidence, cleanupErrors, reportState)
     openPorts: Array.isArray(evidence?.openPorts) ? evidence.openPorts : [],
     errors: [...evidenceErrors, ...attemptErrors],
     postgresStopped: reportState.postgresStopped,
+    postgresRecoveredForCleanup: reportState.postgresRecoveredForCleanup === true,
+    postgresStartedForCleanup: reportState.postgresStartedForCleanup === true,
     redisStopped: reportState.redisStopped,
     networkStopped: reportState.networkStopped,
     clientStopped: reportState.clientStopped,
   };
+}
+
+async function cleanupFailedRunResources(reportState, actions) {
+  const cleanupErrors = [];
+  const networkAlive = reportState.controller?.child?.exitCode === null;
+
+  if (reportState.postgresStopped && networkAlive && !reportState.networkStopped) {
+    try {
+      const restoration = await actions.restorePostgres();
+      reportState.postgresStopped = false;
+      reportState.postgresRecoveredForCleanup = true;
+      reportState.postgresStartedForCleanup = restoration?.startedForCleanup === true;
+      await actions.onPostgresRestored?.();
+    } catch (error) {
+      cleanupErrors.push("postgres restore before network shutdown: " + error.message);
+    }
+  }
+  if (reportState.controller && !reportState.networkStopped) {
+    try {
+      if (reportState.controller.child.exitCode === null) {
+        await actions.stopNetwork();
+        reportState.networkStopped = true;
+      }
+    } catch (error) {
+      cleanupErrors.push("network: " + error.message);
+    }
+  }
+  if (reportState.redis?.child && !reportState.redisStopped) {
+    try {
+      await actions.stopRedis();
+      reportState.redisStopped = true;
+    } catch (error) {
+      cleanupErrors.push("redis: " + error.message);
+    }
+  }
+  if (reportState.postgres && !reportState.postgresStopped) {
+    try {
+      await actions.stopPostgres();
+      reportState.postgresStopped = true;
+    } catch (error) {
+      cleanupErrors.push("postgres: " + error.message);
+    }
+  }
+  return cleanupErrors;
 }
 
 async function createFileManifest(runRoot) {
@@ -1593,6 +1665,8 @@ async function runCell(endpointId) {
     clientReady: false,
     postgresStopped: false,
     postgresRestarted: false,
+    postgresRecoveredForCleanup: false,
+    postgresStartedForCleanup: false,
     redisStopped: false,
     networkStopped: false,
     clientStopped: false,
@@ -1741,8 +1815,8 @@ async function runCell(endpointId) {
     appendEvent(runRoot, "outage_sql_retry_observed", { retryCount: retryEvidence.length, accounts: [...new Set(retryEvidence.map(item => item.uuid))] });
 
     console.log("stage=postgres_recovery endpoint=" + endpointId);
-    reportState.postgresStopped = false;
     await startPostgresAgain(runRoot, preflight, reportState.postgres);
+    reportState.postgresStopped = false;
     reportState.postgresRestarted = true;
     const recoveryOffsets = serverLogOffsets(runRoot);
     appendEvent(runRoot, "postgres_restarted", {
@@ -1948,26 +2022,18 @@ async function runCell(endpointId) {
         }
       } catch (error) { cleanupErrors.push("client: " + error.message); }
     }
-    if (reportState.controller && !reportState.networkStopped) {
-      try {
-        if (reportState.controller.child.exitCode === null) {
-          await stopNetworkController(runRoot, reportState.controller, reportState.controlToken);
-          reportState.networkStopped = true;
-        }
-      } catch (error) { cleanupErrors.push("network: " + error.message); }
-    }
-    if (reportState.redis?.child && !reportState.redisStopped) {
-      try {
-        await stopRedis(preflight, reportState.redis, true);
-        reportState.redisStopped = true;
-      } catch (error) { cleanupErrors.push("redis: " + error.message); }
-    }
-    if (reportState.postgres && !reportState.postgresStopped) {
-      try {
-        await stopPostgres(runRoot, preflight, reportState.postgres, "cleanup");
-        reportState.postgresStopped = true;
-      } catch (error) { cleanupErrors.push("postgres: " + error.message); }
-    }
+    cleanupErrors.push(...await cleanupFailedRunResources(reportState, {
+      restorePostgres: () => ensurePostgresAvailableForNetworkShutdown(runRoot, preflight, reportState.postgres),
+      onPostgresRestored: () => appendEvent(runRoot, "postgres_available_for_network_cleanup", {
+        runOwned: true,
+        ready: true,
+        startedForCleanup: reportState.postgresStartedForCleanup,
+        port: ports.postgres,
+      }),
+      stopNetwork: () => stopNetworkController(runRoot, reportState.controller, reportState.controlToken),
+      stopRedis: () => stopRedis(preflight, reportState.redis, true),
+      stopPostgres: () => stopPostgres(runRoot, preflight, reportState.postgres, "cleanup"),
+    }));
     if (!failure && cleanupErrors.length > 0) failure = new Error(cleanupErrors.join("; "));
     if (failure) {
       let livenessEvidence = null;
@@ -2031,6 +2097,8 @@ export {
   runCapture,
   waitForRedisProcess,
   waitForSqlRetryEvidence,
+  ensurePostgresAvailableForNetworkShutdown,
+  cleanupFailedRunResources,
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
