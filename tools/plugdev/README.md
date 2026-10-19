@@ -90,7 +90,7 @@ For Folia or Canvas, pass the matching `-PlatformEndpoint` selector. Historical 
 
 This verifies the selected profile and lifecycle only; the M04 probe does not exercise a player's rate-limit decision.
 
-As of 2026-10-20, guard-on LOCAL SQLite normal-drain/rollback and shutdown-timeout-handoff/replay have separate reports on the formal current maxima. Seeded duplicate-receipt replay is accepted on the then-pinned Paper 1.21.6#48 / 26.3#166, Folia 1.21.6#6 / 26.2#7, and Canvas 1.21.8#603 / 26.3#972 endpoints, and on current-maximum Paper 26.3#200. The current-maximum Folia 26.3#3 cell is next, followed by current-maximum Canvas 26.3#984. The Paper report-specific audit passed 446 assertions; it does not substitute for the distinct no-pre-existing-receipt schema-migration case.
+As of 2026-10-20, guard-on LOCAL SQLite normal-drain/rollback and shutdown-timeout-handoff/replay have separate reports on the formal current maxima. Seeded duplicate-receipt replay is accepted on the then-pinned Paper 1.21.6#48 / 26.3#166, Folia 1.21.6#6 / 26.2#7, and Canvas 1.21.8#603 / 26.3#972 endpoints, and on current-maximum Paper 26.3#200, Folia 26.3#3, and Canvas 26.3#984. Each current-maximum report-specific audit passed 446 assertions. These reports do not substitute for the distinct no-pre-existing-receipt schema-migration case.
 
 Example for the minimum endpoint (use the verified local artifacts from the T15 manifest):
 
@@ -872,7 +872,7 @@ As of 2026-10-20, all six formal endpoints have separate `PASS_BOUNDED_SUBCASE (
 
 ## T21 M04 seeded duplicate-receipt replay — current-maximum endpoints
 
-Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984` each have a separate `PASS_BOUNDED_SUBCASE (E2)` report for the synthetic committed-receipt journal replay. The Folia and Canvas report-specific audits each passed 446 assertions; Canvas direct evidence verification passed 219 checks over its artifact, retained-log, and PlugDev distribution manifests. All three server stages on each endpoint stopped normally without run-owned residue. Exact report, audit, verifier, source-pin, review, and limitation records are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
+Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984` each have a separate `PASS_BOUNDED_SUBCASE (E2)` report for the synthetic committed-receipt journal replay. The Folia and Canvas report-specific audits each passed 446 assertions; Canvas direct evidence verification passed 219 checks over its artifact, retained-log, and PlugDev distribution manifests. All three server stages on each endpoint stopped normally without run-owned residue. Exact report, audit, direct and universal verifier, source-pin, and limitation records are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
 
 The fixture creates the request-ID schema before candidate startup. This is not evidence for the separate `0/0` migration, hard-crash/power-loss durability, general SQLite recovery, live-player rate-limit behavior, or fleet-wide quiescence. Minimum-Paper/MySQL stays user-directed `BLOCKED / NOT VERIFIED`; the provisioning contract is unchanged and Paper M12 must not be rerun. The three current-maximum committed-receipt replay cells are complete. The next dependency-ready M04 gate is current-maximum Paper `26.3#200` seeded replay from the historical schema with no request-ID column or index; T21 remains `IN_PROGRESS`.
 
