@@ -8,7 +8,10 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  T21_FOLIA_NETWORK_ARTIFACT_PATHS,
   NetworkAuditError,
+  T21_NETWORK_ENDPOINTS,
+  T21_PAPER_NETWORK_ENDPOINTS,
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
   T21_PAPER_NETWORK_HARNESS_SOURCES,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
@@ -48,7 +51,19 @@ async function rewriteJsonEvidence(fixture, relativePath, update) {
   await writeJson(fixture.root, "result.json", fixture.report);
 }
 
-async function createFixture() {
+async function rewriteTextEvidence(fixture, relativePath, update) {
+  const absolute = path.join(fixture.root, ...relativePath.split("/"));
+  const original = await fs.readFile(absolute, "utf8");
+  const text = update(original);
+  const bytes = Buffer.from(text, "utf8");
+  await fs.writeFile(absolute, bytes);
+  const manifest = fixture.report.files.find(entry => entry.path === relativePath);
+  manifest.bytes = bytes.length;
+  manifest.sha256 = hash(bytes);
+  await writeJson(fixture.root, "result.json", fixture.report);
+}
+
+async function createFixture({ endpointId = "paper-1216-48" } = {}) {
   const runId = "audit-" + randomUUID().replaceAll("-", "").slice(0, 16);
   const root = await fs.mkdtemp(path.join(FIXTURE_PARENT, `t21-paper-network-${runId}-`));
   const uuidA = "a2345678-1234-4234-8234-1234567890ab";
@@ -57,8 +72,18 @@ async function createFixture() {
   const backendB = "backend-b";
   const serverNameA = "t21-net-a";
   const serverNameB = "t21-net-b";
+  const endpoint = endpointId === "folia-1216-6"
+    ? { product: "Folia", version: "1.21.6", build: 6 }
+    : { product: "Paper", version: "1.21.6", build: 48 };
+  const shutdownMarker = endpoint.product === "Folia"
+    ? "[Region shutdown thread/INFO]: Stopping server"
+    : "[Server thread/INFO]: Stopping server";
+  const serverKind = endpoint.product === "Paper" ? "paper" : "server";
+  const artifactPaths = endpoint.product === "Paper"
+    ? T21_PAPER_NETWORK_ARTIFACT_PATHS
+    : T21_FOLIA_NETWORK_ARTIFACT_PATHS;
   const contents = {
-    paper: Buffer.from("fixture-paper-jar"),
+    [serverKind]: Buffer.from(`fixture-${endpoint.product.toLowerCase()}-jar`),
     candidate: Buffer.from("fixture-candidate-jar"),
     acceptance: Buffer.from("fixture-acceptance-jar"),
     vaultUnlocked: Buffer.from("fixture-vaultunlocked-jar"),
@@ -73,7 +98,7 @@ async function createFixture() {
     await fs.writeFile(sourcePath, bytes);
     trustedArtifactSources[kind] = sourcePath;
   }
-  for (const spec of T21_PAPER_NETWORK_ARTIFACT_PATHS) {
+  for (const spec of artifactPaths) {
     const artifactBytes = contents[spec.kind];
     const absolute = path.join(root, ...spec.path.split("/"));
     await fs.mkdir(path.dirname(absolute), { recursive: true });
@@ -110,6 +135,7 @@ async function createFixture() {
   } };
 
   const serverA = [
+    `[Server thread/INFO]: This server is running ${endpoint.product} version ${endpoint.version}-${endpoint.build}-fixture`,
     "[Server thread/INFO]: Done (10.0s)! For help, type \"help\"",
     "AcceptanceA joined the game",
     "Failed to process batch to DB",
@@ -118,7 +144,7 @@ async function createFixture() {
     "T15_ACCEPTED_WRITE scenario=logout index=2",
     "T15_PENDING_AT_BOUNDARY scenario=logout uuid=" + uuidA + " pending=2 pending-state=accepted-not-completed",
     "T15_LOGOUT_REQUEST uuid=" + uuidA,
-    "[Server thread/INFO]: Stopping server",
+    shutdownMarker,
     "T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0",
     "T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0",
     "Syncmoney disabled.",
@@ -126,18 +152,19 @@ async function createFixture() {
   const serverAOutageStart = Buffer.byteLength(serverA.split("AcceptanceA joined the game\n")[0] + "AcceptanceA joined the game\n");
   const serverARecovered = Buffer.byteLength(serverA.split("T21_DRAIN owner=economy")[0]);
   const serverB = [
+    `[Server thread/INFO]: This server is running ${endpoint.product} version ${endpoint.version}-${endpoint.build}-fixture`,
     "[Server thread/INFO]: Done (10.0s)! For help, type \"help\"",
     "AcceptanceB joined the game",
     "AcceptanceB joined the game",
-    "[Server thread/INFO]: Stopping server",
+    shutdownMarker,
     "T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0",
     "T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0",
     "Syncmoney disabled.",
   ].join("\n") + "\n";
   const serverBOutageStart = Buffer.byteLength(serverB.split("AcceptanceB joined the game\n").slice(0, 2).join("AcceptanceB joined the game\n") + "AcceptanceB joined the game\n");
   const serverBRecovered = Buffer.byteLength(serverB.split("T21_DRAIN owner=economy")[0]);
-  const serverAShutdownStarted = Buffer.byteLength(serverA.split("[Server thread/INFO]: Stopping server\n")[0] + "[Server thread/INFO]: Stopping server\n");
-  const serverBShutdownStarted = Buffer.byteLength(serverB.split("[Server thread/INFO]: Stopping server\n")[0] + "[Server thread/INFO]: Stopping server\n");
+  const serverAShutdownStarted = Buffer.byteLength(serverA.split(shutdownMarker + "\n")[0] + shutdownMarker + "\n");
+  const serverBShutdownStarted = Buffer.byteLength(serverB.split(shutdownMarker + "\n")[0] + shutdownMarker + "\n");
   const evidenceTexts = {
     "logs/server-a.log": serverA,
     "logs/server-b.log": serverB,
@@ -272,10 +299,8 @@ async function createFixture() {
   for (const [relativePath, text] of Object.entries(evidenceTexts)) allFiles[relativePath] = text;
 
   const expectedEndpoint = {
-    product: "Paper",
-    version: "1.21.6",
-    build: 48,
-    serverJarSha256: hashes.paper,
+    ...endpoint,
+    serverJarSha256: hashes[serverKind],
   };
   const expectedArtifacts = {
     candidateSha256: hashes.candidate,
@@ -307,9 +332,10 @@ async function createFixture() {
     return [kind, { path: sourcePath, bytes: bytes.length, sha256: hash(bytes) }];
   }));
   const sourceManifest = {
-    schemaVersion: 1,
+    schemaVersion: endpoint.product === "Paper" ? 1 : 2,
     createdAt: "2026-10-19T00:00:00.000Z",
     workspaceRoot: WORKSPACE_ROOT,
+    endpoint: endpoint.product === "Paper" ? undefined : { ...expectedEndpoint },
     sourceCommit,
     sourceWorkingTreeDirty,
     harness,
@@ -348,18 +374,20 @@ async function createFixture() {
     sourceWorkingTreeDirty,
     endpoint: { ...expectedEndpoint },
     artifacts: {
-      serverJarSha256: hashes.paper,
+      serverJarSha256: hashes[serverKind],
       candidateSha256: hashes.candidate,
       acceptanceSha256: hashes.acceptance,
       vaultUnlockedSha256: hashes.vaultUnlocked,
       velocitySha256: hashes.velocity,
     },
-    backends: [
-      { name: backendA, serverName: serverNameA, paperJarSha256: hashes.paper,
-        candidateJarSha256: hashes.candidate, acceptanceJarSha256: hashes.acceptance, vaultUnlockedJarSha256: hashes.vaultUnlocked },
-      { name: backendB, serverName: serverNameB, paperJarSha256: hashes.paper,
-        candidateJarSha256: hashes.candidate, acceptanceJarSha256: hashes.acceptance, vaultUnlockedJarSha256: hashes.vaultUnlocked },
-    ],
+    backends: [backendA, backendB].map((name, index) => ({
+      name,
+      serverName: index === 0 ? serverNameA : serverNameB,
+      [endpoint.product === "Paper" ? "paperJarSha256" : "serverJarSha256"]: hashes[serverKind],
+      candidateJarSha256: hashes.candidate,
+      acceptanceJarSha256: hashes.acceptance,
+      vaultUnlockedJarSha256: hashes.vaultUnlocked,
+    })),
     runtime: {
       javaMajor: 25,
       javaVersion: "openjdk version \"25.0.4\"",
@@ -395,6 +423,7 @@ async function createFixture() {
     root,
     workspaceRoot: root,
     report,
+    endpointId,
     expectedEndpoint,
     expectedArtifacts,
     trustedArtifactSources,
@@ -414,6 +443,153 @@ function audit(fixture) {
     fixture.trustedToolchainPins,
   );
 }
+
+test("keeps the Paper endpoint export Paper-only and pins Folia server artifact paths", () => {
+  assert.deepEqual(Object.keys(T21_PAPER_NETWORK_ENDPOINTS), ["paper-1216-48", "paper-263-200"]);
+  assert.equal(T21_NETWORK_ENDPOINTS["folia-1216-6"].product, "Folia");
+  const foliaServerCopies = T21_FOLIA_NETWORK_ARTIFACT_PATHS
+    .filter(artifact => artifact.kind === "server")
+    .map(artifact => artifact.path);
+  assert.deepEqual(foliaServerCopies, [
+    "inputs/folia.jar",
+    "workspace/.plugdev/network/backends/backend-a/server.jar",
+    "workspace/.plugdev/network/backends/backend-b/server.jar",
+  ]);
+});
+
+test("accepts the minimum Folia network report using generic server artifact identity", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    assert.equal(fixture.report.endpoint.product, "Folia");
+    assert.equal(fixture.report.endpoint.version, "1.21.6");
+    assert.equal(fixture.report.endpoint.build, 6);
+    assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
+    assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
+    let result;
+    let error;
+    try { result = audit(fixture); }
+    catch (caught) { error = caught; }
+    assert.equal(error, undefined, error?.message);
+    assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
+    assert.equal(result.endpoint, "Folia 1.21.6#6");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia run when its copied server artifact changes", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    await fs.writeFile(path.join(fixture.root, "inputs", "folia.jar"), Buffer.from("tampered-folia-server-jar"));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /artifact copy SHA-256 mismatch for inputs\/folia\.jar/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia network report when either endpoint or backend server pin changes", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    const report = structuredClone(fixture.report);
+    report.endpoint.serverJarSha256 = "0".repeat(64);
+    report.artifacts.serverJarSha256 = "0".repeat(64);
+    for (const backend of report.backends) backend.serverJarSha256 = "0".repeat(64);
+    let error;
+    try {
+      validateNetworkReport(
+        report,
+        fixture.root,
+        fixture.expectedEndpoint,
+        fixture.expectedArtifacts,
+        fixture.trustedArtifactSources,
+        fixture.workspaceRoot,
+        fixture.trustedToolchainPins,
+      );
+    } catch (caught) { error = caught; }
+    assert.ok(error instanceof NetworkAuditError, "the changed Folia server pin must fail closed");
+    assert.match(error.message, /serverJarSha256|server hash|server pin/i);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia source manifest whose endpoint identity differs from the selected pin", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    await rewriteJsonEvidence(fixture, "evidence/source-manifest.json", manifest => {
+      manifest.endpoint.build = 7;
+    });
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /source manifest endpoint build pin mismatch/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia server log with a Paper startup identity", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
+      "This server is running Folia version 1.21.6-6-fixture",
+      "This server is running Paper version 1.21.6-6-fixture",
+    ));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 1\.21\.6#6 startup identity marker/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia server log with the wrong build startup identity", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    await rewriteTextEvidence(fixture, "logs/server-a.log", text => text.replace(
+      "This server is running Folia version 1.21.6-6-fixture",
+      "This server is running Folia version 1.21.6-7-fixture",
+    ));
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backend A log lacks exact Folia 1\.21\.6#6 startup identity marker/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("rejects a Folia server log that only has Paper's shutdown marker", async () => {
+  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  try {
+    const foliaMarker = "[Region shutdown thread/INFO]: Stopping server";
+    const paperMarker = "[Server thread/INFO]: Stopping server";
+    await rewriteTextEvidence(fixture, "logs/server-a.log", text => text.replace(
+      foliaMarker,
+      paperMarker,
+    ));
+    await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
+      foliaMarker,
+      paperMarker,
+    ));
+    const offsetDelta = Buffer.byteLength(paperMarker) - Buffer.byteLength(foliaMarker);
+    await rewriteJsonEvidence(fixture, "events/runner-events.jsonl", events => {
+      const held = events.find(event => event.type === "shutdown_drain_lock_held");
+      held.serverLogByteOffsets.backendA += offsetDelta;
+      held.serverLogByteOffsets.backendB += offsetDelta;
+    });
+    assert.throws(
+      () => audit(fixture),
+      error => error instanceof NetworkAuditError && /backendA log lacks the pinned Folia server-stop marker/i.test(error.message),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("accepts the pinned report with byte-scoped SQL retry evidence and no synthetic server markers", async () => {
   const fixture = await createFixture();

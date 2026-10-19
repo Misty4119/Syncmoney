@@ -3,6 +3,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildPlugdevConfig,
@@ -16,9 +17,13 @@ import {
 } from "./t21-paper-network-runner.mjs";
 import {
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
+  T21_NETWORK_ENDPOINTS,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
+  resolvePinnedArtifactSources,
 } from "./t21-paper-network-auditor.mjs";
 import * as paperNetworkRunner from "./t21-paper-network-runner.mjs";
+
+const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 test("accepts exact outage pay completion after the recovery barrier when a chat receipt arrived earlier", () => {
   const predicate = paperNetworkRunner.isOutagePayCompletionAfterRecoveryBarrier;
@@ -347,7 +352,7 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
     rconB: 28001,
     bridge: 28100,
   };
-  const config = buildPlugdevConfig(runRoot, { endpoint: { version: "1.21.6" } }, ports, "test-only-rcon-password");
+  const config = buildPlugdevConfig(runRoot, { endpoint: { product: "Paper", version: "1.21.6" } }, ports, "test-only-rcon-password");
 
   const deployedArtifacts = T21_PAPER_NETWORK_ARTIFACT_PATHS.filter(artifact => !artifact.path.startsWith("inputs/"));
   assert.equal(deployedArtifacts.length, 9);
@@ -374,7 +379,7 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
 
   const currentMaximumConfig = buildPlugdevConfig(
     runRoot,
-    { endpoint: { version: "26.3" } },
+    { endpoint: { product: "Paper", version: "26.3" } },
     ports,
     "test-only-rcon-password",
   );
@@ -383,6 +388,63 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
     assert.equal(backend.version, "26.3");
     assert.equal(backend.jar, path.join(runRoot, "inputs", "paper.jar"));
   }
+});
+
+test("runner selects the exact minimum Folia endpoint and its retained C: artifact", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  let parsed;
+  let parseError;
+  try { parsed = parse(["--endpoint", "folia-1216-6"]); }
+  catch (error) { parseError = error; }
+  assert.equal(parseError, undefined, parseError?.message);
+  assert.deepEqual(parsed, { endpointId: "folia-1216-6", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-1216-6"], {
+    product: "Folia",
+    version: "1.21.6",
+    build: 6,
+    serverJarSha256: "917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234",
+  });
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-1216-6");
+  assert.equal(sources.server, path.join(
+    WORKSPACE_ROOT,
+    "build",
+    "reports",
+    "foundation",
+    "T21-sql-runtime",
+    "minimum-artifacts",
+    "folia-1.21.6-6.jar",
+  ));
+});
+
+test("PlugDev launches both Folia backends from the exact run-owned Folia JAR", () => {
+  const runRoot = path.resolve("C:/t21-folia-network-run-test");
+  const ports = {
+    proxy: 25565,
+    backendA: 25566,
+    backendB: 25567,
+    postgres: 25432,
+    redis: 26379,
+    rconA: 28000,
+    rconB: 28001,
+    bridge: 28100,
+  };
+  const endpoint = T21_NETWORK_ENDPOINTS["folia-1216-6"];
+  const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
+  assert.equal(config.backends.length, 2);
+  for (const backend of config.backends) {
+    assert.equal(backend.software, "custom");
+    assert.equal(backend.version, "1.21.6");
+    assert.equal(backend.jar, path.join(runRoot, "inputs", "folia.jar"));
+  }
+});
+
+test("shutdown-start evidence recognizes the server-thread markers emitted by Paper and Folia", () => {
+  const predicate = paperNetworkRunner.hasServerShutdownStartMarker;
+  assert.equal(typeof predicate, "function");
+  assert.equal(predicate("[Server thread/INFO]: Stopping server"), true);
+  assert.equal(predicate("[Region shutdown thread/INFO]: Stopping server"), true);
+  assert.equal(predicate("[Region shutdown thread/WARN]: Stopping server"), false);
+  assert.equal(predicate("[Region shutdown thread/INFO]: Saving chunks"), false);
 });
 
 test("cleanup evidence awaits port probes and accepts a fully closed run", async () => {

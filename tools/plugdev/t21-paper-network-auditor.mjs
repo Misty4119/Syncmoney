@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const T21_PAPER_NETWORK_ENDPOINTS = Object.freeze({
+export const T21_NETWORK_ENDPOINTS = Object.freeze({
   "paper-1216-48": Object.freeze({
     product: "Paper",
     version: "1.21.6",
@@ -17,6 +17,18 @@ export const T21_PAPER_NETWORK_ENDPOINTS = Object.freeze({
     build: 200,
     serverJarSha256: "0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d",
   }),
+  "folia-1216-6": Object.freeze({
+    product: "Folia",
+    version: "1.21.6",
+    build: 6,
+    serverJarSha256: "917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234",
+  }),
+});
+// Keep existing Paper-only consumers scoped to Paper while the network map
+// admits additional products such as Folia.
+export const T21_PAPER_NETWORK_ENDPOINTS = Object.freeze({
+  "paper-1216-48": T21_NETWORK_ENDPOINTS["paper-1216-48"],
+  "paper-263-200": T21_NETWORK_ENDPOINTS["paper-263-200"],
 });
 
 export const T21_PAPER_NETWORK_ARTIFACTS = Object.freeze({
@@ -47,6 +59,7 @@ export const T21_PAPER_NETWORK_HARNESS_SOURCES = Object.freeze({
   auditorTest: "tools/plugdev/t21-paper-network-auditor.test.mjs",
 });
 export const T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION = 1;
+export const T21_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION = 2;
 
 const REQUIRED_FILES = Object.freeze([
   "events/runner-events.jsonl",
@@ -117,12 +130,39 @@ export const T21_PAPER_NETWORK_ARTIFACT_PATHS = Object.freeze([
   Object.freeze({ kind: "velocity", path: "workspace/.plugdev/network/proxy/velocity.jar" }),
 ]);
 
+export const T21_FOLIA_NETWORK_ARTIFACT_PATHS = Object.freeze(
+  T21_PAPER_NETWORK_ARTIFACT_PATHS.map(artifact => artifact.kind === "paper"
+    ? Object.freeze({
+      kind: "server",
+      path: artifact.path.replace("inputs/paper.jar", "inputs/folia.jar"),
+    })
+    : artifact),
+);
+
 export class NetworkAuditError extends Error {
   constructor(failures) {
-    super(`T21 Paper network evidence rejected (${failures.length} checks): ${failures.join("; ")}`);
+    super(`T21 network evidence rejected (${failures.length} checks): ${failures.join("; ")}`);
     this.name = "NetworkAuditError";
     this.failures = failures;
   }
+}
+
+export function endpointServerArtifactKind(endpoint) {
+  if (endpoint?.product === "Paper") return "paper";
+  if (endpoint?.product === "Folia") return "server";
+  return null;
+}
+
+export function endpointServerJarFileName(endpoint) {
+  if (endpoint?.product === "Paper") return "paper.jar";
+  if (endpoint?.product === "Folia") return "folia.jar";
+  return null;
+}
+
+export function networkArtifactPathsForEndpoint(endpoint) {
+  if (endpoint?.product === "Paper") return T21_PAPER_NETWORK_ARTIFACT_PATHS;
+  if (endpoint?.product === "Folia") return T21_FOLIA_NETWORK_ARTIFACT_PATHS;
+  throw new NetworkAuditError([`unsupported network endpoint product ${String(endpoint?.product)}`]);
 }
 
 function sha256(bytes) {
@@ -515,11 +555,15 @@ function isBackendRouteConfirmation(event, target, username) {
   return false;
 }
 
-function validateServerLogs(logABytes, logBBytes, runnerEvents, uuidA, uuidB, fail) {
+function validateServerLogs(logABytes, logBBytes, runnerEvents, uuidA, uuidB, expectedEndpoint, fail) {
   const logBytes = [logABytes, logBBytes];
   const logs = logBytes.map(bytes => bytes.toString("utf8"));
   for (const [name, log] of [["backend A", logs[0]], ["backend B", logs[1]]]) {
-    if (!log.includes("Done (")) fail(`${name} log lacks Paper ready marker`);
+    const identity = `This server is running ${expectedEndpoint.product} version ${expectedEndpoint.version}-${expectedEndpoint.build}-`;
+    if (!log.includes(identity)) {
+      fail(`${name} log lacks exact ${expectedEndpoint.product} ${expectedEndpoint.version}#${expectedEndpoint.build} startup identity marker`);
+    }
+    if (!log.includes("Done (")) fail(`${name} log lacks server ready marker`);
     if (!log.includes("T21_DRAIN owner=economy status=drained queued=0 outstanding=0 retry=0")) fail(`${name} economy queue did not drain to zero`);
     if (!log.includes("T21_DRAIN owner=database status=drained queued=0 inFlight=0 retry=0 stale=0 dropped=0")) fail(`${name} database queue did not drain to zero`);
     if (!log.includes("Syncmoney disabled.")) fail(`${name} did not log normal Syncmoney disable`);
@@ -651,7 +695,7 @@ function validateRunnerEvents(events, fail) {
   }
 }
 
-function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes, fail) {
+function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes, expectedEndpoint, fail) {
   const held = events.find(event => event.type === "shutdown_drain_lock_held");
   const released = events.find(event => event.type === "accepted_write_lock_released_for_shutdown");
   const marker = "T21_ROW_LOCK_RELEASED_FOR_SHUTDOWN";
@@ -664,13 +708,22 @@ function validateShutdownEvidence(events, logABytes, logBBytes, rowLockLogBytes,
   }
   if (!rowLockLog.includes(marker)) fail("retained PostgreSQL row-lock log lacks the lock-release marker");
 
+  const shutdownMarkers = {
+    Paper: Buffer.from("[Server thread/INFO]: Stopping server", "utf8"),
+    Folia: Buffer.from("[Region shutdown thread/INFO]: Stopping server", "utf8"),
+  };
+  const stopping = shutdownMarkers[expectedEndpoint.product];
+  if (!stopping) {
+    fail(`selected platform product ${JSON.stringify(expectedEndpoint.product)} has no pinned server-stop marker`);
+    return;
+  }
+
   const backendNames = ["backendA", "backendB"];
   for (const [index, backend] of backendNames.entries()) {
     const bytes = index === 0 ? logABytes : logBBytes;
-    const stopping = Buffer.from("[Server thread/INFO]: Stopping server", "utf8");
     const stopIndex = bytes.indexOf(stopping);
     if (stopIndex < 0) {
-      fail(`${backend} log lacks a server-stop marker while the SQL row lock was held`);
+      fail(`${backend} log lacks the pinned ${expectedEndpoint.product} server-stop marker while the SQL row lock was held`);
       continue;
     }
     const newlineIndex = bytes.indexOf(0x0a, stopIndex);
@@ -707,7 +760,7 @@ function validateControllerEvents(events, fail) {
   if (!exited || exited.exitCode !== 0 || exited.signal !== null || exited.networkReady !== true || exited.stopRequested !== true) fail("PlugDev network process did not exit gracefully after readiness");
 }
 
-function validateChildProcessEvents(events, report, runRoot, fail) {
+function validateChildProcessEvents(events, report, runRoot, expectedEndpoint, fail) {
   const spawns = events.filter(event => event.event === "spawn");
   const exits = events.filter(event => event.event === "exit");
   const kills = events.filter(event => event.event === "kill");
@@ -720,11 +773,12 @@ function validateChildProcessEvents(events, report, runRoot, fail) {
   const javaSpawns = spawns.filter(isServerJavaLaunch);
   const javaExits = exits.filter(isServerJavaLaunch);
   const javaKills = kills.filter(isJavaChild);
-  if (javaSpawns.length !== 3 || javaExits.length !== 3) fail("shutdown bridge must record exactly the two Paper and one Velocity Java child spawn/exit pairs");
+  if (javaSpawns.length !== 3 || javaExits.length !== 3) fail("shutdown bridge must record exactly two server and one Velocity Java child spawn/exit pairs");
   if (javaKills.length !== 0) fail("shutdown bridge recorded a forced Java-child kill");
+  const serverProduct = expectedEndpoint.product;
   const expectedLaunches = [
-    { relativePath: path.join("workspace", ".plugdev", "network", "backends", "backend-a", "server.jar"), label: "backend-a Paper" },
-    { relativePath: path.join("workspace", ".plugdev", "network", "backends", "backend-b", "server.jar"), label: "backend-b Paper" },
+    { relativePath: path.join("workspace", ".plugdev", "network", "backends", "backend-a", "server.jar"), label: `backend-a ${serverProduct}` },
+    { relativePath: path.join("workspace", ".plugdev", "network", "backends", "backend-b", "server.jar"), label: `backend-b ${serverProduct}` },
     { relativePath: path.join("workspace", ".plugdev", "network", "proxy", "velocity.jar"), label: "Velocity" },
   ];
   const launchCounts = new Map(expectedLaunches.map(item => [item.label, 0]));
@@ -749,7 +803,7 @@ function validateChildProcessEvents(events, report, runRoot, fail) {
     }
     const normalizedJar = normalizedPath(resolvedJar);
     const launch = expectedLaunches.find(item => normalizedJar === normalizedPath(path.join(runRoot, item.relativePath)));
-    if (!launch) fail("Java child did not launch the exact pinned workspace path for Paper or Velocity");
+    if (!launch) fail("Java child did not launch the exact pinned workspace path for the selected server or Velocity");
     else if (event.event === "spawn") launchCounts.set(launch.label, launchCounts.get(launch.label) + 1);
   }
   for (const [label, count] of launchCounts) if (count !== 1) fail(`${label} child launch count must be exactly one`);
@@ -776,7 +830,7 @@ function validateServiceAndArtifactPins(report, expectedEndpoint, expectedArtifa
     requireString(report.endpoint.product, expectedEndpoint.product, "endpoint product", fail);
     requireString(report.endpoint.version, expectedEndpoint.version, "endpoint version", fail);
     if (report.endpoint.build !== expectedEndpoint.build) fail("endpoint build pin mismatch");
-    requireString(report.endpoint.serverJarSha256, expectedEndpoint.serverJarSha256, "Paper SHA-256", fail);
+    requireString(report.endpoint.serverJarSha256, expectedEndpoint.serverJarSha256, `${expectedEndpoint.product} SHA-256`, fail);
   }
   if (!isRecord(report.artifacts)) {
     fail("artifact metadata is missing");
@@ -790,7 +844,10 @@ function validateServiceAndArtifactPins(report, expectedEndpoint, expectedArtifa
   else {
     const [a, b] = report.backends;
     if (a.name !== "backend-a" || b.name !== "backend-b") fail("backend identities must remain backend-a/backend-b");
-    if (a.paperJarSha256 !== expectedEndpoint.serverJarSha256 || b.paperJarSha256 !== expectedEndpoint.serverJarSha256) fail("both backend Paper hashes must match the selected exact endpoint");
+    const serverHashField = expectedEndpoint.product === "Paper" ? "paperJarSha256" : "serverJarSha256";
+    if (a[serverHashField] !== expectedEndpoint.serverJarSha256 || b[serverHashField] !== expectedEndpoint.serverJarSha256) {
+      fail(`both backend ${expectedEndpoint.product} hashes must match the selected exact endpoint`);
+    }
     for (const backend of [a, b]) {
       if (backend.candidateJarSha256 !== expectedArtifacts.candidateSha256 || backend.acceptanceJarSha256 !== expectedArtifacts.acceptanceSha256 || backend.vaultUnlockedJarSha256 !== expectedArtifacts.vaultUnlockedSha256) fail(`${backend.name} plugin artifact pins do not match the required inputs`);
     }
@@ -854,12 +911,24 @@ function validateFilePin(record, expected, label, fail) {
   } catch (error) { fail(`${label} pinned source cannot be read (${error.code ?? error.message})`); }
 }
 
-function validateSourceManifest(manifest, report, expectedArtifacts, trustedArtifactSources, fail) {
+function validateSourceManifest(manifest, report, expectedEndpoint, expectedArtifacts, trustedArtifactSources, fail) {
   if (!isRecord(manifest)) {
     fail("source manifest is missing or malformed");
     return;
   }
-  if (manifest.schemaVersion !== T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION) fail("source manifest schema version is unsupported");
+  const expectedManifestSchemaVersion = expectedEndpoint.product === "Paper"
+    ? T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION
+    : T21_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION;
+  if (manifest.schemaVersion !== expectedManifestSchemaVersion) fail("source manifest schema version is unsupported for the selected endpoint");
+  if (expectedManifestSchemaVersion === T21_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION) {
+    if (!isRecord(manifest.endpoint)) fail("source manifest endpoint identity is missing");
+    else {
+      requireString(manifest.endpoint.product, expectedEndpoint.product, "source manifest endpoint product", fail);
+      requireString(manifest.endpoint.version, expectedEndpoint.version, "source manifest endpoint version", fail);
+      if (manifest.endpoint.build !== expectedEndpoint.build) fail("source manifest endpoint build pin mismatch");
+      requireString(manifest.endpoint.serverJarSha256, expectedEndpoint.serverJarSha256, "source manifest server SHA-256", fail);
+    }
+  }
   if (normalizedPath(manifest.workspaceRoot) !== normalizedPath(T21_PAPER_NETWORK_TOOLCHAIN_PINS.workspaceRoot)) {
     fail("source manifest workspace root does not match this C: worktree");
   }
@@ -895,8 +964,9 @@ function validateSourceManifest(manifest, report, expectedArtifacts, trustedArti
     }
   }
 
+  const serverArtifactKind = endpointServerArtifactKind(expectedEndpoint);
   const artifactHashes = {
-    paper: expectedArtifacts.serverJarSha256 ?? report.artifacts?.serverJarSha256,
+    [serverArtifactKind]: expectedEndpoint.serverJarSha256,
     candidate: expectedArtifacts.candidateSha256,
     acceptance: expectedArtifacts.acceptanceSha256,
     vaultUnlocked: expectedArtifacts.vaultUnlockedSha256,
@@ -1002,14 +1072,16 @@ function validateSourceManifest(manifest, report, expectedArtifacts, trustedArti
 }
 
 function validateArtifactCopies(report, runRoot, expectedEndpoint, expectedArtifacts, trustedArtifactSources, fail) {
+  const artifactPaths = networkArtifactPathsForEndpoint(expectedEndpoint);
+  const serverArtifactKind = endpointServerArtifactKind(expectedEndpoint);
   const expectedHashes = {
-    paper: expectedEndpoint.serverJarSha256,
+    [serverArtifactKind]: expectedEndpoint.serverJarSha256,
     candidate: expectedArtifacts.candidateSha256,
     acceptance: expectedArtifacts.acceptanceSha256,
     vaultUnlocked: expectedArtifacts.vaultUnlockedSha256,
     velocity: expectedArtifacts.velocitySha256,
   };
-  if (!Array.isArray(report.artifactFiles) || report.artifactFiles.length !== T21_PAPER_NETWORK_ARTIFACT_PATHS.length) {
+  if (!Array.isArray(report.artifactFiles) || report.artifactFiles.length !== artifactPaths.length) {
     fail("artifact copy manifest is incomplete");
   }
   const manifest = new Map();
@@ -1022,7 +1094,7 @@ function validateArtifactCopies(report, runRoot, expectedEndpoint, expectedArtif
     manifest.set(record.path, record);
   }
 
-  for (const expected of T21_PAPER_NETWORK_ARTIFACT_PATHS) {
+  for (const expected of artifactPaths) {
     const record = manifest.get(expected.path);
     if (!record) {
       fail(`artifact copy is missing ${expected.path}`);
@@ -1065,7 +1137,7 @@ function validateArtifactCopies(report, runRoot, expectedEndpoint, expectedArtif
 }
 
 export function resolvePinnedArtifactSources(workspaceRoot, endpointId) {
-  const endpoint = T21_PAPER_NETWORK_ENDPOINTS[endpointId];
+  const endpoint = T21_NETWORK_ENDPOINTS[endpointId];
   if (!endpoint) throw new NetworkAuditError([`unknown endpoint ${String(endpointId)}`]);
   const root = path.resolve(workspaceRoot);
   const userRoot = process.env.USERPROFILE;
@@ -1076,11 +1148,18 @@ export function resolvePinnedArtifactSources(workspaceRoot, endpointId) {
     }
   }
   const plugdevRoot = path.join(userRoot ?? "C:/Users/margo", ".plugdev");
-  const paper = endpointId === "paper-1216-48"
-    ? path.join(plugdevRoot, "servers", "paper-1.21.6", "paper-1.21.6-48.jar")
-    : path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "paper-26.3-200.jar");
+  let server;
+  if (endpoint.product === "Paper" && endpointId === "paper-1216-48") {
+    server = path.join(plugdevRoot, "servers", "paper-1.21.6", "paper-1.21.6-48.jar");
+  } else if (endpoint.product === "Paper" && endpointId === "paper-263-200") {
+    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "paper-26.3-200.jar");
+  } else if (endpoint.product === "Folia" && endpointId === "folia-1216-6") {
+    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "folia-1.21.6-6.jar");
+  } else {
+    throw new NetworkAuditError([`no trusted server artifact source is configured for ${endpoint.product} endpoint ${endpointId}`]);
+  }
   return {
-    paper,
+    [endpointServerArtifactKind(endpoint)]: server,
     candidate: path.join(root, "build", "libs", "Syncmoney-1.4.0-alpha.1.jar"),
     acceptance: path.join(root, "build", "acceptance", "SyncmoneyAcceptance.jar"),
     vaultUnlocked: path.join(plugdevRoot, "deps", "url-VaultUnlocked.jar"),
@@ -1156,16 +1235,18 @@ export function validateNetworkReport(report, runRoot, expectedEndpoint, expecte
     filesByPath.get("logs/server-a.log")?.bytes ?? Buffer.alloc(0),
     filesByPath.get("logs/server-b.log")?.bytes ?? Buffer.alloc(0),
     filesByPath.get("logs/postgresql-row-lock.log")?.bytes ?? Buffer.alloc(0),
+    expectedEndpoint,
     fail,
   );
-  validateSourceManifest(getJson("evidence/source-manifest.json"), report, expectedArtifacts, trustedArtifactSources, fail);
+  validateSourceManifest(getJson("evidence/source-manifest.json"), report, expectedEndpoint, expectedArtifacts, trustedArtifactSources, fail);
   const clientIds = validateClientEvents(client, report.backends?.[1]?.name, fail);
   validateRecoveryReceiptLink(runner, clientIds, fail);
   validateServerLogs(filesByPath.get("logs/server-a.log")?.bytes ?? Buffer.alloc(0),
-    filesByPath.get("logs/server-b.log")?.bytes ?? Buffer.alloc(0), runner, clientIds.uuidA, clientIds.uuidB, fail);
+    filesByPath.get("logs/server-b.log")?.bytes ?? Buffer.alloc(0), runner, clientIds.uuidA, clientIds.uuidB,
+    expectedEndpoint, fail);
   validatePositions(getJson("evidence/backend-position.json"), report.backends?.[0]?.name, report.backends?.[1]?.name, fail);
   validateConfigObservations(getJson("evidence/config-observations.json"), report, fail);
-  validateChildProcessEvents(children, report, runRoot, fail);
+  validateChildProcessEvents(children, report, runRoot, expectedEndpoint, fail);
   const snapshots = validateSnapshots(runRoot, { ...report, filesByPath }, fail);
 
   const pgLog = getText("logs/postgresql.log");
@@ -1187,7 +1268,7 @@ export function validateNetworkReport(report, runRoot, expectedEndpoint, expecte
 }
 
 export function auditRunDirectory(runRoot, endpointId, workspaceRoot) {
-  const expected = T21_PAPER_NETWORK_ENDPOINTS[endpointId];
+  const expected = T21_NETWORK_ENDPOINTS[endpointId];
   if (!expected) throw new NetworkAuditError([`unknown endpoint ${String(endpointId)}`]);
   if (!workspaceRoot) throw new NetworkAuditError(["trusted workspace root is required"]);
   const absoluteRoot = path.resolve(runRoot);
@@ -1200,7 +1281,7 @@ export function auditRunDirectory(runRoot, endpointId, workspaceRoot) {
 function main(argv) {
   const [runRoot, endpointId, workspaceRoot] = argv;
   if (!runRoot || !endpointId || !workspaceRoot || argv.length !== 3) {
-    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-1216-48|paper-263-200> <C:-workspace-root>\n");
+    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-1216-48|paper-263-200|folia-1216-6> <C:-workspace-root>\n");
     process.exitCode = 2;
     return;
   }

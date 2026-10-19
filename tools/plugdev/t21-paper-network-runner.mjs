@@ -11,12 +11,15 @@ import {
   auditRunDirectory,
   isOutagePayCompletionAfterRecoveryBarrier,
   collectDirectoryManifest,
+  endpointServerArtifactKind,
+  endpointServerJarFileName,
+  networkArtifactPathsForEndpoint,
   resolvePinnedArtifactSources,
-  T21_PAPER_NETWORK_ARTIFACT_PATHS,
   T21_PAPER_NETWORK_ARTIFACTS,
-  T21_PAPER_NETWORK_ENDPOINTS,
+  T21_NETWORK_ENDPOINTS,
   T21_PAPER_NETWORK_HARNESS_SOURCES,
   T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION,
+  T21_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
 } from "./t21-paper-network-auditor.mjs";
 
@@ -137,8 +140,8 @@ function parseArguments(argv) {
     }
     throw new Error("Unsupported runner argument: " + value);
   }
-  if (!endpointId || !Object.hasOwn(T21_PAPER_NETWORK_ENDPOINTS, endpointId)) {
-    throw new Error("Use --endpoint paper-1216-48 or --endpoint paper-263-200.");
+  if (!endpointId || !Object.hasOwn(T21_NETWORK_ENDPOINTS, endpointId)) {
+    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, or --endpoint folia-1216-6.");
   }
   return { endpointId, preflightOnly };
 }
@@ -332,16 +335,17 @@ async function fetchVelocityMetadata() {
 }
 
 async function collectPreflight(endpointId) {
-  const endpoint = T21_PAPER_NETWORK_ENDPOINTS[endpointId];
-  if (!endpoint) throw new Error("Unknown Paper endpoint " + endpointId + ".");
+  const endpoint = T21_NETWORK_ENDPOINTS[endpointId];
+  if (!endpoint) throw new Error("Unknown network endpoint " + endpointId + ".");
   assertCPath(WORKSPACE_ROOT, "Syncmoney worktree");
   assertCPath(USER_ROOT, "User profile");
   assertCPath(PLUGDEV_ROOT, "Local PlugDev checkout");
   assertCPath(MINEFLAYER_ROOT, "Local Mineflayer checkout");
   assertCPath(RUNS_ROOT, "Runtime report root");
   const artifactSources = resolvePinnedArtifactSources(WORKSPACE_ROOT, endpointId);
+  const serverArtifactKind = endpointServerArtifactKind(endpoint);
   const expectedHashes = {
-    paper: endpoint.serverJarSha256,
+    [serverArtifactKind]: endpoint.serverJarSha256,
     candidate: T21_PAPER_NETWORK_ARTIFACTS.candidateSha256,
     acceptance: T21_PAPER_NETWORK_ARTIFACTS.acceptanceSha256,
     vaultUnlocked: T21_PAPER_NETWORK_ARTIFACTS.vaultUnlockedSha256,
@@ -517,7 +521,7 @@ function buildBackendConfig(serverName, postgresPort, redisPort) {
 function buildPlugdevConfig(runRoot, preflight, ports, rconPassword) {
   const artifact = name => path.join(runRoot, "inputs", name);
   const pluginConfig = name => "inputs/" + name;
-  const paper = artifact("paper.jar");
+  const serverJar = artifact(endpointServerJarFileName(preflight.endpoint));
   const pluginsFor = configName => [
     { jar: artifact("VaultUnlocked.jar") },
     { jar: artifact("Syncmoney.jar"), config: pluginConfig(configName) },
@@ -537,7 +541,7 @@ function buildPlugdevConfig(runRoot, preflight, ports, rconPassword) {
         name: "backend-a",
         software: "custom",
         version: preflight.endpoint.version,
-        jar: paper,
+        jar: serverJar,
         port: ports.backendA,
         bind: "127.0.0.1",
         maxPlayers: 20,
@@ -547,7 +551,7 @@ function buildPlugdevConfig(runRoot, preflight, ports, rconPassword) {
         name: "backend-b",
         software: "custom",
         version: preflight.endpoint.version,
-        jar: paper,
+        jar: serverJar,
         port: ports.backendB,
         bind: "127.0.0.1",
         maxPlayers: 20,
@@ -598,6 +602,7 @@ async function createRunDirectories(runRoot) {
 async function copyInputArtifacts(runRoot, preflight) {
   const names = {
     paper: "paper.jar",
+    server: "folia.jar",
     candidate: "Syncmoney.jar",
     acceptance: "SyncmoneyAcceptance.jar",
     vaultUnlocked: "VaultUnlocked.jar",
@@ -984,12 +989,18 @@ async function stopNetworkController(runRoot, controller, controlToken) {
 }
 
 async function waitForServerShutdownStart(runRoot) {
-  return waitUntil("both Paper backends began shutdown while the SQL row lock is held", 90_000, async () => {
+  return waitUntil("both platform backends began shutdown while the SQL row lock is held", 90_000, async () => {
     const logs = ["backend-a", "backend-b"].map(name =>
       fs.readFileSync(readServerLogPath(runRoot, name)).toString("utf8"));
-    if (!logs.every(log => log.includes("[Server thread/INFO]: Stopping server"))) return null;
+    if (!logs.every(hasServerShutdownStartMarker)) return null;
     return serverLogOffsets(runRoot);
   }, 250);
+}
+
+export function hasServerShutdownStartMarker(log) {
+  if (typeof log !== "string") return false;
+  return log.includes("[Server thread/INFO]: Stopping server") ||
+    log.includes("[Region shutdown thread/INFO]: Stopping server");
 }
 
 async function waitProcess(processHandle, timeoutMs, label) {
@@ -1403,9 +1414,19 @@ async function createSourceManifest(runRoot, preflight) {
     sources[key] = { path: file, bytes: bytes.length, sha256: sha256(bytes) };
   }
   const manifest = {
-    schemaVersion: T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION,
+    schemaVersion: preflight.endpoint.product === "Paper"
+      ? T21_PAPER_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION
+      : T21_NETWORK_SOURCE_MANIFEST_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
     workspaceRoot: WORKSPACE_ROOT,
+    ...(preflight.endpoint.product === "Paper" ? {} : {
+      endpoint: {
+        product: preflight.endpoint.product,
+        version: preflight.endpoint.version,
+        build: preflight.endpoint.build,
+        serverJarSha256: preflight.endpoint.serverJarSha256,
+      },
+    }),
     sourceCommit: await gitValue(WORKSPACE_ROOT, ["rev-parse", "HEAD"], "Syncmoney source commit"),
     sourceWorkingTreeDirty: (await gitValue(WORKSPACE_ROOT, ["status", "--porcelain"], "Syncmoney working-tree state")).length > 0,
     harness: sources,
@@ -1628,9 +1649,9 @@ async function createFileManifest(runRoot) {
   return files;
 }
 
-async function createArtifactCopyManifest(runRoot) {
+async function createArtifactCopyManifest(runRoot, endpoint) {
   const result = [];
-  for (const artifact of T21_PAPER_NETWORK_ARTIFACT_PATHS) {
+  for (const artifact of networkArtifactPathsForEndpoint(endpoint)) {
     const absolute = path.join(runRoot, ...artifact.path.split("/"));
     const bytes = fs.readFileSync(absolute);
     result.push({
@@ -1934,7 +1955,7 @@ async function runCell(endpointId) {
     }
     await copyServerLogs(runRoot);
 
-    const artifactFiles = await createArtifactCopyManifest(runRoot);
+    const artifactFiles = await createArtifactCopyManifest(runRoot, preflight.endpoint);
     const files = await createFileManifest(runRoot);
     const report = {
       schemaVersion: 1,
@@ -1966,7 +1987,7 @@ async function runCell(endpointId) {
         {
           name: "backend-a",
           serverName: "t21-net-a",
-          paperJarSha256: preflight.endpoint.serverJarSha256,
+          [preflight.endpoint.product === "Paper" ? "paperJarSha256" : "serverJarSha256"]: preflight.endpoint.serverJarSha256,
           candidateJarSha256: T21_PAPER_NETWORK_ARTIFACTS.candidateSha256,
           acceptanceJarSha256: T21_PAPER_NETWORK_ARTIFACTS.acceptanceSha256,
           vaultUnlockedJarSha256: T21_PAPER_NETWORK_ARTIFACTS.vaultUnlockedSha256,
@@ -1974,7 +1995,7 @@ async function runCell(endpointId) {
         {
           name: "backend-b",
           serverName: "t21-net-b",
-          paperJarSha256: preflight.endpoint.serverJarSha256,
+          [preflight.endpoint.product === "Paper" ? "paperJarSha256" : "serverJarSha256"]: preflight.endpoint.serverJarSha256,
           candidateJarSha256: T21_PAPER_NETWORK_ARTIFACTS.candidateSha256,
           acceptanceJarSha256: T21_PAPER_NETWORK_ARTIFACTS.acceptanceSha256,
           vaultUnlockedJarSha256: T21_PAPER_NETWORK_ARTIFACTS.vaultUnlockedSha256,
@@ -2088,7 +2109,7 @@ async function main(argv) {
   const preflight = await collectPreflight(options.endpointId);
   if (options.preflightOnly) {
     console.log("PREFLIGHT_PASS endpoint=" + options.endpointId);
-    console.log("paperSha256=" + preflight.endpoint.serverJarSha256);
+    console.log("serverSha256=" + preflight.endpoint.serverJarSha256);
     console.log("candidateSha256=" + preflight.artifactInfo.candidate.sha256);
     console.log("velocityStable=" + preflight.velocityMetadata.version + "#" + preflight.velocityMetadata.build);
     console.log("services=PostgreSQL-" + EXPECTED_POSTGRES_VERSION + ",Redis-" + EXPECTED_REDIS_VERSION);
