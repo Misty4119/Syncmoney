@@ -222,6 +222,24 @@ test("cleanup evidence rejects malformed or mismatched Java child exit records",
   assert.equal(javaWithoutInspectableArguments.runOwnedProcessesRemaining, 1);
 });
 
+test("cleanup evidence accepts an identity-matched Java version probe", async () => {
+  const executable = "C:/Program Files/Java/jdk-25.0.4/bin/java.exe";
+  const args = [executable, "-version"];
+  const evidence = await collectCleanupEvidence({ bridge: 25003 }, [
+    { event: "spawn", pid: 403, executable, args },
+    { event: "exit", pid: 403, executable, args, code: 0, signal: null },
+  ], async () => false);
+
+  assert.deepEqual(evidence, {
+    forcedCleanup: false,
+    evidenceComplete: true,
+    runOwnedProcessesRemaining: 0,
+    runOwnedPortsOpen: 0,
+    openPorts: [],
+    errors: [],
+  });
+});
+
 test("failed-run cleanup status cannot claim clean teardown without complete liveness evidence", () => {
   const state = { postgresStopped: false, redisStopped: false, networkStopped: false, clientStopped: false };
   const missingEvidence = buildFailureCleanupRecord(null, [], state);

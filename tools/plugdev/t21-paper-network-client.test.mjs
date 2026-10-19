@@ -3,6 +3,14 @@ import test from "node:test";
 import * as client from "./t21-paper-network-client.mjs";
 const { parseClientAction } = client;
 
+test("Mineflayer login UUID is read from the protocol client", () => {
+  assert.equal(typeof client.getMineflayerLoginUuid, "function");
+  const uuid = "a2345678-1234-4234-8234-1234567890ab";
+  assert.equal(client.getMineflayerLoginUuid({ _client: { uuid: uuid.toUpperCase() }, uuid: "wrong-bot-field" }), uuid);
+  assert.equal(client.getMineflayerLoginUuid({ uuid }), undefined,
+    "Mineflayer 4.39.0 does not expose the protocol login UUID as bot.uuid");
+});
+
 const validActions = [
   { type: "hop-b", id: "hop-b-1" },
   { type: "reconnect-b", id: "reconnect-b-1" },

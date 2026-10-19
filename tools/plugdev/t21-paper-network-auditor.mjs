@@ -660,8 +660,12 @@ function validateChildProcessEvents(events, report, runRoot, fail) {
   const kills = events.filter(event => event.event === "kill");
   const isJavaChild = event => /^javaw?(?:\.exe)?$/i.test(path.basename(String(event.executable ?? ""))) ||
     (Array.isArray(event.args) && event.args.includes("-jar"));
-  const javaSpawns = spawns.filter(isJavaChild);
-  const javaExits = exits.filter(isJavaChild);
+  const isServerJavaLaunch = event => Array.isArray(event.args) && event.args.includes("-jar");
+  const isJavaVersionProbe = event => /^javaw?(?:\.exe)?$/i.test(path.basename(String(event.executable ?? ""))) &&
+    Array.isArray(event.args) && event.args.length === 2 &&
+    event.args[0] === event.executable && event.args[1] === "-version";
+  const javaSpawns = spawns.filter(isServerJavaLaunch);
+  const javaExits = exits.filter(isServerJavaLaunch);
   const javaKills = kills.filter(isJavaChild);
   if (javaSpawns.length !== 3 || javaExits.length !== 3) fail("shutdown bridge must record exactly the two Paper and one Velocity Java child spawn/exit pairs");
   if (javaKills.length !== 0) fail("shutdown bridge recorded a forced Java-child kill");
@@ -701,8 +705,11 @@ function validateChildProcessEvents(events, report, runRoot, fail) {
     if (matched.length !== 1 || matched[0].executable !== spawn.executable ||
         JSON.stringify(matched[0].args) !== JSON.stringify(spawn.args)) {
       fail(`child process ${spawn.pid} did not have one matching exit`);
-    } else if (isJavaChild(spawn) && (matched[0].code !== 0 || matched[0].signal !== null)) {
-      fail(`Java child ${spawn.pid} did not have one normal exit`);
+    } else if (isJavaChild(spawn)) {
+      if (!isServerJavaLaunch(spawn) && !isJavaVersionProbe(spawn)) {
+        fail(`Java child ${spawn.pid} is neither a server JAR launch nor an exact -version probe`);
+      }
+      if (matched[0].code !== 0 || matched[0].signal !== null) fail(`Java child ${spawn.pid} did not have one normal exit`);
     }
   }
   for (const exit of exits) {

@@ -710,9 +710,26 @@ test("requires exact run-workspace Java artifact paths and rejects unpaired unex
       events.push({ event: "spawn", pid: 7999, executable: "C:/Java/bin/java.exe", args: ["java.exe", "-version"] });
     });
     assert.throws(() => audit(extraJava), error =>
-      error instanceof NetworkAuditError && /exactly the two Paper and one Velocity Java child/i.test(error.message));
+      error instanceof NetworkAuditError && /child process 7999 did not have one matching exit/i.test(error.message));
   } finally {
     await extraJava.close();
+  }
+});
+
+test("accepts completed Java version probes as non-server utility children", async () => {
+  const fixture = await createFixture();
+  try {
+    await rewriteJsonEvidence(fixture, "events/child-process-events.jsonl", events => {
+      const executable = "C:/Program Files/Java/jdk-25.0.4/bin/java.exe";
+      const args = [executable, "-version"];
+      events.push(
+        { event: "spawn", pid: 8120, executable, args },
+        { event: "exit", pid: 8120, executable, args, code: 0, signal: null },
+      );
+    });
+    assert.doesNotThrow(() => audit(fixture));
+  } finally {
+    await fixture.close();
   }
 });
 

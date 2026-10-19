@@ -6,6 +6,12 @@ const ACCEPTANCE_NAME = /^Acceptance[A-Za-z0-9_]{0,12}$/;
 const ACTION_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const BALANCE = /^(?:0|[1-9][0-9]{0,5})\.[0-9]{2}$/;
 
+export function getMineflayerLoginUuid(bot) {
+  // Mineflayer 4.39.0 keeps the login packet UUID on its minecraft-protocol client.
+  const uuid = bot?._client?.uuid;
+  return typeof uuid === "string" ? uuid.toLowerCase() : undefined;
+}
+
 export function parseClientArguments(argv) {
   const [mineflayerRoot, host, portText, version, backendB, eventPath] = argv;
   const port = Number(portText);
@@ -185,7 +191,7 @@ function main() {
       }, 30_000);
 
       bot.once("login", () => {
-        state.uuid = bot.uuid?.toLowerCase();
+        state.uuid = getMineflayerLoginUuid(bot);
         emit("bot_login", { name: username, slot, uuid: state.uuid, protocol: options.version });
         if (!state.uuid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(state.uuid)) {
           fail(`Mineflayer did not expose a valid UUID for ${username}.`);

@@ -1404,6 +1404,9 @@ async function collectCleanupEvidence(ports, childEvents, checkPortOpen = isPort
   };
   const hasInspectableJavaLaunch = event => {
     if (!Array.isArray(event.args)) return false;
+    const isVersionProbe = event.args.length === 2 &&
+      event.args[0] === event.executable && event.args[1] === "-version";
+    if (isVersionProbe) return true;
     const jarIndex = event.args.indexOf("-jar");
     const jarPath = jarIndex >= 0 ? event.args[jarIndex + 1] : null;
     return typeof jarPath === "string" && jarPath.trim().length > 0 && path.isAbsolute(jarPath);
