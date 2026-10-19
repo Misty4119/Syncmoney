@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -47,6 +48,7 @@ const EXPECTED_MINEFLAYER_VERSION = "4.39.0";
 const DATABASE_NAME = "syncmoney_t21";
 const DATABASE_USER = "syncmoney_t21";
 const REDIS_DATABASE = 15;
+const SQL_RETRY_OBSERVATION_TIMEOUT_MS = 60_000;
 const FORBIDDEN_PORTS = new Set([5432, 6379]);
 const REQUIRED_REPORT_FILES = Object.freeze([
   "events/runner-events.jsonl",
@@ -1124,6 +1126,46 @@ function retryLinesInWindow(runRoot, startOffsets, endOffsets, uuids) {
   return found;
 }
 
+async function waitForSqlRetryEvidence(runRoot, startOffsets, uuids, options = {}) {
+  // The confirmed transfer consumer processes both account-side audit effects before
+  // it queues the paired SQL snapshot. Give those bounded SQL timeouts time to finish,
+  // then require account-specific retry evidence before PostgreSQL is restored.
+  const timeoutMs = options.timeoutMs ?? SQL_RETRY_OBSERVATION_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? 250;
+  const now = options.now ?? (() => performance.now());
+  const sleep = options.sleep ?? delay;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 ||
+      !Number.isSafeInteger(intervalMs) || intervalMs < 1 ||
+      typeof now !== "function" || typeof sleep !== "function") {
+    throw new Error("SQL retry observation timing options are invalid.");
+  }
+  const deadline = now() + timeoutMs;
+  while (true) {
+    const pollStartedAt = now();
+    if (pollStartedAt >= deadline) {
+      throw new Error("No account-specific SQL retry was observed before PostgreSQL recovery.");
+    }
+    const endOffsets = serverLogOffsets(runRoot);
+    let retryEvidence;
+    try {
+      retryEvidence = retryLinesInWindow(runRoot, startOffsets, endOffsets, uuids);
+    } catch (error) {
+      if (error?.message !== "No account-specific SQL retry was observed during the PostgreSQL outage.") throw error;
+      retryEvidence = [];
+    }
+    const sampleCompletedAt = now();
+    if (sampleCompletedAt >= deadline) {
+      throw new Error("No account-specific SQL retry was observed before PostgreSQL recovery.");
+    }
+    if (retryEvidence.length > 0) return { endOffsets, retryEvidence };
+    const remainingMs = deadline - sampleCompletedAt;
+    if (remainingMs <= 0) {
+      throw new Error("No account-specific SQL retry was observed before PostgreSQL recovery.");
+    }
+    await sleep(Math.min(intervalMs, remainingMs));
+  }
+}
+
 async function captureBackendPositions(runRoot, password, ports, phase) {
   const [backendA, backendB] = await Promise.all([
     rconCommand(ports.rconA, password, "list"),
@@ -1694,9 +1736,8 @@ async function runCell(endpointId) {
       recipientBalance: duringOutage.accounts.AcceptanceB.redisBalance,
       recipientVersion: duringOutage.accounts.AcceptanceB.redisVersion,
     });
-    const outageEndOffsets = serverLogOffsets(runRoot);
-    const retryEvidence = retryLinesInWindow(runRoot, outageStartOffsets, outageEndOffsets, uuids);
-    if (retryEvidence.length === 0) throw new Error("No account-specific SQL retry was observed before PostgreSQL recovery.");
+    const { endOffsets: outageEndOffsets, retryEvidence } = await waitForSqlRetryEvidence(
+      runRoot, outageStartOffsets, uuids);
     appendEvent(runRoot, "outage_sql_retry_observed", { retryCount: retryEvidence.length, accounts: [...new Set(retryEvidence.map(item => item.uuid))] });
 
     console.log("stage=postgres_recovery endpoint=" + endpointId);
@@ -1989,6 +2030,7 @@ export {
   encodeRconPacket,
   runCapture,
   waitForRedisProcess,
+  waitForSqlRetryEvidence,
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

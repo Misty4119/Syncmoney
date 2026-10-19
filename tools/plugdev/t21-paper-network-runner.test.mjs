@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +18,208 @@ import {
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
 } from "./t21-paper-network-auditor.mjs";
+import * as paperNetworkRunner from "./t21-paper-network-runner.mjs";
+
+test("waits for an account-specific SQL retry marker that arrives after the outage starts", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the retry fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-retry-window-"));
+  const backendALog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-a", "logs", "latest.log");
+  const backendBLog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-b", "logs", "latest.log");
+  const accountUuid = "a55dd31d-e2a0-45f8-8f1e-8e98146e142e";
+  let elapsedMs = 0;
+  let pollCount = 0;
+  try {
+    await mkdir(path.dirname(backendALog), { recursive: true });
+    await mkdir(path.dirname(backendBLog), { recursive: true });
+    await writeFile(backendALog, "", "utf8");
+    await writeFile(backendBLog, "", "utf8");
+    const waitForRetry = paperNetworkRunner.waitForSqlRetryEvidence;
+    assert.equal(typeof waitForRetry, "function",
+      "the outage runner must poll for the SQL retry instead of sampling the log once");
+
+    const result = await waitForRetry(runRoot, { backendA: 0, backendB: 0 }, {
+      uuidA: accountUuid,
+      uuidB: "b66ee42e-f3b1-46a9-901f-9fa217f5253f",
+    }, {
+      timeoutMs: 100,
+      intervalMs: 10,
+      now: () => elapsedMs,
+      sleep: async milliseconds => {
+        elapsedMs += milliseconds;
+        pollCount += 1;
+        if (pollCount === 1) {
+          await appendFile(backendALog,
+            `[Async JDBCTaskExecutor] Re-queued failed DB write task (attempt 1) for player ${accountUuid}\n`,
+            "utf8");
+        }
+      },
+    });
+
+    assert.equal(pollCount, 1, "the runner must re-read logs after its initial empty sample");
+    assert.equal(result.retryEvidence.length, 1);
+    assert.equal(result.retryEvidence[0].backend, "backend-a");
+    assert.equal(result.retryEvidence[0].uuid, accountUuid);
+    assert.equal(result.endOffsets.backendA, Buffer.byteLength(
+      `[Async JDBCTaskExecutor] Re-queued failed DB write task (attempt 1) for player ${accountUuid}\n`));
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("keeps the PostgreSQL outage open for delayed transfer-side-effect retries", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the retry fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-delayed-retry-"));
+  const backendALog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-a", "logs", "latest.log");
+  const backendBLog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-b", "logs", "latest.log");
+  const accountUuid = "c77e05d7-a5d4-4ef1-a610-191f2319e4ef";
+  let elapsedMs = 0;
+  let markerWritten = false;
+  try {
+    await mkdir(path.dirname(backendALog), { recursive: true });
+    await mkdir(path.dirname(backendBLog), { recursive: true });
+    await writeFile(backendALog, "", "utf8");
+    await writeFile(backendBLog, "", "utf8");
+
+    const result = await paperNetworkRunner.waitForSqlRetryEvidence(
+      runRoot,
+      { backendA: 0, backendB: 0 },
+      { uuidA: accountUuid, uuidB: "b66ee42e-f3b1-46a9-901f-9fa217f5253f" },
+      {
+        now: () => elapsedMs,
+        sleep: async milliseconds => {
+          elapsedMs += milliseconds;
+          if (!markerWritten && elapsedMs >= 40_000) {
+            markerWritten = true;
+            await appendFile(backendALog,
+              `[Async JDBCTaskExecutor] Re-queued failed DB write task (attempt 1) for player ${accountUuid}\n`,
+              "utf8");
+          }
+        },
+      });
+
+    assert.equal(markerWritten, true);
+    assert.ok(elapsedMs >= 40_000, "the simulated SQL retry must arrive after 40 seconds");
+    assert.ok(elapsedMs < 60_000, "the observation window must remain bounded at one minute");
+    assert.equal(result.retryEvidence.length, 1);
+    assert.equal(result.retryEvidence[0].uuid, accountUuid);
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("bounds the default SQL retry observation window to 60 seconds", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the retry fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-retry-timeout-"));
+  const backendALog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-a", "logs", "latest.log");
+  const backendBLog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-b", "logs", "latest.log");
+  let elapsedMs = 0;
+  let sleepCount = 0;
+  try {
+    await mkdir(path.dirname(backendALog), { recursive: true });
+    await mkdir(path.dirname(backendBLog), { recursive: true });
+    await writeFile(backendALog, "", "utf8");
+    await writeFile(backendBLog, "", "utf8");
+
+    await assert.rejects(
+      paperNetworkRunner.waitForSqlRetryEvidence(
+        runRoot,
+        { backendA: 0, backendB: 0 },
+        { uuidA: "a55dd31d-e2a0-45f8-8f1e-8e98146e142e", uuidB: "b66ee42e-f3b1-46a9-901f-9fa217f5253f" },
+        {
+          now: () => elapsedMs,
+          sleep: async milliseconds => {
+            elapsedMs += milliseconds;
+            sleepCount += 1;
+          },
+        }),
+      /No account-specific SQL retry was observed before PostgreSQL recovery\./);
+
+    assert.equal(elapsedMs, 60_000);
+    assert.equal(sleepCount, 240, "the default deadline must cap 250 ms polling at one minute");
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("rejects SQL retry evidence first observed after the default deadline", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the retry fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-retry-late-marker-"));
+  const backendALog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-a", "logs", "latest.log");
+  const backendBLog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-b", "logs", "latest.log");
+  const accountUuid = "d88ff6e1-71a7-4a90-bce1-d6f5ddad5843";
+  let elapsedMs = 0;
+  let markerWritten = false;
+  try {
+    await mkdir(path.dirname(backendALog), { recursive: true });
+    await mkdir(path.dirname(backendBLog), { recursive: true });
+    await writeFile(backendALog, "", "utf8");
+    await writeFile(backendBLog, "", "utf8");
+
+    await assert.rejects(
+      paperNetworkRunner.waitForSqlRetryEvidence(
+        runRoot,
+        { backendA: 0, backendB: 0 },
+        { uuidA: accountUuid, uuidB: "b66ee42e-f3b1-46a9-901f-9fa217f5253f" },
+        {
+          now: () => elapsedMs,
+          sleep: async milliseconds => {
+            elapsedMs += milliseconds;
+            if (!markerWritten && elapsedMs >= 60_000) {
+              elapsedMs = 60_001;
+              markerWritten = true;
+              await appendFile(backendALog,
+                `[Async JDBCTaskExecutor] Re-queued failed DB write task (attempt 1) for player ${accountUuid}\n`,
+                "utf8");
+            }
+          },
+        }),
+      /No account-specific SQL retry was observed before PostgreSQL recovery\./);
+
+    assert.equal(markerWritten, true);
+    assert.equal(elapsedMs, 60_001);
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("rejects retry evidence when the log sample completes after the deadline", async () => {
+  const temporaryBase = os.tmpdir();
+  assert.equal(path.parse(temporaryBase).root.toLowerCase(), "c:\\",
+    "the retry fixture must stay on the C: SSD");
+  const runRoot = await mkdtemp(path.join(temporaryBase, "syncmoney-t21-paper-retry-slow-sample-"));
+  const backendALog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-a", "logs", "latest.log");
+  const backendBLog = path.join(runRoot, "workspace", ".plugdev", "network", "backends", "backend-b", "logs", "latest.log");
+  const accountUuid = "e99ff6e1-71a7-4a90-bce1-d6f5ddad5843";
+  let clockReadCount = 0;
+  try {
+    await mkdir(path.dirname(backendALog), { recursive: true });
+    await mkdir(path.dirname(backendBLog), { recursive: true });
+    await writeFile(backendALog,
+      `[Async JDBCTaskExecutor] Re-queued failed DB write task (attempt 1) for player ${accountUuid}\n`,
+      "utf8");
+    await writeFile(backendBLog, "", "utf8");
+
+    await assert.rejects(
+      paperNetworkRunner.waitForSqlRetryEvidence(
+        runRoot,
+        { backendA: 0, backendB: 0 },
+        { uuidA: accountUuid, uuidB: "b66ee42e-f3b1-46a9-901f-9fa217f5253f" },
+        { now: () => [0, 0, 60_001][Math.min(clockReadCount++, 2)] }),
+      /No account-specific SQL retry was observed before PostgreSQL recovery\./);
+
+    assert.equal(clockReadCount, 3, "the helper must validate time again after sampling the logs");
+  } finally {
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
 
 test("runCapture avoids inherited stdio handles for service-start commands", async () => {
   const temporaryBase = os.tmpdir();
