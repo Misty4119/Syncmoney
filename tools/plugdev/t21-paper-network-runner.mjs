@@ -535,7 +535,7 @@ function buildPlugdevConfig(runRoot, preflight, ports, rconPassword) {
     backends: [
       {
         name: "backend-a",
-        software: "paper",
+        software: "custom",
         version: preflight.endpoint.version,
         jar: paper,
         port: ports.backendA,
@@ -545,7 +545,7 @@ function buildPlugdevConfig(runRoot, preflight, ports, rconPassword) {
       },
       {
         name: "backend-b",
-        software: "paper",
+        software: "custom",
         version: preflight.endpoint.version,
         jar: paper,
         port: ports.backendB,

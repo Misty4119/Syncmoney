@@ -356,6 +356,9 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
 
   assert.equal(config.backends.length, 2);
   for (const backend of config.backends) {
+    assert.equal(backend.software, "custom",
+      "each backend must use PlugDev's exact local-JAR path instead of resolving the latest Paper build for the MC version");
+    assert.equal(backend.version, "1.21.6");
     assert.equal(backend.jar, path.join(runRoot, "inputs", "paper.jar"));
     for (const plugin of backend.plugins) {
       assert.equal(path.isAbsolute(plugin.jar), true);
@@ -367,6 +370,18 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
         assert.equal(path.resolve(workspace, plugin.config), path.join(workspace, "inputs", path.basename(plugin.config)));
       }
     }
+  }
+
+  const currentMaximumConfig = buildPlugdevConfig(
+    runRoot,
+    { endpoint: { version: "26.3" } },
+    ports,
+    "test-only-rcon-password",
+  );
+  for (const backend of currentMaximumConfig.backends) {
+    assert.equal(backend.software, "custom");
+    assert.equal(backend.version, "26.3");
+    assert.equal(backend.jar, path.join(runRoot, "inputs", "paper.jar"));
   }
 });
 
