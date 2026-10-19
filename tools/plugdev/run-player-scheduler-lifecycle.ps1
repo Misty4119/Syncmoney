@@ -27,9 +27,21 @@ $pins = @{
     'canvas-263-currentmax' = [ordered]@{ software = 'canvas'; version = '26.3'; build = 984; artifact = 'canvas-26.3-984.jar'; sha256 = '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
 }
 
+function Assert-CrossOwnerEndpoint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Endpoint,
+        [Parameter(Mandatory = $true)][string]$Software
+    )
+    $supportedFolia = ($Software -ceq 'folia') -and ($Endpoint -in @('folia-1216-min', 'folia-262-max', 'folia-263-currentmax'))
+    $supportedCanvas = $Software -ceq 'canvas' -and $Endpoint -ceq 'canvas-263-currentmax'
+    if (-not ($supportedFolia -or $supportedCanvas)) {
+        throw '-CrossOwner is supported for Folia endpoints and the pinned current-maximum Canvas endpoint only.'
+    }
+}
+
 $pin = $pins[$Endpoint]
-if ($CrossOwner.IsPresent -and $pin.software -ne 'folia') {
-    throw '-CrossOwner is only supported for Folia endpoints.'
+if ($CrossOwner.IsPresent) {
+    Assert-CrossOwnerEndpoint -Endpoint $Endpoint -Software $pin.software
 }
 if ($Guard.IsPresent -and $pin.software -notin @('canvas', 'folia')) {
     throw 'Paired player-guard acceptance is only supported for Canvas or Folia endpoints.'
@@ -67,7 +79,7 @@ foreach ($path in @($candidateJar, $acceptanceJar, $apiConsumerJar, $serverJar, 
 $serverSha = (Get-FileHash -LiteralPath $serverJar -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($serverSha -cne $pin.sha256) { throw "Exact server artifact hash mismatch: expected $($pin.sha256), observed $serverSha." }
 $candidateSha = (Get-FileHash -LiteralPath $candidateJar -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354') {
+if ($candidateSha -cne '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1') {
     throw "Candidate artifact does not match the T21 source pin: $candidateSha"
 }
 
@@ -697,7 +709,7 @@ plugins {
     $crossOwnerClient = $null
     if ($crossOwnerEnabled) {
         $crossOwnerClient = Invoke-Client 'cross-owner'
-        $null = Wait-ServerLog 'T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB' 30 'two-region owner proof'
+        $null = Wait-ServerLog 'T21_CROSS_OWNER_PASS players=AcceptanceA,AcceptanceB' 30 'cross-owner entity-owner proof'
     }
 
     $guardClient = $null
@@ -886,7 +898,15 @@ plugins {
         [ordered]@{ path = $_.FullName.Substring($runRoot.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
     })
     $notEstablished = @('CMI callback retirement', 'hard-kill recovery', 'fleet-wide quiescence', 'full backend/failure matrix')
-    if (-not $crossOwnerEnabled) { $notEstablished += 'Folia two-region cross-owner behavior' }
+    if (-not $crossOwnerEnabled) {
+        if ($pin.software -eq 'folia') {
+            $notEstablished += 'Folia two-region cross-owner behavior'
+        } elseif ($pin.software -eq 'canvas') {
+            $notEstablished += 'Canvas two-region cross-owner behavior'
+        } else {
+            $notEstablished += 'Folia and Canvas two-region cross-owner behavior'
+        }
+    }
     if ($Guard.IsPresent) {
         if ($pin.software -eq 'folia') {
             $notEstablished += 'full Folia player-guard lifecycle matrix outside the tested two-owner quota scenario'
@@ -906,6 +926,9 @@ plugins {
             'T21 Canvas two-owner global circuit-breaker rate-limit case with per-player protection disabled and player lifecycle scheduler subcase'
         } elseif ($GuardWithCircuitBreaker.IsPresent) {
             'T21 Canvas two-owner entity guard with global circuit breaker enabled and player lifecycle scheduler subcase'
+        } elseif ($CrossOwner.IsPresent) {
+            $platformName = if ($pin.software -eq 'folia') { 'Folia' } else { 'Canvas' }
+            "T21 $platformName two-owner cross-owner completion-marker and player lifecycle scheduler subcase"
         } elseif ($Guard.IsPresent) {
             $platformName = if ($pin.software -eq 'folia') { 'Folia' } else { 'Canvas' }
             "T21 $platformName two-owner entity guard and player lifecycle scheduler subcase"

@@ -23,13 +23,43 @@ if (-not $runnerSource.Contains($expectedSelectorSet, [StringComparison]::Ordina
 if (-not $runnerSource.Contains('build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\'' + $pin.artifact', [StringComparison]::Ordinal)) {
     throw 'Scheduler current-maximum selectors must resolve their artifacts from the verified T21 current-maximum artifact directory.'
 }
-if (-not $runnerSource.Contains("candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354'", [StringComparison]::Ordinal)) {
+if (-not $runnerSource.Contains("candidateSha -cne '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1'", [StringComparison]::Ordinal)) {
     throw 'Scheduler lifecycle runner must pin the current candidate used by T21 endpoint validation.'
 }
 $runnerTokens = $null
 $runnerParseErrors = $null
 $runnerAst = [System.Management.Automation.Language.Parser]::ParseInput($runnerSource, [ref]$runnerTokens, [ref]$runnerParseErrors)
 if ($runnerParseErrors.Count -gt 0) { throw "Scheduler lifecycle runner has PowerShell parse errors: $($runnerParseErrors -join '; ')" }
+$crossOwnerGuardAst = $runnerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CrossOwnerEndpoint'
+}, $true)
+if ($null -eq $crossOwnerGuardAst) { throw 'Scheduler lifecycle runner must define a testable cross-owner endpoint guard.' }
+. ([scriptblock]::Create($crossOwnerGuardAst.Extent.Text))
+foreach ($allowed in @(
+        @{ Endpoint = 'folia-1216-min'; Software = 'folia' },
+        @{ Endpoint = 'folia-262-max'; Software = 'folia' },
+        @{ Endpoint = 'folia-263-currentmax'; Software = 'folia' },
+        @{ Endpoint = 'canvas-263-currentmax'; Software = 'canvas' }
+    )) {
+    Assert-CrossOwnerEndpoint -Endpoint $allowed.Endpoint -Software $allowed.Software
+}
+foreach ($unsupported in @(
+        @{ Endpoint = 'paper-263-currentmax'; Software = 'paper' },
+        @{ Endpoint = 'canvas-1218-min'; Software = 'canvas' },
+        @{ Endpoint = 'canvas-263-max'; Software = 'canvas' },
+        @{ Endpoint = 'canvas-263-currentmax'; Software = 'folia' }
+    )) {
+    $rejected = $false
+    try { Assert-CrossOwnerEndpoint -Endpoint $unsupported.Endpoint -Software $unsupported.Software }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw "Cross-owner endpoint guard unexpectedly admitted $($unsupported.Endpoint) / $($unsupported.Software)." }
+}
+$guardCall = $runnerSource.IndexOf('Assert-CrossOwnerEndpoint -Endpoint $Endpoint -Software $pin.software', [StringComparison]::Ordinal)
+if ($guardCall -lt 0 -or $guardCall -gt $runnerSource.IndexOf('$root = [IO.Path]::GetFullPath', [StringComparison]::Ordinal) -or
+    $guardCall -gt $runnerSource.IndexOf('New-Item -ItemType Directory -Path $runRoot', [StringComparison]::Ordinal)) {
+    throw 'Cross-owner endpoint guard must run before local path setup or creation of any run directory.'
+}
 $nodeInvokerAst = $runnerAst.Find({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-NodeWithMineflayerModulePath'

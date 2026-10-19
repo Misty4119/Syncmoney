@@ -84,7 +84,7 @@ test("accepts eventless Folia teleport only with entity-scheduler confirmation",
   assert.equal(classifyTeleportOutcome?.([], false, true), null);
 });
 
-test("requires matching owner proofs for two distant players in distinct Folia regions", () => {
+test("requires matching owner proofs for two distant players in distinct server regions", () => {
   const valid = [
     "T21_REGION_OWNER player=AcceptanceA world=world blockX=0 blockZ=0 chunkX=0 chunkZ=0 selfOwned=true otherPlayer=AcceptanceB otherWorld=world otherBlockX=16384 otherBlockZ=16384 otherChunkX=1024 otherChunkZ=1024 otherOwned=false",
     "T21_REGION_OWNER player=AcceptanceB world=world blockX=16384 blockZ=16384 chunkX=1024 chunkZ=1024 selfOwned=true otherPlayer=AcceptanceA otherWorld=world otherBlockX=0 otherBlockZ=0 otherChunkX=0 otherChunkZ=0 otherOwned=false",
@@ -331,14 +331,17 @@ test("cross-owner gate requires two live clients and both entity-owner checks", 
   assert.match(client, /observeCrossOwnerPass\(otherBot, text\)/);
 });
 
-test("cross-owner runner rejects non-Folia endpoints before creating a run or starting services", () => {
+test("cross-owner runner admits only Folia and current-maximum Canvas before any services", () => {
   const runner = readFileSync(new URL("./run-player-scheduler-lifecycle.ps1", import.meta.url), "utf8")
     .replaceAll("\r\n", "\n");
-  const guard = runner.indexOf("$CrossOwner.IsPresent -and $pin.software -ne 'folia'");
+  const guard = runner.indexOf("Assert-CrossOwnerEndpoint -Endpoint $Endpoint -Software $pin.software");
   assert.ok(guard > runner.indexOf("$pin = $pins[$Endpoint]"));
   assert.ok(guard < runner.indexOf("$root = [IO.Path]::GetFullPath"));
   assert.ok(guard < runner.indexOf("New-Item -ItemType Directory -Path $runRoot"));
-  assert.match(runner, /-CrossOwner is only supported for Folia endpoints\./);
+  assert.ok(runner.includes("$supportedFolia = ($Software -ceq 'folia') -and ($Endpoint -in @('folia-1216-min', 'folia-262-max', 'folia-263-currentmax'))"));
+  assert.match(runner, /\$supportedCanvas = \$Software -ceq 'canvas' -and \$Endpoint -ceq 'canvas-263-currentmax'/);
+  assert.match(runner, /-CrossOwner is supported for Folia endpoints and the pinned current-maximum Canvas endpoint only\./);
+  assert.match(runner, /"T21 \$platformName two-owner cross-owner completion-marker and player lifecycle scheduler subcase"/);
 });
 
 test("guard runtime proof requires the entity owner, exact quota outcome, player notice, and persisted balance", () => {
@@ -430,7 +433,7 @@ test("guard acceptance admits the Folia ownership case while keeping breaker com
   assert.match(probe, /T21_GUARD_TRANSACTIONS player=" \+ player\.getName\(\) \+ " uuid=/);
   assert.match(probe, /outcomes=/);
   assert.match(probe, /accepted=" \+ accepted \+ " rejected=" \+ rejected/);
-  assert.match(runner, /candidateSha -cne '7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354'/);
+  assert.match(runner, /candidateSha -cne '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1'/);
 });
 
 test("Canvas guard-pair proof requires two entity owners, independent quotas, notices, and persisted balances", () => {
@@ -610,9 +613,9 @@ test("paired owner guard runner records platform-specific ownership and residual
     runner.indexOf("$notEstablished = @("),
     runner.indexOf("$script:result = [ordered]@{")
   );
-  assert.match(runner, /if \(-not \$crossOwnerEnabled\) \{ \$notEstablished \+= 'Folia two-region cross-owner behavior' \}/);
+  assert.match(notEstablished, /if \(-not \$crossOwnerEnabled\) \{\s*if \(\$pin\.software -eq 'folia'\) \{\s*\$notEstablished \+= 'Folia two-region cross-owner behavior'\s*\} elseif \(\$pin\.software -eq 'canvas'\) \{\s*\$notEstablished \+= 'Canvas two-region cross-owner behavior'\s*\} else \{\s*\$notEstablished \+= 'Folia and Canvas two-region cross-owner behavior'\s*\}/);
   assert.doesNotMatch(runner, /\$twoRegionOwnershipProved/,
-    "the paired player-guard profile must not be treated as the separate Folia cross-owner scenario");
+    "the paired player-guard profile must not be treated as the separate cross-owner scenario");
   assert.match(notEstablished, /if \(\$Guard\.IsPresent\) \{\s*if \(\$pin\.software -eq 'folia'\) \{\s*\$notEstablished \+= 'full Folia player-guard lifecycle matrix outside the tested two-owner quota scenario'\s*\} else \{\s*\$notEstablished \+= 'full Canvas owner\/guard lifecycle matrix outside the tested two-owner quota scenario'\s*\}/);
   assert.match(runner, /"T21 \$platformName two-owner entity guard and player lifecycle scheduler subcase"/);
   assert.match(runner, /Wait-ServerLog 'T21_GUARD_PAIR_PASS players=AcceptanceGuardA,AcceptanceGuardB' 30 'paired player-owner guard outcome'/);
