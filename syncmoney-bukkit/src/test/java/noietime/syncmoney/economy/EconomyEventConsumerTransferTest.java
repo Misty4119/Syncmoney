@@ -8,7 +8,9 @@ import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.storage.db.DbWriterConsumer;
+import noietime.syncmoney.sync.PubSubMessage;
 import noietime.syncmoney.uuid.NameResolver;
+import redis.clients.jedis.Jedis;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 
@@ -102,6 +104,42 @@ class EconomyEventConsumerTransferTest {
         );
     }
 
+    @Test
+    void confirmedPairedTransferPubSubIncludesCachedSenderNameForReceiver() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("5.00");
+        Plugin plugin = plugin();
+        SyncmoneyConfig config = config(false);
+        when(config.isPubsubEnabled()).thenReturn(true);
+
+        RedisManager redisManager = mock(RedisManager.class);
+        when(redisManager.isDegraded()).thenReturn(false);
+        Jedis jedis = mock(Jedis.class);
+        when(redisManager.getResource()).thenReturn(jedis);
+
+        CacheManager cacheManager = mock(CacheManager.class);
+        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
+                new CacheManager.TransferResult(new BigDecimal("95.00"), new BigDecimal("55.00"), 2L, 2L));
+        EconomyWriteQueue queue = pairedQueue(sender, receiver, amount,
+                new BigDecimal("95.00"), new BigDecimal("55.00"), 2L, 2L, plugin);
+        NameResolver nameResolver = mock(NameResolver.class);
+        when(nameResolver.getNameCachedOnly(sender)).thenReturn("AcceptanceA");
+        EconomyEventConsumer consumer = consumer(plugin, config, queue, cacheManager, redisManager,
+                null, nameResolver, mock(DatabaseManager.class));
+
+        consumer.start();
+        consumer.shutdown();
+
+        org.mockito.ArgumentCaptor<String> payload = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(jedis, times(2)).publish(eq("syncmoney:balance:update"), payload.capture());
+        PubSubMessage incoming = payload.getAllValues().stream()
+                .map(PubSubMessage::fromJson)
+                .filter(message -> "TRANSFER_IN".equals(message.getEventType()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("AcceptanceA", incoming.getSourcePlayerName());
+    }
     @Test
     void definitiveAuthorityRejectionReconcilesBothAccountsEvenAtTheProvisionalVersion() throws Exception {
         UUID sender = UUID.randomUUID();

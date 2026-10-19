@@ -79,6 +79,67 @@ export function createSequencedEventEmitter(writeEvent, now = () => new Date()) 
   };
 }
 
+export function createClientStopState() {
+  const controller = new AbortController();
+  return { signal: controller.signal, requestStop: () => controller.abort() };
+}
+
+function abortableDelay(milliseconds, signal) {
+  if (!signal) return new Promise(resolve => setTimeout(resolve, milliseconds));
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+export async function waitForPayReceipts(sender, receiver, action, {
+  signal,
+  senderBefore = sender?.chatMessages?.length ?? 0,
+  receiverBefore = receiver?.chatMessages?.length ?? 0,
+  timeoutMs = 120_000,
+  pollIntervalMs = 100,
+} = {}) {
+  if (!sender || !receiver || !Array.isArray(sender.chatMessages) || !Array.isArray(receiver.chatMessages)) {
+    throw new Error("Pay receipt wait requires sender and receiver chat state.");
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 ||
+      !Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) {
+    throw new Error("Pay receipt wait timeout and interval must be positive integers.");
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !signal?.aborted) {
+    const senderIndex = sender.chatMessages.slice(senderBefore).findIndex(text =>
+      matchesPaySenderSuccess(text, { recipient: receiver.username, amount: action.amount }));
+    const receiverIndex = receiver.chatMessages.slice(receiverBefore).findIndex(text =>
+      matchesPayReceiverSuccess(text, { sender: sender.username, amount: action.amount }));
+    const senderText = senderIndex < 0 ? undefined : sender.chatMessages[senderBefore + senderIndex];
+    const receiverText = receiverIndex < 0 ? undefined : receiver.chatMessages[receiverBefore + receiverIndex];
+    if (senderText && receiverText) {
+      return {
+        senderText,
+        receiverText,
+        senderReceiptEventSequence: sender.chatEventSequences?.[senderBefore + senderIndex],
+        receiverReceiptEventSequence: receiver.chatEventSequences?.[receiverBefore + receiverIndex],
+      };
+    }
+    await abortableDelay(pollIntervalMs, signal);
+  }
+  if (signal?.aborted) return null;
+
+  const senderIndex = sender.chatMessages.slice(senderBefore).findIndex(text =>
+    matchesPaySenderSuccess(text, { recipient: receiver.username, amount: action.amount }));
+  const receiverIndex = receiver.chatMessages.slice(receiverBefore).findIndex(text =>
+    matchesPayReceiverSuccess(text, { sender: sender.username, amount: action.amount }));
+  if (senderIndex < 0) throw new Error("No exact successful /pay sender receipt reached " + sender.username + " for action " + action.id + ".");
+  if (receiverIndex < 0) throw new Error("No exact cross-server /pay receiver receipt reached " + receiver.username + " for action " + action.id + ".");
+  throw new Error("Pay receipt wait ended without a complete receipt pair.");
+}
 function normalizeChatMessage(value) {
   return String(value ?? "")
     .replace(/\u00a7[0-9a-fk-or]/gi, "")
@@ -166,6 +227,7 @@ function main() {
   const eventStream = fs.createWriteStream(options.eventPath, { flags: "wx" });
   let outputClosed = false;
   let stopping = false;
+  const stopState = createClientStopState();
   let actionChain = Promise.resolve();
   const bots = new Map();
   const emit = createSequencedEventEmitter(event => eventStream.write(`${JSON.stringify(event)}\n`));
@@ -286,39 +348,23 @@ function main() {
     if (!a || !b) throw new Error("Both Acceptance clients must be connected before /pay.");
     const senderBefore = a.chatMessages.length;
     const receiverBefore = b.chatMessages.length;
-    a.bot.chat(`/pay AcceptanceB ${action.amount}`);
+    a.bot.chat("/pay AcceptanceB " + action.amount);
     emit("pay_submitted", { id: action.id, sender: a.username, target: "AcceptanceB", amount: action.amount });
-    const deadline = Date.now() + 120_000;
-    let senderText;
-    let receiverText;
-    let senderReceiptEventSequence;
-    let receiverReceiptEventSequence;
-    while (Date.now() < deadline && !stopping) {
-      const senderIndex = a.chatMessages.slice(senderBefore).findIndex(text =>
-        matchesPaySenderSuccess(text, { recipient: b.username, amount: action.amount }));
-      const receiverIndex = b.chatMessages.slice(receiverBefore).findIndex(text =>
-        matchesPayReceiverSuccess(text, { sender: a.username, amount: action.amount }));
-      senderText = senderIndex < 0 ? undefined : a.chatMessages[senderBefore + senderIndex];
-      receiverText = receiverIndex < 0 ? undefined : b.chatMessages[receiverBefore + receiverIndex];
-      senderReceiptEventSequence = senderIndex < 0 ? undefined : a.chatEventSequences[senderBefore + senderIndex];
-      receiverReceiptEventSequence = receiverIndex < 0 ? undefined : b.chatEventSequences[receiverBefore + receiverIndex];
-      if (senderText && receiverText) break;
-      await delay(100);
-    }
-    if (!senderText) throw new Error(`No exact successful /pay sender receipt reached ${a.username} for action ${action.id}.`);
-    if (!receiverText) throw new Error(`No exact cross-server /pay receiver receipt reached ${b.username} for action ${action.id}.`);
+    const receipts = await waitForPayReceipts(a, b, action, {
+      signal: stopState.signal,
+      senderBefore,
+      receiverBefore,
+    });
+    if (receipts === null) return false;
     emit("pay_response_pass", {
       id: action.id,
       sender: a.username,
       recipient: b.username,
       amount: action.amount,
-      senderText,
-      receiverText,
-      senderReceiptEventSequence,
-      receiverReceiptEventSequence,
+      ...receipts,
     });
+    return true;
   }
-
   async function seedAccounts() {
     const a = bots.get("a");
     if (!a) throw new Error("AcceptanceA is not connected for disposable-account seeding.");
@@ -369,6 +415,7 @@ function main() {
 
   async function stopClients() {
     stopping = true;
+    stopState.requestStop();
     const states = [...bots.values()];
     for (const state of states) {
       state.intentionalEnd = true;
@@ -383,9 +430,13 @@ function main() {
   }
 
   async function handleAction(action) {
+    if (stopping && action.type !== "stop") return "cancelled";
     emit("action_started", { action: action.type, id: action.id });
     if (action.type === "hop-b") await hopB();
-    else if (action.type === "pay") await pay(action);
+    else if (action.type === "pay") {
+      const completed = await pay(action);
+      if (!completed) return "cancelled";
+    }
     else if (action.type === "reconnect-b") await reconnectB();
     else if (action.type === "seed") await seedAccounts();
     else if (action.type === "lifecycle-logout") await lifecycleLogout();
@@ -393,10 +444,10 @@ function main() {
       await stopClients();
       return "stop";
     }
+    if (stopping) return "cancelled";
     emit("action_pass", { action: action.type, id: action.id });
     return action.type;
   }
-
   async function start() {
     const a = await connect("AcceptanceA", "a");
     await delay(2_000);
@@ -422,6 +473,10 @@ function main() {
         if (action?.type === "recovery-barrier") {
           emit("recovery_barrier", { id: action.id });
           continue;
+        }
+        if (action?.type === "stop") {
+          stopping = true;
+          stopState.requestStop();
         }
         actionChain = actionChain.then(async () => {
           try {

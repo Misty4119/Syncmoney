@@ -83,6 +83,31 @@ test("cross-server /pay acceptance requires the exact sender and receiver succes
   ), false);
 });
 
+test("queued stop promptly cancels an in-flight pay receipt wait without a receipt", async () => {
+  assert.equal(typeof client.createClientStopState, "function");
+  assert.equal(typeof client.waitForPayReceipts, "function");
+  const stop = client.createClientStopState();
+  const sender = { username: "AcceptanceA", chatMessages: [], chatEventSequences: [] };
+  const receiver = { username: "AcceptanceB", chatMessages: [], chatEventSequences: [] };
+  const pending = client.waitForPayReceipts(sender, receiver, { amount: "5.00" }, {
+    signal: stop.signal,
+    timeoutMs: 120_000,
+    pollIntervalMs: 60_000,
+  });
+  const started = Date.now();
+  stop.requestStop();
+  let timeoutId;
+  try {
+    const cancelled = await Promise.race([
+      pending,
+      new Promise((_, reject) => { timeoutId = setTimeout(() => reject(new Error("Pay wait ignored stop request.")), 500); }),
+    ]);
+    assert.equal(cancelled, null);
+    assert.ok(Date.now() - started < 500, "stop should cancel before the long poll interval elapses");
+  } finally {
+    clearTimeout(timeoutId);
+  }
+});
 test("backend route acknowledgement must name the exact requested Velocity server", () => {
   assert.equal(typeof client.matchesBackendRouteAcknowledgement, "function");
   assert.equal(client.matchesBackendRouteAcknowledgement(

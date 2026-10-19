@@ -1614,8 +1614,9 @@ public final class EconomyEventConsumer implements Runnable {
     }
 
     private void processTransferEventSteps(EconomyEvent out, EconomyEvent in, ReplicationReceipt receipt) {
+        String senderName = nameResolver == null ? null : nameResolver.getNameCachedOnly(out.playerUuid());
         boolean outStepsComplete = processEventSteps(out, receipt, false);
-        boolean inStepsComplete = processEventSteps(in, receipt, false);
+        boolean inStepsComplete = processEventSteps(in, receipt, false, senderName);
         persistTransferPair(out, in, receipt, false);
         if (!outStepsComplete || !inStepsComplete) {
             throw new IllegalStateException("Required downstream work failed for confirmed transfer "
@@ -1696,12 +1697,17 @@ public final class EconomyEventConsumer implements Runnable {
     }
 
     private boolean processEventSteps(EconomyEvent event, ReplicationReceipt receipt, boolean persistSql) {
+        return processEventSteps(event, receipt, persistSql, null);
+    }
+
+    private boolean processEventSteps(EconomyEvent event, ReplicationReceipt receipt, boolean persistSql,
+            String sourcePlayerName) {
         ConfirmedAccount account = receipt.accountFor(event.playerUuid());
         BigDecimal newBalance = account.balance();
         boolean requiredStepsComplete = true;
 
         if (config.isPubsubEnabled()) {
-            requiredStepsComplete &= publishUpdate(event, account);
+            requiredStepsComplete &= publishUpdate(event, account, sourcePlayerName);
         }
 
         if (persistSql && config.isDbEnabled()) {
@@ -1750,8 +1756,12 @@ public final class EconomyEventConsumer implements Runnable {
 
     /** Publish the exact balance/version pair confirmed by the authority write. */
     private boolean publishUpdate(EconomyEvent event, ConfirmedAccount account) {
+        return publishUpdate(event, account, null);
+    }
+
+    private boolean publishUpdate(EconomyEvent event, ConfirmedAccount account, String sourcePlayerName) {
         String serverName = config.getServerName();
-        PubSubMessage message = createPubSubMessage(event, account, serverName);
+        PubSubMessage message = createPubSubMessage(event, account, serverName, sourcePlayerName);
 
         try (var jedis = redisManager.getResource()) {
             jedis.publish(PUBSUB_CHANNEL, message.toJson());
@@ -1764,6 +1774,11 @@ public final class EconomyEventConsumer implements Runnable {
 
     static PubSubMessage createPubSubMessage(EconomyEvent event, ConfirmedAccount account,
             String serverName) {
+        return createPubSubMessage(event, account, serverName, null);
+    }
+
+    static PubSubMessage createPubSubMessage(EconomyEvent event, ConfirmedAccount account,
+            String serverName, String sourcePlayerName) {
         String sourcePlugin = event.sourcePlugin() == null || event.sourcePlugin().isBlank()
                 ? "Syncmoney"
                 : event.sourcePlugin();
@@ -1777,7 +1792,7 @@ public final class EconomyEventConsumer implements Runnable {
                 event.type().name(),
                 event.delta().doubleValue(),
                 sourcePlugin,
-                null);
+                sourcePlayerName);
     }
 
     /** Enqueue the authority receipt without reading cache state again. */

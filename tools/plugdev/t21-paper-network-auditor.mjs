@@ -20,7 +20,7 @@ export const T21_PAPER_NETWORK_ENDPOINTS = Object.freeze({
 });
 
 export const T21_PAPER_NETWORK_ARTIFACTS = Object.freeze({
-  candidateSha256: "7d4fb070ecdb61ece3d5e39b7a2bf6ceb72c0c6a939f269588344b41f908b354",
+  candidateSha256: "69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1",
   acceptanceSha256: "4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df",
   vaultUnlockedSha256: "4ec21910767a68b2defacb121cffee9840ded8b01abcbff03779fb9ab637296a",
   velocitySha256: "85be73b90f295acd8d5d45a00ad10bac791d4b72b7554172612a89565ebaaa8f",
