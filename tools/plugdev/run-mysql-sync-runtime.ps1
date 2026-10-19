@@ -20,6 +20,7 @@ param(
     [switch]$IncompleteV10AuditTableStartupFailure,
     [switch]$IncompleteV10AuditTablePlayerRowPreservation,
     [switch]$RequiredV11DdlPermissionDeniedStartupFailure,
+    [switch]$RequiredV11DdlPermissionDeniedPlayerRowPreservation,
     [switch]$SuccessfulV10AuditSchemaUpgrade,
     [switch]$SuccessfulV10AuditSchemaPlayerRowPreservation,
     [switch]$SuccessfulV10AuditSchemaMultiplePlayerRowPreservation,
@@ -63,6 +64,11 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
     -not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The required-v11-DDL-permission-failure case supports all three SQL products on the user-pinned minimum and maximum Paper, Folia, and Canvas endpoints, plus supplemental current-stable Paper; unpinned endpoints are not supported.'
 }
+if ($RequiredV11DdlPermissionDeniedPlayerRowPreservation.IsPresent -and
+    (-not $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -or
+        -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint))) {
+    throw 'Required-v11 player-row preservation requires the required-v11 startup-failure mode and is scoped only to current-maximum Paper/PostgreSQL.'
+}
 if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The successful audit-schema upgrade case supports MySQL, MariaDB, or PostgreSQL on the six exact user-pinned minimum/maximum Paper, Folia, and Canvas endpoints plus the separately pinned supplemental current-stable Paper endpoint.'
@@ -97,6 +103,7 @@ $script:databaseManagerInitFailureStartupFailure = $DatabaseManagerInitFailureSt
 $script:incompleteV10AuditTableStartupFailure = $IncompleteV10AuditTableStartupFailure.IsPresent
 $script:incompleteV10AuditTablePlayerRowPreservation = $IncompleteV10AuditTablePlayerRowPreservation.IsPresent
 $script:requiredV11DdlPermissionDeniedStartupFailure = $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent
+$script:requiredV11DdlPermissionDeniedPlayerRowPreservation = $RequiredV11DdlPermissionDeniedPlayerRowPreservation.IsPresent
 $ordinarySuccessfulV10AuditSchemaUpgradeRequested = $SuccessfulV10AuditSchemaUpgrade.IsPresent
 $script:successfulV10AuditSchemaSinglePlayerRowPreservation = $SuccessfulV10AuditSchemaPlayerRowPreservation.IsPresent
 $script:successfulV10AuditSchemaMultiplePlayerRowPreservation = $SuccessfulV10AuditSchemaMultiplePlayerRowPreservation.IsPresent
@@ -1495,7 +1502,7 @@ VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73,
     $rows = @(ConvertFrom-Json -InputObject $state.auditRowsJson -AsHashtable -ErrorAction Stop)
     $playerFixtureValid = if ($SeedExistingPlayerRow.IsPresent) {
         $state.playersTableExists -and $state.playerRows -eq 1 -and
-            (Test-T21IncompleteV10PlayerRowSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct)
+            (Test-T21PlayerRowPreservationSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct)
     } else { -not $state.playersTableExists -and $null -eq $state.playerRows }
     if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 9 -or
         -not $state.auditTableExists -or -not $playerFixtureValid -or
@@ -1561,9 +1568,13 @@ function Test-T21MySqlCreateWithoutAlterGrantSet(
     return $usageGrantCount -eq 1 -and $schemaGrantCount -eq 1
 }
 
-function Seed-T21RequiredV11DdlPermissionFailure {
+function Seed-T21RequiredV11DdlPermissionFailure([switch]$SeedExistingPlayerRow) {
     if (-not (Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
         throw 'The required-v11-DDL-permission-failure seed supports all three SQL products on the user-pinned minimum and maximum Paper, Folia, and Canvas endpoints; supplemental current-stable Paper and unpinned endpoints are not supported.'
+    }
+    if ($SeedExistingPlayerRow.IsPresent -and
+        -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+        throw 'Required-v11 player-row preservation is scoped only to current-maximum Paper/PostgreSQL.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1604,6 +1615,22 @@ INSERT INTO syncmoney_audit_log (
 '@
     if ($script:databaseProduct -ceq 'PostgreSQL') {
         $null = Invoke-PostgresQuery $ddl 'seed-v11-audit-ddl-permission-failure' -asRoot -Database $script:databaseName
+        if ($SeedExistingPlayerRow.IsPresent) {
+            $playerDdl = @'
+CREATE TABLE players (
+    player_uuid VARCHAR(36) PRIMARY KEY,
+    player_name VARCHAR(16),
+    balance DECIMAL(20,2) NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
+    last_server VARCHAR(64),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_player_name ON players (player_name);
+INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', TIMESTAMP '2026-10-16 12:34:56');
+'@
+            $null = Invoke-PostgresQuery $playerDdl 'seed-v11-existing-player-row' -Database $script:databaseName
+        }
         $null = Invoke-PostgresQuery "GRANT SELECT, INSERT, UPDATE, DELETE ON syncmoney_schema_version, syncmoney_audit_log TO $script:databaseUser;" `
             'grant-postgresql-v11-audit-dml' -asRoot -Database $script:databaseName
         $privilegeSql = @"
@@ -1693,8 +1720,10 @@ WHERE d.datname = current_database();
     $indexes = @(ConvertFrom-Json -InputObject $state.auditIndexesJson -AsHashtable -ErrorAction Stop)
     $expectedColumns = @('id', 'timestamp', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after',
         'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 't21_sentinel')
+    $expectedPlayersTable = $SeedExistingPlayerRow.IsPresent
+    $expectedPlayerRows = if ($SeedExistingPlayerRow.IsPresent) { 1 } else { $null }
     if ($state.mainVersion -ne 1 -or $state.auditVersion -ne 10 -or
-        -not $state.auditTableExists -or $state.playersTableExists -or $null -ne $state.playerRows -or
+        -not $state.auditTableExists -or $state.playersTableExists -ne $expectedPlayersTable -or $state.playerRows -ne $expectedPlayerRows -or
         $state.mainVersionRowJson -notmatch 'T21 pre-existing main schema' -or
         $state.auditVersionRowJson -notmatch 'T21 required v11 DDL failure sentinel' -or
         $columnNames.Count -ne $expectedColumns.Count -or
@@ -1706,6 +1735,10 @@ WHERE d.datname = current_database();
     }
     if ($rows.Count -ne 1 -or -not (Test-T21RequiredV11AuditSentinelRow $rows[0])) {
         throw 'The isolated MySQL database did not retain the exact seeded v10 audit row before candidate startup.'
+    }
+    if ($SeedExistingPlayerRow.IsPresent -and
+        -not (Test-T21PlayerRowPreservationSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct)) {
+        throw 'The isolated PostgreSQL database did not retain the exact pre-existing player-row sentinel before candidate startup.'
     }
     return $state
 }
@@ -1844,7 +1877,7 @@ function Get-T21DatabaseManagerInitFailureFinalCleanup {
     return $cleanup
 }
 
-function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'DatabaseManagerInitFailure', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario) {
+function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'DatabaseManagerInitFailure', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')][string]$FailureScenario) {
     if (@(Get-T21ServerProcesses).Count -ne 0) { throw 'A run-marked server process exists before expected-failure startup.' }
     Set-T21PluginInProfile $CandidateVersion
     $before = Get-ServerLogLineCount
@@ -1877,7 +1910,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         }
         'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }
-        'RequiredV11DdlPermissionDenied' {
+        { $_ -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation') } {
             if ($script:databaseProduct -ceq 'PostgreSQL') { 'must be owner of table syncmoney_audit_log' }
             else { 'ALTER command denied' }
         }
@@ -2502,7 +2535,7 @@ try {
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
         $script:schemaStateBefore = Seed-T21IncompleteV10AuditTable -SeedExistingPlayerRow:$script:incompleteV10AuditTablePlayerRowPreservation
     } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
-        $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure
+        $script:schemaStateBefore = Seed-T21RequiredV11DdlPermissionFailure -SeedExistingPlayerRow:$script:requiredV11DdlPermissionDeniedPlayerRowPreservation
     } elseif ($script:successfulV10AuditSchemaUpgrade) {
         $script:schemaStateBefore = Seed-T21AuditSchemaV10Upgrade `
             -SeedExistingPlayerRow:$script:successfulV10AuditSchemaSinglePlayerRowPreservation `
@@ -2565,6 +2598,7 @@ try {
             $script:databaseManagerInitFailureStartupFailure { 'DatabaseManagerInitFailure'; break }
             $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
             $script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }
+            $script:requiredV11DdlPermissionDeniedPlayerRowPreservation { 'RequiredV11DdlPermissionDeniedPlayerRowPreservation'; break }
             $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
             default { 'RequiredV11DdlPermissionDenied' }
         }
@@ -2594,7 +2628,7 @@ try {
             'IncompleteV10AuditTablePlayerRowPreservation' { 9 }
             default { 10 }
         }
-        $expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation) { 1 } else { 0 }
+        $expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation -or $script:requiredV11DdlPermissionDeniedPlayerRowPreservation) { 1 } else { 0 }
         if ($null -eq $script:schemaStateBefore -or
             $script:schemaStateAfter.mainVersion -ne 1 -or $script:schemaStateAfter.auditVersion -ne $expectedAuditVersion -or
             -not $script:schemaStateAfter.auditTableExists -or -not $script:schemaStateAfter.playersTableExists -or
@@ -2603,9 +2637,11 @@ try {
             $script:schemaStateBefore.auditColumnsJson -cne $script:schemaStateAfter.auditColumnsJson -or
             $script:schemaStateBefore.auditIndexesJson -cne $script:schemaStateAfter.auditIndexesJson -or
             $script:schemaStateBefore.auditRowsJson -cne $script:schemaStateAfter.auditRowsJson -or
-            ($script:incompleteV10AuditTablePlayerRowPreservation -and
+            (($script:incompleteV10AuditTablePlayerRowPreservation -or $script:requiredV11DdlPermissionDeniedPlayerRowPreservation) -and
                 ($script:schemaStateBefore.playerRows -ne 1 -or
-                    $script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson)) -or
+                    $script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson -or
+                    -not (Test-T21PlayerRowPreservationSentinel $script:schemaStateBefore.playerRowsJson -DatabaseProduct $script:databaseProduct) -or
+                    -not (Test-T21PlayerRowPreservationSentinel $script:schemaStateAfter.playerRowsJson -DatabaseProduct $script:databaseProduct))) -or
             (($script:incompleteV10AuditTableStartupFailure -or $script:requiredV11DdlPermissionDeniedStartupFailure) -and
                 $script:schemaStateBefore.mainVersionRowJson -cne $script:schemaStateAfter.mainVersionRowJson)) {
             throw 'The failed candidate startup mutated the audit schema version, audit table columns/indexes/data, pre-existing main schema row, or player state.'
@@ -2876,6 +2912,7 @@ try {
                 $script:databaseManagerInitFailureStartupFailure { 'DatabaseManagerInitFailure'; break }
                 $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
                 $script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }
+                $script:requiredV11DdlPermissionDeniedPlayerRowPreservation { 'RequiredV11DdlPermissionDeniedPlayerRowPreservation'; break }
                 $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
                 default { 'RequiredV11DdlPermissionDenied' }
             }

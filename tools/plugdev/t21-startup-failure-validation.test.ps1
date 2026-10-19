@@ -176,7 +176,7 @@ try {
         [string]$expectedApiConsumerSha,
         [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct = 'PostgreSQL',
         [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')][string]$PlatformEndpoint = 'Minimum',
-        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
+        [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')][string]$FailureScenario = 'NewerAuditSchema'
     ) {
         return Test-T21NewerAuditSchemaStartupFailureReport $candidateReport $expectedServerSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha `
             -ExpectedPlugDevRoot $expectedPlugDevRoot -ExpectedPlugDevSourceCommit $expectedPlugDevSourceCommit -ExpectedPlugDevCliSha256 $expectedPlugDevCliSha256 `
@@ -721,12 +721,12 @@ try {
         updated_at = '2026-10-16 12:34:56.000000'
     }
     $postgresPlayerRowsJson = ConvertTo-Json -InputObject @($postgresPlayerRowSentinel) -Depth 10 -Compress
-    if (-not (Test-T21IncompleteV10PlayerRowSentinel $postgresPlayerRowsJson -DatabaseProduct PostgreSQL)) {
+    if (-not (Test-T21PlayerRowPreservationSentinel $postgresPlayerRowsJson -DatabaseProduct PostgreSQL)) {
         throw 'The PostgreSQL player-row sentinel rejected its exact six-digit fractional-second timestamp.'
     }
     $postgresPlayerRowSentinel.updated_at = '2026-10-16 12:34:56.000001'
     $postgresFractionOnlyMutationJson = ConvertTo-Json -InputObject @($postgresPlayerRowSentinel) -Depth 10 -Compress
-    if (Test-T21IncompleteV10PlayerRowSentinel $postgresFractionOnlyMutationJson -DatabaseProduct PostgreSQL) {
+    if (Test-T21PlayerRowPreservationSentinel $postgresFractionOnlyMutationJson -DatabaseProduct PostgreSQL) {
         throw 'The PostgreSQL player-row sentinel accepted a one-microsecond timestamp mutation.'
     }
     Write-Output 'PASS: preserve PostgreSQL TIMESTAMP microseconds and reject a fractional-only player-row mutation'
@@ -1229,6 +1229,14 @@ try {
     if ($approvedV11Count -ne 30) { throw "Expected 30 approved required-v11 product/endpoint combinations; observed $approvedV11Count." }
     Write-Output 'PASS: admit the 30 historical/current maximum, minimum, and supplemental Paper product/endpoint combinations'
 
+    if (-not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum)) {
+        throw 'Required-v11 player-row preservation must be admitted only for current-maximum Paper/PostgreSQL.'
+    }
+    Write-Output 'PASS: scope required-v11 player-row preservation to current-maximum Paper/PostgreSQL'
+
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint Minimum -FailureScenario RequiredV11DdlPermissionDenied)) {
@@ -1352,6 +1360,45 @@ try {
         throw 'The complete maximum-Paper PostgreSQL v11 DDL-denial report was rejected.'
     }
     Write-Output 'PASS: accept a complete maximum-Paper PostgreSQL v11 DDL-denial report with the exact pinned runtime identity'
+    $currentMaximumPaperPostgreSqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximum
+    $currentMaximumPaperPostgreSqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'CurrentMaximum'
+    $requiredV11PlayerRow = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.56'
+        version = '73'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:56.000000'
+    }
+    $requiredV11PlayerRowsJson = ConvertTo-Json -InputObject @($requiredV11PlayerRow) -Depth 10 -Compress
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateBefore.playersTableExists = $true
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateBefore.playerRows = 1
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateBefore.playerRowsJson = $requiredV11PlayerRowsJson
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateAfter.playersTableExists = $true
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateAfter.playerRows = 1
+    $currentMaximumPaperPostgreSqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11PlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumPaperPostgreSqlRowReport $currentMaximumPaperPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Paper/PostgreSQL required-v11 report with one unchanged player row was rejected.'
+    }
+    Write-Output 'PASS: accept one unchanged pre-existing player row across required-v11 DDL rejection'
+
+    $missingRequiredV11PlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $missingRequiredV11PlayerRowReport.schemaStateAfter.playerRows = 0
+    $missingRequiredV11PlayerRowReport.schemaStateAfter.playerRowsJson = '[]'
+    if (Test-T21StartupFailureReportFixture $missingRequiredV11PlayerRowReport $currentMaximumPaperPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The required-v11 row-preservation report accepted a missing pre-existing player row.'
+    }
+    $mutatedRequiredV11PlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedRequiredV11PlayerRowsJson = $requiredV11PlayerRowsJson.Replace('"balance":"1234.56"', '"balance":"1234.57"')
+    if ($mutatedRequiredV11PlayerRowsJson -ceq $requiredV11PlayerRowsJson) { throw 'The required-v11 negative fixture did not mutate the balance value.' }
+    $mutatedRequiredV11PlayerRowReport.schemaStateAfter.playerRowsJson = $mutatedRequiredV11PlayerRowsJson
+    if (Test-T21StartupFailureReportFixture $mutatedRequiredV11PlayerRowReport $currentMaximumPaperPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The required-v11 row-preservation report accepted a changed player-row balance.'
+    }
+    Write-Output 'PASS: reject missing or mutated player-row evidence for the required-v11 case'
     if (Test-T21StartupFailureReportFixture $maximumPaperPostgreSqlDdlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum -FailureScenario RequiredV11DdlPermissionDenied) {
         throw 'The maximum-Paper PostgreSQL v11 DDL-denial report accepted the minimum-Paper server SHA-256.'
@@ -2405,7 +2452,7 @@ try {
     if (-not $runnerSource.Contains("to_char(updated_at, 'YYYY-MM-DD HH24:MI:SS.US')")) {
         throw 'The PostgreSQL player-row snapshot must retain TIMESTAMP fractional seconds.'
     }
-    if (-not $runnerSource.Contains('Test-T21IncompleteV10PlayerRowSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct')) {
+    if (-not $runnerSource.Contains('Test-T21PlayerRowPreservationSentinel $state.playerRowsJson -DatabaseProduct $script:databaseProduct')) {
         throw 'The runtime pre-start sentinel check must select the exact SQL-product timestamp representation.'
     }
     $playerRowsSqlStart = $runnerSource.IndexOf('SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT(', [StringComparison]::Ordinal)
@@ -2420,15 +2467,30 @@ try {
     $failureScenarioSwitchIndex = $runnerSource.IndexOf('$failureScenario = switch ($true)', [StringComparison]::Ordinal)
     $playerRowFailureScenarioIndex = $runnerSource.IndexOf("`$script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }", $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
     $failureScenarioStartIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario', $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
-    $expectedStartupFailureFunctionSignature = 'function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet(''NewerAuditSchema'', ''DatabaseManagerInitFailure'', ''IncompleteV10AuditTable'', ''IncompleteV10AuditTablePlayerRowPreservation'', ''RequiredV11DdlPermissionDenied'')][string]$FailureScenario)'
-    if (-not $runnerSource.Contains('$expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation) { 1 } else { 0 }') -or
+    $expectedStartupFailureFunctionSignature = 'function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet(''NewerAuditSchema'', ''DatabaseManagerInitFailure'', ''IncompleteV10AuditTable'', ''IncompleteV10AuditTablePlayerRowPreservation'', ''RequiredV11DdlPermissionDenied'', ''RequiredV11DdlPermissionDeniedPlayerRowPreservation'')][string]$FailureScenario)'
+    if (-not $runnerSource.Contains('$expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation -or $script:requiredV11DdlPermissionDeniedPlayerRowPreservation) { 1 } else { 0 }') -or
         -not $runnerSource.Contains('$script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson') -or
         -not $runnerSource.Contains($expectedStartupFailureFunctionSignature) -or
         $failureScenarioSwitchIndex -lt 0 -or $playerRowFailureScenarioIndex -lt $failureScenarioSwitchIndex -or
         $failureScenarioStartIndex -le $playerRowFailureScenarioIndex) {
         throw 'The startup-failure runtime gate must require one unchanged player row for the preservation subcase.'
     }
-    Write-Output 'PASS: require one unchanged player row only for the preservation subcase'
+    Write-Output 'PASS: require one unchanged player row only for the enabled preservation subcases'
+    if (-not $runnerSource.Contains('[switch]$RequiredV11DdlPermissionDeniedPlayerRowPreservation') -or
+        -not $runnerSource.Contains('Test-T21RequiredV11DdlPlayerRowPreservationTarget') -or
+        -not $runnerSource.Contains('Seed-T21RequiredV11DdlPermissionFailure -SeedExistingPlayerRow:$script:requiredV11DdlPermissionDeniedPlayerRowPreservation') -or
+        -not $runnerSource.Contains('$script:requiredV11DdlPermissionDeniedPlayerRowPreservation { ''RequiredV11DdlPermissionDeniedPlayerRowPreservation''; break }') -or
+        -not $runnerSource.Contains('$script:incompleteV10AuditTablePlayerRowPreservation -or $script:requiredV11DdlPermissionDeniedPlayerRowPreservation') -or
+        -not $runnerSource.Contains('$script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson')) {
+        throw 'The runner must seed, target-guard, and compare an existing player row for the required-v11 preservation mode.'
+    }
+    Write-Output 'PASS: bind the required-v11 row-preservation option to a guarded seed and exact post-start comparison'
+    $requiredV11PlayerRowGuardIndex = $runnerSource.IndexOf('if ($RequiredV11DdlPermissionDeniedPlayerRowPreservation.IsPresent', [StringComparison]::Ordinal)
+    $requiredV11PlayerRowRuntimePathIndex = $runnerSource.IndexOf('$script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path', [StringComparison]::Ordinal)
+    if ($requiredV11PlayerRowGuardIndex -lt 0 -or $requiredV11PlayerRowRuntimePathIndex -le $requiredV11PlayerRowGuardIndex) {
+        throw 'The required-v11 player-row target guard must reject out-of-scope cells before resolving external paths.'
+    }
+    Write-Output 'PASS: reject out-of-scope required-v11 player-row cells before resolving external paths'
     $startupFailureHelperStart = $runnerSource.IndexOf('function Start-T21ServerExpectingAuditSchemaFailure(', [StringComparison]::Ordinal)
     $startupFailureHelperEnd = if ($startupFailureHelperStart -ge 0) {
         $runnerSource.IndexOf("`nfunction ", $startupFailureHelperStart + 1, [StringComparison]::Ordinal)
@@ -2492,7 +2554,9 @@ try {
         $startupValidatorSource -notmatch 'request_id' -or
         $startupValidatorSource -notmatch 'must be owner of table syncmoney_audit_log' -or
         $startupValidatorSource -notmatch 'Test-T21PostgreSqlAuditOwnerBoundary' -or
-        $startupValidatorSource -notmatch 'T21-V03-SYNC-v11-audit-ddl-permission-failure') {
+        $startupValidatorSource -notmatch 'T21-V03-SYNC-v11-audit-ddl-permission-failure' -or
+        $startupValidatorSource -notmatch 'RequiredV11DdlPermissionDeniedPlayerRowPreservation' -or
+        $startupValidatorSource -notmatch 'Test-T21PlayerRowPreservationSentinel') {
         throw 'The startup-failure report predicate does not verify the incomplete-v10-audit-table case.'
     }
     Write-Output 'PASS: report predicates check v9 rejection and v10 preservation after denied v11 DDL'

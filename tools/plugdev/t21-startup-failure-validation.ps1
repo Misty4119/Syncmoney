@@ -51,7 +51,7 @@ function Test-T21IncompleteAuditTablePlayerRowPreservationTarget(
         $PlatformEndpoint -in @('Minimum', 'Maximum', 'CurrentMaximum', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')
 }
 
-function Test-T21IncompleteV10PlayerRowSentinel(
+function Test-T21PlayerRowPreservationSentinel(
     [object]$RowsJson,
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct
 ) {
@@ -87,6 +87,14 @@ function Test-T21RequiredV11DdlFailureTarget(
     if ($PlatformEndpoint -ceq 'MinimumCanvas') { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     if ($PlatformEndpoint -in @('MaximumCanvas', 'CurrentMaximumCanvas')) { return $DatabaseProduct -in @('MySQL', 'MariaDB', 'PostgreSQL') }
     return $PlatformEndpoint -in @('Maximum', 'CurrentMaximum', 'CurrentStable')
+}
+
+function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
+    [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
+    [string]$PlatformEndpoint
+) {
+    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -ceq 'CurrentMaximum'
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
@@ -440,7 +448,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
     [ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario = 'NewerAuditSchema'
+    [ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')][string]$FailureScenario = 'NewerAuditSchema'
 ) {
     try {
         $targetAccepted = switch ($FailureScenario) {
@@ -452,6 +460,9 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             }
             'IncompleteV10AuditTablePlayerRowPreservation' {
                 Test-T21IncompleteAuditTablePlayerRowPreservationTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
+            }
+            'RequiredV11DdlPermissionDeniedPlayerRowPreservation' {
+                Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
             }
             default {
                 Test-T21RequiredV11DdlFailureTarget -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint
@@ -467,6 +478,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 $productTaskSuffix = if ($DatabaseProduct -ceq 'MySQL') { 'MySQL' } else { $DatabaseProduct }
                 "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-$productTaskSuffix-$($expectedPlatform.taskSuffix)"
             }
+            'RequiredV11DdlPermissionDeniedPlayerRowPreservation' { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
             default { 'T21-V03-SYNC-v11-audit-ddl-permission-failure' }
         }
         $acceptedTasks = @($expectedTask)
@@ -553,7 +565,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         $expectedFailureDetailMarker = switch ($FailureScenario) {
             'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
             'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }
-            'RequiredV11DdlPermissionDenied' {
+            { $_ -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation') } {
                 if ($DatabaseProduct -ceq 'PostgreSQL') { 'must be owner of table syncmoney_audit_log' }
                 else { 'ALTER command denied' }
             }
@@ -605,8 +617,25 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'playersTableExists') $true) -or
                 [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 1 -or
                 [string](Get-T21ObservedValue $schemaBefore 'playerRowsJson') -cne [string](Get-T21ObservedValue $schemaAfter 'playerRowsJson') -or
-                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
-                -not (Test-T21IncompleteV10PlayerRowSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
+                -not (Test-T21PlayerRowPreservationSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
+                -not (Test-T21PlayerRowPreservationSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
+                (Get-T21ObservedValue $schemaBefore 'mainVersionRowJson') -cne (Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) { return $false }
+            $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
+            if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
+        } elseif ($FailureScenario -ceq 'RequiredV11DdlPermissionDeniedPlayerRowPreservation') {
+            if ([int](Get-T21ObservedValue $schemaBefore 'mainVersion') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaBefore 'auditVersion') -ne 10 -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'auditTableExists') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaBefore 'playersTableExists') $true) -or
+                [int](Get-T21ObservedValue $schemaBefore 'playerRows') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaAfter 'mainVersion') -ne 1 -or
+                [int](Get-T21ObservedValue $schemaAfter 'auditVersion') -ne 10 -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'auditTableExists') $true) -or
+                -not (Test-T21ObservedBoolean (Get-T21ObservedValue $schemaAfter 'playersTableExists') $true) -or
+                [int](Get-T21ObservedValue $schemaAfter 'playerRows') -ne 1 -or
+                [string](Get-T21ObservedValue $schemaBefore 'playerRowsJson') -cne [string](Get-T21ObservedValue $schemaAfter 'playerRowsJson') -or
+                -not (Test-T21PlayerRowPreservationSentinel (Get-T21ObservedValue $schemaBefore 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
+                -not (Test-T21PlayerRowPreservationSentinel (Get-T21ObservedValue $schemaAfter 'playerRowsJson') -DatabaseProduct $DatabaseProduct) -or
                 (Get-T21ObservedValue $schemaBefore 'mainVersionRowJson') -cne (Get-T21ObservedValue $schemaAfter 'mainVersionRowJson')) { return $false }
             $mainVersionRow = ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'mainVersionRowJson')) -AsHashtable -ErrorAction Stop
             if ($mainVersionRow['id'] -cne '1' -or [int]$mainVersionRow['version'] -ne 1) { return $false }
@@ -761,7 +790,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
                 @{ typePattern = '^(?:bigint|bigint\(20\))$'; nullable = 'YES'; default = '0'; character = $false }
                 @{ typePattern = '^text$'; nullable = 'NO'; default = $null; character = $true }
             )
-            if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+            if ($FailureScenario -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')) {
                 $expectedColumnMetadata = @($expectedColumnMetadata[0..12]) + @($expectedColumnMetadata[15])
             }
             $expected = $expectedColumnMetadata[$columnIndex]
@@ -793,7 +822,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
         }
 
         $auditIndexes = @(ConvertFrom-Json -InputObject ([string](Get-T21ObservedValue $schemaBefore 'auditIndexesJson')) -AsHashtable -ErrorAction Stop)
-        if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')) {
+        if ($FailureScenario -in @('IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')) {
             if ($auditIndexes.Count -ne 1) { return $false }
             if ($DatabaseProduct -ceq 'PostgreSQL') {
                 if ([string]$auditIndexes[0]['name'] -cne 'syncmoney_audit_log_pkey' -or
@@ -864,7 +893,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             if ($auditRows.Count -ne 1 -or
                 $auditRows[0].Count -ne 1 -or
                 $auditRows[0]['id'] -cne '00000000-0000-0000-0000-000000000329') { return $false }
-        } elseif ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+        } elseif ($FailureScenario -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')) {
             if ($auditRows.Count -ne 1 -or
                 -not (Test-T21RequiredV11AuditSentinelRow $auditRows[0]) -or
                 -not (Test-T21RequiredV11AuditSentinelMoneyJson $auditRowsJson)) { return $false }
@@ -872,7 +901,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             $auditRows[0]['id'] -cne '00000000-0000-0000-0000-000000000321' -or
             $auditRows[0]['t21_sentinel'] -cne 't21-v12-preservation-sentinel') { return $false }
 
-        if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+        if ($FailureScenario -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')) {
             $privileges = Get-T21ObservedValue $report 'databaseDdlPrivileges'
             $configuration = Get-T21ObservedValue $report 'configuration'
             $databaseName = [string](Get-T21ObservedValue $configuration 'databaseName')
@@ -1056,7 +1085,7 @@ function Test-T21NewerAuditSchemaStartupFailureReport(
             if (-not $declaredLogPaths.Contains($actualRelativeLogPath)) { return $false }
         }
 
-        if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied') {
+        if ($FailureScenario -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation')) {
             $privileges = Get-T21ObservedValue $report 'databaseDdlPrivileges'
             if ($DatabaseProduct -ceq 'PostgreSQL') {
                 $privilegeLogPath = 'logs\postgresql-audit-ddl-privileges.txt'
