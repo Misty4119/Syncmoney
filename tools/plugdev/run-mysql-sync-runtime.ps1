@@ -16,6 +16,7 @@ param(
     [string]$CandidateVersion = '1.4.0-alpha.1',
     [switch]$LegacySqlDataUpgrade,
     [switch]$NewerAuditSchemaStartupFailure,
+    [switch]$DatabaseManagerInitFailureStartupFailure,
     [switch]$IncompleteV10AuditTableStartupFailure,
     [switch]$IncompleteV10AuditTablePlayerRowPreservation,
     [switch]$RequiredV11DdlPermissionDeniedStartupFailure,
@@ -32,6 +33,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'T21 SQL runtime validation r
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-legacy-sql-upgrade-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-startup-failure-validation.ps1')
+. (Join-Path $PSScriptRoot 't21-database-manager-init-failure-validation.ps1')
 . (Join-Path $PSScriptRoot 't21-audit-schema-upgrade-validation.ps1')
 
 $requestedDatabaseProduct = $DatabaseProduct
@@ -43,6 +45,10 @@ $script:platformTarget = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndp
 if ($NewerAuditSchemaStartupFailure.IsPresent -and
     -not (Test-T21NewerAuditSchemaStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
     throw 'The newer-audit-schema startup-failure case requires one of the supported SQL products and an explicitly pinned T21 platform endpoint.'
+}
+if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and
+    -not (Test-T21DatabaseManagerInitFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
+    throw 'The DatabaseManager initial-schema failure case is limited to PostgreSQL 18.1 and current-maximum Paper 26.3#200.'
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -71,6 +77,14 @@ if ($SuccessfulV10AuditSchemaMultiplePlayerRowPreservation.IsPresent -and
 }
 $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin } 'PostgreSQL' { $PostgreSqlBin } default { $MySqlBin } }
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$script:sourceCommit = (& git -C $script:root rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
+if ($LASTEXITCODE -ne 0 -or $script:sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not pin the Syncmoney source commit.' }
+$script:sourceDirtyEntries = @(& git -C $script:root status --porcelain --untracked-files=all 2>$null)
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Syncmoney source worktree state.' }
+$script:sourceWorkingTreeDirty = $script:sourceDirtyEntries.Count -gt 0
+if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and $script:sourceWorkingTreeDirty) {
+    throw 'Refusing the DatabaseManager initial-schema failure cell while the Syncmoney source worktree has tracked or untracked changes.'
+}
 $script:serverPath = (Resolve-Path -LiteralPath $ServerJar).Path
 $script:candidatePath = Join-Path $script:root "build\libs\Syncmoney-$CandidateVersion.jar"
 $script:baselinePath = $null
@@ -79,6 +93,7 @@ $script:baselineSourceCommit = $null
 $script:legacySqlStages = [Collections.Generic.List[object]]::new()
 $script:legacySqlDataUpgrade = $LegacySqlDataUpgrade.IsPresent
 $script:newerAuditSchemaStartupFailure = $NewerAuditSchemaStartupFailure.IsPresent
+$script:databaseManagerInitFailureStartupFailure = $DatabaseManagerInitFailureStartupFailure.IsPresent
 $script:incompleteV10AuditTableStartupFailure = $IncompleteV10AuditTableStartupFailure.IsPresent
 $script:incompleteV10AuditTablePlayerRowPreservation = $IncompleteV10AuditTablePlayerRowPreservation.IsPresent
 $script:requiredV11DdlPermissionDeniedStartupFailure = $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent
@@ -88,17 +103,20 @@ $script:successfulV10AuditSchemaMultiplePlayerRowPreservation = $SuccessfulV10Au
 $script:successfulV10AuditSchemaPlayerRowPreservation = $script:successfulV10AuditSchemaSinglePlayerRowPreservation -or
     $script:successfulV10AuditSchemaMultiplePlayerRowPreservation
 $script:successfulV10AuditSchemaUpgrade = $SuccessfulV10AuditSchemaUpgrade.IsPresent -or $script:successfulV10AuditSchemaPlayerRowPreservation
-$script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:incompleteV10AuditTableStartupFailure -or
+$script:auditSchemaStartupFailure = $script:newerAuditSchemaStartupFailure -or $script:databaseManagerInitFailureStartupFailure -or $script:incompleteV10AuditTableStartupFailure -or
     $script:requiredV11DdlPermissionDeniedStartupFailure
 $script:schemaStateBefore = $null
 $script:schemaStateAfter = $null
 $script:databaseDdlPrivileges = $null
+$script:databaseManagerInitFailureSchemaBefore = $null
+$script:databaseManagerInitFailureSchemaAfter = $null
 $script:resourceCleanupObservation = $null
 $script:mysqlGeneralLogRestoreRequired = $false
 $script:mysqlGeneralLogOutputBefore = $null
 $script:deniedDdlEvidence = $null
 $startupFailureModeCount = 0
 if ($script:newerAuditSchemaStartupFailure) { $startupFailureModeCount++ }
+if ($script:databaseManagerInitFailureStartupFailure) { $startupFailureModeCount++ }
 if ($script:incompleteV10AuditTableStartupFailure) { $startupFailureModeCount++ }
 if ($script:requiredV11DdlPermissionDeniedStartupFailure) { $startupFailureModeCount++ }
 if ($script:successfulV10AuditSchemaUpgrade) { $startupFailureModeCount++ }
@@ -412,6 +430,78 @@ function Invoke-PostgresQuery([string]$sql, [string]$label, [switch]$asRoot, [st
     } finally {
         [Environment]::SetEnvironmentVariable('PGPASSWORD', $previousPassword, 'Process')
     }
+}
+
+function Get-T21DatabaseManagerInitFailurePrivileges {
+    if ($script:databaseUser -notmatch '^sm_t21_[0-9a-f]{8}$' -or $script:databaseName -notmatch '^syncmoney_t21_[0-9a-f]{8}$') {
+        throw 'Refusing to query PostgreSQL privileges for an unexpected isolated role or database name.'
+    }
+    $sql = @"
+SELECT json_build_object(
+    'appRole', app.rolname,
+    'appRoleIsSuperuser', app.rolsuper,
+    'appRoleCanCreateDatabase', app.rolcreatedb,
+    'appRoleOwnsDatabase', target_db.datdba = app.oid,
+    'appRoleOwnsPublicSchema', public_schema.nspowner = app.oid,
+    'targetDatabaseOwner', database_owner.rolname,
+    'publicSchemaOwner', schema_owner.rolname,
+    'bootstrapConnectGranted', has_database_privilege(app.rolname, 'postgres', 'CONNECT'),
+    'targetConnectGranted', has_database_privilege(app.rolname, target_db.oid, 'CONNECT'),
+    'appRoleHasPublicUsage', has_schema_privilege(app.rolname, public_schema.oid, 'USAGE'),
+    'appRoleHasPublicCreate', has_schema_privilege(app.rolname, public_schema.oid, 'CREATE'),
+    'publicHasCreate', EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(COALESCE(public_schema.nspacl, pg_catalog.acldefault('n', public_schema.nspowner))) privilege
+        WHERE privilege.grantee = 0 AND privilege.privilege_type = 'CREATE'
+    )
+)::text
+FROM pg_catalog.pg_roles app
+JOIN pg_catalog.pg_database target_db ON target_db.datname = '$script:databaseName'
+JOIN pg_catalog.pg_roles database_owner ON database_owner.oid = target_db.datdba
+JOIN pg_catalog.pg_namespace public_schema ON public_schema.nspname = 'public'
+JOIN pg_catalog.pg_roles schema_owner ON schema_owner.oid = public_schema.nspowner
+WHERE app.rolname = '$script:databaseUser';
+"@
+    $lines = @(Invoke-PostgresQuery $sql 'postgresql-database-manager-init-privileges' -asRoot -Database $script:databaseName)
+    if ($lines.Count -ne 1) { throw 'PostgreSQL returned no unique initial-schema privilege evidence.' }
+    try { $privileges = ConvertFrom-Json -InputObject $lines[0] -AsHashtable -ErrorAction Stop }
+    catch { throw 'PostgreSQL initial-schema privilege evidence was not valid JSON.' }
+    $validation = Test-T21DatabaseManagerInitFailurePrivileges $privileges
+    if (-not $validation.passed) { throw "PostgreSQL initial-schema privilege boundary failed: $($validation.failures -join '; ')" }
+    return $privileges
+}
+
+function Get-T21DatabaseManagerInitFailureSchemaSnapshot([ValidateSet('before', 'after')][string]$Stage) {
+    $sql = @'
+SELECT json_build_object(
+    'playersTableExists', to_regclass('public.players') IS NOT NULL,
+    'schemaVersionTableExists', to_regclass('public.syncmoney_schema_version') IS NOT NULL,
+    'publicTableCount', (SELECT COUNT(*)::integer FROM pg_catalog.pg_tables WHERE schemaname = 'public'),
+    'publicObjectCount', (
+        SELECT COUNT(*)::integer
+        FROM (
+            SELECT relation.oid
+            FROM pg_catalog.pg_class relation
+            WHERE relation.relnamespace = 'public'::regnamespace
+            UNION ALL
+            SELECT routine.oid
+            FROM pg_catalog.pg_proc routine
+            WHERE routine.pronamespace = 'public'::regnamespace
+            UNION ALL
+            SELECT user_type.oid
+            FROM pg_catalog.pg_type user_type
+            WHERE user_type.typnamespace = 'public'::regnamespace
+              AND user_type.typtype NOT IN ('c', 'p')
+              AND user_type.typelem = 0
+              AND user_type.typisdefined
+        ) public_schema_objects
+    )
+)::text;
+'@
+    $lines = @(Invoke-PostgresQuery $sql ("postgresql-database-manager-schema-" + $Stage) -asRoot -Database $script:databaseName)
+    if ($lines.Count -ne 1) { throw "PostgreSQL returned no unique $Stage initial-schema snapshot." }
+    try { return ConvertFrom-Json -InputObject $lines[0] -ErrorAction Stop }
+    catch { throw "PostgreSQL $Stage initial-schema snapshot was not valid JSON." }
 }
 
 function Assert-BackendListenerOwner([string]$name, [int]$port, [int]$processId) {
@@ -780,8 +870,12 @@ function Stop-T21Server([string]$stage) {
     $skip = if ($allLines.Count -ge $before) { $before } else { 0 }
     $stopLines = @($allLines | Select-Object -Skip $skip)
     $disabled = @($stopLines | Select-String -Pattern 'Syncmoney disabled\.' | Select-Object -Last 1)
-    $startupFailureDisabled = $script:auditSchemaStartupFailure -and
-        (Test-T21StartupRollbackCompletionLog ($allLines -join "`n") $CandidateVersion)
+    $startupFailureDisabled = if ($script:databaseManagerInitFailureStartupFailure) {
+        (Test-T21DatabaseManagerInitFailureStartupLog -LogText ($allLines -join "`n") -CandidateVersion $CandidateVersion).passed
+    } else {
+        $script:auditSchemaStartupFailure -and
+            (Test-T21StartupRollbackCompletionLog ($allLines -join "`n") $CandidateVersion)
+    }
     if ($disabled.Count -eq 0 -and -not $startupFailureDisabled) { throw "Syncmoney did not log its normal disable marker for $stage." }
     $failureMarkers = @(Get-T21ShutdownFailureMarkers ($stopLines -join "`n"))
     if ($failureMarkers.Count -gt 0) { throw "Server shutdown failure marker observed at ${stage}: $($failureMarkers -join '; ')." }
@@ -1681,7 +1775,42 @@ function Get-T21StartupFailureResourceCleanup {
     }
 }
 
-function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario) {
+function Get-T21DatabaseManagerInitFailureFinalCleanup {
+    $afterDisable = $script:resourceCleanupObservation
+    if ($null -eq $afterDisable) { throw 'The post-disable SQL/Redis resource snapshot is absent.' }
+    $serverProcesses = @(Get-T21ServerProcesses)
+    $postgresShutdown = @($script:backendShutdowns | Where-Object { [string]$_.backend -ceq 'postgresql' })
+    $redisShutdown = @($script:backendShutdowns | Where-Object { [string]$_.backend -ceq 'redis' })
+    $normalStopForced = @($script:normalStops | Where-Object { $_.forced -eq $true }).Count -gt 0
+    $backendStopForced = @($script:backendShutdowns | Where-Object { $_.forced -eq $true }).Count -gt 0
+    $postgresListenerCount = @(Get-NetTCPConnection -State Listen -LocalPort $script:mysqlPort -ErrorAction SilentlyContinue).Count
+    $redisListenerCount = @(Get-NetTCPConnection -State Listen -LocalPort $script:redisPort -ErrorAction SilentlyContinue).Count
+    $serverListenerCount = 0
+    foreach ($port in @($script:gamePort, ($script:gamePort + 10000))) {
+        $serverListenerCount += @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue).Count
+    }
+    $postgresProcessExited = $null -ne $script:mysqlProcess -and $script:mysqlProcess.HasExited
+    $redisProcessExited = $null -ne $script:redisProcess -and $script:redisProcess.HasExited
+    $postgresStopped = $postgresProcessExited -and $postgresShutdown.Count -eq 1 -and
+        [bool]$postgresShutdown[0].processExited -and -not [bool]$postgresShutdown[0].forced -and $postgresListenerCount -eq 0
+    $redisStopped = $redisProcessExited -and $redisShutdown.Count -eq 1 -and
+        [bool]$redisShutdown[0].processExited -and -not [bool]$redisShutdown[0].forced -and $redisListenerCount -eq 0
+    $runOwnedPortsClosed = $postgresListenerCount -eq 0 -and $redisListenerCount -eq 0 -and $serverListenerCount -eq 0
+    return [ordered]@{
+        forcedCleanup = [bool]($normalStopForced -or $backendStopForced)
+        serverStopped = [bool]($serverProcesses.Count -eq 0)
+        serverProcessCount = [int]$serverProcesses.Count
+        postgresStopped = [bool]$postgresStopped
+        redisStopped = [bool]$redisStopped
+        runOwnedPortsClosed = [bool]$runOwnedPortsClosed
+        sqlOtherConnections = [int]$afterDisable.sqlOtherConnections
+        redisOtherClients = [int]$afterDisable.redisOtherClients
+        redisDbSize = [int]$afterDisable.redisDbSize
+        cleanupFailures = @($script:cleanupFailures.ToArray())
+    }
+}
+
+function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSchema', 'DatabaseManagerInitFailure', 'IncompleteV10AuditTable', 'IncompleteV10AuditTablePlayerRowPreservation', 'RequiredV11DdlPermissionDenied')][string]$FailureScenario) {
     if (@(Get-T21ServerProcesses).Count -ne 0) { throw 'A run-marked server process exists before expected-failure startup.' }
     Set-T21PluginInProfile $CandidateVersion
     $before = Get-ServerLogLineCount
@@ -1692,17 +1821,20 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     $fullLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
     $expectedFailureMessage = switch ($FailureScenario) {
         'NewerAuditSchema' { 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.' }
+        'DatabaseManagerInitFailure' { 'Failed to initialize database schema: ERROR: permission denied for schema public' }
         'IncompleteV10AuditTable' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'Failed audit schema migration to version 10; version metadata was not advanced past 9' }
         default { 'Failed audit schema migration to version 11; version metadata was not advanced past 10' }
     }
     $expectedFailureKind = switch ($FailureScenario) {
         'NewerAuditSchema' { 'newer-audit-schema' }
+        'DatabaseManagerInitFailure' { 'database-manager-initial-schema-failure' }
         'IncompleteV10AuditTable' { 'incomplete-v10-audit-table' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'incomplete-v10-audit-table' }
         default { 'required-v11-audit-ddl-permission-failure' }
     }
     $failureDetailMarker = switch ($FailureScenario) {
+        'DatabaseManagerInitFailure' { 'permission denied for schema public' }
         'IncompleteV10AuditTable' { 'Required v10 audit columns are missing:' }
         'IncompleteV10AuditTablePlayerRowPreservation' { 'Required v10 audit columns are missing:' }
         'RequiredV11DdlPermissionDenied' {
@@ -1712,8 +1844,10 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         default { $null }
     }
     $sqlPoolShutdownObserved = $fullLog -match '(?m)^\[[^\]\r\n]+\] \[[^\]\r\n]+/INFO\]: \[noietime\.libs\.hikari\.HikariDataSource\] Syncmoney-HikariCP - Shutdown completed\.\r?$'
+    $sqlPoolStartObserved = $fullLog.Contains('Syncmoney-HikariCP - Start completed.')
     $scenarioMarkers = switch ($FailureScenario) {
         'NewerAuditSchema' { @() }
+        'DatabaseManagerInitFailure' { @('Syncmoney-HikariCP - Start completed.') }
         'IncompleteV10AuditTable' { @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker) }
         'IncompleteV10AuditTablePlayerRowPreservation' { @('Syncmoney audit schema version: current 9, target 11', $failureDetailMarker) }
         default { @('Syncmoney audit schema version: current 10, target 11', $failureDetailMarker) }
@@ -1727,7 +1861,12 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         if (-not $fullLog.Contains($marker)) { throw "Expected startup-failure marker was absent: $marker" }
     }
     if (-not $sqlPoolShutdownObserved) { throw 'The INFO-level Syncmoney Hikari pool shutdown marker was absent after startup rollback.' }
-    if (-not (Test-T21StartupRollbackCompletionLog $fullLog $CandidateVersion)) {
+    if ($FailureScenario -ceq 'DatabaseManagerInitFailure') {
+        $startupLogResult = Test-T21DatabaseManagerInitFailureStartupLog -LogText $fullLog -CandidateVersion $CandidateVersion
+        if (-not $startupLogResult.passed) {
+            throw "DatabaseManager initial-schema failure log was not accepted: $($startupLogResult.failures -join '; ')"
+        }
+    } elseif (-not (Test-T21StartupRollbackCompletionLog $fullLog $CandidateVersion)) {
         throw 'Startup rollback completion requires ordered rollback, INFO-level SQL pool shutdown, and Bukkit plugin-disable markers.'
     }
     if ($fullLog.Contains('Syncmoney enabled successfully')) { throw 'Syncmoney unexpectedly completed startup against the seeded audit schema failure.' }
@@ -1752,6 +1891,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         failureMessage = $expectedFailureMessage
         # This flag records Syncmoney owner cleanup after startup failure; SQL preservation is measured by the explicit schema/row snapshots.
         rollbackComplete = $true
+        sqlPoolStartObserved = [bool]$sqlPoolStartObserved
         sqlPoolShutdownObserved = [bool]$sqlPoolShutdownObserved
         disabledMarker = $true
         successMarkerObserved = $false
@@ -2117,8 +2257,14 @@ $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; Acce
 
 $script:report = [ordered]@{
     schemaVersion = 4
-    task = if ($script:newerAuditSchemaStartupFailure) {
+    sourceCommit = $script:sourceCommit
+    sourceWorkingTreeDirty = $script:sourceWorkingTreeDirty
+    task = if ($script:databaseManagerInitFailureStartupFailure) {
+        'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-CurrentMaximum'
+    } elseif ($script:newerAuditSchemaStartupFailure) {
         "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
+    } elseif ($script:databaseManagerInitFailureStartupFailure) {
+        "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
         "T21-V03-SYNC-incomplete-v10-audit-table-player-row-preservation-MySQL-$($script:platformTarget.taskSuffix)"
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
@@ -2226,7 +2372,15 @@ try {
             throw "Isolated PostgreSQL server returned unexpected version '$($mysqlVersion -join ',')'."
         }
         $script:report.postgresql.serverVersion = $mysqlVersion[0].Trim()
-        if ($script:requiredV11DdlPermissionDeniedStartupFailure) {
+        if ($script:databaseManagerInitFailureStartupFailure) {
+            $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser WITH LOGIN PASSWORD '$script:databasePassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;" `
+                'postgresql-create-isolated-role' -asRoot
+            $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER postgres;" 'postgresql-create-isolated-database' -asRoot
+            $null = Invoke-PostgresQuery "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC; GRANT CONNECT ON DATABASE postgres TO $script:databaseUser; REVOKE CONNECT ON DATABASE $script:databaseName FROM PUBLIC; GRANT CONNECT ON DATABASE $script:databaseName TO $script:databaseUser;" `
+                'postgresql-grant-isolated-bootstrap-and-target-connect' -asRoot
+            $null = Invoke-PostgresQuery "REVOKE ALL ON SCHEMA public FROM PUBLIC; REVOKE ALL ON SCHEMA public FROM $script:databaseUser; GRANT USAGE ON SCHEMA public TO $script:databaseUser;" `
+                'postgresql-deny-initial-schema-create' -asRoot -Database $script:databaseName
+        } elseif ($script:requiredV11DdlPermissionDeniedStartupFailure) {
             $null = Invoke-PostgresQuery "CREATE ROLE $script:databaseUser WITH LOGIN PASSWORD '$script:databasePassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;" `
                 'postgresql-create-isolated-role' -asRoot
             $null = Invoke-PostgresQuery "CREATE DATABASE $script:databaseName OWNER postgres;" 'postgresql-create-isolated-database' -asRoot
@@ -2274,7 +2428,18 @@ try {
     $null = Invoke-MySqlQuery $sql 'mysql-create-isolated-schema' -asRoot
     }
 
-    if ($script:newerAuditSchemaStartupFailure) {
+    if ($script:databaseManagerInitFailureStartupFailure) {
+        $script:databaseDdlPrivileges = Get-T21DatabaseManagerInitFailurePrivileges
+        $script:databaseManagerInitFailureSchemaBefore = Get-T21DatabaseManagerInitFailureSchemaSnapshot 'before'
+        $script:schemaStateBefore = $script:databaseManagerInitFailureSchemaBefore
+        $initialSchemaCheck = Test-T21DatabaseManagerInitFailureSchemaState ([pscustomobject]@{
+            before = $script:databaseManagerInitFailureSchemaBefore
+            after = $script:databaseManagerInitFailureSchemaBefore
+        })
+        if (-not $initialSchemaCheck.passed) {
+            throw "PostgreSQL initial schema was not empty before startup: $($initialSchemaCheck.failures -join '; ')"
+        }
+    } elseif ($script:newerAuditSchemaStartupFailure) {
         $script:schemaStateBefore = Seed-T21NewerAuditSchema
     } elseif ($script:incompleteV10AuditTableStartupFailure) {
         $script:schemaStateBefore = Seed-T21IncompleteV10AuditTable -SeedExistingPlayerRow:$script:incompleteV10AuditTablePlayerRowPreservation
@@ -2339,12 +2504,31 @@ try {
 
     if ($script:auditSchemaStartupFailure) {
         $failureScenario = switch ($true) {
+            $script:databaseManagerInitFailureStartupFailure { 'DatabaseManagerInitFailure'; break }
             $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
             $script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }
             $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
             default { 'RequiredV11DdlPermissionDenied' }
         }
         $startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario
+        if ($script:databaseManagerInitFailureStartupFailure) {
+            $script:databaseManagerInitFailureSchemaAfter = Get-T21DatabaseManagerInitFailureSchemaSnapshot 'after'
+            $script:schemaStateAfter = $script:databaseManagerInitFailureSchemaAfter
+            $schemaCheck = Test-T21DatabaseManagerInitFailureSchemaState ([pscustomobject]@{
+                before = $script:databaseManagerInitFailureSchemaBefore
+                after = $script:databaseManagerInitFailureSchemaAfter
+            })
+            if (-not $schemaCheck.passed) {
+                throw "PostgreSQL initial schema changed during the denied CREATE TABLE attempt: $($schemaCheck.failures -join '; ')"
+            }
+            $script:resourceCleanupObservation = Get-T21StartupFailureResourceCleanup
+            if ($script:resourceCleanupObservation.sqlOtherConnections -ne 0 -or
+                $script:resourceCleanupObservation.redisOtherClients -ne 0 -or
+                $script:resourceCleanupObservation.redisDbSize -ne 0) {
+                throw 'SQL or Redis resources remained active after DatabaseManager startup rollback.'
+            }
+            Stop-T21Server 'after-database-manager-init-failure'
+        } else {
         $script:schemaStateAfter = Get-T21StartupFailureSchemaState
         $expectedAuditVersion = switch ($failureScenario) {
             'NewerAuditSchema' { 12 }
@@ -2375,6 +2559,7 @@ try {
             throw 'SQL or Redis resources remained active after the startup rollback completed.'
         }
         Stop-T21Server 'after-startup-failure'
+        }
     } elseif ($script:successfulV10AuditSchemaUpgrade) {
         $null = Start-T21Server 'candidate-audit-v10-upgrade'
         $upgradeLog = Get-Content -LiteralPath $script:serverLogPath -Raw -ErrorAction Stop
@@ -2477,6 +2662,10 @@ try {
         }
     }
     try { Restore-TestEnvironment } catch { $script:cleanupFailures.Add("Process environment restore failed: $($_.Exception.Message)") }
+    if ($script:databaseManagerInitFailureStartupFailure) {
+        try { $script:resourceCleanupObservation = Get-T21DatabaseManagerInitFailureFinalCleanup }
+        catch { $script:cleanupFailures.Add("DatabaseManager startup-failure cleanup evidence failed: $($_.Exception.Message)") }
+    }
     try {
         $script:report.logs = [ordered]@{}
         foreach ($log in @(Get-ChildItem -LiteralPath $script:logsRoot -File -Recurse)) {
@@ -2494,9 +2683,18 @@ try {
         if ($plugDevCliDistManifestAfter.sha256 -cne $script:plugDevCliDistManifest.sha256) {
             $script:cleanupFailures.Add('The local PlugDev CLI bundle changed during runtime acceptance.')
         }
+        $sourceCommitAfter = (& git -C $script:root rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
+        $sourceDirtyAfter = @(& git -C $script:root status --porcelain --untracked-files=all 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $sourceCommitAfter -cne $script:sourceCommit -or $sourceDirtyAfter.Count -ne 0) {
+            $script:cleanupFailures.Add('The Syncmoney source commit or clean worktree state changed during runtime acceptance.')
+        }
+        $script:report.sourceCommitAfter = $sourceCommitAfter
+        $script:report.sourceWorkingTreeDirtyAfter = [bool]($sourceDirtyAfter.Count -gt 0)
         $script:report.runner = [ordered]@{
             path='tools/plugdev/run-mysql-sync-runtime.ps1'
             sha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\run-mysql-sync-runtime.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            databaseManagerInitFailureValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-database-manager-init-failure-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+            databaseManagerInitFailureTestSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-database-manager-init-failure-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             validatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             testSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-upgrade-validation.test.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
             startupFailureValidatorSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\t21-startup-failure-validation.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -2526,7 +2724,13 @@ try {
         if ($script:auditSchemaStartupFailure) {
             $script:finalReport = [ordered]@{
                 schemaVersion=1
-                task=if ($script:newerAuditSchemaStartupFailure) {
+                sourceCommit=$script:sourceCommit
+                sourceCommitAfter=$script:report.sourceCommitAfter
+                sourceWorkingTreeDirty=$script:sourceWorkingTreeDirty
+                sourceWorkingTreeDirtyAfter=$script:report.sourceWorkingTreeDirtyAfter
+                task=if ($script:databaseManagerInitFailureStartupFailure) {
+                    'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-CurrentMaximum'
+                } elseif ($script:newerAuditSchemaStartupFailure) {
                     'T21-V03-SYNC-newer-audit-schema-startup-failure'
                 } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
                     $productTaskSuffix = if ($script:databaseProduct -ceq 'MySQL') { 'MySQL' } else { $script:databaseProduct }
@@ -2587,6 +2791,7 @@ try {
                 failure=$script:failure
                 logs=$script:report.logs
                 sourcePins=[ordered]@{
+                    sourceCommit=$script:sourceCommit
                     runnerSha256=$script:report.runner.sha256
                     validatorSha256=$script:report.runner.startupFailureValidatorSha256
                     validatorTestSha256=$script:report.runner.startupFailureValidatorTestSha256
@@ -2595,20 +2800,36 @@ try {
                     acceptanceJarSha256=$acceptanceSha256
                     apiConsumerJarSha256=$apiConsumerSha256
                     plugDevCliDistManifestSha256=$script:report.plugDev.cliDistManifestSha256Before
+                    plugDevCommit=$script:report.plugDev.sourceCommit
+                    plugDevCliSha256=$script:report.plugDev.cliSha256
+                    databaseManagerInitFailureValidatorSha256=$script:report.runner.databaseManagerInitFailureValidatorSha256
+                    databaseManagerInitFailureTestSha256=$script:report.runner.databaseManagerInitFailureTestSha256
+                    databaseManagerSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\storage\db\DatabaseManager.java') -Algorithm SHA256).Hash.ToLowerInvariant()
+                    storageManagerSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\storage\StorageManager.java') -Algorithm SHA256).Hash.ToLowerInvariant()
+                    syncmoneyLifecycleSourceSha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'syncmoney-bukkit\src\main\java\noietime\syncmoney\Syncmoney.java') -Algorithm SHA256).Hash.ToLowerInvariant()
+                    paperJarSha256=$serverSha256
+                    candidateJarSha256=$script:candidateSha256
                 }
             }
             $failureScenario = switch ($true) {
+                $script:databaseManagerInitFailureStartupFailure { 'DatabaseManagerInitFailure'; break }
                 $script:newerAuditSchemaStartupFailure { 'NewerAuditSchema'; break }
                 $script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }
                 $script:incompleteV10AuditTableStartupFailure { 'IncompleteV10AuditTable'; break }
                 default { 'RequiredV11DdlPermissionDenied' }
             }
-            $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
-                $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
-                -ExpectedPlugDevRoot $script:plugDevRoot `
-                -ExpectedPlugDevSourceCommit $script:plugDevSourceCommit -ExpectedPlugDevCliSha256 $script:plugDevCliSha256 `
-                -ExpectedPlugDevCliDistManifestSha256 $script:plugDevCliDistManifest.sha256 `
-                -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -FailureScenario $failureScenario
+            if ($script:databaseManagerInitFailureStartupFailure) {
+                $reportAccepted = Test-T21DatabaseManagerInitFailureReport $script:finalReport `
+                    $ExpectedServerSha256 $ExpectedCandidateSha256 $script:plugDevSourceCommit $script:plugDevCliSha256 `
+                    $script:plugDevCliDistManifest.sha256 $acceptanceSha256 $apiConsumerSha256 $script:sourceCommit
+            } else {
+                $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
+                    $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
+                    -ExpectedPlugDevRoot $script:plugDevRoot `
+                    -ExpectedPlugDevSourceCommit $script:plugDevSourceCommit -ExpectedPlugDevCliSha256 $script:plugDevCliSha256 `
+                    -ExpectedPlugDevCliDistManifestSha256 $script:plugDevCliDistManifest.sha256 `
+                    -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -FailureScenario $failureScenario
+            }
         } elseif ($script:successfulV10AuditSchemaUpgrade) {
             $reportAccepted = Test-T21AuditSchemaV10UpgradeReport $script:report `
                 $ExpectedServerSha256 $ExpectedCandidateSha256 `
@@ -2709,6 +2930,8 @@ try {
                 'The completed report did not satisfy the product-specific T21 legacy SQL data upgrade predicate.'
             } elseif ($script:successfulV10AuditSchemaUpgrade) {
                 'The completed report did not satisfy Test-T21AuditSchemaV10UpgradeReport.'
+            } elseif ($script:databaseManagerInitFailureStartupFailure) {
+                'The completed report did not satisfy Test-T21DatabaseManagerInitFailureReport.'
             } elseif ($script:auditSchemaStartupFailure) {
                 'The completed report did not satisfy Test-T21NewerAuditSchemaStartupFailureReport.'
             } else {

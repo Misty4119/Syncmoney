@@ -2420,7 +2420,7 @@ try {
     $failureScenarioSwitchIndex = $runnerSource.IndexOf('$failureScenario = switch ($true)', [StringComparison]::Ordinal)
     $playerRowFailureScenarioIndex = $runnerSource.IndexOf("`$script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }", $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
     $failureScenarioStartIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario', $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
-    $expectedStartupFailureFunctionSignature = 'function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet(''NewerAuditSchema'', ''IncompleteV10AuditTable'', ''IncompleteV10AuditTablePlayerRowPreservation'', ''RequiredV11DdlPermissionDenied'')][string]$FailureScenario)'
+    $expectedStartupFailureFunctionSignature = 'function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet(''NewerAuditSchema'', ''DatabaseManagerInitFailure'', ''IncompleteV10AuditTable'', ''IncompleteV10AuditTablePlayerRowPreservation'', ''RequiredV11DdlPermissionDenied'')][string]$FailureScenario)'
     if (-not $runnerSource.Contains('$expectedStartupFailurePlayerRows = if ($script:incompleteV10AuditTablePlayerRowPreservation) { 1 } else { 0 }') -or
         -not $runnerSource.Contains('$script:schemaStateBefore.playerRowsJson -cne $script:schemaStateAfter.playerRowsJson') -or
         -not $runnerSource.Contains($expectedStartupFailureFunctionSignature) -or
