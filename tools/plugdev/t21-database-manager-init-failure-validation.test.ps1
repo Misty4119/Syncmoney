@@ -17,6 +17,8 @@ $runnerTokens = $null
 $runnerParseErrors = $null
 $runnerAst = [System.Management.Automation.Language.Parser]::ParseFile($runnerPath, [ref]$runnerTokens, [ref]$runnerParseErrors)
 Assert-Predicate ($runnerParseErrors.Count -eq 0) 'The runtime runner must parse before checking its validator call contract.'
+Assert-Predicate ($runnerSource -match "\[ValidateSet\('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas'") 'The runtime runner must expose the selected minimum-Canvas endpoint.'
+Assert-Predicate ($runnerSource.Contains('current-maximum Folia, or minimum Canvas; minimum-Paper MySQL remains blocked')) 'The runtime runner must describe the bounded minimum-Canvas target while preserving the minimum-Paper MySQL blocker.'
 $databaseManagerReportCalls = @($runnerAst.FindAll({
     param($node)
     $node -is [System.Management.Automation.Language.CommandAst] -and
@@ -36,7 +38,7 @@ Assert-Predicate ($runnerSource -notmatch 'if \(\$script:sourceWorkingTreeDirty\
 $databaseManagerGuardPosition = $runnerSource.IndexOf('if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and')
 $runtimeSetupPosition = $runnerSource.IndexOf('$script:root = (Resolve-Path')
 Assert-Predicate ($databaseManagerGuardPosition -ge 0 -and $runtimeSetupPosition -gt $databaseManagerGuardPosition) 'A blocked DatabaseManager case must be rejected before runtime artifact, port, or service setup.'
-Assert-Predicate ($runnerSource.Contains('The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, current-maximum Paper, or current-maximum Folia; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.')) 'The runner must explain the selected endpoint support and why the MySQL cell is blocked before runtime.'
+Assert-Predicate ($runnerSource.Contains('The DatabaseManager initial-schema failure case is enabled only for PostgreSQL on minimum Paper, minimum Folia, current-maximum Paper, current-maximum Folia, or minimum Canvas; minimum-Paper MySQL remains blocked before runtime until database provisioning and table-creation permissions can be separated.')) 'The runner must explain the selected endpoint support and why the MySQL cell is blocked before runtime.'
 Assert-Predicate ($runnerSource -match 'The completed report did not satisfy Test-T21DatabaseManagerInitFailureReport\.') 'DatabaseManager report failures must name their own validator.'
 foreach ($catalog in @('pg_catalog\.pg_class', 'pg_catalog\.pg_proc', 'pg_catalog\.pg_type')) {
     Assert-Predicate ($runnerSource -match $catalog) "PostgreSQL schema snapshot must count objects from $catalog."
@@ -52,12 +54,14 @@ Assert-Predicate ($runnerSource -match '(?s)if \(\$script:databaseManagerInitFai
 $auditPath = Join-Path $PSScriptRoot 'audit-t21-database-manager-init-failure.ps1'
 $auditSource = Get-Content -LiteralPath $auditPath -Raw
 $auditLogHelperSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 't21-database-manager-init-audit-log.ps1') -Raw
-Assert-Predicate ($auditSource -match "\[ValidateSet\('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia'\)\]\[string\]\`$PlatformEndpoint = 'CurrentMaximum'") 'The offline auditor must support minimum Paper and Folia plus current-maximum Paper and Folia while keeping CurrentMaximum as its default endpoint.'
+Assert-Predicate ($auditSource -match "\[ValidateSet\('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas'\)\]\[string\]\`$PlatformEndpoint = 'CurrentMaximum'") 'The offline auditor must support the selected PostgreSQL minimum-Canvas endpoint while keeping CurrentMaximum as its default endpoint.'
 Assert-Predicate ($auditSource.Contains('$serverJarPinName = Get-T21DatabaseManagerInitServerJarPinName -PlatformEndpoint $PlatformEndpoint -SourcePins $sourcePins')) 'The offline auditor must use the tested server-JAR pin selector.'
+Assert-Predicate ($auditSource.Contains('Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint $PlatformEndpoint -ExpectedServerSha256 $ExpectedServerSha256')) 'The offline auditor must use the executable formal endpoint server-hash predicate.'
 Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'Minimum' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'paperJarSha256') 'A historical Paper report without serverJarSha256 must retain its paperJarSha256 fallback.'
 Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'CurrentMaximum' ([pscustomobject]@{serverJarSha256='a'*64})) -ceq 'serverJarSha256') 'A current Paper report must select serverJarSha256 when present.'
 Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'MinimumFolia' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'serverJarSha256') 'Minimum Folia must require the server-neutral JAR pin even if paperJarSha256 is present.'
 Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'CurrentMaximumFolia' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'serverJarSha256') 'Current-maximum Folia must require the server-neutral JAR pin even if paperJarSha256 is present.'
+Assert-Predicate ((Get-T21DatabaseManagerInitServerJarPinName 'MinimumCanvas' ([pscustomobject]@{paperJarSha256='a'*64})) -ceq 'serverJarSha256') 'Minimum Canvas must require the server-neutral JAR pin even if paperJarSha256 is present.'
 Assert-Predicate ($auditSource.Contains('[ValidateSet(''PostgreSQL'', ''MySQL'')][string]$DatabaseProduct = ''PostgreSQL''')) 'The offline auditor must select the expected SQL product explicitly.'
 Assert-Predicate ($auditSource -match '(?m)^\$reportPredicate = Test-T21DatabaseManagerInitFailureReport .*\$PlatformEndpoint\s+\$DatabaseProduct\s*$') 'The offline auditor must pass its selected endpoint and SQL product to the report predicate.'
 Assert-Predicate ($auditSource -match 'Test-T21DatabaseManagerInitFailureStartupLog .*MySqlAppRole \(\[string\]\(Get-T21ObjectField \$observedPrivileges ''appRole''\)\)') 'The offline audit must bind the exact MySQL denial log line to its retained authenticated account.'
@@ -157,13 +161,15 @@ function New-ValidMySqlCleanupEvidence {
 }
 
 function New-ValidDatabaseManagerInitFailureReport(
-    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia')][string]$PlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas')][string]$PlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
 ) {
     $server = if ($PlatformEndpoint -ceq 'Minimum') {
         [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48; sha256 = '0' * 64 }
     } elseif ($PlatformEndpoint -ceq 'MinimumFolia') {
         [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6; sha256 = '0' * 64 }
+    } elseif ($PlatformEndpoint -ceq 'MinimumCanvas') {
+        [pscustomobject]@{ software = 'canvas'; minecraftVersion = '1.21.8'; build = 603; sha256 = '0' * 64 }
     } elseif ($PlatformEndpoint -ceq 'CurrentMaximumFolia') {
         [pscustomobject]@{ software = 'folia'; minecraftVersion = '26.3'; build = 3; sha256 = '0' * 64 }
     } else {
@@ -433,12 +439,48 @@ Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Current
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Minimum') 'The pinned PostgreSQL minimum Paper cell should be enabled.'
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MinimumFolia') 'The pinned PostgreSQL minimum-Folia cell should be enabled.'
 Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'CurrentMaximumFolia') 'The pinned PostgreSQL current-maximum Folia cell should be enabled.'
+Assert-Predicate (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MinimumCanvas') 'The pinned PostgreSQL minimum-Canvas cell should be enabled.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'Minimum')) 'MySQL minimum-Paper must remain disabled while CREATE DATABASE runs before the main pool and cannot be separated from CREATE TABLE denial.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'Maximum')) 'The historical Paper maximum must not be accepted for this case.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MaximumFolia')) 'An unselected Folia endpoint must remain rejected.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'CurrentMaximum')) 'A different SQL product must not be accepted for this cell.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MariaDB' 'Minimum')) 'The unselected MariaDB product must remain rejected for this bounded cell.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'MinimumFolia')) 'The unselected Folia platform must remain rejected for this bounded cell.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MySQL' 'MinimumCanvas')) 'The minimum-Canvas MySQL startup-failure cell must remain rejected.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MariaDB' 'MinimumCanvas')) 'The minimum-Canvas MariaDB startup-failure cell must remain rejected.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MaximumCanvas')) 'The unselected historical Canvas endpoint must remain rejected.'
+
+$minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate $minimumCanvasReportPassed 'The exactly pinned minimum-Canvas/PostgreSQL startup-failure report should pass.'
+$minimumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumCanvas
+Assert-Predicate ($minimumCanvasEndpoint.software -ceq 'canvas' -and $minimumCanvasEndpoint.minecraftVersion -ceq '1.21.8' -and $minimumCanvasEndpoint.build -eq 603 -and $minimumCanvasEndpoint.sha256 -ceq '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b') 'The selected minimum-Canvas endpoint must retain its formal version, build, and SHA-256 pin.'
+Assert-Predicate (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b') 'The minimum-Canvas auditor pin helper must accept the formal SHA-256.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 ('0' * 64))) 'The minimum-Canvas auditor pin helper must reject a mismatched expected SHA-256.'
+Assert-Predicate (-not (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 'not-a-hash')) 'The minimum-Canvas auditor pin helper must reject a malformed expected SHA-256.'
+$minimumCanvasReport.server.software = 'paper'
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate (-not $minimumCanvasReportPassed) 'A minimum-Canvas report identifying itself as Paper must be rejected.'
+$minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas
+$minimumCanvasReport.server.build = 604
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate (-not $minimumCanvasReportPassed) 'A minimum-Canvas report with the wrong build must be rejected.'
+$minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas
+$minimumCanvasReport.server.minecraftVersion = '1.21.9'
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate (-not $minimumCanvasReportPassed) 'A minimum-Canvas report with the wrong Minecraft version must be rejected.'
+$minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas
+$minimumCanvasReport.server.sha256 = 'f' * 64
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate (-not $minimumCanvasReportPassed) 'A minimum-Canvas report with the wrong pinned server SHA-256 must be rejected.'
+$minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas
+$minimumCanvasReport.sourcePins | Add-Member -MemberType NoteProperty -Name paperJarSha256 -Value ('0' * 64)
+$null = $minimumCanvasReport.sourcePins.PSObject.Properties.Remove('serverJarSha256')
+$minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
+Assert-Predicate (-not $minimumCanvasReportPassed) 'A minimum-Canvas report must not fall back to a Paper-only source pin.'
+$minimumCanvasMySqlReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumCanvas -DatabaseProduct MySQL
+$minimumCanvasMySqlReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasMySqlReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas' -ExpectedPlatformEndpoint MinimumCanvas -ExpectedDatabaseProduct MySQL
+Assert-Predicate (-not $minimumCanvasMySqlReportPassed) 'A minimum-Canvas MySQL report must remain unaccepted for this PostgreSQL-only cell.'
 
 $minimumFoliaReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint MinimumFolia
 $minimumFoliaReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumFoliaReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumFolia'

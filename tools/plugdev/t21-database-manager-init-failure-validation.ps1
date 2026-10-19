@@ -240,13 +240,23 @@ function Test-T21DatabaseManagerInitFailureMySqlPrivileges([object]$Privileges) 
 }
 
 function Test-T21DatabaseManagerInitFailureTarget([string]$DatabaseProduct, [string]$PlatformEndpoint) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia')
+    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas')
 }
 
 function Get-T21DatabaseManagerInitServerJarPinName([string]$PlatformEndpoint, [object]$SourcePins) {
-    if ($PlatformEndpoint -in @('MinimumFolia', 'CurrentMaximumFolia')) { return 'serverJarSha256' }
+    if ($PlatformEndpoint -in @('MinimumFolia', 'CurrentMaximumFolia', 'MinimumCanvas')) { return 'serverJarSha256' }
     if ($null -ne (Get-T21DatabaseManagerInitFailureValue $SourcePins 'serverJarSha256')) { return 'serverJarSha256' }
     return 'paperJarSha256'
+}
+
+function Test-T21DatabaseManagerInitExpectedPlatformServerPin([string]$PlatformEndpoint, [string]$ExpectedServerSha256) {
+    if ($ExpectedServerSha256 -notmatch '^[0-9a-fA-F]{64}$') { return $false }
+    try {
+        $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+        return $endpoint.sha256 -ceq $ExpectedServerSha256.ToLowerInvariant()
+    } catch {
+        return $false
+    }
 }
 
 function Test-T21DatabaseManagerInitFailureSchemaState(
@@ -337,7 +347,7 @@ function Test-T21DatabaseManagerInitFailureReport(
     [string]$ExpectedAcceptanceSha256,
     [string]$ExpectedApiConsumerSha256,
     [string]$ExpectedSourceCommit,
-    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
+    [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$ExpectedDatabaseProduct = 'PostgreSQL'
 ) {
     $expectedServer = switch ($ExpectedPlatformEndpoint) {
@@ -345,6 +355,7 @@ function Test-T21DatabaseManagerInitFailureReport(
         'MinimumFolia' { [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6 } }
         'CurrentMaximum' { [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200 } }
         'CurrentMaximumFolia' { [pscustomobject]@{ software = 'folia'; minecraftVersion = '26.3'; build = 3 } }
+        'MinimumCanvas' { [pscustomobject]@{ software = 'canvas'; minecraftVersion = '1.21.8'; build = 603 } }
     }
     $failure = Get-T21DatabaseManagerInitFailureValue $Report 'failure'
     if ($null -eq $Report -or
