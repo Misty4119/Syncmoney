@@ -879,16 +879,7 @@ function Stop-T21Server([string]$stage) {
     if ($disabled.Count -eq 0 -and -not $startupFailureDisabled) { throw "Syncmoney did not log its normal disable marker for $stage." }
     $failureMarkers = @(Get-T21ShutdownFailureMarkers ($stopLines -join "`n"))
     if ($failureMarkers.Count -gt 0) { throw "Server shutdown failure marker observed at ${stage}: $($failureMarkers -join '; ')." }
-    $platformLogStage = switch ($stage) {
-        'after-write' { 'candidate-write' }
-        'after-restart-read' { 'candidate-restart-read' }
-        'after-legacy-seed' { 'legacy-seed' }
-        'after-candidate-existing-read' { 'candidate-existing-read' }
-        'after-legacy-rollback-read' { 'legacy-rollback-read' }
-        'after-startup-failure' { 'candidate-startup-failure' }
-        'after-audit-v10-upgrade' { 'candidate-audit-v10-upgrade' }
-        default { throw "Unexpected platform log snapshot stage: $stage" }
-    }
+    $platformLogStage = Get-T21PlatformLogSnapshotStageName $stage
     $platformLogRelativePath = 'logs\platform-' + $platformLogStage + '.txt'
     $platformLogPath = Join-Path $script:runRoot $platformLogRelativePath
     Copy-Item -LiteralPath $script:serverLogPath -Destination $platformLogPath -Force -ErrorAction Stop

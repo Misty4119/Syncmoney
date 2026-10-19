@@ -1,5 +1,19 @@
 Set-StrictMode -Version Latest
 
+function Get-T21PlatformLogSnapshotStageName([string]$StopStage) {
+    switch ($StopStage) {
+        'after-write' { return 'candidate-write' }
+        'after-restart-read' { return 'candidate-restart-read' }
+        'after-legacy-seed' { return 'legacy-seed' }
+        'after-candidate-existing-read' { return 'candidate-existing-read' }
+        'after-legacy-rollback-read' { return 'legacy-rollback-read' }
+        'after-startup-failure' { return 'candidate-startup-failure' }
+        'after-database-manager-init-failure' { return 'candidate-database-manager-init-failure' }
+        'after-audit-v10-upgrade' { return 'candidate-audit-v10-upgrade' }
+        default { throw "Unexpected platform log snapshot stage: $StopStage" }
+    }
+}
+
 function Get-T21DatabaseManagerInitFailureValue([object]$Value, [string]$Name) {
     if ($null -eq $Value) { return $null }
     if ($Value -is [System.Collections.IDictionary]) {

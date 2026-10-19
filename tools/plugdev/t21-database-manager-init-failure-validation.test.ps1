@@ -352,4 +352,22 @@ $report.status = 'FAIL'
 $reportPassed = Test-T21DatabaseManagerInitFailureReport $report ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40)
 Assert-Predicate (-not $reportPassed) 'A failed or unaccepted runtime report must be rejected.'
 
+$platformLogStages = @(
+    [pscustomobject]@{ stopStage = 'after-write'; snapshotStage = 'candidate-write' }
+    [pscustomobject]@{ stopStage = 'after-restart-read'; snapshotStage = 'candidate-restart-read' }
+    [pscustomobject]@{ stopStage = 'after-legacy-seed'; snapshotStage = 'legacy-seed' }
+    [pscustomobject]@{ stopStage = 'after-candidate-existing-read'; snapshotStage = 'candidate-existing-read' }
+    [pscustomobject]@{ stopStage = 'after-legacy-rollback-read'; snapshotStage = 'legacy-rollback-read' }
+    [pscustomobject]@{ stopStage = 'after-startup-failure'; snapshotStage = 'candidate-startup-failure' }
+    [pscustomobject]@{ stopStage = 'after-database-manager-init-failure'; snapshotStage = 'candidate-database-manager-init-failure' }
+    [pscustomobject]@{ stopStage = 'after-audit-v10-upgrade'; snapshotStage = 'candidate-audit-v10-upgrade' }
+)
+foreach ($mapping in $platformLogStages) {
+    $actualStage = Get-T21PlatformLogSnapshotStageName $mapping.stopStage
+    Assert-Predicate ($actualStage -ceq $mapping.snapshotStage) "The server stop stage '$($mapping.stopStage)' must map to snapshot '$($mapping.snapshotStage)'."
+}
+$unknownStageRejected = $false
+try { $null = Get-T21PlatformLogSnapshotStageName 'unrecognized-stop-stage' } catch { $unknownStageRejected = $true }
+Assert-Predicate $unknownStageRejected 'An unknown server stop stage must remain rejected.'
+
 Write-Output ("Assertions passed: {0}/{0}" -f $assertions)
