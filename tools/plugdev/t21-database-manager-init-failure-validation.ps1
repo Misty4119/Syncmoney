@@ -179,7 +179,7 @@ function Test-T21DatabaseManagerInitFailurePrivileges([object]$Privileges) {
 }
 
 function Test-T21DatabaseManagerInitFailureTarget([string]$DatabaseProduct, [string]$PlatformEndpoint) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -ceq 'CurrentMaximum'
+    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -in @('Minimum', 'CurrentMaximum')
 }
 
 function Test-T21DatabaseManagerInitFailureSchemaState([object]$SchemaState) {
@@ -255,11 +255,16 @@ function Test-T21DatabaseManagerInitFailureReport(
     [string]$ExpectedPlugDevCliDistManifestSha256,
     [string]$ExpectedAcceptanceSha256,
     [string]$ExpectedApiConsumerSha256,
-    [string]$ExpectedSourceCommit
+    [string]$ExpectedSourceCommit,
+    [ValidateSet('Minimum', 'CurrentMaximum')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum'
 ) {
+    $expectedServer = switch ($ExpectedPlatformEndpoint) {
+        'Minimum' { [pscustomobject]@{ minecraftVersion = '1.21.6'; build = 48 } }
+        'CurrentMaximum' { [pscustomobject]@{ minecraftVersion = '26.3'; build = 200 } }
+    }
     $failure = Get-T21DatabaseManagerInitFailureValue $Report 'failure'
     if ($null -eq $Report -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $Report 'task' 'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-CurrentMaximum') -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $Report 'task' "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$ExpectedPlatformEndpoint") -or
         -not (Test-T21DatabaseManagerInitFailureStringField $Report 'status' 'PASS_BOUNDED_SUBCASE') -or
         $null -ne $failure) { return $false }
 
@@ -272,8 +277,8 @@ function Test-T21DatabaseManagerInitFailureReport(
 
     $server = Get-T21DatabaseManagerInitFailureValue $Report 'server'
     if (-not (Test-T21DatabaseManagerInitFailureStringField $server 'software' 'paper') -or
-        -not (Test-T21DatabaseManagerInitFailureStringField $server 'minecraftVersion' '26.3') -or
-        -not (Test-T21DatabaseManagerInitFailureInteger $server 'build' 200) -or
+        -not (Test-T21DatabaseManagerInitFailureStringField $server 'minecraftVersion' $expectedServer.minecraftVersion) -or
+        -not (Test-T21DatabaseManagerInitFailureInteger $server 'build' $expectedServer.build) -or
         -not (Test-T21DatabaseManagerInitFailureStringField $server 'sha256' $ExpectedServerSha256.ToLowerInvariant())) { return $false }
 
     $candidate = Get-T21DatabaseManagerInitFailureValue $Report 'candidate'

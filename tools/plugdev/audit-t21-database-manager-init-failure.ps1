@@ -7,6 +7,7 @@ param(
     [string]$ServerJar = 'build\reports\foundation\T21-sql-runtime\current-maximum-artifacts\paper-26.3-200.jar',
     [string]$CandidateJar = 'build\libs\Syncmoney-1.4.0-alpha.1.jar',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedServerSha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d',
+    [ValidateSet('Minimum', 'CurrentMaximum')][string]$PlatformEndpoint = 'CurrentMaximum',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedCandidateSha256 = '69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedAcceptanceSha256 = '4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df',
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedApiConsumerSha256 = '49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e',
@@ -70,7 +71,7 @@ $serverHash = Get-T21Hash $serverJarPath
 $candidateHash = Get-T21Hash $candidateJarPath
 $acceptanceHash = Get-T21Hash $acceptanceJarPath
 $apiConsumerHash = Get-T21Hash $apiConsumerJarPath
-Assert-T21DatabaseManagerInitFailure ($serverHash -ceq $ExpectedServerSha256.ToLowerInvariant()) 'Paper 26.3#200 artifact hash differs from the pinned SHA-256.'
+Assert-T21DatabaseManagerInitFailure ($serverHash -ceq $ExpectedServerSha256.ToLowerInvariant()) 'Selected Paper endpoint artifact hash differs from the pinned SHA-256.'
 Assert-T21DatabaseManagerInitFailure ($candidateHash -ceq $ExpectedCandidateSha256.ToLowerInvariant()) 'Candidate artifact hash differs from the pinned SHA-256.'
 Assert-T21DatabaseManagerInitFailure ($acceptanceHash -ceq $ExpectedAcceptanceSha256.ToLowerInvariant()) 'Acceptance JAR hash differs from the pinned SHA-256.'
 Assert-T21DatabaseManagerInitFailure ($apiConsumerHash -ceq $ExpectedApiConsumerSha256.ToLowerInvariant()) 'API consumer JAR hash differs from the pinned SHA-256.'
@@ -179,7 +180,7 @@ Assert-T21DatabaseManagerInitFailure $artifactPinsMatch 'Runtime report source, 
 $server = Get-T21ObjectField $report 'server'
 Assert-T21DatabaseManagerInitFailure (Test-T21DatabaseManagerInitFailureStringField $server 'path' $serverJarPath) 'Runtime report server path differs from the pinned input artifact.'
 Assert-T21DatabaseManagerInitFailure (Test-T21DatabaseManagerInitFailureInteger $server 'bytes' ([long](Get-Item -LiteralPath $serverJarPath).Length)) 'Runtime report Paper artifact byte count differs from the pinned input.'
-$reportPredicate = Test-T21DatabaseManagerInitFailureReport $report $serverHash $candidateHash $plugDevCommit $plugDevCliHash $plugDevManifest.sha256 $acceptanceHash $apiConsumerHash $syncmoneySourceCommit
+$reportPredicate = Test-T21DatabaseManagerInitFailureReport $report $serverHash $candidateHash $plugDevCommit $plugDevCliHash $plugDevManifest.sha256 $acceptanceHash $apiConsumerHash $syncmoneySourceCommit $PlatformEndpoint
 Assert-T21DatabaseManagerInitFailure ([bool]$reportPredicate) 'The report-specific DatabaseManager initial-schema predicate rejected the runtime report.'
 
 $logs = Get-T21ObjectField $report 'logs'

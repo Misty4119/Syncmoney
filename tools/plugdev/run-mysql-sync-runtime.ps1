@@ -48,7 +48,7 @@ if ($NewerAuditSchemaStartupFailure.IsPresent -and
 }
 if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and
     -not (Test-T21DatabaseManagerInitFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-    throw 'The DatabaseManager initial-schema failure case is limited to PostgreSQL 18.1 and current-maximum Paper 26.3#200.'
+    throw 'The DatabaseManager initial-schema failure case is limited to PostgreSQL 18.1 on the pinned minimum or current-maximum Paper endpoints.'
 }
 if ($IncompleteV10AuditTableStartupFailure.IsPresent -and
     -not (Test-T21IncompleteAuditTableStartupFailureTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -2251,7 +2251,7 @@ $script:report = [ordered]@{
     sourceCommit = $script:sourceCommit
     sourceWorkingTreeDirty = $script:sourceWorkingTreeDirty
     task = if ($script:databaseManagerInitFailureStartupFailure) {
-        'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-CurrentMaximum'
+        "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$PlatformEndpoint"
     } elseif ($script:newerAuditSchemaStartupFailure) {
         "T21-V03-SYNC-newer-audit-schema-startup-failure-$script:databaseProduct-$($script:platformTarget.taskSuffix)"
     } elseif ($script:databaseManagerInitFailureStartupFailure) {
@@ -2720,7 +2720,7 @@ try {
                 sourceWorkingTreeDirty=$script:sourceWorkingTreeDirty
                 sourceWorkingTreeDirtyAfter=$script:report.sourceWorkingTreeDirtyAfter
                 task=if ($script:databaseManagerInitFailureStartupFailure) {
-                    'T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-CurrentMaximum'
+                    "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-PostgreSQL-$PlatformEndpoint"
                 } elseif ($script:newerAuditSchemaStartupFailure) {
                     'T21-V03-SYNC-newer-audit-schema-startup-failure'
                 } elseif ($script:incompleteV10AuditTablePlayerRowPreservation) {
@@ -2815,7 +2815,7 @@ try {
             if ($script:databaseManagerInitFailureStartupFailure) {
                 $reportAccepted = Test-T21DatabaseManagerInitFailureReport $script:finalReport `
                     $ExpectedServerSha256 $ExpectedCandidateSha256 $script:plugDevSourceCommit $script:plugDevCliSha256 `
-                    $script:plugDevCliDistManifest.sha256 $acceptanceSha256 $apiConsumerSha256 $script:sourceCommit
+                    $script:plugDevCliDistManifest.sha256 $acceptanceSha256 $apiConsumerSha256 $script:sourceCommit $PlatformEndpoint
             } else {
                 $reportAccepted = Test-T21NewerAuditSchemaStartupFailureReport $script:finalReport `
                     $ExpectedServerSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 `
