@@ -90,6 +90,8 @@ For Folia or Canvas, pass the matching `-PlatformEndpoint` selector. Historical 
 
 This verifies the selected profile and lifecycle only; the M04 probe does not exercise a player's rate-limit decision.
 
+As of 2026-10-20, guard-on LOCAL SQLite normal-drain/rollback and shutdown-timeout-handoff/replay have separate reports on the formal current maxima. Seeded duplicate-receipt replay evidence covers the then-pinned Paper 1.21.6#48 / 26.3#166, Folia 1.21.6#6 / 26.2#7, and Canvas 1.21.8#603 / 26.3#972 endpoints. The first uncovered formal-maximum cell for that replay scenario is Paper 26.3#200; the accepted normal-drain report on Paper 26.3#200 does not cover it.
+
 Example for the minimum endpoint (use the verified local artifacts from the T15 manifest):
 
 ```powershell
@@ -126,6 +128,18 @@ node tools/plugdev/prepare.mjs canvas 26.3 local off 1.4.0-alpha.1
 ```
 
 The current user-confirmed maximum endpoints are Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984`. Use `CurrentMaximum`, `CurrentMaximumFolia`, and `CurrentMaximumCanvas` for T21 SQL validation; use the `*-263-currentmax` selectors for the M10 and player-scheduler runners. The M10 and player-scheduler runners resolve these artifacts under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/` and verify each JAR against its endpoint pin. Existing `Maximum` and `*-max` selectors retain their previous exact-build mappings for report reproduction. Previously accepted T21 reports on Paper `26.3#166`, Folia `26.2#7`, and Canvas `26.3#972` remain historical bounded results for those exact builds. Supplemental Paper `26.3#194` reports remain outside the formal range. All nine current-maximum candidate-created-account M05 `SYNC` SQL cells and all three current-maximum M10 reconciliation cells have bounded report-specific audits. The 1.3.2-seeded M05 formal-maximum legacy-data matrix now has `PASS_BOUNDED_SUBCASE (E2)` evidence for all nine Paper/Folia/Canvas × MySQL/MariaDB/PostgreSQL cells; this matrix is complete and other T21 gates remain open. The three standard current-maximum player-scheduler cells have bounded runtime evidence; Folia current-maximum cross-owner and Canvas current-maximum paired-owner guard-plus-breaker profiles have each passed as separate bounded E2 scenarios. The current-maximum Canvas 26.3#984 breaker-only profile has passed as a separate PASS_BOUNDED_SUBCASE (E2); its report-specific offline audit passed 150 assertions. Four Redis persistence files were hashed but no AOF reload was performed. Other T21 scenarios remain open. Selector support alone does not count as runtime evidence.
+
+## T21 same-version two-backend SYNC network acceptance
+
+The network runner has endpoint selectors `paper-1216-48`, `paper-263-200`, `folia-1216-6`, `folia-263-3`, `canvas-1218-603`, and `canvas-263-984`. Use `--preflight-only` to check the pinned artifacts, local toolchain/backends, and temporary loopback port reservations without starting the network. A runtime run creates isolated PostgreSQL and Redis services and should use the local, pinned artifacts only:
+
+```powershell
+node tools/plugdev/t21-paper-network-runner.mjs --endpoint canvas-263-984 --preflight-only
+node tools/plugdev/t21-paper-network-runner.mjs --endpoint canvas-263-984
+node tools/plugdev/t21-paper-network-auditor.mjs <run-directory> canvas-263-984 <workspace-root>
+```
+
+As of 2026-10-20, all six formal endpoints have separate bounded accepted reports for the same-version, two-backend SYNC scenario. Each run observes cross-server payment/reconnect, PostgreSQL outage/recovery, and normal drain of accepted writes. The result is endpoint-specific; it does not establish mixed-build networking, live mixed-version write guarantees, or completion of T21. Report and audit identities are recorded in the Architecture Foundation validation plan.
 
 `prepare.mjs` rejects Paper versions below 1.21.6. `local` disables Redis and SQL; `local_redis` and `sync` require isolated local services as described by the test profile, never production services. `features=on` enables optional test modules and creates a random local Web Admin key; do not expose that server.
 
@@ -854,4 +868,4 @@ These observations cover six PostgreSQL endpoint cells for this bounded startup-
 
 ## T21 same-version two-backend SYNC network gate
 
-The bounded network case now has accepted reports for Paper `1.21.6#48` and `26.3#200`, Folia `1.21.6#6` and `26.3#3`, and minimum Canvas `1.21.8#603`. The minimum-Canvas report is `build/reports/foundation/T21-paper-network/canvas-1218-603-20261019160133-c1d8da21c9a2/result.json`; its report-specific audit accepted 22 retained files. Current-maximum Canvas `26.3#984` is the next endpoint. Its server artifact is pinned at `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/canvas-26.3-984.jar` with SHA-256 `0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa`; the runner/auditor selector and focused fixtures now admit the exact endpoint; their complete focused harness suite passed 98/98. The endpoint harness has passed independent review; runtime remains NOT RUN pending fresh artifact and listener preflight. This exact-build observation does not establish mixed-build networking or live mixed-version write guarantees. The accepted Paper M12 report is reused and must not be rerun. Minimum-Paper/MySQL stays `BLOCKED / NOT VERIFIED`; T21 remains `IN_PROGRESS`.
+As of 2026-10-20, all six formal endpoints have separate `PASS_BOUNDED_SUBCASE (E2)` reports for the same-version, two-backend SYNC network scenario: Paper `1.21.6#48` / `26.3#200`, Folia `1.21.6#6` / `26.3#3`, and Canvas `1.21.8#603` / `26.3#984`. The current-maximum Canvas report-specific audit accepted 22 retained files, and the direct evidence verifier passed 361 checks; report/audit identities and evidence limits are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. These exact-build observations do not establish mixed-build networking or live mixed-version write guarantees. The accepted Paper M12 report is reused and must not be rerun. Minimum-Paper/MySQL stays `BLOCKED / NOT VERIFIED`; T21 remains `IN_PROGRESS`.
