@@ -1574,7 +1574,7 @@ function Seed-T21RequiredV11DdlPermissionFailure([switch]$SeedExistingPlayerRow)
     }
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'Required-v11 player-row preservation is scoped only to current-maximum Paper/PostgreSQL or Folia/PostgreSQL.'
+        throw 'Required-v11 player-row preservation is scoped only to current-maximum Paper/MySQL or current-maximum Paper, Folia, and Canvas/PostgreSQL.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -1616,19 +1616,7 @@ INSERT INTO syncmoney_audit_log (
     if ($script:databaseProduct -ceq 'PostgreSQL') {
         $null = Invoke-PostgresQuery $ddl 'seed-v11-audit-ddl-permission-failure' -asRoot -Database $script:databaseName
         if ($SeedExistingPlayerRow.IsPresent) {
-            $playerDdl = @'
-CREATE TABLE players (
-    player_uuid VARCHAR(36) PRIMARY KEY,
-    player_name VARCHAR(16),
-    balance DECIMAL(20,2) NOT NULL DEFAULT 0,
-    version BIGINT NOT NULL DEFAULT 0,
-    last_server VARCHAR(64),
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_player_name ON players (player_name);
-INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
-VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', TIMESTAMP '2026-10-16 12:34:56');
-'@
+            $playerDdl = Get-T21PlayerRowPreservationSeedSql -DatabaseProduct $script:databaseProduct
             $null = Invoke-PostgresQuery $playerDdl 'seed-v11-existing-player-row' -Database $script:databaseName
         }
         $null = Invoke-PostgresQuery "GRANT SELECT, INSERT, UPDATE, DELETE ON syncmoney_schema_version, syncmoney_audit_log TO $script:databaseUser;" `
@@ -1689,6 +1677,10 @@ WHERE d.datname = current_database();
         }
     } else {
         $null = Invoke-MySqlQuery $ddl 'seed-v11-audit-ddl-permission-failure'
+        if ($SeedExistingPlayerRow.IsPresent) {
+            $playerDdl = Get-T21PlayerRowPreservationSeedSql -DatabaseProduct $script:databaseProduct
+            $null = Invoke-MySqlQuery $playerDdl 'seed-v11-existing-player-row'
+        }
 
         $revokeAlter = "REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'127.0.0.1'; REVOKE ALTER ON $($script:databaseName).* FROM '$($script:databaseUser)'@'localhost'; FLUSH PRIVILEGES;"
         $null = Invoke-MySqlQuery $revokeAlter 'revoke-runtime-user-alter' -asRoot

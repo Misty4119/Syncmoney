@@ -1458,6 +1458,23 @@ try {
         throw 'The current-maximum Paper/MySQL required-v11 report with one unchanged player row was rejected.'
     }
     Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Paper/MySQL'
+    $mySqlPlayerSeedSql = Get-T21PlayerRowPreservationSeedSql -DatabaseProduct MySQL
+    foreach ($requiredSeedFragment in @(
+            'CREATE TABLE players',
+            'INDEX idx_player_name (player_name)',
+            'INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)',
+            "VALUES ('00000000-0000-0000-0000-00000000cafe', 'T21-ROW-SENTINEL', 1234.56, 73, 't21-player-preservation', '2026-10-16 12:34:56');")) {
+        if (-not $mySqlPlayerSeedSql.Contains($requiredSeedFragment)) {
+            throw "The MySQL required-v11 fixture seed omitted required player-row fragment: $requiredSeedFragment"
+        }
+    }
+    Write-Output 'PASS: prepare the exact seeded player row in the MySQL required-v11 fixture'
+    $postgreSqlPlayerSeedSql = Get-T21PlayerRowPreservationSeedSql -DatabaseProduct PostgreSQL
+    if (-not $postgreSqlPlayerSeedSql.Contains('CREATE INDEX idx_player_name ON players (player_name);') -or
+        -not $postgreSqlPlayerSeedSql.Contains("TIMESTAMP '2026-10-16 12:34:56'")) {
+        throw 'The PostgreSQL player-row fixture lost its index or dialect-native timestamp literal.'
+    }
+    Write-Output 'PASS: preserve the PostgreSQL player-row fixture DDL and timestamp semantics'
     $currentMaximumPaperMySqlRowReportMissingDdlEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperMySqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $currentMaximumPaperMySqlRowReportMissingDdlEvidence.Remove('deniedDdlEvidence')
     if (Test-T21StartupFailureReportFixture $currentMaximumPaperMySqlRowReportMissingDdlEvidence $currentMaximumPaperMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -2608,6 +2625,16 @@ try {
         throw 'The MySQL/MariaDB sentinel snapshot query must read its JSON rows from the players table.'
     }
     Write-Output 'PASS: read the MySQL/MariaDB sentinel snapshot from the players table'
+    $mysqlV11SeedStart = $runnerSource.IndexOf('Invoke-MySqlQuery $ddl ''seed-v11-audit-ddl-permission-failure''', [StringComparison]::Ordinal)
+    $mysqlV11SeedEnd = $runnerSource.IndexOf('$revokeAlter =', $mysqlV11SeedStart, [StringComparison]::Ordinal)
+    $mysqlV11SeedBranch = if ($mysqlV11SeedStart -ge 0 -and $mysqlV11SeedEnd -gt $mysqlV11SeedStart) {
+        $runnerSource.Substring($mysqlV11SeedStart, $mysqlV11SeedEnd - $mysqlV11SeedStart)
+    } else { '' }
+    if ($mysqlV11SeedBranch -notmatch 'Get-T21PlayerRowPreservationSeedSql\s+-DatabaseProduct\s+\$script:databaseProduct' -or
+        $mysqlV11SeedBranch -notmatch 'Invoke-MySqlQuery\s+\$playerDdl') {
+        throw 'The current-maximum MySQL required-v11 seed branch must create the player-row preservation fixture before state validation.'
+    }
+    Write-Output 'PASS: wire the MySQL required-v11 seed branch to its player-row fixture'
     $failureScenarioSwitchIndex = $runnerSource.IndexOf('$failureScenario = switch ($true)', [StringComparison]::Ordinal)
     $playerRowFailureScenarioIndex = $runnerSource.IndexOf("`$script:incompleteV10AuditTablePlayerRowPreservation { 'IncompleteV10AuditTablePlayerRowPreservation'; break }", $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
     $failureScenarioStartIndex = $runnerSource.IndexOf('$startup = Start-T21ServerExpectingAuditSchemaFailure $failureScenario', $failureScenarioSwitchIndex, [StringComparison]::Ordinal)
