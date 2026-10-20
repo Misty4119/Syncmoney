@@ -1237,11 +1237,13 @@ try {
             @{ database='PostgreSQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$true }
             @{ database='MySQL'; endpoint='Maximum'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
-            @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$false }
+            @{ database='MySQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximum'; expected=$false }
+            @{ database='MariaDB'; endpoint='CurrentMaximumFolia'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$false }
         )) {
         $accepted = Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $requiredV11PlayerRowCase.database -PlatformEndpoint $requiredV11PlayerRowCase.endpoint
@@ -1249,7 +1251,7 @@ try {
             throw "Required-v11 row preservation target guard returned $accepted for $($requiredV11PlayerRowCase.database) / $($requiredV11PlayerRowCase.endpoint); expected $($requiredV11PlayerRowCase.expected)."
         }
     }
-    Write-Output 'PASS: admit current-maximum Paper/MySQL and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
+    Write-Output 'PASS: admit current-maximum Paper/Folia MySQL and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
 
     $currentMaximumCanvasRowGuardPathResolutionObserved = $false
     try {
@@ -1277,6 +1279,33 @@ try {
         throw 'The current-maximum Paper/MySQL row-preservation selector was rejected before its pinned path-resolution boundary.'
     }
     Write-Output 'PASS: accept only the current-maximum Paper/MySQL row-preservation selector before external paths are resolved'
+
+    $currentMaximumFoliaMySqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumFolia
+    $currentMaximumFoliaMySqlRowGuardPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumFoliaMySqlEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumFolia `
+            -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumFoliaMySqlRowGuardPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $currentMaximumFoliaMySqlRowGuardPathResolutionObserved) {
+        throw 'The current-maximum Folia/MySQL row-preservation selector was rejected before its pinned path-resolution boundary.'
+    }
+    Write-Output 'PASS: accept the current-maximum Folia/MySQL row-preservation selector before external paths are resolved'
+
+    $currentMaximumFoliaMySqlRowPreservationWithoutFailureModeRejectedBeforePaths = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumFoliaMySqlEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumFolia `
+            -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumFoliaMySqlRowPreservationWithoutFailureModeRejectedBeforePaths = $_.Exception.Message -match 'requires the required-v11 startup-failure mode'
+    }
+    if (-not $currentMaximumFoliaMySqlRowPreservationWithoutFailureModeRejectedBeforePaths) {
+        throw 'Current-maximum Folia/MySQL row preservation without required-v11 startup-failure mode was not rejected before external paths were resolved.'
+    }
+    Write-Output 'PASS: reject current-maximum Folia/MySQL row preservation without required-v11 startup-failure mode before external paths are resolved'
 
     $currentMaximumPaperMariaDbRowGuardRejectedBeforePaths = $false
     try {

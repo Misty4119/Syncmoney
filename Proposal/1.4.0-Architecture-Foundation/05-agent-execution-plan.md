@@ -2024,3 +2024,11 @@ Validation consolidation analysis: keep assertions that share the same initial s
 The independent documentation review found no Critical or Important issues; its one Minor wording note was corrected. Universal AI Verifier returned `PASS` for this consolidation analysis, with no A/B timing claim. Exact review and verifier digests are recorded in 06.
 
 The earlier fixture-setup failure remains retained as `FAIL / EXCLUDED`; it is superseded for this bounded gate by the accepted runtime report. The minimum-Paper/MySQL and minimum-Paper/MariaDB initial-schema blockers remain `BLOCKED / NOT VERIFIED`; no provisioning contract or acceptance criterion changed. Paper M12 was not repeated. T21 remains `IN_PROGRESS` with E07 P1, E08 `INCONCLUSIVE / P0-CANDIDATE`, and licensed CMI `BLOCKED / NOT VERIFIED`.
+
+### 2026-10-20 T21 next selected gate — current-maximum Folia/MySQL required-v11 row preservation
+
+Following the accepted Paper `26.3#200` / MySQL `8.0.42` row-preservation cell, select Folia `26.3#3` / MySQL `8.0.42` for the same bounded required-v11 audit-DDL denial with one pre-existing `players` row. This adds the next formal platform observation without reopening the user-blocked minimum-Paper initial-schema cases or changing SQL provisioning or acceptance criteria. Require candidate startup rejection at the denied DDL boundary, initialization rollback, and an identical normalized before/after row snapshot. This is one-row evidence, not all-row or whole-database atomic-rollback evidence.
+
+The target guard now admits MySQL only for current-maximum Paper and Folia, while preserving the PostgreSQL target set. Baseline RED evidence showed the current guard rejecting MySQL / `CurrentMaximumFolia`; the updated focused validator passed 205 `PASS:` assertions, including positive selector/path-boundary coverage and rejection when the startup-failure mode is omitted. All three modified PowerShell files parsed and `git diff --check` passed. Exact outputs and pre-runtime pins are recorded in 06.
+
+As of this checkpoint, the Folia/MySQL runtime cell has not started. Keep all prior run data and reports; the user waived the separate cleanup operation. Do not repeat Paper M12. T21 remains `IN_PROGRESS`; E07 P1; E08 `INCONCLUSIVE / P0-CANDIDATE`; licensed CMI `BLOCKED / NOT VERIFIED`.
