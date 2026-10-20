@@ -94,7 +94,8 @@ function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    return $DatabaseProduct -ceq 'PostgreSQL' -and $PlatformEndpoint -ceq 'CurrentMaximum'
+    return $DatabaseProduct -ceq 'PostgreSQL' -and
+        $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia')
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {

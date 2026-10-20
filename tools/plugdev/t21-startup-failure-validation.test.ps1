@@ -1230,12 +1230,15 @@ try {
     Write-Output 'PASS: admit the 30 historical/current maximum, minimum, and supplemental Paper product/endpoint combinations'
 
     if (-not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum) -or
+        -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia) -or
         (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum)) {
-        throw 'Required-v11 player-row preservation must be admitted only for current-maximum Paper/PostgreSQL.'
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum) -or
+        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumFolia)) {
+        throw 'Required-v11 player-row preservation must be admitted only for current-maximum Paper/PostgreSQL or Folia/PostgreSQL.'
     }
-    Write-Output 'PASS: scope required-v11 player-row preservation to current-maximum Paper/PostgreSQL'
+    Write-Output 'PASS: scope required-v11 player-row preservation to current-maximum Paper/PostgreSQL and Folia/PostgreSQL'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1382,6 +1385,31 @@ try {
         throw 'The current-maximum Paper/PostgreSQL required-v11 report with one unchanged player row was rejected.'
     }
     Write-Output 'PASS: accept one unchanged pre-existing player row across required-v11 DDL rejection'
+
+    $currentMaximumFoliaPostgreSqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumFolia
+    $currentMaximumFoliaPostgreSqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'CurrentMaximumFolia'
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateBefore.playersTableExists = $true
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateBefore.playerRows = 1
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateBefore.playerRowsJson = $requiredV11PlayerRowsJson
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateAfter.playersTableExists = $true
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateAfter.playerRows = 1
+    $currentMaximumFoliaPostgreSqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11PlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumFoliaPostgreSqlRowReport $currentMaximumFoliaPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Folia/PostgreSQL required-v11 report with one unchanged player row was rejected.'
+    }
+    Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Folia/PostgreSQL'
+    if (Test-T21StartupFailureReportFixture $currentMaximumFoliaPostgreSqlRowReport $currentMaximumPaperPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Folia/PostgreSQL report accepted the Paper server SHA-256.'
+    }
+    $mutatedCurrentMaximumFoliaPostgreSqlRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumFoliaPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedCurrentMaximumFoliaPostgreSqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11PlayerRowsJson.Replace('"balance":"1234.56"', '"balance":"1234.57"')
+    if (Test-T21StartupFailureReportFixture $mutatedCurrentMaximumFoliaPostgreSqlRowReport $currentMaximumFoliaPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Folia/PostgreSQL report accepted a mutated pre-existing player row.'
+    }
+    Write-Output 'PASS: reject wrong Folia server pins and mutated player-row evidence'
 
     $missingRequiredV11PlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $missingRequiredV11PlayerRowReport.schemaStateAfter.playerRows = 0
