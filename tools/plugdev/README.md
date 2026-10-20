@@ -868,6 +868,12 @@ The bounded DatabaseManager initial-schema PostgreSQL startup-failure case has P
 
 These observations cover six PostgreSQL endpoint cells for this bounded startup-failure/cleanup case; they do not establish exact denied DDL, whole-schema atomic rollback, preservation of existing rows, MySQL/MariaDB behavior, or general platform compatibility. Minimum-Paper/MySQL remains user-directed BLOCKED / NOT VERIFIED; minimum-Paper/MariaDB remains blocked for this criterion, and the provisioning contract is unchanged. This bounded startup-failure/cleanup case does not close T21.
 
+## T21 current-maximum required-v11 DDL denial with seeded player-row preservation
+
+The current-maximum Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984` endpoints now each have one bounded PostgreSQL `18.1` report for required-v11 audit DDL permission denial with a single pre-existing `players` row. Each report observed initialization rollback, main schema v1, audit schema v10, and an unchanged row snapshot. These are endpoint/backend observations only; they do not establish all-row preservation, complete database inventory, or whole-database atomic rollback.
+
+Minimum-Paper/MySQL and minimum-Paper/MariaDB initial-schema permission-denial remain `BLOCKED / NOT VERIFIED` by user disposition. The SQL provisioning contract and criteria are unchanged; Paper M12 was not repeated. T21 remains `IN_PROGRESS`. Exact report, audit, hashes, and limits are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
+
 ## T21 same-version two-backend SYNC network gate
 
 As of 2026-10-20, all six formal endpoints have separate `PASS_BOUNDED_SUBCASE (E2)` reports for the same-version, two-backend SYNC network scenario: Paper `1.21.6#48` / `26.3#200`, Folia `1.21.6#6` / `26.3#3`, and Canvas `1.21.8#603` / `26.3#984`. The current-maximum Canvas report-specific audit accepted 22 retained files, and the direct evidence verifier passed 361 checks; report/audit identities and evidence limits are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`. These exact-build observations do not establish mixed-build networking or live mixed-version write guarantees. The accepted Paper M12 report is reused and must not be rerun. Minimum-Paper/MySQL stays `BLOCKED / NOT VERIFIED`; T21 remains `IN_PROGRESS`.
