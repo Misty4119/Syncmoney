@@ -129,6 +129,7 @@ function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
     [string]$PlatformEndpoint
 ) {
     if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')) { return $true }
+    if ($DatabaseProduct -ceq 'MariaDB' -and $PlatformEndpoint -ceq 'CurrentMaximum') { return $true }
     return $DatabaseProduct -ceq 'PostgreSQL' -and
         $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')
 }
