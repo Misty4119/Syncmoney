@@ -1165,7 +1165,7 @@ try {
         } else {
             'ALTER command denied'
         }
-        if ($databaseProduct -in @('MySQL', 'MariaDB') -and $platformEndpoint -ceq 'Maximum') {
+        if ($databaseProduct -in @('MySQL', 'MariaDB') -and $platformEndpoint -in @('Maximum', 'CurrentMaximum')) {
             $requestIdDdlLogPath = 'logs\mysql-denied-request-id-ddl-evidence.jsonl'
             $requestIdDdlEvent = [ordered]@{
                 userHost = 'sm_t21_a1b2c3d4[sm_t21_a1b2c3d4] @ localhost [127.0.0.1]'
@@ -1236,9 +1236,12 @@ try {
             @{ database='PostgreSQL'; endpoint='Maximum'; expected=$false }
             @{ database='PostgreSQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
-            @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$false }
+            @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$true }
+            @{ database='MySQL'; endpoint='Maximum'; expected=$false }
+            @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$false }
+            @{ database='MariaDB'; endpoint='CurrentMaximum'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$false }
         )) {
         $accepted = Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $requiredV11PlayerRowCase.database -PlatformEndpoint $requiredV11PlayerRowCase.endpoint
@@ -1246,7 +1249,7 @@ try {
             throw "Required-v11 row preservation target guard returned $accepted for $($requiredV11PlayerRowCase.database) / $($requiredV11PlayerRowCase.endpoint); expected $($requiredV11PlayerRowCase.expected)."
         }
     }
-    Write-Output 'PASS: admit only current-maximum Paper, Folia, and Canvas PostgreSQL row-preservation targets'
+    Write-Output 'PASS: admit current-maximum Paper/MySQL and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
 
     $currentMaximumCanvasRowGuardPathResolutionObserved = $false
     try {
@@ -1260,6 +1263,33 @@ try {
         throw 'The current-maximum Canvas/PostgreSQL row-preservation target was rejected before path resolution or accepted past the path guard.'
     }
     Write-Output 'PASS: accept the current-maximum Canvas/PostgreSQL row-preservation selector before external paths are resolved'
+
+    $currentMaximumPaperMySqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximum
+    $currentMaximumPaperMySqlRowGuardPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumPaperMySqlEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum `
+            -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumPaperMySqlRowGuardPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $currentMaximumPaperMySqlRowGuardPathResolutionObserved) {
+        throw 'The current-maximum Paper/MySQL row-preservation selector was rejected before its pinned path-resolution boundary.'
+    }
+    Write-Output 'PASS: accept only the current-maximum Paper/MySQL row-preservation selector before external paths are resolved'
+
+    $currentMaximumPaperMariaDbRowGuardRejectedBeforePaths = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumPaperMySqlEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximum `
+            -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumPaperMariaDbRowGuardRejectedBeforePaths = $_.Exception.Message -match 'Required-v11 player-row preservation'
+    }
+    if (-not $currentMaximumPaperMariaDbRowGuardRejectedBeforePaths) {
+        throw 'The current-maximum Paper/MariaDB row-preservation selector was not rejected by the target guard before external paths were resolved.'
+    }
+    Write-Output 'PASS: reject current-maximum Paper/MariaDB row-preservation before external paths are resolved'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1406,6 +1436,46 @@ try {
         throw 'The current-maximum Paper/PostgreSQL required-v11 report with one unchanged player row was rejected.'
     }
     Write-Output 'PASS: accept one unchanged pre-existing player row across required-v11 DDL rejection'
+
+    $currentMaximumPaperMySqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'CurrentMaximum'
+    $requiredV11MySqlPlayerRow = [ordered]@{
+        player_uuid = '00000000-0000-0000-0000-00000000cafe'
+        player_name = 'T21-ROW-SENTINEL'
+        balance = '1234.56'
+        version = '73'
+        last_server = 't21-player-preservation'
+        updated_at = '2026-10-16 12:34:56'
+    }
+    $requiredV11MySqlPlayerRowsJson = ConvertTo-Json -InputObject @($requiredV11MySqlPlayerRow) -Depth 10 -Compress
+    $currentMaximumPaperMySqlRowReport.schemaStateBefore.playersTableExists = $true
+    $currentMaximumPaperMySqlRowReport.schemaStateBefore.playerRows = 1
+    $currentMaximumPaperMySqlRowReport.schemaStateBefore.playerRowsJson = $requiredV11MySqlPlayerRowsJson
+    $currentMaximumPaperMySqlRowReport.schemaStateAfter.playersTableExists = $true
+    $currentMaximumPaperMySqlRowReport.schemaStateAfter.playerRows = 1
+    $currentMaximumPaperMySqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumPaperMySqlRowReport $currentMaximumPaperMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Paper/MySQL required-v11 report with one unchanged player row was rejected.'
+    }
+    Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Paper/MySQL'
+    $currentMaximumPaperMySqlRowReportMissingDdlEvidence = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperMySqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $currentMaximumPaperMySqlRowReportMissingDdlEvidence.Remove('deniedDdlEvidence')
+    if (Test-T21StartupFailureReportFixture $currentMaximumPaperMySqlRowReportMissingDdlEvidence $currentMaximumPaperMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Paper/MySQL row-preservation report accepted missing denied request_id DDL evidence.'
+    }
+    Write-Output 'PASS: require retained request_id ALTER evidence for current-maximum Paper/MySQL'
+    if (Test-T21StartupFailureReportFixture $currentMaximumPaperMySqlRowReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Paper/MySQL row-preservation report accepted the minimum-Paper server SHA-256.'
+    }
+    $mutatedCurrentMaximumPaperMySqlRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperMySqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedCurrentMaximumPaperMySqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson.Replace('1234.56', '1234.57')
+    if (Test-T21StartupFailureReportFixture $mutatedCurrentMaximumPaperMySqlRowReport $currentMaximumPaperMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Paper/MySQL row-preservation report accepted a changed player-row balance.'
+    }
+    Write-Output 'PASS: reject wrong Paper/MySQL server pins and mutated player-row evidence'
 
     $currentMaximumFoliaPostgreSqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumFolia
     $currentMaximumFoliaPostgreSqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'CurrentMaximumFolia'
