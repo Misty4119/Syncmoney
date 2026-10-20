@@ -1229,16 +1229,37 @@ try {
     if ($approvedV11Count -ne 30) { throw "Expected 30 approved required-v11 product/endpoint combinations; observed $approvedV11Count." }
     Write-Output 'PASS: admit the 30 historical/current maximum, minimum, and supplemental Paper product/endpoint combinations'
 
-    if (-not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximum) -or
-        -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumFolia) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint Maximum) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximum) -or
-        (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumFolia)) {
-        throw 'Required-v11 player-row preservation must be admitted only for current-maximum Paper/PostgreSQL or Folia/PostgreSQL.'
+    foreach ($requiredV11PlayerRowCase in @(
+            @{ database='PostgreSQL'; endpoint='CurrentMaximum'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='CurrentMaximumFolia'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='CurrentMaximumCanvas'; expected=$true }
+            @{ database='PostgreSQL'; endpoint='Maximum'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='MaximumFolia'; expected=$false }
+            @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
+            @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$false }
+            @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$false }
+            @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$false }
+            @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$false }
+        )) {
+        $accepted = Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $requiredV11PlayerRowCase.database -PlatformEndpoint $requiredV11PlayerRowCase.endpoint
+        if ($accepted -ne $requiredV11PlayerRowCase.expected) {
+            throw "Required-v11 row preservation target guard returned $accepted for $($requiredV11PlayerRowCase.database) / $($requiredV11PlayerRowCase.endpoint); expected $($requiredV11PlayerRowCase.expected)."
+        }
     }
-    Write-Output 'PASS: scope required-v11 player-row preservation to current-maximum Paper/PostgreSQL and Folia/PostgreSQL'
+    Write-Output 'PASS: admit only current-maximum Paper, Folia, and Canvas PostgreSQL row-preservation targets'
+
+    $currentMaximumCanvasRowGuardPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas `
+            -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumCanvasRowGuardPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $currentMaximumCanvasRowGuardPathResolutionObserved) {
+        throw 'The current-maximum Canvas/PostgreSQL row-preservation target was rejected before path resolution or accepted past the path guard.'
+    }
+    Write-Output 'PASS: accept the current-maximum Canvas/PostgreSQL row-preservation selector before external paths are resolved'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1410,6 +1431,31 @@ try {
         throw 'The current-maximum Folia/PostgreSQL report accepted a mutated pre-existing player row.'
     }
     Write-Output 'PASS: reject wrong Folia server pins and mutated player-row evidence'
+
+    $currentMaximumCanvasPostgreSqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumCanvas
+    $currentMaximumCanvasPostgreSqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'PostgreSQL' '18.1' 'CurrentMaximumCanvas'
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateBefore.playersTableExists = $true
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateBefore.playerRows = 1
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateBefore.playerRowsJson = $requiredV11PlayerRowsJson
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateAfter.playersTableExists = $true
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateAfter.playerRows = 1
+    $currentMaximumCanvasPostgreSqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11PlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumCanvasPostgreSqlRowReport $currentMaximumCanvasPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Canvas/PostgreSQL required-v11 report with one unchanged player row was rejected.'
+    }
+    Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Canvas/PostgreSQL'
+    if (Test-T21StartupFailureReportFixture $currentMaximumCanvasPostgreSqlRowReport ('d' * 64) ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Canvas/PostgreSQL report accepted an unpinned server SHA-256.'
+    }
+    $mutatedCurrentMaximumCanvasPostgreSqlRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumCanvasPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedCurrentMaximumCanvasPostgreSqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11PlayerRowsJson.Replace('"balance":"1234.56"', '"balance":"1234.57"')
+    if (Test-T21StartupFailureReportFixture $mutatedCurrentMaximumCanvasPostgreSqlRowReport $currentMaximumCanvasPostgreSqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct PostgreSQL -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Canvas/PostgreSQL report accepted a mutated pre-existing player row.'
+    }
+    Write-Output 'PASS: reject wrong Canvas server pins and mutated player-row evidence'
 
     $missingRequiredV11PlayerRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumPaperPostgreSqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
     $missingRequiredV11PlayerRowReport.schemaStateAfter.playerRows = 0

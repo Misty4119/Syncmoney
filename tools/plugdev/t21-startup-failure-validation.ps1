@@ -95,7 +95,7 @@ function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
     [string]$PlatformEndpoint
 ) {
     return $DatabaseProduct -ceq 'PostgreSQL' -and
-        $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia')
+        $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')
 }
 
 function Test-T21MySqlDeniedRequestIdDdlEvent([object]$Event, [string]$RuntimeUser) {
