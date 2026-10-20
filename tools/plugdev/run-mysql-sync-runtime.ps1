@@ -1941,7 +1941,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
     $identity = Get-T21PlatformIdentity $fullLog
     Assert-T21PlatformIdentity $identity $script:platformTarget.software $script:platformTarget.minecraftVersion $script:platformTarget.build
     $pluginPin = Get-PinnedSyncmoneyPlugin $CandidateVersion $script:candidateSha256
-    if ($FailureScenario -ceq 'RequiredV11DdlPermissionDenied' -and
+    if ($FailureScenario -in @('RequiredV11DdlPermissionDenied', 'RequiredV11DdlPermissionDeniedPlayerRowPreservation') -and
         $script:databaseProduct -in @('MySQL', 'MariaDB') -and $PlatformEndpoint -in @('Maximum', 'CurrentMaximum')) {
         $script:deniedDdlEvidence = Get-T21MySqlDeniedRequestIdDdlEvidence
     }

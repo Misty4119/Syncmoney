@@ -2714,6 +2714,25 @@ try {
     }
     Write-Output 'PASS: restore general-log state after partial enablement and before platform shutdown'
 
+    $requiredV11EvidenceCall = $runnerSource.IndexOf('$script:deniedDdlEvidence = Get-T21MySqlDeniedRequestIdDdlEvidence', [StringComparison]::Ordinal)
+    $requiredV11Dispatch = if ($requiredV11EvidenceCall -ge 0) {
+        $runnerSource.LastIndexOf("if (`$FailureScenario -in @(", $requiredV11EvidenceCall, [StringComparison]::Ordinal)
+    } else { -1 }
+    $requiredV11DispatchEnd = if ($requiredV11Dispatch -ge 0) {
+        $runnerSource.IndexOf('}', $requiredV11Dispatch, [StringComparison]::Ordinal)
+    } else { -1 }
+    $requiredV11StandardScenario = if ($requiredV11Dispatch -ge 0 -and $requiredV11DispatchEnd -gt $requiredV11Dispatch) {
+        $runnerSource.IndexOf("'RequiredV11DdlPermissionDenied'", $requiredV11Dispatch, $requiredV11DispatchEnd - $requiredV11Dispatch, [StringComparison]::Ordinal)
+    } else { -1 }
+    $requiredV11PlayerRowScenario = if ($requiredV11Dispatch -ge 0 -and $requiredV11DispatchEnd -gt $requiredV11Dispatch) {
+        $runnerSource.IndexOf("'RequiredV11DdlPermissionDeniedPlayerRowPreservation'", $requiredV11Dispatch, $requiredV11DispatchEnd - $requiredV11Dispatch, [StringComparison]::Ordinal)
+    } else { -1 }
+    if ($requiredV11Dispatch -lt 0 -or $requiredV11DispatchEnd -le $requiredV11Dispatch -or
+        $requiredV11StandardScenario -lt 0 -or $requiredV11PlayerRowScenario -lt 0) {
+        throw 'The runner must capture request_id DDL evidence for both required-v11 failure scenarios.'
+    }
+    Write-Output 'PASS: capture denied request_id DDL evidence for both required-v11 failure fixtures'
+
     $startupValidatorSource = Get-Content -LiteralPath $validatorPath -Raw
     if ($startupValidatorSource -notmatch 'FailureScenario' -or
         $startupValidatorSource -notmatch 'IncompleteV10AuditTable' -or
