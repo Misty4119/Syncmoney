@@ -1238,9 +1238,10 @@ try {
             @{ database='PostgreSQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentMaximum'; expected=$true }
             @{ database='MySQL'; endpoint='CurrentMaximumFolia'; expected=$true }
+            @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$true }
             @{ database='MySQL'; endpoint='Maximum'; expected=$false }
+            @{ database='MySQL'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MySQL'; endpoint='CurrentStable'; expected=$false }
-            @{ database='MySQL'; endpoint='CurrentMaximumCanvas'; expected=$false }
             @{ database='MySQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximum'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximumFolia'; expected=$false }
@@ -1251,7 +1252,7 @@ try {
             throw "Required-v11 row preservation target guard returned $accepted for $($requiredV11PlayerRowCase.database) / $($requiredV11PlayerRowCase.endpoint); expected $($requiredV11PlayerRowCase.expected)."
         }
     }
-    Write-Output 'PASS: admit current-maximum Paper/Folia MySQL and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
+    Write-Output 'PASS: admit current-maximum Paper/Folia/Canvas MySQL and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
 
     $currentMaximumCanvasRowGuardPathResolutionObserved = $false
     try {
@@ -1293,6 +1294,20 @@ try {
         throw 'The current-maximum Folia/MySQL row-preservation selector was rejected before its pinned path-resolution boundary.'
     }
     Write-Output 'PASS: accept the current-maximum Folia/MySQL row-preservation selector before external paths are resolved'
+
+    $currentMaximumCanvasMySqlEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumCanvas
+    $currentMaximumCanvasMySqlRowGuardPathResolutionObserved = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumCanvasMySqlEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumCanvas `
+            -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumCanvasMySqlRowGuardPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
+    }
+    if (-not $currentMaximumCanvasMySqlRowGuardPathResolutionObserved) {
+        throw 'The current-maximum Canvas/MySQL row-preservation target was rejected before its pinned path-resolution boundary.'
+    }
+    Write-Output 'PASS: accept the current-maximum Canvas/MySQL row-preservation selector before external paths are resolved'
 
     $currentMaximumFoliaMySqlRowPreservationWithoutFailureModeRejectedBeforePaths = $false
     try {
@@ -1487,6 +1502,26 @@ try {
         throw 'The current-maximum Paper/MySQL required-v11 report with one unchanged player row was rejected.'
     }
     Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Paper/MySQL'
+
+    $currentMaximumCanvasMySqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'CurrentMaximumCanvas'
+    $currentMaximumCanvasMySqlRowReport.schemaStateBefore.playersTableExists = $true
+    $currentMaximumCanvasMySqlRowReport.schemaStateBefore.playerRows = 1
+    $currentMaximumCanvasMySqlRowReport.schemaStateBefore.playerRowsJson = $requiredV11MySqlPlayerRowsJson
+    $currentMaximumCanvasMySqlRowReport.schemaStateAfter.playersTableExists = $true
+    $currentMaximumCanvasMySqlRowReport.schemaStateAfter.playerRows = 1
+    $currentMaximumCanvasMySqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumCanvasMySqlRowReport $currentMaximumCanvasMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Canvas/MySQL required-v11 report with one unchanged player row was rejected.'
+    }
+    Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Canvas/MySQL'
+    $mutatedCurrentMaximumCanvasMySqlRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumCanvasMySqlRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedCurrentMaximumCanvasMySqlRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson.Replace('1234.56', '1234.57')
+    if (Test-T21StartupFailureReportFixture $mutatedCurrentMaximumCanvasMySqlRowReport $currentMaximumCanvasMySqlEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MySQL -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Canvas/MySQL row-preservation report accepted a changed player-row balance.'
+    }
+    Write-Output 'PASS: reject a mutated current-maximum Canvas/MySQL player-row snapshot'
     $mySqlPlayerSeedSql = Get-T21PlayerRowPreservationSeedSql -DatabaseProduct MySQL
     foreach ($requiredSeedFragment in @(
             'CREATE TABLE players',

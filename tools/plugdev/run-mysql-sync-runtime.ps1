@@ -67,7 +67,7 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
 if ($RequiredV11DdlPermissionDeniedPlayerRowPreservation.IsPresent -and
     (-not $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -or
         -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint))) {
-    throw 'Required-v11 player-row preservation requires the required-v11 startup-failure mode and is limited to current-maximum Paper/Folia MySQL plus current-maximum Paper/Folia/Canvas PostgreSQL.'
+    throw 'Required-v11 player-row preservation requires the required-v11 startup-failure mode and is limited to current-maximum Paper/Folia/Canvas MySQL and Paper/Folia/Canvas PostgreSQL.'
 }
 if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {

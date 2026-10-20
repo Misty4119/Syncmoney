@@ -128,7 +128,7 @@ function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint
 ) {
-    if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia')) { return $true }
+    if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')) { return $true }
     return $DatabaseProduct -ceq 'PostgreSQL' -and
         $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')
 }
