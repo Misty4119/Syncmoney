@@ -24,10 +24,13 @@ $acceptedPlatformEndpoints = @($platformEndpointValidateSet.PositionalArguments 
 if ($acceptedPlatformEndpoints -notcontains 'CurrentStable') {
     throw 'The M04 offline auditor must accept the explicitly pinned current-stable Paper endpoint.'
 }
+if ($acceptedPlatformEndpoints -notcontains 'CurrentStable209') {
+    throw 'The M04 offline auditor must accept the independently pinned Paper 26.3#209 current-stable endpoint.'
+}
 if ($acceptedPlatformEndpoints -notcontains 'Maximum') {
     throw 'The M04 offline auditor must continue to accept the separate formal maximum endpoint.'
 }
-Write-Output 'PASS: M04 offline auditor accepts current-stable without replacing the formal maximum selector'
+Write-Output 'PASS: M04 offline auditor accepts historical and Paper 26.3#209 current-stable selectors without replacing the formal maximum selector'
 
 function Import-AuditPredicate([string]$Name) {
     $predicate = {

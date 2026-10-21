@@ -42,7 +42,7 @@ function Assert-T21PlatformIdentity(
 }
 
 function Get-T21PlatformEndpoint(
-    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     switch -CaseSensitive ($PlatformEndpoint) {
@@ -80,6 +80,15 @@ function Get-T21PlatformEndpoint(
                 minecraftVersion = '26.3'
                 build = 194
                 sha256 = '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784'
+            }
+        }
+        'CurrentStable209' {
+            return [ordered]@{
+                taskSuffix = 'current-stable-Paper-209'
+                software = 'paper'
+                minecraftVersion = '26.3'
+                build = 209
+                sha256 = '0a056c7648cfa0ca8d9b8c833a2bd2e1313ed4f1393a5125dd3444a4ee257e22'
             }
         }
         'MinimumFolia' {
@@ -140,13 +149,13 @@ function Get-T21PlatformEndpoint(
     throw "Unsupported T21 platform endpoint: $PlatformEndpoint"
 }
 
-function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable')][string]$PaperEndpoint = 'Minimum') {
+function Get-T21PaperEndpoint([ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209')][string]$PaperEndpoint = 'Minimum') {
     return Get-T21PlatformEndpoint -PlatformEndpoint $PaperEndpoint
 }
 
 function Test-T21M04PlatformEndpointReport(
     [object]$report,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ($null -eq $report) { return $false }
@@ -159,7 +168,7 @@ function Test-T21M04PlatformEndpointReport(
 
 function Test-T21M04PlatformStartupIdentity(
     [string]$serverLogText,
-    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
     if ([string]::IsNullOrWhiteSpace($serverLogText)) { return $false }

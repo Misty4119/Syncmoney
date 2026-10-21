@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RunDirectory,
     [Parameter(Mandatory = $true)][string]$PlugDevRoot,
     [Alias('PaperEndpoint')]
-    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
+    [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 )
 

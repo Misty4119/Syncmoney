@@ -146,6 +146,16 @@ if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
 }
 Write-Output 'PASS: pin current-stable Paper independently from user maximum'
 
+$currentStable209Paper = Get-T21PaperEndpoint -PaperEndpoint CurrentStable209
+if ($currentStable209Paper.taskSuffix -cne 'current-stable-Paper-209' -or
+    $currentStable209Paper.software -cne 'paper' -or
+    $currentStable209Paper.minecraftVersion -cne '26.3' -or
+    $currentStable209Paper.build -ne 209 -or
+    $currentStable209Paper.sha256 -cne '0a056c7648cfa0ca8d9b8c833a2bd2e1313ed4f1393a5125dd3444a4ee257e22') {
+    throw 'The T21 current-stable Paper 26.3#209 endpoint must be pinned independently from both the historical CurrentStable and formal maximum endpoints.'
+}
+Write-Output 'PASS: pin Paper 26.3#209 current stable independently from historical CurrentStable and formal maximum'
+
 $currentMaximumEndpoints = @(
     [ordered]@{ endpoint='CurrentMaximum'; taskSuffix='current-maximum-Paper'; software='paper'; minecraftVersion='26.3'; build=200; sha256='0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' },
     [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=3; sha256='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
@@ -186,6 +196,37 @@ if (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint 
     throw 'The M04 auditor must not accept current-stable Paper evidence as the formal maximum endpoint.'
 }
 Write-Output 'PASS: keep current-stable Paper separate from the formal maximum in M04'
+$currentStable209M04Report = [ordered]@{
+    platform = $currentStable209Paper.software
+    minecraftVersion = $currentStable209Paper.minecraftVersion
+    buildNumber = $currentStable209Paper.build
+    expectedServerSha256 = $currentStable209Paper.sha256
+}
+if (-not (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentStable209)) {
+    throw 'The M04 auditor must accept the exact pinned current-stable Paper 26.3#209 endpoint.'
+}
+if (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentStable) {
+    throw 'The M04 auditor must not accept Paper 26.3#209 evidence under the historical CurrentStable 26.3#194 selector.'
+}
+if (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentMaximum) {
+    throw 'The M04 auditor must not accept Paper 26.3#209 evidence as the formal maximum endpoint.'
+}
+$currentStable209WrongHash = [ordered]@{
+    platform = $currentStable209Paper.software
+    minecraftVersion = $currentStable209Paper.minecraftVersion
+    buildNumber = $currentStable209Paper.build
+    expectedServerSha256 = '1' * 64
+}
+if (Test-T21M04PlatformEndpointReport $currentStable209WrongHash -PlatformEndpoint CurrentStable209) {
+    throw 'The M04 auditor must reject Paper 26.3#209 when its reported expected server hash is wrong.'
+}
+Write-Output 'PASS: require exact Paper 26.3#209 build, hash, and supplemental endpoint identity for M04'
+$currentStable209M04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-209-main@fixture (2026-10-20T21:49:44Z) for Minecraft 26.3'
+if (-not (Test-T21M04PlatformStartupIdentity $currentStable209M04Startup -PlatformEndpoint CurrentStable209) -or
+    (Test-T21M04PlatformStartupIdentity $currentStable209M04Startup.Replace('26.3-209', '26.3-208') -PlatformEndpoint CurrentStable209)) {
+    throw 'The M04 auditor must accept only the exact Paper 26.3#209 startup identity under CurrentStable209.'
+}
+Write-Output 'PASS: accept Paper 26.3#209 startup identity and reject another build under CurrentStable209'
 $currentStableM04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-194-main@fixture (2026-10-16T00:00:00Z) for Minecraft 26.3'
 if (-not (Test-T21M04PlatformStartupIdentity $currentStableM04Startup -PlatformEndpoint CurrentStable)) {
     throw 'The M04 auditor must accept the exact current-stable Paper startup identity.'
@@ -201,8 +242,8 @@ if ($defaultRuntimeReportsRoot -cne [IO.Path]::GetFullPath('C:\syncmoney\build\r
     throw 'The T21 runtime reports root must preserve the repository-local default when no override is supplied.'
 }
 Write-Output 'PASS: preserve the repository-local T21 reports root by default'
-$alternateRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:\syncmoney-t21-reports'
-if ($alternateRuntimeReportsRoot -cne [IO.Path]::GetFullPath('D:\syncmoney-t21-reports')) {
+$alternateRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'C:\syncmoney-t21-reports'
+if ($alternateRuntimeReportsRoot -cne [IO.Path]::GetFullPath('C:\syncmoney-t21-reports')) {
     throw 'The T21 runtime reports root override did not resolve to its exact absolute destination.'
 }
 Write-Output 'PASS: resolve an explicit absolute T21 reports root'
@@ -210,13 +251,13 @@ Assert-ThrowsContaining 'reject a relative T21 reports root' {
     Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'reports'
 } 'must be an absolute path'
 Assert-ThrowsContaining 'reject a drive-relative T21 reports root' {
-    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:syncmoney-t21-reports'
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'C:syncmoney-t21-reports'
 } 'must be an absolute path'
 Assert-ThrowsContaining 'reject a root-relative T21 reports root' {
     Resolve-T21RuntimeReportsRoot 'C:\syncmoney' '\syncmoney-t21-reports'
 } 'must be an absolute path'
 Assert-ThrowsContaining 'reject a filesystem root as the T21 reports root' {
-    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'D:\'
+    Resolve-T21RuntimeReportsRoot 'C:\syncmoney' 'C:\'
 } 'cannot be a filesystem root'
 
 $runtimePlatformEndpoints = @(
