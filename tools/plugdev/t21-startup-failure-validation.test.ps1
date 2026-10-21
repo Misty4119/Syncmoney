@@ -8,6 +8,30 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or newer is req
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('t21-startup-failure-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path (Join-Path $testRoot 'logs') | Out-Null
 try {
+    $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $canvasMariaDbRunRoot = Get-T21RuntimeRunDirectoryPath `
+        -ReportsRoot (Join-Path $repoRoot 'build\reports\foundation\T21-sql-runtime') `
+        -DatabaseProduct MariaDB -TaskSuffix CurrentMaximumCanvas -Timestamp '20261021-101237' `
+        -RunId '0123456789abcdef0123456789abcdef'
+    $longestMariaDbBootstrapPath = Join-Path $canvasMariaDbRunRoot 'mysql\data\sys\x@0024statements_with_runtimes_in_95th_percentile.frm~'
+    if ($canvasMariaDbRunRoot -notmatch '-0123456789abcdef$' -or $longestMariaDbBootstrapPath.Length -gt 245) {
+        throw "The Canvas/MariaDB runtime path is not shortened enough for the longest system-table bootstrap file ($($longestMariaDbBootstrapPath.Length) characters)."
+    }
+    Write-Output 'PASS: keep the longest Canvas/MariaDB bootstrap path at or below 245 characters with a 16-hex display suffix'
+
+    $runRootCollisionProbe = Join-Path $testRoot 'run-root-collision-probe'
+    $null = New-T21RuntimeRunDirectory -RunDirectoryPath $runRootCollisionProbe
+    $runRootCollisionRejected = $false
+    try {
+        $null = New-T21RuntimeRunDirectory -RunDirectoryPath $runRootCollisionProbe
+    } catch {
+        $runRootCollisionRejected = $_.Exception.Message -match 'Refusing to reuse an existing runtime run directory'
+    }
+    if (-not $runRootCollisionRejected) {
+        throw 'A repeated shortened runtime run-directory identity was not rejected before evidence could be overwritten.'
+    }
+    Write-Output 'PASS: refuse to reuse an existing shortened runtime run directory'
+
     $platformLogPath = Join-Path $testRoot 'logs\platform-candidate-startup-failure.txt'
     $platformLog = @(
         '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
@@ -1245,8 +1269,9 @@ try {
             @{ database='MySQL'; endpoint='MaximumFolia'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentMaximum'; expected=$true }
             @{ database='MariaDB'; endpoint='CurrentMaximumFolia'; expected=$true }
-            @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$false }
+            @{ database='MariaDB'; endpoint='CurrentMaximumCanvas'; expected=$true }
             @{ database='MariaDB'; endpoint='Maximum'; expected=$false }
+            @{ database='MariaDB'; endpoint='MaximumCanvas'; expected=$false }
             @{ database='MariaDB'; endpoint='MaximumFolia'; expected=$false }
             @{ database='MariaDB'; endpoint='CurrentStable'; expected=$false }
         )) {
@@ -1255,7 +1280,7 @@ try {
             throw "Required-v11 row preservation target guard returned $accepted for $($requiredV11PlayerRowCase.database) / $($requiredV11PlayerRowCase.endpoint); expected $($requiredV11PlayerRowCase.expected)."
         }
     }
-    Write-Output 'PASS: admit current-maximum Paper/Folia MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
+    Write-Output 'PASS: admit current-maximum Paper/Folia/Canvas MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL row-preservation targets only'
 
     $currentMaximumCanvasRowGuardPathResolutionObserved = $false
     try {
@@ -1379,18 +1404,32 @@ try {
     }
     Write-Output 'PASS: reject current-maximum Folia/MariaDB row preservation without required-v11 startup-failure mode before external paths are resolved'
 
-    $currentMaximumCanvasMariaDbRowPreservationRejectedBeforePaths = $false
+    $currentMaximumCanvasMariaDbEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumCanvas
+    $currentMaximumCanvasMariaDbRowPreservationPathResolutionObserved = $false
     try {
-        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 ('a' * 64) -ExpectedCandidateSha256 ('b' * 64) `
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumCanvasMariaDbEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
             -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas `
             -RequiredV11DdlPermissionDeniedStartupFailure -RequiredV11DdlPermissionDeniedPlayerRowPreservation
     } catch {
-        $currentMaximumCanvasMariaDbRowPreservationRejectedBeforePaths = $_.Exception.Message -match 'Required-v11 player-row preservation'
+        $currentMaximumCanvasMariaDbRowPreservationPathResolutionObserved = $_.Exception.Message -match 'unused\.jar'
     }
-    if (-not $currentMaximumCanvasMariaDbRowPreservationRejectedBeforePaths) {
-        throw 'Current-maximum Canvas/MariaDB row preservation was not rejected before external paths were resolved.'
+    if (-not $currentMaximumCanvasMariaDbRowPreservationPathResolutionObserved) {
+        throw 'The current-maximum Canvas/MariaDB row-preservation selector was rejected before its pinned path-resolution boundary.'
     }
-    Write-Output 'PASS: reject current-maximum Canvas/MariaDB row-preservation selector before external paths are resolved'
+    Write-Output 'PASS: accept the current-maximum Canvas/MariaDB row-preservation selector before external paths are resolved'
+
+    $currentMaximumCanvasMariaDbRowPreservationWithoutFailureModeRejectedBeforePaths = $false
+    try {
+        & $runnerPath -ServerJar 'unused.jar' -ExpectedServerSha256 $currentMaximumCanvasMariaDbEndpoint.sha256 -ExpectedCandidateSha256 ('b' * 64) `
+            -PlugDevRoot 'unused' -JavaHome 'unused' -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas `
+            -RequiredV11DdlPermissionDeniedPlayerRowPreservation
+    } catch {
+        $currentMaximumCanvasMariaDbRowPreservationWithoutFailureModeRejectedBeforePaths = $_.Exception.Message -match 'requires the required-v11 startup-failure mode'
+    }
+    if (-not $currentMaximumCanvasMariaDbRowPreservationWithoutFailureModeRejectedBeforePaths) {
+        throw 'Current-maximum Canvas/MariaDB row preservation without required-v11 startup-failure mode was not rejected before external paths were resolved.'
+    }
+    Write-Output 'PASS: reject current-maximum Canvas/MariaDB row preservation without required-v11 startup-failure mode before external paths are resolved'
 
     $ddlFailureReport = New-T21RequiredV11DdlFailureReportFixture
     if (-not (Test-T21StartupFailureReportFixture $ddlFailureReport $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
@@ -1612,11 +1651,22 @@ try {
     $currentMaximumCanvasMariaDbRowReport.schemaStateAfter.playersTableExists = $true
     $currentMaximumCanvasMariaDbRowReport.schemaStateAfter.playerRows = 1
     $currentMaximumCanvasMariaDbRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson
-    if (Test-T21StartupFailureReportFixture $currentMaximumCanvasMariaDbRowReport $currentMaximumCanvasMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
-            -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
-        throw 'The unselected current-maximum Canvas/MariaDB row-preservation report was accepted.'
+    if (-not (Test-T21StartupFailureReportFixture $currentMaximumCanvasMariaDbRowReport $currentMaximumCanvasMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation)) {
+        throw 'The current-maximum Canvas/MariaDB required-v11 report with one unchanged player row was rejected.'
     }
-    Write-Output 'PASS: reject unselected current-maximum Canvas/MariaDB row-preservation report'
+    Write-Output 'PASS: accept one unchanged pre-existing player row on current-maximum Canvas/MariaDB'
+    if (Test-T21StartupFailureReportFixture $currentMaximumCanvasMariaDbRowReport $currentMaximumFoliaMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Canvas/MariaDB row-preservation report accepted the Folia server SHA-256.'
+    }
+    $mutatedCurrentMaximumCanvasMariaDbRowReport = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $currentMaximumCanvasMariaDbRowReport -Depth 30 -Compress) -AsHashtable -ErrorAction Stop
+    $mutatedCurrentMaximumCanvasMariaDbRowReport.schemaStateAfter.playerRowsJson = $requiredV11MySqlPlayerRowsJson.Replace('1234.56', '1234.57')
+    if (Test-T21StartupFailureReportFixture $mutatedCurrentMaximumCanvasMariaDbRowReport $currentMaximumCanvasMariaDbEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
+            -DatabaseProduct MariaDB -PlatformEndpoint CurrentMaximumCanvas -FailureScenario RequiredV11DdlPermissionDeniedPlayerRowPreservation) {
+        throw 'The current-maximum Canvas/MariaDB row-preservation report accepted a changed player-row balance.'
+    }
+    Write-Output 'PASS: reject wrong Canvas server pins and mutated Canvas/MariaDB player-row evidence'
 
     $currentMaximumCanvasMySqlRowReport = New-T21RequiredV11DdlFailureReportFixture 'MySQL' '8.0.42' 'CurrentMaximumCanvas'
     $currentMaximumCanvasMySqlRowReport.schemaStateBefore.playersTableExists = $true

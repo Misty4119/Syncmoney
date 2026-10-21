@@ -1,6 +1,37 @@
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 
+function Get-T21RuntimeRunDirectoryPath(
+    [Parameter(Mandatory)][string]$ReportsRoot,
+    [Parameter(Mandatory)][ValidateSet('MySQL', 'MariaDB', 'PostgreSQL')][string]$DatabaseProduct,
+    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9-]+$')][string]$TaskSuffix,
+    [Parameter(Mandatory)][ValidatePattern('^\d{8}-\d{6}$')][string]$Timestamp,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$RunId
+) {
+    # Keep the full RunId in the report and run marker, while shortening MariaDB's directory component.
+    # MariaDB 12.3 on Windows failed to bootstrap a 258-character system-table temp path.
+    $directoryRunId = if ($DatabaseProduct -ceq 'MariaDB') { $RunId.Substring(0, 16) } else { $RunId }
+    $directoryName = $DatabaseProduct.ToLowerInvariant() + '-sync-' + $TaskSuffix.ToLowerInvariant() + '-' + $Timestamp + '-' + $directoryRunId
+    return [IO.Path]::GetFullPath((Join-Path $ReportsRoot $directoryName))
+}
+
+function New-T21RuntimeRunDirectory([Parameter(Mandatory)][string]$RunDirectoryPath) {
+    if ([string]::IsNullOrWhiteSpace($RunDirectoryPath)) {
+        throw 'A runtime run-directory path is required.'
+    }
+    if (Test-Path -LiteralPath $RunDirectoryPath) {
+        throw "Refusing to reuse an existing runtime run directory: $RunDirectoryPath."
+    }
+    try {
+        New-Item -ItemType Directory -Path $RunDirectoryPath -ErrorAction Stop | Out-Null
+    } catch {
+        if (Test-Path -LiteralPath $RunDirectoryPath) {
+            throw "Refusing to reuse an existing runtime run directory: $RunDirectoryPath."
+        }
+        throw
+    }
+}
+
 function Test-T21StartupRollbackCompletionLog([string]$LogText, [string]$PluginVersion) {
     if ([string]::IsNullOrWhiteSpace($LogText) -or [string]::IsNullOrWhiteSpace($PluginVersion)) { return $false }
 
@@ -129,7 +160,7 @@ function Test-T21RequiredV11DdlPlayerRowPreservationTarget(
     [string]$PlatformEndpoint
 ) {
     if ($DatabaseProduct -ceq 'MySQL' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')) { return $true }
-    if ($DatabaseProduct -ceq 'MariaDB' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia')) { return $true }
+    if ($DatabaseProduct -ceq 'MariaDB' -and $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')) { return $true }
     return $DatabaseProduct -ceq 'PostgreSQL' -and
         $PlatformEndpoint -in @('CurrentMaximum', 'CurrentMaximumFolia', 'CurrentMaximumCanvas')
 }

@@ -67,7 +67,7 @@ if ($RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -and
 if ($RequiredV11DdlPermissionDeniedPlayerRowPreservation.IsPresent -and
     (-not $RequiredV11DdlPermissionDeniedStartupFailure.IsPresent -or
         -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint))) {
-    throw 'Required-v11 player-row preservation requires the required-v11 startup-failure mode and is limited to current-maximum Paper/Folia MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL.'
+    throw 'Required-v11 player-row preservation requires the required-v11 startup-failure mode and is limited to current-maximum Paper/Folia/Canvas MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL.'
 }
 if ($SuccessfulV10AuditSchemaUpgrade.IsPresent -and
     -not (Test-T21AuditSchemaV10UpgradeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
@@ -155,7 +155,9 @@ $script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $scr
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)
 $script:databaseUser = 'sm_t21_' + $script:runId.Substring(0, 8)
 $script:databasePassword = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-$script:runRoot = [IO.Path]::GetFullPath((Join-Path $script:reportsRoot ($script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:platformTarget.taskSuffix.ToLowerInvariant() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $script:runId)))
+$script:runRoot = Get-T21RuntimeRunDirectoryPath `
+    -ReportsRoot $script:reportsRoot -DatabaseProduct $script:databaseProduct `
+    -TaskSuffix $script:platformTarget.taskSuffix -Timestamp (Get-Date -Format 'yyyyMMdd-HHmmss') -RunId $script:runId
 $script:workspace = Join-Path $script:runRoot 'workspace'
 $script:gradleUserHome = Join-Path $script:runRoot '.gradle-user-home'
 $script:mysqlRoot = Join-Path $script:runRoot $(if ($script:databaseProduct -ceq 'PostgreSQL') { 'postgresql' } else { 'mysql' })
@@ -1574,7 +1576,7 @@ function Seed-T21RequiredV11DdlPermissionFailure([switch]$SeedExistingPlayerRow)
     }
     if ($SeedExistingPlayerRow.IsPresent -and
         -not (Test-T21RequiredV11DdlPlayerRowPreservationTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {
-        throw 'Required-v11 player-row preservation is scoped only to current-maximum Paper/Folia MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL.'
+        throw 'Required-v11 player-row preservation is scoped only to current-maximum Paper/Folia/Canvas MariaDB, Paper/Folia/Canvas MySQL, and Paper/Folia/Canvas PostgreSQL.'
     }
     $ddl = @'
 CREATE TABLE syncmoney_schema_version (
@@ -2329,8 +2331,10 @@ if ($LASTEXITCODE -ne 0 -or $redisVersionOutput -notmatch 'v=8\.10\.1') { throw 
 
 Assert-NoReparsePointAncestors $script:root
 Assert-NoReparsePointAncestors $script:reportsRoot
-New-Item -ItemType Directory -Force -Path $script:logsRoot, $script:mysqlData, $script:redisData | Out-Null
+New-Item -ItemType Directory -Force -Path $script:reportsRoot | Out-Null
+New-T21RuntimeRunDirectory -RunDirectoryPath $script:runRoot
 Assert-NoReparsePointAncestors $script:runRoot
+New-Item -ItemType Directory -Force -Path $script:logsRoot, $script:mysqlData, $script:redisData | Out-Null
 $script:gamePort = Get-FreeLoopbackPort 20000 30000 @() 10000
 $script:mysqlPort = Get-FreeLoopbackPort 33001 43000 @($script:gamePort, ($script:gamePort + 10000))
 $script:redisPort = Get-FreeLoopbackPort 15000 25000 @($script:gamePort, ($script:gamePort + 10000), $script:mysqlPort)
