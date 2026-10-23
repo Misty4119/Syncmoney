@@ -137,4 +137,11 @@ public class ApiKeyAuthFilter {
     public RateLimiter getRateLimiter() {
         return rateLimiter;
     }
+
+    /**
+     * Shut down the rate-limiter cleanup executor owned by this filter.
+     */
+    public void shutdown() {
+        rateLimiter.shutdown();
+    }
 }

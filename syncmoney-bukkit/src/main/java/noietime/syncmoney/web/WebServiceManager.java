@@ -218,6 +218,9 @@ public class WebServiceManager {
                 }),
                 new ShutdownStepRunner.Step("web admin server", () -> {
                     if (webAdminServer != null) webAdminServer.stop();
+                }),
+                new ShutdownStepRunner.Step("API key rate limiter", () -> {
+                    if (apiKeyAuthFilter != null) apiKeyAuthFilter.shutdown();
                 }));
         plugin.getLogger().fine("Web layer shutdown complete");
     }

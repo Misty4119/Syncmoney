@@ -27,7 +27,7 @@ public class SyncManager {
     private final CacheManager cacheManager;
     private final EconomyFacade economyFacade;
     private final RedisManager redisManager;
-    
+
     private PubsubSubscriber pubsubSubscriber;
     private DebounceManager debounceManager;
     private boolean versionCheckRunning;
@@ -52,7 +52,7 @@ public class SyncManager {
      */
     public void initialize() {
         this.debounceManager = new DebounceManager(plugin, config);
-        
+
         boolean redisRequired = config.getEconomyMode() != noietime.syncmoney.economy.EconomyMode.LOCAL;
         this.pubsubSubscriber = new PubsubSubscriber(
                 plugin,
@@ -62,14 +62,14 @@ public class SyncManager {
                 debounceManager,
                 redisManager,
                 redisRequired);
-        
+
         if (redisManager != null && redisRequired) {
             pubsubSubscriber.startSubscription();
             plugin.getLogger().fine("PubSub subscription started");
         } else {
             plugin.getLogger().fine("PubSub subscription skipped (no Redis or not required)");
         }
-        
+
         plugin.getLogger().fine("Sync layer initialized");
     }
 

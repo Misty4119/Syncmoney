@@ -83,7 +83,7 @@ public final class CacheManager {
 
         startCleanupTask();
     }
-    
+
     /**
      * [MEM-01 FIX] Start periodic cleanup task for expired cache entries.
      * Runs every 5 minutes to remove expired entries.
@@ -91,7 +91,7 @@ public final class CacheManager {
     private void startCleanupTask() {
 
         long cleanupIntervalTicks = 5 * 60 * 20;
-        
+
         cleanupTask = plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
             if (stopped) {
                 task.cancel();
@@ -99,10 +99,10 @@ public final class CacheManager {
             }
             cleanupExpiredEntries();
         }, cleanupIntervalTicks, cleanupIntervalTicks);
-        
+
         plugin.getLogger().fine("Cache cleanup task started (interval: 5 minutes)");
     }
-    
+
     /**
      * [MEM-01 FIX] Remove expired entries from memory cache.
      * Only removes entries that have exceeded the expiration time.
@@ -568,7 +568,7 @@ public final class CacheManager {
      * [FIX-003] Atomic transfer between two players using Redis Lua script.
      * This ensures the transfer is atomic - both withdraw and deposit happen together,
      * or neither happens.
-     * 
+     *
      * @param fromUuid Sender's UUID
      * @param toUuid Receiver's UUID
      * @param amount Amount to transfer

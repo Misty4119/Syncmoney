@@ -25,7 +25,7 @@ import java.util.logging.Logger;
 /**
  * [SYNC-ECO-083] Write queue for economic events using BlockingQueue.
  * Thread-safe for multiple producers and single consumer pattern.
- * 
+ *
  * [FIX-002] Improved backpressure mechanism:
  * - Lowered threshold from 80% to 70%
  * - Added blocking offer with timeout
@@ -260,14 +260,14 @@ public final class EconomyWriteQueue {
     public boolean offer(EconomyEvent event) {
         int currentSize = capacity - writeAdmission.availableCapacity();
         int usageThreshold = (int) (capacity * BACKPRESSURE_THRESHOLD);
-        
+
         if (currentSize >= usageThreshold) {
             if (logger != null) {
 
                 long now = System.currentTimeMillis();
                 if (now - lastHighUsageWarning > HIGH_USAGE_CHECK_INTERVAL) {
                     logger.warning("EconomyWriteQueue backpressure triggered: " + currentSize + "/" + capacity +
-                            " (" + FormatUtil.formatPercentRaw(currentSize * 100.0 / capacity) + 
+                            " (" + FormatUtil.formatPercentRaw(currentSize * 100.0 / capacity) +
                             "%) - rejecting event for " + event.uuid());
                     lastHighUsageWarning = now;
                 }
@@ -292,7 +292,7 @@ public final class EconomyWriteQueue {
      * [FIX-002] Blocking offer with timeout.
      * This method will block for up to the specified timeout if the queue is full,
      * giving the consumer time to catch up before rejecting the event.
-     * 
+     *
      * @param event The event to offer
      * @param timeout Maximum time to wait
      * @param unit Time unit
@@ -332,7 +332,7 @@ public final class EconomyWriteQueue {
     /**
      * [FIX-002] Try offer with timeout - convenience method.
      * Uses default timeout of 100ms.
-     * 
+     *
      * @param event The event to offer
      * @return true if offered, false if timeout expired
      */

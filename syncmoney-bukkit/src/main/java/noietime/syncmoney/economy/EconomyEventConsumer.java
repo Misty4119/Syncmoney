@@ -929,7 +929,7 @@ public final class EconomyEventConsumer implements Runnable {
      * the player should NOT be kicked because the currency has already been
      * modified in Redis.
      * Kicking the player would only cause greater data inconsistency.
-     * 
+     *
      * [FIX-001] Now also writes to OverflowLog to prevent permanent data loss.
      */
     private void handleCriticalFailure(FailedEvent failed) {
@@ -943,7 +943,7 @@ public final class EconomyEventConsumer implements Runnable {
         if (overflowLog != null && recoverySpool == null) {
             try {
                 overflowLog.log(failed.event());
-                plugin.getLogger().info("CRITICAL: Event written to OverflowLog for later recovery: " + 
+                plugin.getLogger().info("CRITICAL: Event written to OverflowLog for later recovery: " +
                     failed.event().requestId());
             } catch (Exception e) {
                 plugin.getLogger().severe("CRITICAL: Failed to write to OverflowLog: " + e.getMessage());
@@ -1913,7 +1913,7 @@ public final class EconomyEventConsumer implements Runnable {
 
             if (hybridAuditManager != null && hybridAuditManager.isEnabled()) {
                 hybridAuditManager.persistConfirmedRecord(record);
-            } 
+            }
 
             else if (auditLogger != null && auditLogger.isEnabled()) {
                 auditLogger.persistConfirmedRecord(record);

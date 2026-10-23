@@ -2,11 +2,16 @@ package noietime.syncmoney.web;
 
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.web.security.ApiKeyAuthFilter;
+import noietime.syncmoney.web.security.RateLimiter;
+import noietime.syncmoney.web.server.WebAdminConfig;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Field;
 import java.nio.file.Path;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -74,5 +79,40 @@ class WebServiceKeyGuardTest {
         } finally {
             manager.shutdown();
         }
+    }
+
+    @Test
+    void shutdownStopsWebAdminRateLimiterCleanupExecutor(@TempDir Path dataFolder) throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getDataFolder()).thenReturn(dataFolder.toFile());
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("WebServiceKeyGuardTest"));
+
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("web-admin.security.api-key", "test-api-key");
+        WebAdminConfig webConfig = new WebAdminConfig();
+        webConfig.load(yaml);
+        ApiKeyAuthFilter authFilter = new ApiKeyAuthFilter(plugin, webConfig);
+        ScheduledExecutorService cleanupExecutor = cleanupExecutor(authFilter.getRateLimiter());
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        WebServiceManager manager = new WebServiceManager(plugin, config, null, null, null, null);
+        Field authFilterField = WebServiceManager.class.getDeclaredField("apiKeyAuthFilter");
+        authFilterField.setAccessible(true);
+        authFilterField.set(manager, authFilter);
+
+        assertFalse(cleanupExecutor.isShutdown());
+        manager.shutdown();
+
+        boolean shutdown = cleanupExecutor.isShutdown();
+        if (!shutdown) {
+            cleanupExecutor.shutdownNow();
+        }
+        assertTrue(shutdown, "WebServiceManager must close the owned API rate limiter");
+    }
+
+    private static ScheduledExecutorService cleanupExecutor(RateLimiter rateLimiter) throws Exception {
+        Field executorField = RateLimiter.class.getDeclaredField("cleanupExecutor");
+        executorField.setAccessible(true);
+        return (ScheduledExecutorService) executorField.get(rateLimiter);
     }
 }
