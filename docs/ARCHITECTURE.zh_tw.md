@@ -169,6 +169,8 @@ Audit 是 optional。Cleanup/export 依 parent audit switch；停用時相關 We
 
 Shadow Sync、CMI migration、local-to-sync migration 是明確的 maintenance/data workflow，與 live economy routing 的 lifecycle、storage、authority semantics 分開。
 
+Shadow Sync 是 best-effort 的次級鏡像，不是具持久性的寫入佇列。有限佇列滿載時可能拒收快照；伺服器會記錄警告，`/syncmoney shadow status` 會顯示本次啟動後遭拒的數量。遭拒快照可能要等該玩家再次進入佇列才會補上。這不會改變主要 economy balance。
+
 ## 8. Configuration model
 
 `SyncmoneyConfig` 是 runtime snapshot；live reload 僅限既有 `display`、`pay`、`permissions`、`admin-permissions`、`debug` roots。需要新 connection、owner、listener、executor、schema、subscription 或 economy authority 的變更，在 lifecycle 未明確支援前都視為 restart-required。`server-name` 必須設定，空白會阻止正常 operation。

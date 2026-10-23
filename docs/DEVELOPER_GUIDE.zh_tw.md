@@ -18,7 +18,7 @@
 - Node.js + pnpm，供 `syncmoney-web`
 - 依測試範圍準備 Paper/Folia/Canvas
 - 需要對應 mode/feature 時才啟動 Redis/SQL
-- CMI acceptance 需自行提供合法授權 CMI
+- CMI runtime check 需自行提供 CMI 與 CMILib；適用的 license 需另行確認（目前 1.4.0 probe 未確認 license 狀態）
 
 1.4.0 target 的 build 與 runtime 最低為 Java 25，Paper 最低為 1.21.6。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0；這些僅是歷史基準，不是 1.4.0 的 toolchain 或 runtime minimum。
 
@@ -163,6 +163,10 @@ Cross-server CMI update 要比較 version/freshness、套用時 suppress echo，
 
 CMI 為授權軟體，不隨 repository 分發；acceptance 需要本機合法 plugin。
 
+先前的 `1.4.0-alpha.1` 候選版使用本機提供的 CMI 9.8.10.5 與 CMILib 1.6.0.1，在 Paper 1.21.6 上對一名線上玩家進行過一次有界唯讀檢查；CMI direct balance、Syncmoney CMI route 與公開的 `BalanceSnapshot` API 讀值相符。最終候選版的 CMI runtime acceptance 仍為 **NOT VERIFIED**。此結果不能證明 CMI license 目前有效，也未驗證 CMI mode 下 Syncmoney Vault provider 的註冊、任何 mutation、跨服行為或 Folia/Canvas 行為。依 ADR-12，CMI mode 不屬於 1.4.0 已驗證的支援範圍，未驗證可用於正式環境；完整 CMI runtime acceptance 仍為 **NOT VERIFIED**。
+
+CMI mode 會停用 `/syncmoney admin` 餘額操作及 `/syncmoney sync-balance`，因為這些命令不會更新 CMI 的權威餘額。
+
 ## 10. Web Admin backend development
 
 Backend 是 Undertow。
@@ -284,7 +288,7 @@ Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不�
 #### M01 — 維護窗口與備份
 
 1. 確認 Java 25 或更新版本、Paper 1.21.6 或更新版本、實際 server build、每個節點唯一的 `server-name`、economy mode、optional dependencies、SQL schema version、Redis topology、Syncmoney artifact hash 與 config schema。Acceptance 使用 [PlugDev guide](../tools/plugdev/README.md) 列出的 user-pinned server artifacts；額外的 current-stable build 只能作 supplemental evidence。保存移除 secrets 的版本清單；report 不得包含 credentials。
-2. 宣告維護並在每個節點停止所有 economy producer：玩家／管理員命令、Web Admin 寫入、定時獎勵、自動化與第三方整合。若 CMI 是設定中的 authority，也要停用 CMI economy commands/module，並 quiesce 外部 CMI API 與 SQL writers。CMI 在 authority mutation 後才發出 balance event，因此該 event 無法 veto 任意直接 API mutation；licensed CMI runtime acceptance 仍是 **BLOCKED / NOT RUN**。
+2. 宣告維護並在每個節點停止所有 economy producer：玩家／管理員命令、Web Admin 寫入、定時獎勵、自動化與第三方整合。若 CMI 是設定中的 authority，也要停用 CMI economy commands/module，並 quiesce 外部 CMI API 與 SQL writers。CMI 在 authority mutation 後才發出 balance event，因此該 event 無法 veto 任意直接 API mutation；完整 CMI runtime acceptance 仍是 **NOT VERIFIED**。目前只執行過 §9 的有界唯讀檢查，且依 ADR-12，CMI mode 不在 1.4.0 已驗證支援範圍。
 3. 確認 accepted writes、retry、in-flight work、database writes 與 audit work 已排空後才繼續。目前 runtime 沒有提供完整的 fleet-wide queue/retry/in-flight counters。單獨看到 `Syncmoney disabled.` 或 zero pending recovery records，不能證明 production fleet 已排空。若現有證據無法確認每個節點與 writer 的狀態，維持 maintenance window，不要進行升級。
 4. 正常停止每個節點並確認 process 已結束。之後才保存最新 config、messages、aliases、SQL data、local SQLite database 與可能存在的 WAL/SHM、Redis RDB/AOF state、recovery/overflow files。記錄版本與 SHA-256。這些備份只供另行授權的 disaster recovery，不是一般 rollback 流程。
 
@@ -301,7 +305,7 @@ Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不�
 3. 將 candidate JAR 換成 checksum 已驗證的 1.3.2 JAR，同時保留相容的目前資料與版本。確認 1.3.2 能讀取升級期間寫入的交易。可行時保留 Java 25 與受支援的 server；如果也要降級 JVM 或 server，必須選 1.3.2 支援的版本，不可假設較新的 server 能在 Java 21 執行。
 4. 一般 rollback 不可 flush Redis、重設餘額或還原升級前備份。舊備份會丟失其建立後的有效交易。重新使用 1.3.2 也會重新引入已知 stale SQL-writer 限制，因此不得讓新舊 writer 同時運作。
 
-目前 M01–M03 runtime reports 覆蓋六個 user-pinned Paper/Folia/Canvas endpoints 上的兩個 synthetic nodes；另有一份 supplemental current-stable Paper report。它們驗證這些測試節點的正常停止、candidate writes、data snapshots 與 recovery journal state，尚未證明 production fleet-wide quiescence、完整 drain counters 或 licensed CMI behavior。T00A minimum-Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 完整 persisted-state upgrade 與 rollback gate。
+目前 M01–M03 runtime reports 覆蓋六個 user-pinned Paper/Folia/Canvas endpoints 上的兩個 synthetic nodes；另有一份 supplemental current-stable Paper report。它們驗證這些測試節點的正常停止、candidate writes、data snapshots 與 recovery journal state，尚未證明 production fleet-wide quiescence、完整 drain counters 或完整 CMI acceptance。依 ADR-12，完整 CMI mode 及尚未執行的 T21 案例不屬於 1.4.0 已驗證的支援聲明。T00A minimum-Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 完整 persisted-state upgrade 與 rollback gate。
 
 ## 18. Documentation、security 與 release hygiene
 
@@ -324,7 +328,9 @@ Release 前：
 
 ## 19. Release 自動化與 frontend mirror
 
-Root repository 是 Web Admin 的 canonical source。穩定 source metadata 保留在 `build.gradle` 的 committed version；preview job 傳入 `-PreleaseVersion`，因此 CI 可以產生 `1.3.3-alpha.<run-number>` 而不必把 preview metadata commit 進去。`NEXT_VERSION` repository variable 用來選擇下一個 stable base。
+Root repository 是 Web Admin 的 canonical source。穩定 source metadata 保留在 `build.gradle` 的 committed version；preview job 傳入 `-PreleaseVersion`，因此不必把 preview metadata commit 進去。CI 在 `NEXT_VERSION` repository variable 已設定時使用它，否則退回 root version。此 checkout 無法取得 hosted variable 的值，因此 preview version 應寫成 `<base-version>-alpha.<run-number>`。
+
+1.4.0 matched synthetic facade/receipt-adapter benchmark 未達全部原始 B00 thresholds。ADR-11 僅在該有界 profile 範圍內接受已量測的 regression；thresholds 與 correctness hard gates 均未改變。此結果不能證明 production、SQL、Redis 或 real-server performance，且此例外不適用於 correctness failure。
 
 Core repository 使用不帶前綴的 tag。Alpha/beta tag 會在 Web repository 更新後發佈 prerelease；stable tag 必須先通過 `production-release` environment approval，且有對應 changelog section。Release workflow 先更新 [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)，推送對應的 `v` 前綴 tag，等待 Web Release 完成，再發佈 core 與 PlaceholderAPI JAR。Web Release 內容是 deterministic source archive 與 checksum；刻意不包含 `dist`、`node_modules`、coverage、Playwright output 或 editor files。Syncmoney 下載 archive 後在目標 server 本機建置。
 

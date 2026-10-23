@@ -412,6 +412,7 @@ public final class EconomyEventConsumer implements Runnable {
                 } else {
                     queue.complete(failed.event(), account.balance(), account.version());
                 }
+                enqueueShadowSyncEvent(failed.event(), receipt);
                 acknowledgeRecovery(key);
                 failedEvents.remove(key, retryState);
                 plugin.getLogger().fine("Retry successful for event: " + failed.event().requestId());
@@ -499,11 +500,15 @@ public final class EconomyEventConsumer implements Runnable {
             if (receipt != null) {
                 AuthorityAccount account = authorityAccount(receipt, event.playerUuid());
                 queue.reconcileRecovered(event, account.balance(), account.version(), failed.reconciliationOnly());
+                if (!failed.reconciliationOnly()) enqueueShadowSyncEvent(event, receipt);
             }
         } else if (receipt != null) {
             AuthorityAccount account = authorityAccount(receipt, event.playerUuid());
             if (failed.reconciliationOnly()) queue.completeRejected(event, account.balance(), account.version());
-            else if (account.balance() != null) queue.complete(event, account.balance(), account.version());
+            else if (account.balance() != null) {
+                queue.complete(event, account.balance(), account.version());
+                enqueueShadowSyncEvent(event, receipt);
+            }
         } else {
             queue.quarantine(event);
         }
@@ -1278,6 +1283,7 @@ public final class EconomyEventConsumer implements Runnable {
             processEventSteps(event, receipt);
             ConfirmedAccount account = receipt.accountFor(event.playerUuid());
             queue.complete(event, account.balance(), account.version());
+            enqueueShadowSyncEvent(event, receipt);
             acknowledgeRecovery(key);
 
         } catch (RedisMutationException e) {
@@ -1531,6 +1537,10 @@ public final class EconomyEventConsumer implements Runnable {
         AuthorityAccount secondAuthority = authorityAccount(receipt, second.playerUuid());
         queue.reconcileRecoveredPair(first, firstAuthority.balance(), firstAuthority.version(),
                 second, secondAuthority.balance(), secondAuthority.version(), rejected);
+        if (!rejected) {
+            enqueueShadowSyncEvent(first, receipt);
+            enqueueShadowSyncEvent(second, receipt);
+        }
     }
 
     private static ReplicationReceipt transferReceipt(EconomyEvent out, EconomyEvent in,
@@ -1552,6 +1562,10 @@ public final class EconomyEventConsumer implements Runnable {
                         in, receiver.balance(), receiver.version());
         if (!completed) {
             return false;
+        }
+        if (!rejected) {
+            enqueueShadowSyncEvent(out, receipt);
+            enqueueShadowSyncEvent(in, receipt);
         }
         if (rejected) {
             plugin.getLogger().warning("Redis rejected accepted transfer pair "
@@ -1726,14 +1740,26 @@ public final class EconomyEventConsumer implements Runnable {
             updateBaltop(event.playerUuid(), newBalance.doubleValue());
         }
 
-        if (shadowSyncTask != null && config.shadowSync().isShadowSyncEnabled()
-                && event.source() != EconomyEvent.EventSource.TEST) {
-            String playerName = nameResolver.getNameCachedOnly(event.playerUuid());
-            if (playerName != null) {
-                shadowSyncTask.enqueueSyncEvent(event.playerUuid(), playerName, newBalance);
-            }
-        }
         return requiredStepsComplete;
+    }
+
+    /**
+     * Enqueue a confirmed receipt only after the queue's completion handler has reconciled
+     * optimistic memory to the authority pair. ShadowSyncTask also revalidates the pair when
+     * admitting and flushing it, so a later write safely supersedes this receipt.
+     */
+    private void enqueueShadowSyncEvent(EconomyEvent event, ReplicationReceipt receipt) {
+        if (shadowSyncTask == null || !config.shadowSync().isShadowSyncEnabled()
+                || event.source() == EconomyEvent.EventSource.TEST) {
+            return;
+        }
+        ConfirmedAccount account = receipt.findAccount(event.playerUuid()).orElse(null);
+        if (account == null) return;
+        String playerName = nameResolver == null ? null : nameResolver.getNameCachedOnly(event.playerUuid());
+        if (playerName != null) {
+            shadowSyncTask.enqueueSyncEvent(
+                    event.playerUuid(), playerName, account.balance(), account.version());
+        }
     }
 
     /** Execute Redis atomic write and preserve the pair returned by that same authority operation. */

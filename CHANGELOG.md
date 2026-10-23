@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0-alpha.3] - Unpublished preview
+
+This is an experimental, unpublished engineering candidate for Java 25+ and Paper 1.21.6+. It is not a stable release. ADR-03 freezes only the T11 read/query SDK; public Maven resolution and third-party adoption remain unverified. The 1.4.0 verified support scope is evidence-bounded: full CMI mode, minimum-Paper MySQL/MariaDB initial-schema cases, and several mode/resource/failure combinations are not verified. Do not use this candidate as a production compatibility claim.
+
+The matched synthetic facade/receipt-adapter benchmark did not meet all original B00 thresholds (throughput 27/48, allocation 12/48, and SampleTime p99 18/48 cases met threshold). Under ADR-11, the measured regression is accepted only for that bounded synthetic profile; thresholds and correctness hard gates are unchanged. This is not a production, SQL, Redis, or real-server capacity claim.
+
 ### Security
 
 - Web Admin now disables itself for both shipped API-key placeholders (including blank values), without preventing the economy plugin from starting.
@@ -16,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Undertow routes dispatch from I/O threads to worker threads before running handlers.
+
+### Fixed
+
+- CMI mode now rejects `/syncmoney admin` and `/syncmoney sync-balance` before reading or changing Syncmoney balances, because these command paths do not update CMI authority.
 
 ## [1.3.2] - 2026-09-20
 

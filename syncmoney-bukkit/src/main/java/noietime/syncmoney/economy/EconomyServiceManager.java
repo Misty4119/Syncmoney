@@ -146,7 +146,8 @@ public class EconomyServiceManager {
         this.shadowSyncTask = new ShadowSyncTask(
                 plugin, config, economyFacade,
                 storageManager.getCacheManager(),
-                storageManager.getDatabaseManager());
+                storageManager.getDatabaseManager(),
+                storageManager::acquireDatabaseUseLease);
         shadowSyncTask.start();
     }
 

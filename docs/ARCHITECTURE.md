@@ -193,6 +193,8 @@ Audit is optional. Cleanup/export behavior depends on the parent audit switch. W
 
 Shadow Sync, CMI migration, and local-to-sync migration are explicit maintenance/data workflows. They must keep separate lifecycle, storage, and authority semantics from live economy routing.
 
+Shadow Sync is a best-effort secondary mirror, not a durable write queue. Its bounded queue can reject snapshots when full; the server logs this condition and `/syncmoney shadow status` reports the number rejected since startup. A rejected snapshot may remain absent from the secondary mirror until that player is queued again. This does not change the primary economy balance.
+
 ## 8. Configuration model
 
 `SyncmoneyConfig` represents a runtime configuration snapshot. `ConfigReloadPolicy` currently permits live reload only under:

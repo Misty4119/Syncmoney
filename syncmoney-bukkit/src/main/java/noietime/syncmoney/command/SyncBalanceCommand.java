@@ -3,6 +3,8 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.EconomyMode;
+import noietime.syncmoney.economy.EconomyModeRouter;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.util.FormatUtil;
@@ -29,13 +31,16 @@ public final class SyncBalanceCommand implements CommandExecutor, TabCompleter {
 
     private final Syncmoney plugin;
     private final EconomyFacade economyFacade;
+    private final EconomyModeRouter economyModeRouter;
     private final CacheManager cacheManager;
     private final DatabaseManager databaseManager;
 
     public SyncBalanceCommand(Syncmoney plugin, EconomyFacade economyFacade,
-            CacheManager cacheManager, DatabaseManager databaseManager) {
+            CacheManager cacheManager, DatabaseManager databaseManager,
+            EconomyModeRouter economyModeRouter) {
         this.plugin = plugin;
         this.economyFacade = economyFacade;
+        this.economyModeRouter = economyModeRouter;
         this.cacheManager = cacheManager;
         this.databaseManager = databaseManager;
     }
@@ -44,6 +49,16 @@ public final class SyncBalanceCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("syncmoney.admin")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return true;
+        }
+
+        EconomyMode mode = economyModeRouter == null ? null : economyModeRouter.getMode();
+        if (mode == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.economy-authority-unavailable"));
+            return true;
+        }
+        if (mode == EconomyMode.CMI) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.cmi-authority-command-disabled"));
             return true;
         }
 

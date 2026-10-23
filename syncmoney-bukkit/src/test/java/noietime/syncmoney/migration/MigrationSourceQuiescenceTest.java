@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -42,6 +43,17 @@ class MigrationSourceQuiescenceTest {
     private static void stubContentFingerprint(CMIDatabaseReader reader) {
         when(reader.getSourceSnapshotFingerprint())
                 .thenReturn(new MigrationSourceFingerprint.Result(1, "test-cmi-source-fingerprint"));
+    }
+
+    private static void stubSharedSqlTarget(SyncmoneyConfig config) {
+        when(config.isDatabaseEnabled()).thenReturn(true);
+    }
+
+    private static DatabaseManager successfulDatabase() {
+        DatabaseManager database = mock(DatabaseManager.class);
+        when(database.tryReplacePlayerForMigration(any(UUID.class), any(), any(), anyLong(), any()))
+                .thenReturn(true);
+        return database;
     }
 
     @Test
@@ -66,6 +78,7 @@ class MigrationSourceQuiescenceTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
@@ -84,7 +97,7 @@ class MigrationSourceQuiescenceTest {
         when(disabler.reloadCMIAndReport()).thenReturn(true);
 
         MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class),
-                mock(DatabaseManager.class), redis, mock(NameResolver.class), mock(MigrationCheckpoint.class),
+                successfulDatabase(), redis, mock(NameResolver.class), mock(MigrationCheckpoint.class),
                 null, disabler);
 
         task.start(false, false);
@@ -107,6 +120,7 @@ class MigrationSourceQuiescenceTest {
         Plugin plugin = mock(Plugin.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationSourceQuiescenceTest"));
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(false);
         CMIDatabaseReader reader = mock(CMIDatabaseReader.class);
@@ -117,7 +131,7 @@ class MigrationSourceQuiescenceTest {
         CMIEconomyDisabler disabler = mock(CMIEconomyDisabler.class);
 
         MigrationTask task = new MigrationTask(plugin, config, reader, mock(EconomyFacade.class),
-                mock(DatabaseManager.class), redis, mock(NameResolver.class),
+                successfulDatabase(), redis, mock(NameResolver.class),
                 mock(MigrationCheckpoint.class), null, disabler);
 
         task.start(false, false);
@@ -152,6 +166,7 @@ class MigrationSourceQuiescenceTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
@@ -178,7 +193,7 @@ class MigrationSourceQuiescenceTest {
         when(facade.setBalance(any(UUID.class), any(BigDecimal.class), any()))
                 .thenAnswer(invocation -> invocation.getArgument(1));
         MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade,
-                mock(DatabaseManager.class), redis, mock(NameResolver.class), checkpoint, null, disabler);
+                successfulDatabase(), redis, mock(NameResolver.class), checkpoint, null, disabler);
 
         task.start(false, false);
         globalTask.get().run();
@@ -214,6 +229,7 @@ class MigrationSourceQuiescenceTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
@@ -232,7 +248,7 @@ class MigrationSourceQuiescenceTest {
         when(disabler.reloadCMIAndReport()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
         MigrationTask task = new MigrationTask(plugin, config, reader, mock(EconomyFacade.class),
-                mock(DatabaseManager.class), redis, mock(NameResolver.class), checkpoint, null, disabler);
+                successfulDatabase(), redis, mock(NameResolver.class), checkpoint, null, disabler);
 
         task.start(false, false);
         globalTask.get().run();
@@ -266,6 +282,7 @@ class MigrationSourceQuiescenceTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
@@ -290,7 +307,7 @@ class MigrationSourceQuiescenceTest {
         when(facade.getBalance(account)).thenReturn(BigDecimal.ZERO);
         when(facade.setBalance(any(UUID.class), any(BigDecimal.class), any())).thenReturn(null);
         MigrationTask task = new MigrationTask(plugin, config, reader, facade,
-                null, redis, mock(NameResolver.class), checkpoint, null, disabler);
+                successfulDatabase(), redis, mock(NameResolver.class), checkpoint, null, disabler);
 
         task.start(false, false);
         globalTask.get().run();
@@ -325,6 +342,7 @@ class MigrationSourceQuiescenceTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        stubSharedSqlTarget(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
@@ -355,7 +373,7 @@ class MigrationSourceQuiescenceTest {
         when(disabler.disableEconomyModule()).thenReturn(true);
         when(disabler.reloadCMIAndReport()).thenReturn(true);
         MigrationTask task = new MigrationTask(plugin, config, reader, facade,
-                null, redis, mock(NameResolver.class), checkpoint, null, disabler);
+                successfulDatabase(), redis, mock(NameResolver.class), checkpoint, null, disabler);
 
         task.start(false, false);
         globalTask.get().run();

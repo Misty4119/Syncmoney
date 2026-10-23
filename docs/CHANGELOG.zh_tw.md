@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.4.0-alpha.3] - 未發佈預覽
+
+此為 Java 25+ 與 Paper 1.21.6+ 的實驗性、未發佈工程候選版；並非穩定版本。ADR-03 僅凍結 T11 唯讀查詢 SDK；public Maven 解析與第三方採用仍未驗證。1.4.0 已驗證的支援範圍依據現有證據界定：完整 CMI mode、minimum-Paper MySQL/MariaDB initial-schema 案例及若干 mode/resource/failure 組合均未驗證。請勿將此候選版視為正式環境相容性承諾。
+
+matched synthetic facade/receipt-adapter benchmark 未達全部原始 B00 thresholds（throughput 27/48、allocation 12/48、SampleTime p99 18/48 案例達標）。依 ADR-11，僅在該有界 synthetic profile 範圍內接受已量測的 regression；thresholds 與 correctness hard gates 均未改變。此例外不是 production、SQL、Redis 或 real-server capacity 的性能承諾。
+
 ### 安全性 (Security)
 
 - Web Admin 會因兩種 shipped API-key placeholder（含空白值）自動停用，但不影響 economy plugin 啟動。
@@ -15,6 +21,10 @@
 ### 已變更 (Changed)
 
 - Undertow route 會先從 I/O thread dispatch 到 worker thread，再執行 handler。
+
+### 已修復 (Fixed)
+
+- CMI mode 現在會在讀取或修改 Syncmoney balance 前拒絕 `/syncmoney admin` 與 `/syncmoney sync-balance`，因為這些命令路徑不會更新 CMI authority。
 
 ## [1.3.2] - 2026-09-20
 

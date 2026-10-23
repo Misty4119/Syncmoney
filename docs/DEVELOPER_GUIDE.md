@@ -18,7 +18,7 @@ Use:
 - Node.js + pnpm for `syncmoney-web`;
 - an appropriate Paper/Folia/Canvas server for runtime acceptance;
 - Redis and SQL only for the modes/features being tested;
-- a locally supplied licensed CMI build when testing CMI integration.
+- locally supplied CMI and CMILib builds for CMI runtime checks; verify any applicable license separately (the current 1.4.0 probe did not establish license status).
 
 The 1.4.0 target requires Java 25 or newer at build and runtime and Paper 1.21.6 or newer. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0; that is historical context, not the 1.4.0 toolchain or runtime minimum.
 
@@ -188,6 +188,10 @@ When applying cross-server CMI updates:
 
 CMI is licensed and not distributed by this repository. Acceptance depends on a locally supplied plugin.
 
+One earlier `1.4.0-alpha.1` candidate was used for a bounded read-only check on Paper 1.21.6 with locally supplied CMI 9.8.10.5 and CMILib 1.6.0.1; CMI's direct balance, Syncmoney's CMI route, and the public `BalanceSnapshot` API matched for one online player. Exact final-candidate CMI runtime acceptance remains **NOT VERIFIED**. The observation does not establish an active CMI license, Syncmoney Vault provider registration in CMI mode, any mutation, cross-server behavior, or Folia/Canvas behavior. Under ADR-12, CMI mode is outside the verified 1.4.0 support scope and is not validated for production use; full CMI runtime acceptance remains **NOT VERIFIED**.
+
+In CMI mode, `/syncmoney admin` balance operations and `/syncmoney sync-balance` are disabled because they do not update CMI's authoritative balance.
+
 ## 10. Web Admin backend development
 
 The backend is Undertow.
@@ -310,7 +314,7 @@ This is the operator sequence for V03/M01–M03. A successful PlugDev report is 
 #### M01 — Maintenance window and backup
 
 1. Confirm Java 25 or newer, Paper 1.21.6 or newer, the exact server builds, unique `server-name` values, configured economy modes, optional dependencies, SQL schema versions, Redis topology, Syncmoney artifact hashes, and config schema. For acceptance, use the exact user-pinned server artifacts listed in the [PlugDev guide](../tools/plugdev/README.md); any additional current-stable build is supplemental. Keep a redacted inventory; do not put credentials in reports.
-2. Announce maintenance and stop all economy producers on every node: player/admin commands, Web Admin writes, scheduled rewards, automation, and third-party integrations. If CMI is the configured authority, stop its economy commands/module and quiesce external CMI API and SQL writers too. A post-change CMI balance event cannot veto an arbitrary direct API mutation; licensed CMI runtime acceptance remains **BLOCKED / NOT RUN**.
+2. Announce maintenance and stop all economy producers on every node: player/admin commands, Web Admin writes, scheduled rewards, automation, and third-party integrations. If CMI is the configured authority, stop its economy commands/module and quiesce external CMI API and SQL writers too. A post-change CMI balance event cannot veto an arbitrary direct API mutation; full CMI runtime acceptance remains **NOT VERIFIED**. Only the bounded read check in §9 has run, and CMI mode is outside 1.4.0 verified support claims.
 3. Establish that accepted writes, retries, in-flight work, database writes, and audit work have drained before continuing. The current runtime does not expose complete fleet-wide queue/retry/in-flight counters. A `Syncmoney disabled.` log line and zero pending recovery records alone do not prove a production fleet is drained. If the available evidence cannot establish the state for every node and writer, keep the maintenance window open and do not proceed with the upgrade.
 4. Stop every node normally and verify its process has exited. Only then capture the latest configuration, messages, aliases, SQL data, local SQLite database and any WAL/SHM files, Redis RDB/AOF state, and recovery/overflow files. Record versions and SHA-256 hashes. These backups are for separately authorized disaster recovery, not the ordinary rollback path.
 
@@ -327,7 +331,7 @@ This is the operator sequence for V03/M01–M03. A successful PlugDev report is 
 3. Replace the candidate JAR with a checksum-verified 1.3.2 JAR while keeping compatible current data and versions. Verify that 1.3.2 reads transactions written during the upgrade. Keep Java 25 and the supported server where possible; if the JVM or server must also be downgraded, use versions supported by 1.3.2 rather than assuming a newer server runs on Java 21.
 4. Do not flush Redis, reset balances, or restore the pre-upgrade backup as ordinary rollback. Restoring an old backup can discard valid transactions made afterward. Reintroducing 1.3.2 also restores its known stale SQL-writer limitation, so do not run old and new writers together.
 
-The current M01–M03 runtime reports cover two synthetic nodes on the six user-pinned Paper/Folia/Canvas endpoints; a separate current-stable Paper report is supplemental. They verify normal stop, candidate writes, data snapshots, and recovery-journal state for those test nodes. They do not prove production fleet-wide quiescence, complete drain counters, or licensed CMI behavior. T00A's minimum-Paper smoke is documented in [`tools/plugdev/README.md`](../tools/plugdev/README.md); it does not replace the full persisted-state upgrade and rollback gate in V03/M00–M12.
+The current M01–M03 runtime reports cover two synthetic nodes on the six user-pinned Paper/Folia/Canvas endpoints; a separate current-stable Paper report is supplemental. They verify normal stop, candidate writes, data snapshots, and recovery-journal state for those test nodes. They do not prove production fleet-wide quiescence, complete drain counters, or full CMI acceptance. Under ADR-12, full CMI mode and the unrun T21 cases are outside verified 1.4.0 support claims. T00A's minimum-Paper smoke is documented in [`tools/plugdev/README.md`](../tools/plugdev/README.md); it does not replace the full persisted-state upgrade and rollback gate in V03/M00–M12.
 
 ## 18. Documentation, security, and release hygiene
 
@@ -350,7 +354,9 @@ Expected artifacts are `build/libs/Syncmoney-<version>.jar`, `syncmoney-papi-exp
 
 ## 19. Release automation and frontend mirroring
 
-The root repository is the canonical source for the Web Admin. Stable source metadata stays at the committed version in `build.gradle`; preview jobs pass `-PreleaseVersion` so CI can build `1.3.3-alpha.<run-number>` without committing preview metadata. `NEXT_VERSION` is the repository variable that selects the next stable base.
+The root repository is the canonical source for the Web Admin. Stable source metadata stays at the committed version in `build.gradle`; preview jobs pass `-PreleaseVersion` without committing preview metadata. CI uses the repository variable `NEXT_VERSION` when set and otherwise falls back to the root version. The hosted variable value is not available in this checkout, so preview versions should be described as `<base-version>-alpha.<run-number>`.
+
+The 1.4.0 matched synthetic facade/receipt-adapter benchmark did not meet all original B00 thresholds. ADR-11 accepts the measured regression only for that bounded profile; the thresholds and correctness hard gates remain unchanged. This does not establish production, SQL, Redis, or real-server performance, and the exception does not cover a correctness failure.
 
 The core repository uses unprefixed tags. A beta or alpha tag publishes a prerelease after the Web repository is updated. A stable tag requires the `production-release` environment approval and a matching changelog section. The release workflow updates [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web) first, pushes its corresponding `v`-prefixed tag, waits for its Web Release, and then publishes the core and PlaceholderAPI JARs. The Web Release contains a deterministic source archive and checksum; it intentionally does not publish `dist`, `node_modules`, coverage, Playwright output, or editor files. Syncmoney downloads the archive and builds it on the target server.
 

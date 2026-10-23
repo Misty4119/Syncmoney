@@ -1,6 +1,7 @@
 package noietime.syncmoney.economy;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.audit.AuditLogger;
 import noietime.syncmoney.audit.HybridAuditManager;
 import noietime.syncmoney.baltop.BaltopManager;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -112,6 +114,60 @@ class EconomyEventConsumerTest {
         assertEquals(EconomyEvent.EventType.DEPOSIT, event.type());
         assertEquals(playerUuid, event.uuid());
         assertEquals("test-request", event.requestId());
+    }
+
+    @Test
+    void reconcilesAcceptedReceiptBeforeEnqueuingShadowSync() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        BigDecimal receiptBalance = new BigDecimal("110.00");
+        long receiptVersion = 73L;
+        EconomyEvent event = new EconomyEvent(
+                playerUuid,
+                new BigDecimal("10.00"),
+                receiptBalance,
+                12L,
+                EconomyEvent.EventType.DEPOSIT,
+                EconomyEvent.EventSource.COMMAND_ADMIN,
+                "shadow-receipt-version",
+                System.currentTimeMillis());
+        when(mockConfig.isPubsubEnabled()).thenReturn(false);
+        when(mockConfig.isDbEnabled()).thenReturn(false);
+        when(mockConfig.shadowSync().isShadowSyncEnabled()).thenReturn(true);
+        when(mockNameResolver.getNameCachedOnly(playerUuid)).thenReturn("SyntheticPlayer");
+        when(mockCacheManager.atomicAddBalanceReceipt(playerUuid, event.delta()))
+                .thenReturn(new ConfirmedAccount(playerUuid, receiptBalance, receiptVersion));
+
+        EconomyWriteQueue acceptedQueue = new EconomyWriteQueue(4);
+        MemoryStateManager memory = new MemoryStateManager(mockPlugin, acceptedQueue);
+        memory.put(playerUuid, new AccountState(event.balanceAfter(), event.version(), event.timestamp()));
+        EconomyWriteQueue.Reservation reservation = acceptedQueue.tryReserve(playerUuid);
+        assertNotNull(reservation);
+        assertTrue(reservation.commit(event));
+
+        EconomyEventConsumer acceptedConsumer = new EconomyEventConsumer(
+                mockPlugin, mockConfig, acceptedQueue, mockCacheManager, mockRedisManager,
+                null, mockAuditLogger, mockHybridAuditManager, mockNameResolver, null,
+                mockShadowSyncTask, mockOverflowLog, mockDatabaseManager);
+        doAnswer(invocation -> {
+            AccountState reconciled = memory.get(playerUuid);
+            assertNotNull(reconciled, "queue completion must leave a resident authority snapshot");
+            assertEquals(receiptBalance, reconciled.balance(),
+                    "shadow admission must observe the Redis receipt balance in memory");
+            assertEquals(receiptVersion, reconciled.version(),
+                    "shadow admission must observe the Redis receipt version in memory");
+            return null;
+        }).when(mockShadowSyncTask).enqueueSyncEvent(
+                playerUuid, "SyntheticPlayer", receiptBalance, receiptVersion);
+
+        Method processEvent = EconomyEventConsumer.class.getDeclaredMethod("processEvent", EconomyEvent.class);
+        processEvent.setAccessible(true);
+        processEvent.invoke(acceptedConsumer, event);
+
+        verify(mockShadowSyncTask).enqueueSyncEvent(
+                playerUuid, "SyntheticPlayer", receiptBalance, receiptVersion);
+        assertEquals(receiptBalance, memory.get(playerUuid).balance());
+        assertEquals(receiptVersion, memory.get(playerUuid).version());
+        assertFalse(acceptedQueue.hasAcceptedWrite(playerUuid));
     }
 
     @Test

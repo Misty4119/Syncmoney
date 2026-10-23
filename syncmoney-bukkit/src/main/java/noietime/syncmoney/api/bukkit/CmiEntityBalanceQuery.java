@@ -14,13 +14,13 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 /** Routes a cold CMI balance read through the online player's entity owner. */
-final class CmiEntityBalanceQuery {
+public final class CmiEntityBalanceQuery {
 
     private final Plugin plugin;
     private final CMIEconomyHandler cmiHandler;
     private final BooleanSupplier providerActive;
 
-    CmiEntityBalanceQuery(Plugin plugin, CMIEconomyHandler cmiHandler) {
+    public CmiEntityBalanceQuery(Plugin plugin, CMIEconomyHandler cmiHandler) {
         this(plugin, cmiHandler, () -> true);
     }
 
@@ -30,7 +30,7 @@ final class CmiEntityBalanceQuery {
         this.providerActive = providerActive;
     }
 
-    CompletionStage<Optional<BigDecimal>> load(UUID uuid) {
+    public CompletionStage<Optional<BigDecimal>> load(UUID uuid) {
         if (uuid == null) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("Account UUID must not be null"));
         }

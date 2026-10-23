@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,6 +34,7 @@ import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class MigrationTaskAdmissionTest {
@@ -41,6 +43,57 @@ class MigrationTaskAdmissionTest {
     void resetMigrationLock() {
         MigrationLock.unlock();
         MigrationLock.disable();
+    }
+
+    @Test
+    void startRejectsMissingSharedSqlTargetBeforeReadingCmiOrTouchingRedis() {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.isDatabaseEnabled()).thenReturn(false);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+
+        CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        EconomyFacade facade = mock(EconomyFacade.class);
+        RedisManager redisManager = mock(RedisManager.class);
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null,
+                redisManager, null, checkpoint, null, null);
+
+        task.start(false, false);
+
+        assertFalse(task.isRunning());
+        verify(cmiReader, never()).testConnection();
+        verify(cmiReader, never()).getSourceSnapshotFingerprint();
+        verify(facade, never()).setBalance(any(UUID.class), any(BigDecimal.class), any());
+        verify(redisManager, never()).isConnected();
+        verify(redisManager, never()).getResource();
+        verifyNoInteractions(checkpoint);
+    }
+
+    @Test
+    void resumeRejectsMissingSharedSqlTargetBeforeResumingCheckpointOrTouchingRedis() {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.isDatabaseEnabled()).thenReturn(false);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+
+        CMIDatabaseReader cmiReader = mock(CMIDatabaseReader.class);
+        EconomyFacade facade = mock(EconomyFacade.class);
+        RedisManager redisManager = mock(RedisManager.class);
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null,
+                redisManager, null, checkpoint, null, null);
+
+        assertFalse(task.resume());
+
+        verifyNoInteractions(checkpoint);
+        verify(cmiReader, never()).initialize();
+        verify(cmiReader, never()).getSourceSnapshotFingerprint();
+        verify(facade, never()).setBalance(any(UUID.class), any(BigDecimal.class), any());
+        verify(redisManager, never()).isConnected();
+        verify(redisManager, never()).getResource();
     }
 
     @Test

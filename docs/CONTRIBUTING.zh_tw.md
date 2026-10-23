@@ -153,14 +153,14 @@ pnpm build
 
 ## Release 流程
 
-Core repository 是 Web Admin 的 canonical source。穩定版本保存在 root `build.gradle`；preview build 由 CI 傳入 `-PreleaseVersion`，因此不需要把 alpha/beta 版本提交到 source metadata。目前 repository variable `NEXT_VERSION` 選擇下一條 preview line：`1.3.3`。
+Core repository 是 Web Admin 的 canonical source。穩定版本保存在 root `build.gradle`；preview build 由 CI 傳入 `-PreleaseVersion`，因此不需要把 alpha/beta 版本提交到 source metadata。CI 會優先使用 repository variable `NEXT_VERSION`，未設定時則使用 root version；此 checkout 無法取得 hosted variable 的值，因此文件不能假設固定的 preview base。
 
-Pull request 與 `main` 都會執行 Java/Web checks 並產生 CI artifact；preview artifact 預設命名為 `1.3.3-alpha.<run-number>`，只保留在 GitHub Actions，不會建立公開 Release。
+Pull request 與 `main` 都會執行 Java/Web checks 並產生 CI artifact；preview artifact 命名為 `<base-version>-alpha.<run-number>`，只保留在 GitHub Actions，不會建立公開 Release。
 
 Core repository tag 不帶前綴：
 
-- `1.3.3-alpha.1` 或 `1.3.3-beta.1` 發佈 prerelease；
-- `1.3.3` 在 `production-release` environment 審核通過且 `CHANGELOG.md` 有對應 section 後發佈 stable release。
+- `<version>-alpha.1` 或 `<version>-beta.1` 發佈 prerelease；
+- `<version>` 在 `production-release` environment 審核通過且 `CHANGELOG.md` 有對應 section 後發佈 stable release。
 
 Release workflow 會把 canonical `syncmoney-web` source 同步到 [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)，套用 release version，先推送對應的 `v` 前綴 tag。Web workflow 先發佈 deterministic `syncmoney-web.tar.gz` 與 checksum；Web release 存在後，core workflow 才發佈 plugin 與 PlaceholderAPI JAR。跨 repository job 需要 fine-grained `SYNC_WEB_RELEASE_TOKEN` secret，且 write access 限定在 Web repository。
 

@@ -35,7 +35,7 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 ## Key Features
 
 - **Standard Economy Compatibility**: Integrates seamlessly with Vault 1.7 and VaultUnlocked (Vault2 API).
-- **Flexible Economy Modes**: Supports standalone SQLite (`local`), Redis-only sync (`local_redis`), Redis + SQL database persistence (`sync`), and CMI-authoritative sync (`cmi`).
+- **Economy Modes**: The code provides `local`, `local_redis`, `sync`, and `cmi` mode paths. Under ADR-12, full `cmi` mode is outside the verified 1.4.0 support scope and is not validated for production use.
 - **Distributed Synchronization**: Redis-backed balance updates use atomic Lua scripts and per-account versions. CMI retains its legacy timestamp-derived version, which is not globally monotonic; inbound updates still use local freshness checks and echo suppression.
 - **In-Memory Performance**: O(1) balance reads served directly from memory; persistent storage writes handled asynchronously off the tick thread.
 - **Multi-Layer Circuit Breaker**: Real-time per-transaction limits, anomaly rate detection, and an independent per-player guard (L1–L4 states).
@@ -56,12 +56,12 @@ Syncmoney manages balances, currency operations, and its own economy commands an
 | **Economy Bridge** | Required: **Vault** (legacy 1.7) or **VaultUnlocked** (2.20.0+). *Do not load both concurrently under the same name.* |
 | **Message Broker** | Redis 5.0+ (Required for `sync`, `local_redis`, and `cmi` modes). |
 | **Database** | MySQL 8.0+, MariaDB 10.5+, PostgreSQL 13+, or local SQLite. |
-| **Optional Integrations** | PlaceholderAPI (with `SyncmoneyExpansion`), CMI (compatible licensed release for `cmi` mode). |
+| **Optional Integrations** | PlaceholderAPI (with `SyncmoneyExpansion`), CMI (a locally supplied compatible release is required; CMI mode is outside the verified 1.4.0 support scope and is not validated for production use). |
 
 > [!NOTE]
 > Future server releases remain compatibility targets rather than unconditional guarantees. Always validate upgrades on a staging environment prior to updating production balances.
 
-The formal 1.4.0 runtime-validation endpoints are Paper `1.21.6#48`–`26.3#166`, Folia `1.21.6#6`–`26.2#7`, and Canvas `1.21.8#603`–`26.3#972`. These identify the pinned lowest and highest endpoint builds; they do not claim that every intervening build has been exercised.
+The formal 1.4.0 runtime-validation endpoints are Paper `1.21.6#48`–`26.3#200`, Folia `1.21.6#6`–`26.3#3`, and Canvas `1.21.8#603`–`26.3#984`. These identify the pinned lowest and highest endpoint builds; they do not claim that every intervening build has been exercised. Reports from earlier `1.4.0-alpha.1` candidates include several bounded Paper `1.21.6#48` observations: LOCAL SQLite shutdown/replay, two-node SYNC upgrade/rollback, and selected PostgreSQL initialization and migration cases. They are not runtime evidence for the final `1.4.0` candidate. Minimum-Paper MySQL/MariaDB initial-schema cases and the broader T21 mode/resource/failure matrix remain unverified and are outside the verified 1.4.0 support claims; the full release matrix is not complete. Earlier `26.3#166`, `26.2#7`, and `26.3#972` reports remain historical for their exact builds.
 
 The historical 1.3.2 acceptance matrix covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network behind the latest `velocity-ctd` build. Folia was tested successfully on that beta server build; this remains an observed compatibility baseline, not a promise that an unreleased server build will remain binary-compatible.
 
@@ -90,8 +90,12 @@ The install instructions below describe the published 1.3.2 artifact. For the 1.
 | `local` | Single-server SQLite file. No Redis or external database required. | Standalone servers without cross-server requirements. |
 | `local_redis` | Redis-backed network economy without SQL persistence. | Networks relying on persistent Redis storage (AOF/RDB). |
 | `sync` | Redis Pub/Sub + central SQL database (MySQL / MariaDB / PostgreSQL). | Standard multi-server networks requiring robust relational persistence. SQLite is for LOCAL/Shadow storage, not this shared database connection. |
-| `cmi` | CMI retains primary economy authority; mutations propagate via Redis. | Networks using CMI as the authoritative economy engine. |
+| `cmi` | CMI remains the configured authority, but CMI mode is outside the verified 1.4.0 support scope. Do not treat it as production-validated for 1.4.0. | Not a verified 1.4.0 deployment profile. |
 | `auto` | Automatically detects installed environment and suggests mode. | For quick evaluations; explicit mode configuration is recommended for production. |
+
+An earlier `1.4.0-alpha.1` candidate had a bounded, read-only CMI check on Paper 1.21.6 with CMI 9.8.10.5 and CMILib 1.6.0.1. One online Acceptance player's direct CMI balance, Syncmoney CMI route, and public `BalanceSnapshot` read matched. Exact final-candidate CMI runtime acceptance remains NOT VERIFIED. This observation does not establish active CMI license status, Syncmoney Vault provider registration in CMI mode, mutations, cross-server behavior, or Folia/Canvas behavior. Under ADR-12, CMI mode remains outside verified 1.4.0 support claims.
+
+The matched synthetic facade/receipt-adapter benchmark did not meet all original performance thresholds. Under ADR-11, the measured regression is accepted only for that bounded synthetic profile; correctness hard gates remain unchanged, and this is not a production, SQL, Redis, or real-server capacity claim.
 
 ### Minimal Standalone Configuration (`local`)
 
@@ -287,11 +291,11 @@ Compiled JAR files are produced in `build/libs/` and `syncmoney-papi-expansion/b
 
 ## Release and CI workflow
 
-Every pull request and `main` push runs Java and Web checks and retains build artifacts in GitHub Actions. CI preview artifacts use the repository variable `NEXT_VERSION` as their base and are named `1.3.3-alpha.<run-number>` by default. They are test artifacts, not public GitHub Releases.
+Every pull request and `main` push runs Java and Web checks and retains build artifacts in GitHub Actions. CI preview artifacts use the repository variable `NEXT_VERSION` when set, otherwise falling back to the version in root `build.gradle`; their name is `<base-version>-alpha.<run-number>`. The hosted repository-variable value is not stored in this checkout. Preview artifacts are test artifacts, not public GitHub Releases.
 
-The core repository is the canonical Web Admin source. A release tag in the core repository has no `v` prefix (`1.3.2`, `1.3.3-beta.1`); the automation synchronizes the frontend to [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), where the corresponding tag has a `v` prefix (`v1.3.2`, `v1.3.3-beta.1`). The Web release publishes `syncmoney-web.tar.gz`, a deterministic source archive. The plugin downloads that archive, installs dependencies, and builds locally before loading it.
+The core repository is the canonical Web Admin source. A release tag in the core repository has no `v` prefix (`<version>-alpha.<number>`, `<version>-beta.<number>`, or `<version>`); the automation synchronizes the frontend to [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), where the corresponding tag has a `v` prefix. The Web release publishes `syncmoney-web.tar.gz`, a deterministic source archive. The plugin downloads that archive, installs dependencies, and builds locally before loading it.
 
-To publish a preview, push an explicit core tag such as `1.3.3-beta.1`. The Web release is published first, then the core release. A stable tag such as `1.3.2` additionally requires the `production-release` environment approval and a matching `CHANGELOG.md` section. The cross-repository job uses the `SYNC_WEB_RELEASE_TOKEN` secret, which must be a fine-grained token limited to the `Misty4119/Syncmoney-web` repository.
+To publish a preview, push an explicit core tag such as `<version>-beta.1`. The Web release is published first, then the core release. A stable tag such as `<version>` additionally requires the `production-release` environment approval and a matching `CHANGELOG.md` section. The cross-repository job uses the `SYNC_WEB_RELEASE_TOKEN` secret, which must be a fine-grained token limited to the `Misty4119/Syncmoney-web` repository.
 
 When Web source changes, run `pnpm build:embedded` from `syncmoney-web`. The command clears and replaces `src/main/resources/syncmoney-web/dist` and updates `WebAdminServer.extractIndividualFiles` in the same operation. Commit the generated bundle and the Java extraction lists together.
 

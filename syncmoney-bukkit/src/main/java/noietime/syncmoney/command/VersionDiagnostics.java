@@ -4,6 +4,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DatabaseManager;
+import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.util.BuildVersion;
 import noietime.syncmoney.util.ServerPlatformDetector;
 import noietime.syncmoney.vault.VaultRuntimeDetector;
@@ -130,8 +131,9 @@ public final class VersionDiagnostics {
                 + " running=" + (plugin.getWebAdminServer() != null));
         report.add("module.audit", config.audit().isAuditEnabled()
                 + " running=" + (plugin.getAuditLogger() != null && plugin.getAuditLogger().isEnabled()));
+        ShadowSyncTask shadowSyncTask = plugin.getShadowSyncTask();
         report.add("module.shadow_sync", config.shadowSync().isShadowSyncEnabled()
-                + " running=" + (plugin.getShadowSyncTask() != null));
+                + " running=" + (shadowSyncTask != null && shadowSyncTask.isRunning()));
         report.add("module.circuit_breaker", config.circuitBreaker().isCircuitBreakerEnabled()
                 + " state=" + (plugin.getCircuitBreaker() == null
                 ? "NOT_INITIALIZED" : plugin.getCircuitBreaker().getState()));

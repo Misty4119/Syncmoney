@@ -8,6 +8,7 @@ import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.storage.db.DbWriterConsumer;
 import noietime.syncmoney.initialization.ShutdownStepRunner;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Unified storage layer manager.
@@ -31,6 +32,8 @@ public class StorageManager {
     private final long dbWriterInterruptJoinMillis;
     private final AtomicBoolean shutdownRequested = new AtomicBoolean();
     private final AtomicBoolean storageDependenciesClosed = new AtomicBoolean();
+    private final AtomicBoolean dbWriterFinished = new AtomicBoolean(true);
+    private final AtomicInteger activeDatabaseUseLeases = new AtomicInteger();
 
     public StorageManager(Syncmoney plugin, SyncmoneyConfig config) {
         this(plugin, config, DB_WRITER_JOIN_TIMEOUT_MILLIS, DB_WRITER_INTERRUPT_JOIN_MILLIS);
@@ -55,11 +58,13 @@ public class StorageManager {
         this.cacheManager = new CacheManager(plugin, redisManager, redisRequired);
 
         EconomyMode mode = config.getEconomyMode();
-        if (mode != EconomyMode.LOCAL && mode != EconomyMode.LOCAL_REDIS) {
+        boolean databaseRequiredForMode = mode == EconomyMode.SYNC
+                || (mode == EconomyMode.CMI && config.isDatabaseEnabled());
+        if (databaseRequiredForMode) {
             this.databaseManager = new DatabaseManager(plugin, config);
         } else {
             this.databaseManager = null;
-            plugin.getLogger().fine("Database manager skipped (" + mode + " mode)");
+            plugin.getLogger().fine("Database manager skipped (" + mode + " mode, database disabled or unused)");
         }
 
         this.dbWriteQueue = new DbWriteQueue(config.getQueueCapacity());
@@ -69,7 +74,15 @@ public class StorageManager {
                     cacheManager, redisManager);
             this.dbWriterThread = createDbWriterThread(dbWriterConsumer);
             dbWriterThread.setDaemon(true);
-            dbWriterThread.start();
+            dbWriterFinished.set(false);
+            try {
+                dbWriterThread.start();
+            } catch (RuntimeException | Error startupFailure) {
+                // The wrapper's finally block cannot run when Thread.start() fails.
+                // Let initialization rollback close the dependencies it already created.
+                dbWriterFinished.set(true);
+                throw startupFailure;
+            }
         }
 
         plugin.getLogger().fine("Storage layer initialized");
@@ -112,7 +125,11 @@ public class StorageManager {
         }
 
         closeStorageDependencies();
-        plugin.getLogger().fine("Storage layer shutdown complete");
+        if (storageDependenciesClosed.get()) {
+            plugin.getLogger().fine("Storage layer shutdown complete");
+        } else {
+            plugin.getLogger().severe("Storage dependencies remain open until all registered database users exit");
+        }
     }
 
     Thread createDbWriterThread(DbWriterConsumer consumer) {
@@ -120,6 +137,7 @@ public class StorageManager {
             try {
                 consumer.run();
             } finally {
+                dbWriterFinished.set(true);
                 if (shutdownRequested.get()) {
                     closeStorageDependencies();
                 }
@@ -127,7 +145,53 @@ public class StorageManager {
         }, "Syncmoney-DbWriter");
     }
 
+    /**
+     * Keeps the shared database and Redis dependencies open while an owned worker can use them.
+     * The lease must be closed only after that worker has fully terminated.
+     *
+     * @return a lease, or {@code null} when no database is configured or shutdown has begun
+     */
+    public DatabaseUseLease acquireDatabaseUseLease() {
+        if (databaseManager == null || shutdownRequested.get() || storageDependenciesClosed.get()) {
+            return null;
+        }
+        activeDatabaseUseLeases.incrementAndGet();
+        if (shutdownRequested.get() || storageDependenciesClosed.get()) {
+            releaseDatabaseUseLease();
+            return null;
+        }
+        return new DatabaseUseLease();
+    }
+
+    private void releaseDatabaseUseLease() {
+        int active = activeDatabaseUseLeases.decrementAndGet();
+        if (active < 0) {
+            activeDatabaseUseLeases.incrementAndGet();
+            throw new IllegalStateException("Database use lease released more than once");
+        }
+        if (shutdownRequested.get()) {
+            closeStorageDependencies();
+        }
+    }
+
+    public final class DatabaseUseLease implements AutoCloseable {
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        private DatabaseUseLease() {
+        }
+
+        @Override
+        public void close() {
+            if (released.compareAndSet(false, true)) {
+                releaseDatabaseUseLease();
+            }
+        }
+    }
+
     private void closeStorageDependencies() {
+        if (!shutdownRequested.get() || !dbWriterFinished.get() || activeDatabaseUseLeases.get() > 0) {
+            return;
+        }
         if (!storageDependenciesClosed.compareAndSet(false, true)) {
             return;
         }

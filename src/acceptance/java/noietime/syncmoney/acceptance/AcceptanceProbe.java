@@ -3,6 +3,8 @@ package noietime.syncmoney.acceptance;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
+import noietime.syncmoney.api.BalanceSnapshot;
+import noietime.syncmoney.api.SyncmoneyApi;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyWriteQueue;
 import net.milkbowl.vault.economy.Economy;
@@ -25,9 +27,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 /** Explicit RCON-triggered tests against an isolated development server, never production. */
 public final class AcceptanceProbe extends JavaPlugin implements Listener {
+    private enum CmiAcceptanceFailureStage {
+        GLOBAL_OWNER_LOOKUP,
+        PLAYER_OWNER,
+        PUBLIC_API_LOAD,
+        PUBLIC_API_RESULT
+    }
+
     private static final long ACCOUNT_LOAD_TIMEOUT_MILLIS = 10_000L;
     private static final UUID LEGACY_SQLITE_ACCOUNT_A = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final UUID LEGACY_SQLITE_ACCOUNT_B = UUID.fromString("00000000-0000-0000-0000-000000000002");
@@ -133,6 +144,10 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
                 getServer().getGlobalRegionScheduler().run(this, task -> runVersionChecks(args[0]));
                 return true;
             }
+            if (args.length > 0 && args[0].equalsIgnoreCase("cmi")) {
+                runCmiAcceptanceProbe(args);
+                return true;
+            }
             if (args.length > 0 && args[0].equalsIgnoreCase("quiescence")) {
                 getServer().getGlobalRegionScheduler().run(this, task -> runQuiescenceCheck());
                 return true;
@@ -140,6 +155,160 @@ public final class AcceptanceProbe extends JavaPlugin implements Listener {
             getServer().getAsyncScheduler().runNow(this, task -> runChecks(args));
             return true;
         });
+    }
+
+    /** Read-only CMI authority and public API check for one online disposable Acceptance account. */
+    private void runCmiAcceptanceProbe(String[] args) {
+        if (args.length != 2 || !args[1].startsWith("Acceptance")) {
+            getLogger().severe("CMI_ACCEPTANCE_FAIL reason=usage-or-non-acceptance-player");
+            return;
+        }
+
+        final String playerName = args[1];
+        getServer().getGlobalRegionScheduler().run(this, globalTask -> {
+            try {
+                var plugin = getServer().getPluginManager().getPlugin("Syncmoney");
+                require(plugin != null && plugin.isEnabled(), "syncmoney-enabled");
+                Object syncmoneyConfig = plugin.getClass().getMethod("getSyncmoneyConfig").invoke(plugin);
+                require(syncmoneyConfig != null, "syncmoney-config-available");
+                Object configuredMode = syncmoneyConfig.getClass().getMethod("getEconomyMode")
+                        .invoke(syncmoneyConfig);
+                require("CMI".equals(String.valueOf(configuredMode)), "configured-mode-is-cmi");
+
+                Object economyRouter = plugin.getClass().getMethod("getEconomyModeRouter").invoke(plugin);
+                require(economyRouter != null, "economy-router-available");
+                Object routerMode = economyRouter.getClass().getMethod("getMode").invoke(economyRouter);
+                require("CMI".equals(String.valueOf(routerMode)), "economy-router-mode-is-cmi");
+                Object cmiHandler = economyRouter.getClass().getMethod("getCmiHandler").invoke(economyRouter);
+                require(cmiHandler != null, "cmi-handler-available");
+                Object cmiApi = cmiHandler.getClass().getMethod("getCmiApi").invoke(cmiHandler);
+                require(cmiApi != null
+                                && Boolean.TRUE.equals(cmiApi.getClass().getMethod("isAvailable").invoke(cmiApi)),
+                        "cmi-api-available");
+                var apiRegistration = getServer().getServicesManager().getRegistration(SyncmoneyApi.class);
+                require(apiRegistration != null && apiRegistration.getPlugin() == plugin,
+                        "public-api-registered-by-syncmoney");
+                SyncmoneyApi syncmoneyApi = apiRegistration.getProvider();
+                require(syncmoneyApi != null, "public-api-provider-available");
+
+                var player = getServer().getPlayerExact(playerName);
+                require(player != null, "acceptance-player-online");
+                player.getScheduler().run(this, entityTask -> {
+                    try {
+                        require(player.isOnline() && player.getName().startsWith("Acceptance"),
+                                "acceptance-player-remains-online");
+                        UUID uuid = player.getUniqueId();
+                        Method invalidateBalanceCache = cmiHandler.getClass()
+                                .getMethod("invalidateCachedBalanceForApi", UUID.class);
+                        invalidateBalanceCache.invoke(cmiHandler, uuid);
+                        require(syncmoneyApi.economy().cachedBalance(uuid).isEmpty(),
+                                "public-api-cache-empty-before-cold-load");
+
+                        syncmoneyApi.economy().loadBalance(uuid).whenComplete((snapshot, failure) -> {
+                            if (failure != null) {
+                                logCmiAcceptanceFailure(CmiAcceptanceFailureStage.PUBLIC_API_LOAD, failure);
+                                return;
+                            }
+                            getServer().getGlobalRegionScheduler().run(this, lookupTask -> {
+                                var currentPlayer = getServer().getPlayer(uuid);
+                                if (currentPlayer == null) {
+                                    logCmiAcceptanceFailure(CmiAcceptanceFailureStage.PUBLIC_API_RESULT,
+                                            new IllegalStateException("Acceptance player left before CMI read comparison"));
+                                    return;
+                                }
+                                currentPlayer.getScheduler().run(this, compareTask -> {
+                                    try {
+                                        require(currentPlayer.isOnline()
+                                                        && currentPlayer.getName().startsWith("Acceptance"),
+                                                "acceptance-player-remains-online-after-cold-load");
+                                        require(snapshot != null && snapshot.isPresent(),
+                                                "public-api-cold-balance-available");
+                                        BalanceSnapshot apiSnapshot = snapshot.orElseThrow();
+                                        require(uuid.equals(apiSnapshot.accountId()),
+                                                "public-api-account-id-matches");
+                                        var cachedSnapshot = syncmoneyApi.economy().cachedBalance(uuid);
+                                        require(cachedSnapshot.isPresent()
+                                                        && cachedSnapshot.orElseThrow().balance()
+                                                        .compareTo(apiSnapshot.balance()) == 0,
+                                                "public-api-cold-result-populates-cache");
+
+                                        Object cmiBalanceResult = cmiApi.getClass()
+                                                .getMethod("getExistingBalance", UUID.class).invoke(cmiApi, uuid);
+                                        require(cmiBalanceResult instanceof java.util.Optional<?>,
+                                                "existing-cmi-balance-result-available");
+                                        java.util.Optional<?> cmiBalance = (java.util.Optional<?>) cmiBalanceResult;
+                                        require(cmiBalance.isPresent(), "existing-cmi-balance-available");
+                                        Object directBalanceValue = cmiBalance.orElseThrow();
+                                        require(directBalanceValue instanceof BigDecimal,
+                                                "existing-cmi-balance-is-decimal");
+                                        BigDecimal directBalance = (BigDecimal) directBalanceValue;
+                                        BigDecimal apiBalance = apiSnapshot.balance();
+                                        require(directBalance.compareTo(apiBalance) == 0,
+                                                "cmi-api-and-cold-public-api-balances-match");
+
+                                        getLogger().info("CMI_ACCEPTANCE_PASS public-api-cache-before=empty"
+                                                + " public-api-read=cold cmi-authority-matches-public-api=true"
+                                                + " cmi-router-mirror=NOT_VERIFIED");
+                                    } catch (Throwable e) {
+                                        logCmiAcceptanceFailure(CmiAcceptanceFailureStage.PUBLIC_API_RESULT, e);
+                                    }
+                                }, () -> logCmiAcceptanceFailure(CmiAcceptanceFailureStage.PUBLIC_API_RESULT,
+                                        new IllegalStateException("Acceptance player retired before CMI read comparison")));
+                            });
+                        });
+                    } catch (Throwable e) {
+                        logCmiAcceptanceFailure(CmiAcceptanceFailureStage.PLAYER_OWNER, e);
+                    }
+                }, () -> getLogger().severe("CMI_ACCEPTANCE_FAIL reason=acceptance-player-retired"));
+            } catch (Throwable e) {
+                logCmiAcceptanceFailure(CmiAcceptanceFailureStage.GLOBAL_OWNER_LOOKUP, e);
+            }
+        });
+    }
+
+    private void logCmiAcceptanceFailure(CmiAcceptanceFailureStage stage, Throwable failure) {
+        Throwable cause = failure;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException
+                || cause instanceof java.lang.reflect.InvocationTargetException)
+                && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        String type = cause.getClass().getSimpleName();
+        if (!type.matches("[A-Za-z0-9_$]+")) {
+            type = "unknown";
+        }
+        String missingClass = safeMissingClassName(cause);
+        logCmiAcceptanceFailure("probe-error stage=" + stage.name() + " type=" + type
+                + (missingClass == null ? "" : " missingClass=" + missingClass));
+    }
+
+    private String safeMissingClassName(Throwable failure) {
+        if (!(failure instanceof NoClassDefFoundError)) {
+            return null;
+        }
+        String message = failure.getMessage();
+        if (message == null || message.length() > 256) {
+            return null;
+        }
+
+        String candidate = message.trim();
+        String initializerPrefix = "Could not initialize class ";
+        if (candidate.startsWith(initializerPrefix)) {
+            candidate = candidate.substring(initializerPrefix.length());
+        }
+        String binaryNamePattern = "(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*[A-Za-z_$][A-Za-z0-9_$]*";
+        if (candidate.matches(binaryNamePattern)) {
+            return candidate;
+        }
+        String internalNamePattern = "(?:[A-Za-z_$][A-Za-z0-9_$]*/)*[A-Za-z_$][A-Za-z0-9_$]*";
+        if (candidate.matches(internalNamePattern)) {
+            return candidate.replace('/', '.');
+        }
+        return null;
+    }
+
+    private void logCmiAcceptanceFailure(String reason) {
+        getLogger().severe("CMI_ACCEPTANCE_FAIL reason=" + reason);
     }
 
     private void runQuiescenceCheck() {

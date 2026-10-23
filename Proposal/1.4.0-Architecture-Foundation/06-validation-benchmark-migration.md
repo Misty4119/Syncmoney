@@ -1678,6 +1678,20 @@ At 17:58 UTC, report 059 appeared. The corrected verifier passed reports 001–0
 
 **Performance observation and limits:** Bounded-runner admission rejects totaled 910,045/30,141,888 offered (3.019%); 14 scenario rows had any such rejects and row 049 peaked at 32.18%. These are explicit bounded-capacity rejections, not Redis authority rejects or lost accepted writes. This is benchmark evidence, not release performance approval or a production capacity claim; T22 retains the final performance disposition. T21 platform/runtime compatibility remains untested by this Redis/SQL benchmark.
 
+### 2026-10-22 T19 final release disposition — bounded user-delegated exception
+
+**Decision:** Under ADR-11, keep the B00 thresholds and correctness hard gates unchanged and accept the observed regression only as a bounded exception for the measured synthetic facade/receipt-adapter profile. This is not a threshold PASS, causal profile, production capacity claim, SQL/Redis throughput claim, or claim of no regression. T22 Beta remains open until an independent reviewer accepts this disposition and the release documentation reflects the same scope.
+
+**Matched t=8 result:** The accepted report is SHA-256 `57a7a97b0dd0e1b3ad59876af283e119dde9045b769544ef6030713ff9ca2287` (manifest `syncmoney-benchmarks/build/reports/benchmarks/transaction-paired-manifest-t8-0eb0c320-739d-4672-8720-e21504875586.json`). Across 48 matched cases, throughput met `current >= 90% of legacy132` in 27/48; allocation met `current <= 110%` in 12/48; SampleTime p99 met `current <= 110%` in 18/48. Median current/baseline ratios were 0.965×, 1.720×, and 1.985×. Worst observations were 0.765% of baseline throughput for rejected withdrawal, 24.12× baseline allocation for rejected withdrawal, and 3.287× baseline p99 for hot-account withdrawal. Existing source review identifies migration lease/readiness/version prechecks and bounded-queue admission as plausible costs; it is not a causal profile. No measured row is removed.
+
+**Open-loop evidence boundary:** The 60-row verifier summary is SHA-256 `bbc4cc36ed4fc4b674b4f18dab5436f205781afdbed0ca774155e4f6f96fede0`. It records 30,141,888 offered, 29,231,843 accepted and persisted, and 910,045 bounded admission rejects (3.019%; row 049 peaked at 32.18%). Authority rejects, money-invariant failures, version conflicts, ambiguous outcomes, and quarantine were zero. The runner marks `baselineLatencyComparisonEligible=false`; this run does not substitute for matched p99 or allocation thresholds.
+
+**Evidence limitation:** The original paired JMH and open-loop raw JSON files are not present in this worktree, so this disposition relies on the hash-bound accepted summaries and prior independent review recorded above; no histogram was recomputed and no benchmark was rerun. The written exception still requires its own independent review before T22 closes.
+
+### 2026-10-22 T21/T22 evidence-bounded 1.4.0 support scope
+
+Under ADR-12, the broad V03 mode/resource/failure and SQL-dialect remainder, minimum-Paper MySQL/MariaDB initial-schema cells, and full CMI mode are excluded from verified 1.4.0 support claims. T21 remains `PARTIAL / IN_PROGRESS`; these cells remain `SKIPPED` or `BLOCKED / NOT VERIFIED`, not PASS. The accepted current-maximum 9/9 seeded-row matrix and Paper M12 result remain reused without rerun. This decision does not change SQL provisioning, the acceptance contract, runtime code, or stable release metadata. Publish only the exact endpoint, mode, backend, fixture, and predicate combinations supported by retained reports; no all-mode or full CMI support statement is permitted.
+
 ## T21 quiesced SYNC upgrade at all six confirmed endpoints (2026-10-13)
 
 **Status: PASS for the bounded M01–M03 two-node sequential-upgrade/normal-downgrade subcase on the six user-confirmed endpoints; T21 remains IN_PROGRESS.** The local PlugDev runner `tools/plugdev/run-quiesced-network-upgrade.ps1` exercised the endpoint set on isolated PostgreSQL `18.1` and Redis `8.10.1` DB 15, Java `25.0.4+7-LTS-189`, baseline `Syncmoney-1.3.2` SHA-256 `442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10`, candidate `Syncmoney-1.4.0-alpha.1` SHA-256 `55d42c2b72e86fdfd1d36e4f909e140f88256527a8e189c0c699d0cef89935d0`, and PlugDev commit `b59871ae8d9f2731d2bcbca061a735edddd23eb2`. Each report pins 21 harness source files, including the report-time quiesced runner SHA-256 `906b60c3e0f6a7d923a72499e92350068a412bb16153a9939103257ed068bdac` and contract-test SHA-256 `071a766d995c721ef764aab7006dd1b3fe6ec47c6c06f4fd94f1c5dc529ec711`.
@@ -7098,4 +7112,185 @@ The accepted report pins clean source commit `a47263063ef548e1f983395e316417bfb2
 
 The consolidation analysis above remains the approved efficiency boundary: compatible predicates sharing one initial state and lifecycle may share one isolated runtime/report; focused validators, parser checks, and source/manifest preflight may be reused for an unchanged source fingerprint, with every cell's endpoint/artifact pins still checked; each report is audited after teardown before a single aggregate audit. Distinct endpoint/backend cells and mutually exclusive failure fixtures remain isolated and sequential. Port selection is still bind-then-release, and there is no measured wall-clock comparison, so no speedup is claimed.
 
-This disposition defines no additional endpoint × mode × backend × failure-fixture selector. T21 remains `IN_PROGRESS`; the minimum-Paper MySQL/MariaDB initial-schema cases remain `BLOCKED / NOT VERIFIED`, and licensed CMI remains `BLOCKED / NOT VERIFIED` while active license status is `UNKNOWN`. No runtime/test was started and no retained report or run data was cleaned for this follow-up. Do not repeat Paper M12 or alter the provisioning/acceptance contract. T22 remains dependent on T21.
+This disposition defines no additional endpoint × mode × backend × failure-fixture selector. T21 remains `IN_PROGRESS`; the minimum-Paper MySQL/MariaDB initial-schema cases remain `BLOCKED / NOT VERIFIED`, and licensed CMI remains `BLOCKED / NOT VERIFIED` while active license status is `UNKNOWN`. No runtime/test was started and no retained report or run data was cleaned for this follow-up. Do not repeat Paper M12 or alter the provisioning/acceptance contract. At that 2026-10-21 checkpoint, T22 was held behind T21; later ADR-12/current routing supersedes that dependency interpretation for preparation and Alpha work. T22 may proceed with explicit evidence-bounded skips, but Beta remains `NOT VERIFIED` until all applicable exact-candidate acceptance criteria pass.
+
+## 2026-10-21 T21 Alpha-scope skips and T22 Alpha candidate verification
+
+**User direction:** Continue toward Syncmoney 1.4.0; skip or remove blockers that are complex or difficult. Reuse and combine local PlugDev flows where compatible to avoid repeated environment creation and disk growth.
+
+**T21 disposition:** The broad remaining V03 mode/resource/failure and SQL-dialect row has no finite next selector, fixture, predicate, or auditor. It is SKIPPED for the Alpha gate and remains NOT VERIFIED; no new runtime cell was invented. Full licensed CMI is also SKIPPED for Alpha while license status is UNKNOWN and remains BLOCKED / NOT VERIFIED. Minimum-Paper/MySQL and minimum-Paper/MariaDB initial-schema criteria remain BLOCKED / NOT VERIFIED; the provisioning contract was not changed and those cases were not retried. The current-maximum 9/9 seeded-row extension is complete and was not repeated. The accepted Paper M12 case was not repeated. T21 remains PARTIAL / IN_PROGRESS against the full matrix; the documented skip disposition allows T22 Alpha preparation to proceed without treating these gaps as passed.
+
+**T22 Alpha engineering checks:** PASS_BOUNDED_SUBCASE for the build/test/runtime criteria in 04§24. Experimental, unpublished status is stated in CHANGELOG.md and docs/CHANGELOG.zh_tw.md. At that earlier Alpha checkpoint ADR-03 had not yet been reconciled in 08; the later 2026-10-21 user-delegated decision freezes the T11 read/query SDK as recorded there. Beta acceptance and publication remain open. Java was 25.0.4. The combined command was: .gradlew.bat test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar '-PreleaseVersion=1.4.0-alpha.1' --console=plain --rerun-tasks. It completed in 1m42s with exit 0; all 52 actionable Gradle tasks executed. The JUnit result set contains 147 XML suites / 722 tests, with 0 failures, 0 errors, and 0 skipped. The retained build log is build/reports/foundation/T22/alpha-build.log (SHA-256 2e99f97d20c9083543f3b2c3e920e846ed0d93141073431ec3c3f0a5e9c418cf).
+
+| Candidate artifact | Size | SHA-256 |
+|---|---:|---|
+| build/libs/Syncmoney-1.4.0-alpha.1.jar | 31,559,262 bytes | 69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1 |
+| syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0-alpha.1.jar | 13,890 bytes | e4fae341fc876f6b4663d542ca74eae1435fd8f9265a8e379fdcc1a2e940636c |
+| build/acceptance/SyncmoneyAcceptance.jar | 50,284 bytes | 4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df |
+| build/acceptance/SyncmoneyApiConsumer.jar | 2,760 bytes | 49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e |
+
+The current candidate hash matches the already accepted runtime evidence, so no new PlugDev environment was created:
+
+| Alpha criterion | Accepted evidence reused | Candidate / predicate |
+|---|---|---|
+| LOCAL startup and journal replay | Paper 26.3#200 M04 report build/reports/foundation/T21-upgrade-cycles/paper-26.3-200-20261020-012627-2ffc48ab5c8a47bdadcf68ec0cb104f6/result.json; report SHA-256 85ab6da1df2824b1676b0bb50df27860357c4639203e8da49621379db6b9d11f; saved audit passed 446 assertions | Candidate SHA-256 69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1 |
+| Redis-backed two-node SYNC | Canvas 26.3#984 report build/reports/foundation/T21-paper-network/canvas-263-984-20261019164812-d7b9044ef7cf/result.json; report SHA-256 6cc6cfbca913fcae9f86deeea45452a402ae7d9b5ab0c19ffff62b57d073bc64; accepted audit passed 361 checks | Candidate SHA-256 69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1; Redis 8.10.1 and PostgreSQL 18.1 were exercised |
+
+The candidate build property is local to this invocation; the committed root release version remains 1.3.2. This report closes Alpha candidate preparation only. It does not close the full V03 matrix, licensed CMI, Beta acceptance, or the remaining release criteria, and it makes no all-mode, hard-crash durability, or publication claim. ADR-03 API scope was resolved later as recorded below. T23 publication was not performed.
+
+## 2026-10-21 current-source cold Vault verification and decision reconciliation
+
+The earlier T04 E1 note that `coldVaultReadWaitsForSynchronousCacheAdapter` demonstrated a live blocking Vault caller is historical. Commit `8aaf3b112c14bff47f1b80d92eed7ffa6794b21a` changed `VaultPlayerHandler` to use `EconomyFacade.getBalanceForPlaceholder`, moved cold reads to the bounded `balanceLoadExecutor`, and replaced the old characterization with tests that block the storage adapter while asserting immediate caller return. That fix commit is an ancestor of the current branch HEAD `41995be6532f6e201b0d47fb600c7b12568f0443`.
+
+Fresh focused validation on Java `25.0.4+7-LTS-189` with the repository Gradle `9.8.0` wrapper:
+
+```powershell
+.\gradlew.bat :syncmoney-bukkit:test --tests '*VaultTest' --tests '*ColdAccountContractTest' --rerun-tasks --no-daemon --console=plain
+```
+
+Result: exit 0, `BUILD SUCCESSFUL`, 2 JUnit XML files, 37 tests, 0 failures, 0 errors, 0 skipped. The retained log is `build/reports/foundation/T24/cold-vault-focused.log`, SHA-256 `5ba8b66d3468e3e417428e9de2178f62e41632335ce7ed40109d58e2670c6106`. The cold Vault checks use deterministic latch-blocked mocks. VaultTest.coldVaultReadReturnsImmediatelyWhileCacheSnapshotIsBlockedOnLoader blocks mocked CacheManager.getBalanceSnapshotStrict on the loader and asserts the Vault caller returns NaN before release. VaultTest.coldVaultReadReturnsNaNWhileSqlSnapshotIsBlockedOffCallerAndMutationIsRejected checks mocked DatabaseManager.getPlayerStrict runs off the caller and rejects cold mutation. These tests do not perform live Redis or SQL reads; they do not establish production backend latency, behavior in all modes, or all Paper/Folia/Canvas endpoints. No server, PlugDev environment, CMI service, or external publisher was used.
+
+Decision register reconciliation: ADR-03 freezes only the implemented read/query SDK; ADR-04 selects the already implemented `NaN`/`null`, bounded async warm, and cold-mutation rejection behavior; ADR-06 selects the existing NMCP local bundle plus guarded `USER_MANAGED` Portal client. T11/T04/T18 evidence is retained above and in 05. These decisions do not authenticate a maintainer or prove external Vault compatibility, licensed CMI behavior, Portal namespace eligibility, authenticated staging, or publication.
+
+## 2026-10-22 T13 bounded CMI runtime R2 and local 1.4.0 artifact build
+
+### T13 supplied-CMI authority-read probe R2
+
+**Result:** `PASS_BOUNDED_SUBCASE` for one read-only Paper 1.21.6 player-owner observation. On Paper `1.21.6-48-main@4d854e6` with Java `25.0.4+7-LTS-189`, CMI `9.8.10.5` and CMILib `1.6.0.1` loaded. The retained `CMI_ACCEPTANCE_PASS` observation shows CMI direct balance, Syncmoney's CMI route, and public `BalanceSnapshot` all returned `100.00` for one online Acceptance player. No balance mutation was attempted.
+
+The supplied Downloads JARs and runtime copies match: CMI SHA-256 `EF3454CE6809E2CF35B509FBBAC88AD7FFD8DDAC069F645CB7BB07D5CA0008A6`; CMILib SHA-256 `FF6B7F2CD59F5809EEBC4B9D178661B88052C75B6E2786B22961B7DBC0403507`. The run used `Syncmoney-1.4.0-alpha.1.jar` SHA-256 `BDA7C79C8B7BA912B015BD6FB72D907F59BD6D8CDF6B8052201305BED7228070`, Acceptance SHA-256 `AA2F94566AA793DD4989696798760E2DE7C4F92FD1CD4046CAC0096E8F4A6FE6`, CMI mode, Redis `8.10.1` on task-owned loopback DB 15 with persistence disabled, and `database.enabled=false`. Paper and Redis stopped normally; the temporary Redis setting was restored byte-for-byte and the retained PlugDev profile/world/CMI data were preserved.
+
+The outcome is `build/reports/foundation/T13/cmi-runtime-r2/outcome.md` (3,746 bytes; SHA-256 `CACD2B2367B8B5793D8AB82F749FE51DDA0F9D61E3E74D2BF7A605A8E89D43B4`). Independent review `build/reports/foundation/T13/cmi-runtime-r2/independent-review-r2.md` (4,812 bytes; SHA-256 `55BA718010B3C238234AB351696116B1D3E6ACC1C942FA011FCF8D5B8F78C1FB`) accepts the four immutable bounded R2 criteria. Active license authorization remains `UNKNOWN / NOT VERIFIED`; this does not establish CMI Vault provider behavior, mutation, cross-server behavior, Folia/Canvas behavior, or complete CMI support. CMI remains outside verified 1.4.0 support under ADR-12. This probe predates the final local 1.4.0 artifact below and is not final-candidate runtime acceptance.
+
+### Local 1.4.0 build and test gate
+
+The current worktree source at `41995be6532f6e201b0d47fb600c7b12568f0443` was built locally with the Java 25 toolchain and repository Gradle `9.8.0` wrapper, using an invocation-only `-PreleaseVersion=1.4.0` property. The root stable version in `build.gradle` remains `1.3.2`; no stable release metadata was changed.
+
+Source manifest `build/reports/foundation/T24/release-candidate-source-manifest-20261022.json` pins 577 tracked and untracked source/build-input files at this HEAD plus the dirty worktree (111,363 bytes; SHA-256 `9DBAF6F8FB49B7C6F841073B5809C47EE0C281D7597B73E50B4511A156E801A9`). It includes the three untracked Java test files and records each source/build-input file's SHA-256.
+
+Command:
+
+```powershell
+.\gradlew.bat test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks
+```
+
+Result: exit 0, `BUILD SUCCESSFUL`, 58 actionable Gradle tasks. JUnit XML contains 150 suites / 753 unit tests and 7 integration suites / 35 tests; both totals have zero failures, errors, or skips. `verifyArchitecture` passed, and `verifyPackaging` accepted the core JAR with classfile major 69, unique classes, stable descriptors/resources, an unrelocated API, relocated Gson, and runtime-only server APIs. The retained log is `build/reports/foundation/T24/release-candidate-build-20261022.log` (9,801 bytes; SHA-256 `0D2192A4E44878A8E1688691D923A5695EF36CD43A6A43325114E956F7EF3EAB`).
+
+| Local artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,573,065 | `43919FE4B866FA182DF44AF3A0949358EC68B031A154120C2D0A93DE5E414DCF` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 55,093 | `303F5BBC508C046D66B0F350D7C3144FA4B3CB4FEE6603B081C846696CBE77FF` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+
+This is a local artifact/test result, not a Beta or Stable acceptance verdict. No PlugDev runtime was started with the exact `1.4.0` JAR; the retained runtime reports use their individually stated older candidate hashes. T22 Beta remains `NOT VERIFIED` pending final-candidate/runtime and independent documentation/release review. T21 remains `PARTIAL / IN_PROGRESS`; skipped or blocked cases remain `NOT VERIFIED`. No Central staging, publication, or stable metadata change occurred.
+
+### ADR-11 independent review and release-document update
+
+The read-only review receipt `build/reports/foundation/T19/adr11-independent-review-20261022.md` (1,821 bytes; SHA-256 `902397EA943EA26E19B51FC858511322A4E022E6D0015D431C8381AD52A95086`) accepts the written exception only for the measured synthetic facade/receipt-adapter profile. It confirms that original B00 thresholds and correctness hard gates remain unchanged; the t=8 matched outcomes remain 27/48 throughput, 12/48 allocation, and 18/48 SampleTime p99 cases meeting threshold. The review did not recompute metrics because raw paired JMH/open-loop JSON is absent from this worktree; it relies on the hash-bound summaries and prior independent review already recorded in this section. No production, SQL, Redis, real-server, causal, or no-regression claim follows.
+
+README, English/Traditional Chinese changelogs, and both developer guides now include the bounded ADR-11 performance scope and ADR-12 support limits. The independent documentation audit and complete T22 Beta/release review remain open; this review closes only the ADR-11 independent-review subcriterion.
+
+## 2026-10-23 T13 CMI final-candidate cold-read R6 preflight — NOT RUN
+
+This entry records preparation only; it is not a runtime acceptance result. The direct user authorization covers use of the exact supplied CMI `9.8.10.5` and CMILib `1.6.0.1` JARs for one local, read-only CMI public-API cold read. It does not assert license authorization, permit credential or license-setting inspection/change, or expand CMI production-support claims.
+
+The R1 attempt failed in its earliest reparse-point preflight before starting Paper or Redis. R5 R2 was not dispatched; `.upaw/` artifact registration was rejected because that directory is reserved for workflow control data. Work R3 was cancelled and superseded without runtime execution. R6 files are frozen under `build/reports/foundation/T13/cmi-runtime-r6/`:
+
+| Artifact | SHA-256 |
+|---|---|
+| `run-cmi-cold-read-r6.py` | `DE233A4CB0DD7C846983CB1B80C884D646E0B78E79AD20F5E081D1517254B846` |
+| `cmi_recovery_store.py` | `D44FABF777B4B7E40427CB5B532698619E2E2BFD49EC61B757B537DB31243692` |
+| `recover-cmi-cold-read-r6.py` | `89C67EDC83225F14F5278B15C5935B9B94C0276C7271E7AA8E0B3D223A2FAFB6` |
+| `input-manifest.txt` | `346E0D80973E933A41271603827DD3EB32B521D504731129DC80C71B3BA3818D` |
+
+The manifest records CMI SHA-256 `EF3454CE6809E2CF35B509FBBAC88AD7FFD8DDAC069F645CB7BB07D5CA0008A6`, CMILib SHA-256 `FF6B7F2CD59F5809EEBC4B9D178661B88052C75B6E2786B22961B7DBC0403507`, candidate SHA-256 `65F318A27233D7E8C67B2EFC45C395F25D2A918BA839A92E55C04624238E83FC`, PAPI SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`, Acceptance/API Consumer pins, PlugDev CLI SHA-256 `40437ECFB68CC5F13F77BFCAF25BE5F2BEBBB90D269D482284A3129906E06155`, and Paper cache SHA-256 `35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214`.
+
+AST parsing and static guard checks passed. The preflight observed PlugDev stopped, ports `25675`, `35675`, and `16379` unbound, the existing Paper symlink pointing to the pinned cache, and retained world/CMI/CMILib data present. These observations do not establish runtime behavior. R6 has not been independently reviewed or dispatched, no CMI API was invoked, and no outcome report exists. The UPAW R4 work remains `waiting` for independent review; after review, rerun all dispatch preflight checks and invoke once only if every pin and state still matches.
+
+**Limits:** license authorization remains `UNKNOWN / NOT VERIFIED`; SQL, balance mutation, CMI Vault hooks, Redis mirror equality, Pub/Sub, cross-server CMI, Folia, Canvas, and complete licensed CMI acceptance remain NOT VERIFIED. The previously accepted 9/9 current-maximum matrix and Paper M12 were not repeated. Minimum-Paper MySQL/MariaDB initial-schema cases and undefined V03 scope remain as previously deferred/blocked. T21 remains `PARTIAL / IN_PROGRESS`; T22 Beta and T24 Stable remain open. No stable metadata change, publication, PlugDev profile creation, or cleanup occurred.
+
+**Superseding R6 routing update (2026-10-23):** An independent runner audit returned **BLOCK / NOT SAFE TO DISPATCH** for R6. The PlugDev checkout is dirty. The audit initially reported the pinned Paper `1.21.6#48` JAR absent; a subsequent current inventory confirms `C:\Users\margo\.plugdev\servers\paper-1.21.6\paper-1.21.6-48.jar` is present (52,639,704 bytes; SHA-256 `35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214`), matching the R6 manifest pin. The exact `1.3.2` baseline artifact remains absent. The runner's teardown and work-ID binding have safety defects, so do not dispatch or replay R6/R8D/R8E and do not clean the existing PlugDev checkout. The preceding conditional dispatch instructions are historical and superseded by this no-dispatch decision. The supplied JAR authorization does not resolve license status.
+
+## 2026-10-23 final local candidate build and release-readiness boundary
+
+### Combined Java 25 validation
+
+The final dirty source after the CMI-mode admin `view` correction was validated with Java `25.0.4+7-LTS-189` and Gradle `9.8.0` using the invocation-only release property `1.4.0`:
+
+```powershell
+.\gradlew.bat test :syncmoney-sync:integrationTest :syncmoney-papi-expansion:jar acceptanceJar verifyArchitecture verifyPackaging '-PreleaseVersion=1.4.0' --no-daemon --console=plain
+```
+
+Result: exit 0, `BUILD SUCCESSFUL`, 58 actionable tasks (12 executed, 46 up-to-date). JUnit reports for the requested tasks contain 152 unit suites / 774 tests and 7 `syncmoney-sync` integration suites / 35 tests, with zero failures, errors, or skipped tests. The historical `syncmoney-storage:integrationTest` report in this worktree contains one earlier failed test, but that task requires configured database services and was not part of this invocation; it is not included in these totals and remains NOT VERIFIED. `verifyArchitecture` and `verifyPackaging` passed; packaging verified classfile major 69, unique classes, stable descriptors/resources, unrelocated API, relocated Gson, and runtime-only server APIs.
+
+The final test report digest inventory is `build/reports/foundation/T24/release-candidate-test-summary-20261023.json`; it binds the 159 JUnit XML reports used for the totals. The exact source manifest is `build/reports/foundation/T24/release-candidate-source-manifest-20261023-r2.json`; it includes all tracked repository files and current untracked Java tests, excludes UPAW private state and ignored build outputs, and is pinned in `12-release-readiness-2026-10-23.md`.
+
+| Local artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,582,002 | `9DA1CFDA1B0B69AB6DF08A39120FC70E73CDD8B824A4506D52DF68F9BF03A301` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+
+This Java gate includes synthetic CMI SQLite writer/UUID fixtures and Shadow Sync freshness regressions. It does not establish live CMI database compatibility or license status. A bounded Paper/CMI R2 read exists for an older Alpha artifact; it is not acceptance for these exact final local artifact hashes.
+
+### Findings, fixes, and boundaries
+
+An independent source review found that the new CMI authority guard also rejected the read-only `/syncmoney view` command. The code now allows only that read path in CMI mode and obtains the balance through `EconomyModeRouter`; set/give/take/reset/confirm and `/sync-balance` remain blocked before Syncmoney-side mutations. The added test confirms a CMI-authoritative `42.50` view and verifies the legacy facade is not queried. The independent reviewer accepted this correction; the full combined build above passed afterward.
+
+CMI Shadow writes revalidate authority before sink calls and bind SQLite records by UUID when `player_uuid` is available; duplicate usernames cannot redirect the synthetic fixture update, and ambiguous name-only mutations fail closed. There is no version CAS field in CMI's row schema. If authority advances after the final check while a CMI batch update is in flight, a transient stale sink write remains possible before the serialized newer receipt corrects it. This is eventual mirroring, not a stale-write-free guarantee.
+
+### Release status
+
+The final local artifact and Java validation are ready for review, but the 1.4.0 Beta/Stable release gate is **NOT VERIFIED**. No exact-final-candidate PlugDev runtime was dispatched. The R6 runner is **BLOCK / NOT SAFE TO DISPATCH**; PlugDev is dirty, the exact pinned minimum-Paper artifact is present and matches the R6 manifest (inventory above), and the exact baseline JAR remains absent. Do not replay R6/R8D/R8E, create a replacement runtime workspace, or clean retained PlugDev data.
+
+Keep T21 `PARTIAL / IN_PROGRESS`. The broad V03 remainder remains `SKIPPED / NOT VERIFIED` because no finite criterion/selector/fixture/predicate/auditor was defined. Minimum-Paper MySQL/MariaDB initial-schema remain `BLOCKED / NOT VERIFIED` under the maintainer disposition. Full licensed CMI remains `BLOCKED / NOT VERIFIED`; supplying JARs did not verify license authorization. Do not repeat the accepted 9/9 seeded-row matrix or Paper M12. Required Beta evidence for exact final-candidate minimum/latest Paper, applicable Folia/Canvas, PAPI cross-pair, upgrade/rollback, and bidirectional wire behavior remains absent. Stable metadata is still `1.3.2`; authenticated staging, public publication, and tags were not performed.
+
+The concise current gate matrix, artifact pins, and next safe step are in `12-release-readiness-2026-10-23.md`. This record supersedes the 2026-10-22 local candidate hashes and supersedes the previous conditional R6 dispatch routing only; it does not change acceptance criteria or claim Beta/Stable completion.
+
+## 2026-10-23 local T23 API bundle and consumer dry run
+
+The local API distribution subgate passed using Java `25.0.4+7-LTS-189` and the cached Gradle `9.8.0` wrapper. Command:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' :syncmoney-api:check nmcpZipAggregation --offline --no-daemon --console=plain
+python tools/central-publisher/publish_central.py validate --bundle build/nmcp/zip/aggregation.zip
+$env:JAVA_HOME='C:\Program Files\Java\jdk-25.0.4'
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+python tools/central-publisher/publish_central.py verify-consumer --bundle build/nmcp/zip/aggregation.zip --gradle-wrapper .\gradlew.bat
+```
+
+The Gradle gate exited 0; `verifyCentralPublisherIsolation` passed and `nmcpZipAggregation` built the local bundle. `validate` exited 0 for `io.github.misty4119:syncmoney-api:1.4.0`, reporting `signed=false`. The first consumer attempt inherited Java 21 and failed fast on the declared Java 25 compatibility requirement; rerunning the same consumer check with Java 25 exited 0 and compiled the consumer. The generated bundle `build/nmcp/zip/aggregation.zip` is 4,162,102 bytes, SHA-256 `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D`. The report `build/reports/foundation/T24/release-candidate-central-dry-run-20261023.md` records the source manifest and candidate hashes, commands, outcomes, and boundaries.
+
+This is a local unsigned packaging/consumer result only. No credentials were read, and no Portal staging, upload, public resolution, tag, metadata mutation, or publication was performed. T23 external account/policy, authenticated staging, signing, final protected publish, and public-consumer criteria remain open; T22 exact-candidate runtime remains NOT VERIFIED. This does not authorize or establish a Stable release.
+
+## 2026-10-23 superseding r4 candidate evidence and release boundary
+
+This entry supersedes the earlier local-candidate test totals and artifact hashes above. The Java 25.0.4+7-LTS-189 / Gradle 9.8.0 merged invocation was:
+
+    .\gradlew.bat test :syncmoney-sync:integrationTest :syncmoney-papi-expansion:jar acceptanceJar verifyArchitecture verifyPackaging :syncmoney-api:check nmcpZipAggregation --offline --no-daemon --console=plain -PreleaseVersion=1.4.0
+
+Result: exit 0, BUILD SUCCESSFUL, 68 actionable tasks (15 executed, 53 up-to-date). The current XML inventory contains 152 unit suites / 780 tests and 7 syncmoney-sync integration suites / 35 tests; failures, errors, and skipped tests are all zero. verifyArchitecture and verifyPackaging passed, including classfile major 69 and the recorded dependency/resource packaging checks. The earlier syncmoney-storage:integrationTest report contains a failure but that task was not invoked because the configured database services were unavailable; it is excluded from r4 totals and remains NOT VERIFIED. The failed intermediate r3 build is retained as history; its four test failures were corrected before r4.
+
+Current r4 pins:
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| build/libs/Syncmoney-1.4.0.jar | 31,585,956 | C89DA174076BEAC03168A3DD0D1FB57DD830845FE1A32C306A0F482046E7E968 |
+| syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| build/acceptance/SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| build/acceptance/SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| build/nmcp/zip/aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+The r4 console log is build/reports/foundation/T24/release-candidate-build-20261023-r4.log (9,323 bytes; SHA-256 6720E8FA99BBCDB719806817E3141DAF209AD628BDA62ADB4F8CFFECE0B14EB0). The replacement XML inventory is release-candidate-test-summary-20261023-r2.json. A new source manifest is generated after this documentation update and is recorded in 12-release-readiness-2026-10-23.md. These inventories pin the local state; they do not establish a real-server runtime result.
+
+The r4 source/build result includes the CMI-mode read-only /syncmoney view routing and failure reporting, the CMI shared-SQL migration admission guard, supplied-CMI-shaped synthetic SQLite schema/UUID/duplicate-row checks, and Shadow Sync freshness regressions. The independent source review found no confirmable correctness, security, lifecycle, or scheduler defect. The supplied CMI and CMILib JARs were used only for bounded local schema work; license status was not inspected and remains UNKNOWN. The CMI writer has no version/CAS fence, so an in-flight write can transiently commit stale data before a newer receipt corrects it; no stale-write-free guarantee is made.
+
+The exact-final-candidate Beta/Stable gate remains NOT VERIFIED. R6 remains BLOCK / NOT SAFE TO DISPATCH, and R6/R8D/R8E must not be replayed. Do not create another PlugDev workspace, clean retained PlugDev data, rerun the accepted 9/9 seeded-row matrix, or repeat Paper M12. T21 remains PARTIAL / IN_PROGRESS; broad V03 is SKIPPED / NOT VERIFIED because no finite criterion/selector/fixture/predicate/auditor was defined; minimum-Paper MySQL/MariaDB and full licensed CMI remain BLOCKED / NOT VERIFIED. Exact-final-candidate minimum/latest Paper, applicable Folia/Canvas, PAPI cross-pair, upgrade/rollback, and bidirectional wire acceptance are absent. Stable metadata remains 1.3.2; no staging, tag, or publication occurred. The user’s direction to skip complex blockers authorizes routing/deferment, not changing PASS criteria or claiming unobserved support.
+
+## 2026-10-23 independent source and CMI binary review
+
+The read-only review receipt `build/reports/foundation/T24/cmi-static-binary-source-review-20261023-r1.md` is 2,269 bytes, SHA-256 `F74062555D1B890FD500480C157271485C399AF19CDBA86C621EE68B256D3F95`. The independent reviewer found no new actionable production or acceptance-probe defect in the current diff. Static inspection of supplied CMI `9.8.10.5` / CMILib `1.6.0.1` JARs confirmed the `users.player_uuid`, `username`, and `Balance` schema names used by `CMIDatabaseWriter`, plus the class/method signatures reflected by `CMIApi`; exact JAR hashes match the user-supplied files. No CMI runtime was started by this review, and it did not inspect license settings, credentials, or player rows. This is binary-surface evidence only, not a live compatibility test; the prior R2 live read uses an older candidate hash.
+
+The known no-CAS limitation remains: an authority change during CMI's unconditional SQL update can allow a stale value to land temporarily despite freshness checks and later correction. Stale-write-free mirroring is not claimed. The Beta exact-candidate runtime, all applicable endpoint/mode and upgrade/wire acceptance, full licensed CMI, and Stable/external release gates remain NOT VERIFIED or BLOCKED as recorded above.

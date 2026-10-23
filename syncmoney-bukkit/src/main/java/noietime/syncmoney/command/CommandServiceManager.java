@@ -195,7 +195,8 @@ public class CommandServiceManager {
                 circuitBreaker,
                 nameResolver,
                 baltopManager,
-                auditLogger);
+                auditLogger,
+                economyServiceManager.getEconomyModeRouter());
         syncmoneyRouter.register("admin", adminCommand);
 
         WebCommand webCommand = new WebCommand(plugin);
@@ -228,7 +229,8 @@ public class CommandServiceManager {
                 plugin,
                 economyFacade,
                 cacheManager,
-                storageManager.getDatabaseManager());
+                storageManager.getDatabaseManager(),
+                economyServiceManager.getEconomyModeRouter());
         syncmoneyRouter.register("sync-balance", syncBalanceCommand);
 
         TestCommand testCommand = new TestCommand(plugin, economyFacade, redisManager);

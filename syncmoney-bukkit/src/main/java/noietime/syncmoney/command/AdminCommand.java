@@ -1,12 +1,16 @@
 package noietime.syncmoney.command;
 
 import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.api.bukkit.CmiEntityBalanceQuery;
 import noietime.syncmoney.audit.AuditLogger;
 import noietime.syncmoney.breaker.EconomicCircuitBreaker;
 import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.EconomyMode;
+import noietime.syncmoney.economy.EconomyModeRouter;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.uuid.OnlinePlayerRegistry;
@@ -14,9 +18,13 @@ import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.NumericUtil;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.util.Constants;
+import org.bukkit.Location;
+import org.bukkit.command.BlockCommandSender;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.command.RemoteConsoleCommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
@@ -26,6 +34,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +51,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final EconomyFacade economyFacade;
+    private final EconomyModeRouter economyModeRouter;
     private final RedisManager redisManager;
     private final EconomicCircuitBreaker circuitBreaker;
     private final NameResolver nameResolver;
@@ -62,10 +72,12 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
                         EconomicCircuitBreaker circuitBreaker,
                         NameResolver nameResolver,
                         BaltopManager baltopManager,
-                        AuditLogger auditLogger) {
+                        AuditLogger auditLogger,
+                        EconomyModeRouter economyModeRouter) {
         this.plugin = plugin;
         this.config = config;
         this.economyFacade = economyFacade;
+        this.economyModeRouter = economyModeRouter;
         this.redisManager = redisManager;
         this.circuitBreaker = circuitBreaker;
         this.nameResolver = nameResolver;
@@ -78,6 +90,19 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("syncmoney.admin")) {
             MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            return true;
+        }
+
+        EconomyMode mode = economyModeRouter == null ? null : economyModeRouter.getMode();
+        if (mode == null) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.economy-authority-unavailable"));
+            return true;
+        }
+        boolean isReadOnlyBalanceView = args != null
+                && args.length > 0
+                && args[0].equalsIgnoreCase("view");
+        if (mode == EconomyMode.CMI && !isReadOnlyBalanceView) {
+            MessageHelper.sendMessage(sender, plugin.getMessage("general.cmi-authority-command-disabled"));
             return true;
         }
 
@@ -459,17 +484,102 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        if (economyModeRouter.getMode() == EconomyMode.CMI) {
+            // CMI exposes only loaded local users here, so resolve an exact online target before querying its owner.
+            CMIEconomyHandler cmiHandler = economyModeRouter.getCmiHandler();
+            String unavailableMessage = plugin.getMessage("general.economy-authority-unavailable");
+            if (cmiHandler == null) {
+                MessageHelper.sendMessage(sender,
+                        unavailableMessage);
+                return;
+            }
+
+            String notFoundMessage = plugin.getMessage("money.player-not-found")
+                    .replace("{player}", playerName);
+            String successTemplate = plugin.getMessage("money.others");
+            Optional<Consumer<String>> reply = createCmiViewReply(sender);
+            if (reply.isEmpty()) {
+                return;
+            }
+            Consumer<String> replyRoute = reply.get();
+            try {
+                plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> {
+                    Player target = plugin.getServer().getPlayerExact(playerName);
+                    if (target == null) {
+                        replyRoute.accept(notFoundMessage);
+                        return;
+                    }
+
+                    UUID targetUuid = target.getUniqueId();
+                    new CmiEntityBalanceQuery(plugin, cmiHandler).load(targetUuid)
+                            .whenComplete((existingBalance, failure) -> {
+                                String message;
+                                if (failure != null || existingBalance == null || existingBalance.isEmpty()) {
+                                    message = unavailableMessage;
+                                } else {
+                                    message = successTemplate
+                                            .replace("{player}", playerName)
+                                            .replace("{balance}", FormatUtil.formatCurrency(existingBalance.get()));
+                                }
+                                replyRoute.accept(message);
+                            });
+                });
+            } catch (RuntimeException failure) {
+                replyRoute.accept(unavailableMessage);
+            }
+            return;
+        }
+
         UUID uuid = resolvePlayerUUID(playerName);
         if (uuid == null) {
             MessageHelper.sendMessage(sender, plugin.getMessage("money.player-not-found").replace("{player}", playerName));
             return;
         }
 
-        BigDecimal balance = economyFacade.getBalance(uuid);
+        BigDecimal balance = economyModeRouter.getBalance(uuid);
         String message = plugin.getMessage("money.others")
                 .replace("{player}", playerName)
                 .replace("{balance}", FormatUtil.formatCurrency(balance));
         MessageHelper.sendMessage(sender, message);
+    }
+
+    /** Captures the safe owner route before an asynchronous CMI query starts. */
+    private Optional<Consumer<String>> createCmiViewReply(CommandSender sender) {
+        if (sender instanceof Player player) {
+            return Optional.of(message -> safelyScheduleCmiViewReply(
+                    () -> player.getScheduler().run(plugin, task -> MessageHelper.sendMessage(player, message), null),
+                    "player sender"));
+        }
+        if (sender instanceof BlockCommandSender blockSender) {
+            Location blockLocation;
+            try {
+                blockLocation = blockSender.getBlock().getLocation().clone();
+            } catch (RuntimeException failure) {
+                plugin.getLogger().fine("Could not capture the command block location for an asynchronous CMI reply");
+                return Optional.empty();
+            }
+            return Optional.of(message -> safelyScheduleCmiViewReply(
+                    () -> plugin.getServer().getRegionScheduler().run(
+                            plugin, blockLocation, task -> MessageHelper.sendMessage(sender, message)),
+                    "command block sender"));
+        }
+        if (sender instanceof RemoteConsoleCommandSender || sender instanceof ConsoleCommandSender) {
+            return Optional.of(message -> safelyScheduleCmiViewReply(
+                    () -> plugin.getServer().getGlobalRegionScheduler().run(
+                            plugin, task -> MessageHelper.sendMessage(sender, message)),
+                    "console sender"));
+        }
+
+        plugin.getLogger().fine("Skipping asynchronous CMI balance reply for an unsupported command sender type");
+        return Optional.empty();
+    }
+
+    private void safelyScheduleCmiViewReply(Runnable schedule, String senderType) {
+        try {
+            schedule.run();
+        } catch (RuntimeException failure) {
+            plugin.getLogger().fine("Could not schedule asynchronous CMI balance view for " + senderType);
+        }
     }
 
     /**

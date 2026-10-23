@@ -37,6 +37,11 @@ public final class RollbackProtection {
     public boolean canWriteToCMI(UUID uuid, BigDecimal syncmoneyBalance) {
         BigDecimal previousCMIBalance = previousCMIBalances.get(uuid);
 
+        if (syncmoneyBalance.compareTo(BigDecimal.ZERO) < 0) {
+            plugin.getLogger().warning("RollbackProtection: Syncmoney balance is negative, blocking write for " + uuid);
+            return false;
+        }
+
         if (syncmoneyBalance.compareTo(BigDecimal.ZERO) <= 0) {
             if (previousCMIBalance != null && previousCMIBalance.compareTo(BigDecimal.ZERO) > 0) {
                 plugin.getLogger().warning("RollbackProtection: Syncmoney balance is 0 but CMI has " + previousCMIBalance + ", blocking write for " + uuid);

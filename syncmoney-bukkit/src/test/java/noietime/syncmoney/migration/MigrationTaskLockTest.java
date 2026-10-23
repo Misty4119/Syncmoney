@@ -177,6 +177,7 @@ class MigrationTaskLockTest {
         when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskLockTest"));
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
+        when(config.isDatabaseEnabled()).thenReturn(true);
         UUID account = UUID.randomUUID();
         EconomyWriteQueue queue = new EconomyWriteQueue(4);
         EconomyFacade facade = new EconomyFacade(plugin, config, mock(CacheManager.class), mock(RedisManager.class),
@@ -220,7 +221,7 @@ class MigrationTaskLockTest {
         when(cmiReader.testConnection()).thenReturn(true);
         RedisManager migrationRedis = mock(RedisManager.class);
         when(migrationRedis.isConnected()).thenReturn(true);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null, migrationRedis,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, successfulDatabase(), migrationRedis,
                 null, mock(MigrationCheckpoint.class), null, null);
 
         try {
@@ -272,7 +273,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         EconomyFacade facade = mock(EconomyFacade.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null, redis,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, successfulDatabase(), redis,
                 null, mock(MigrationCheckpoint.class), null, successfulDisabler());
 
         task.start(false, false);
@@ -299,7 +300,7 @@ class MigrationTaskLockTest {
         when(cmiReader.getSourceSnapshotFingerprint()).thenThrow(new IllegalStateException("source snapshot failed"));
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), successfulDatabase(),
                 redis, null, mock(MigrationCheckpoint.class), null, successfulDisabler());
 
         task.start(false, false);
@@ -338,7 +339,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         task.start(false, false);
@@ -369,7 +370,7 @@ class MigrationTaskLockTest {
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
-                mock(EconomyFacade.class), null, null, null, checkpoint, null, successfulDisabler());
+                mock(EconomyFacade.class), successfulDatabase(), null, null, checkpoint, null, successfulDisabler());
 
         assertTrue(task.resume());
 
@@ -471,7 +472,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
-        MigrationTask task = new MigrationTask(plugin, config, null, facade, null, redis,
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, successfulDatabase(), redis,
                 null, checkpoint, null, successfulDisabler());
 
         CMIMultiServerReader source = new CMIMultiServerReader(plugin, config);
@@ -542,7 +543,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
-        MigrationTask initialTask = new MigrationTask(plugin, config, initialReader, facade, null,
+        MigrationTask initialTask = new MigrationTask(plugin, config, initialReader, facade, successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         initialTask.start(false, false);
@@ -568,7 +569,7 @@ class MigrationTaskLockTest {
         when(server.getAsyncScheduler()).thenReturn(resumeScheduler);
         CMIDatabaseReader resumeReader = new CMIDatabaseReader(plugin, config);
         resumeReader.initialize();
-        MigrationTask resumedTask = new MigrationTask(plugin, config, resumeReader, facade, null,
+        MigrationTask resumedTask = new MigrationTask(plugin, config, resumeReader, facade, successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         try {
@@ -613,7 +614,7 @@ class MigrationTaskLockTest {
         stubCmiQuiescence(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
         MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
-        MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class), mock(EconomyFacade.class), null,
+        MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class), mock(EconomyFacade.class), successfulDatabase(),
                 null, null, checkpoint, null, successfulDisabler());
 
         assertFalse(task.resume(), "a legacy CMI checkpoint has no content proof for its prior source snapshot");
@@ -677,7 +678,7 @@ class MigrationTaskLockTest {
         MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
         CMIDatabaseReader source = new CMIDatabaseReader(plugin, config);
         source.initialize();
-        MigrationTask task = new MigrationTask(plugin, config, source, facade, null, redis,
+        MigrationTask task = new MigrationTask(plugin, config, source, facade, successfulDatabase(), redis,
                 null, checkpoint, null, successfulDisabler());
 
         try {
@@ -746,7 +747,7 @@ class MigrationTaskLockTest {
         when(checkpoint.getTotalPlayers()).thenReturn(2);
         when(checkpoint.getMigratedCount()).thenReturn(1);
         when(checkpoint.getFailedCount()).thenReturn(0);
-        MigrationTask task = new MigrationTask(plugin, config, null, facade, null, null,
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, successfulDatabase(), null,
                 null, checkpoint, null, successfulDisabler());
 
         assertTrue(task.resume());
@@ -807,7 +808,7 @@ class MigrationTaskLockTest {
         runGlobalTasksImmediately(plugin, server);
 
         EconomyFacade facade = mock(EconomyFacade.class);
-        MigrationTask task = new MigrationTask(plugin, config, null, facade, null,
+        MigrationTask task = new MigrationTask(plugin, config, null, facade, successfulDatabase(),
                 null, null, checkpoint, null, successfulDisabler());
         try {
             assertTrue(task.resume());
@@ -845,7 +846,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         task.start(false, false);
@@ -883,7 +884,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, mock(EconomyFacade.class), successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         task.start(false, false);
@@ -936,7 +937,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
         taskRef.set(task);
 
@@ -961,13 +962,14 @@ class MigrationTaskLockTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
+        when(config.isDatabaseEnabled()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
         when(checkpoint.resume()).thenReturn(true);
         when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
-                mock(EconomyFacade.class), null, null, null, checkpoint, null, null);
+                mock(EconomyFacade.class), successfulDatabase(), null, null, checkpoint, null, null);
 
         MigrationLock.enable();
         try (MigrationLock.WriteLease activeWrite = MigrationLock.tryAcquireWrite()) {
@@ -1061,7 +1063,7 @@ class MigrationTaskLockTest {
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
-        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, null,
+        MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
 
         task.start(false, false);
@@ -1097,7 +1099,7 @@ class MigrationTaskLockTest {
         when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
         when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, mock(CMIDatabaseReader.class),
-                mock(EconomyFacade.class), null, null, null, checkpoint, null, successfulDisabler());
+                mock(EconomyFacade.class), successfulDatabase(), null, null, checkpoint, null, successfulDisabler());
 
         assertTrue(task.resume());
 
@@ -1131,8 +1133,16 @@ class MigrationTaskLockTest {
     }
 
     private static void stubCmiQuiescence(SyncmoneyConfig config) {
+        when(config.isDatabaseEnabled()).thenReturn(true);
         when(config.migration().isCMIAutoDisableCommands()).thenReturn(true);
         when(config.migration().isCMIAutoDisableEconomy()).thenReturn(true);
+    }
+
+    private static DatabaseManager successfulDatabase() {
+        DatabaseManager database = mock(DatabaseManager.class);
+        when(database.tryReplacePlayerForMigration(any(UUID.class), any(), any(), anyLong(), any()))
+                .thenReturn(true);
+        return database;
     }
 
     private static void runGlobalTasksImmediately(Plugin plugin, Server server) {

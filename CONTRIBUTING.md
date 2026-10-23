@@ -153,14 +153,14 @@ Expected artifacts are:
 
 ## Release workflow
 
-The core repository is the canonical source for the Web Admin. The committed stable version lives in root `build.gradle`; preview builds pass `-PreleaseVersion` from CI so alpha and beta versions do not need to be committed as source metadata. The repository variable `NEXT_VERSION` currently selects the next preview line (`1.3.3`).
+The core repository is the canonical source for the Web Admin. The committed stable version lives in root `build.gradle`; preview builds pass `-PreleaseVersion` from CI so alpha and beta versions do not need to be committed as source metadata. CI uses the repository variable `NEXT_VERSION` when set and otherwise falls back to the root version. The hosted variable value is not available in this checkout, so documentation must not assume a fixed preview base.
 
-CI runs on pull requests and `main`, builds Java and Web artifacts, and labels preview artifacts as `1.3.3-alpha.<run-number>`. These artifacts are retained by GitHub Actions and do not create public Releases.
+CI runs on pull requests and `main`, builds Java and Web artifacts, and labels preview artifacts as `<base-version>-alpha.<run-number>`. These artifacts are retained by GitHub Actions and do not create public Releases.
 
 Release tags use no prefix in this repository:
 
-- `1.3.3-alpha.1` or `1.3.3-beta.1` publishes a prerelease;
-- `1.3.3` publishes a stable release after the `production-release` environment approval and a `CHANGELOG.md` section.
+- `<version>-alpha.1` or `<version>-beta.1` publishes a prerelease;
+- `<version>` publishes a stable release after the `production-release` environment approval and a `CHANGELOG.md` section.
 
 The release workflow synchronizes the canonical `syncmoney-web` source to [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), applies the release version, and pushes the corresponding `v`-prefixed tag there first. The Web workflow publishes the deterministic `syncmoney-web.tar.gz` source archive and checksum; only after that release exists does the core workflow publish the plugin and PlaceholderAPI JARs. The cross-repository job requires the fine-grained `SYNC_WEB_RELEASE_TOKEN` secret with write access limited to the Web repository.
 

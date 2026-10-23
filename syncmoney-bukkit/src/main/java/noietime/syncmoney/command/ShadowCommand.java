@@ -91,6 +91,8 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
         int queueSize = shadowSyncTask.getQueueSize();
         MessageHelper.sendMessage(sender, plugin.getMessage("shadow.status-queue")
                 .replace("{count}", String.valueOf(queueSize)));
+        MessageHelper.sendMessage(sender, plugin.getMessage("shadow.status-queue-rejected")
+                .replace("{count}", String.valueOf(shadowSyncTask.getQueueRejectionCount())));
 
         if (status.lastSyncTime() > 0) {
             long secondsAgo = (System.currentTimeMillis() - status.lastSyncTime()) / 1000;

@@ -131,6 +131,10 @@ public final class MigrationTask {
             return;
         }
 
+        if (!validateSharedSqlTarget()) {
+            return;
+        }
+
         checkpointStarted = false;
 
         this.multiServerReader = multiServerReader;
@@ -182,6 +186,10 @@ public final class MigrationTask {
     public boolean resume() {
         if (MigrationLock.isLocked() && !ownsActiveMigrationLock()) {
             plugin.getLogger().warning("CMI migration resume not started because another migration holds the economy lock");
+            return false;
+        }
+
+        if (!validateSharedSqlTarget()) {
             return false;
         }
 
@@ -392,6 +400,17 @@ public final class MigrationTask {
         if (progressCallback != null) {
             progressCallback.onError(message);
         }
+    }
+
+    private boolean validateSharedSqlTarget() {
+        if (config.isDatabaseEnabled() && databaseManager != null) {
+            return true;
+        }
+
+        String message = "Shared SQL database is required for CMI migration to SYNC mode; enable database storage and restart before starting or resuming migration";
+        plugin.getLogger().severe(message);
+        reportMigrationError(message);
+        return false;
     }
 
     private boolean abortIfCmiSourceChanged() {

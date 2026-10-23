@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -20,6 +21,31 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class StorageManagerShutdownTest {
+
+    @Test
+    void storageDependenciesRemainOpenUntilDatabaseUseLeaseIsReleased() {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("StorageManagerShutdownTest"));
+        StorageManager manager = new StorageManager(plugin, mock(SyncmoneyConfig.class));
+        CacheManager cacheManager = mock(CacheManager.class);
+        RedisManager redisManager = mock(RedisManager.class);
+        DatabaseManager databaseManager = mock(DatabaseManager.class);
+        setUnchecked(manager, "cacheManager", cacheManager);
+        setUnchecked(manager, "redisManager", redisManager);
+        setUnchecked(manager, "databaseManager", databaseManager);
+
+        StorageManager.DatabaseUseLease lease = manager.acquireDatabaseUseLease();
+        assertNotNull(lease);
+        manager.shutdown();
+
+        verify(databaseManager, never()).close();
+        verify(redisManager, never()).close();
+
+        lease.close();
+
+        verify(databaseManager).close();
+        verify(redisManager).close();
+    }
 
     @Test
     void storageDependenciesRemainOpenWhileDatabaseWriterIsStillRunning() throws Exception {
@@ -79,5 +105,13 @@ class StorageManagerShutdownTest {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static void setUnchecked(Object target, String name, Object value) {
+        try {
+            set(target, name, value);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Could not set StorageManager test dependency", e);
+        }
     }
 }

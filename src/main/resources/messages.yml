@@ -63,6 +63,8 @@ general:
   degraded-local: '{prefix}<b><#FBBF24>[ OFFLINE STATUS ]</b> <#94A3B8>Cross-server protocols suspended. Reading local node data.'
   error: '{prefix}<#F43F5E>Critical failure encountered. Please file a diagnostic report.'
   no-permission: '{prefix}<#F43F5E>Insufficient clearance for this operation.'
+  economy-authority-unavailable: '{prefix}<#F43F5E>Command unavailable: the active economy authority could not be verified.'
+  cmi-authority-command-disabled: '{prefix}<#F43F5E>Command unavailable: CMI is the economy authority and this operation cannot safely update CMI balances.'
   sync-error: '{prefix}<#F43F5E>Data desynchronization detected. Re-authenticate to secure assets.'
   player-only: '<#F43F5E>SYSTEM PROMPT ⦊ <#94A3B8>Command execution restricted to physical in-game terminals.'
   time-format:
@@ -428,6 +430,7 @@ shadow:
   status-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>SHADOW REPLICATION GRID</bold></gradient> <#475569>▰▰▰▰'
   status-running: ' <#38BDF8>▪ <#94A3B8>Execution State: <white>{running}'
   status-queue: ' <#38BDF8>▪ <#94A3B8>Queued for processing: <#38BDF8>{count} entries'
+  status-queue-rejected: ' <#FBBF24>▪ <#94A3B8>Snapshots rejected since startup: <#FBBF24>{count} (secondary mirror may be incomplete)'
   status-last-sync: ' <#38BDF8>▪ <#94A3B8>Last Sync: <white>{time}'
   status-last-sync-never: ' <#38BDF8>▪ <#94A3B8>Last Sync: <#94A3B8><i>No Record</i>'
   status-today: ' <#38BDF8>▪ <#94A3B8>Syncs Today: <white>{count} times'
