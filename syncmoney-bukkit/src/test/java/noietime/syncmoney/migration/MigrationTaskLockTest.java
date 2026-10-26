@@ -906,7 +906,9 @@ class MigrationTaskLockTest {
                 mock(io.papermc.paper.threadedregions.scheduler.AsyncScheduler.class);
         AtomicReference<java.util.function.Consumer<io.papermc.paper.threadedregions.scheduler.ScheduledTask>> worker =
                 new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger scheduledWorkers = new java.util.concurrent.atomic.AtomicInteger();
         doAnswer(invocation -> {
+            scheduledWorkers.incrementAndGet();
             worker.set(invocation.getArgument(1));
             return null;
         }).when(asyncScheduler).runNow(any(Plugin.class), any());
@@ -914,6 +916,7 @@ class MigrationTaskLockTest {
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
         runGlobalTasksImmediately(plugin, server);
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.isDatabaseEnabled()).thenReturn(true);
         when(config.migration().isMigrationLockEconomy()).thenReturn(true);
         stubCmiQuiescence(config);
         when(config.migration().getMigrationBatchSize()).thenReturn(10);
@@ -929,14 +932,22 @@ class MigrationTaskLockTest {
         EconomyFacade facade = mock(EconomyFacade.class);
         when(facade.getBalance(account)).thenReturn(BigDecimal.ZERO);
         AtomicReference<MigrationTask> taskRef = new AtomicReference<>();
+        AtomicBoolean resumeDuringBatchAccepted = new AtomicBoolean(true);
+        AtomicBoolean busyDuringStopDrain = new AtomicBoolean();
         org.mockito.Mockito.when(facade.setBalance(any(UUID.class), any(BigDecimal.class), any()))
                 .thenAnswer(invocation -> {
                     taskRef.get().stop();
+                    busyDuringStopDrain.set(taskRef.get().isRunning());
+                    resumeDuringBatchAccepted.set(taskRef.get().resume());
                     return invocation.getArgument(1);
                 });
         RedisManager redis = mock(RedisManager.class);
         when(redis.isConnected()).thenReturn(true);
         MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        when(checkpoint.resume()).thenReturn(true);
+        when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.PAUSED);
+        when(checkpoint.getSourceIdentity()).thenReturn("cmi-single|unit-test");
+        when(checkpoint.getSourceFingerprint()).thenReturn("test-cmi-source-fingerprint");
         MigrationTask task = new MigrationTask(plugin, config, cmiReader, facade, successfulDatabase(),
                 redis, null, checkpoint, null, successfulDisabler());
         taskRef.set(task);
@@ -945,10 +956,20 @@ class MigrationTaskLockTest {
         worker.get().accept(mock(io.papermc.paper.threadedregions.scheduler.ScheduledTask.class));
         worker.get().accept(mock(io.papermc.paper.threadedregions.scheduler.ScheduledTask.class));
 
+        assertTrue(busyDuringStopDrain.get(), "the task remains busy until the active batch drains");
+        assertFalse(resumeDuringBatchAccepted.get(), "resume must wait until the stopped worker leaves its batch");
+        assertEquals(2, scheduledWorkers.get(), "stop/resume must not enqueue a second worker while the batch is active");
         org.mockito.Mockito.verify(checkpoint, org.mockito.Mockito.atLeastOnce()).pause();
         verify(checkpoint).updateProgress(1, 1);
         verify(checkpoint, never()).complete();
+        assertFalse(task.isRunning(), "the task becomes resumable after the stopped batch has exited");
         assertTrue(MigrationLock.isLocked(), "stopping at a batch boundary retains the lock for resume");
+
+        assertTrue(task.resume(), "resume is accepted after the stopped worker has drained");
+        task.stop();
+        worker.get().accept(mock(io.papermc.paper.threadedregions.scheduler.ScheduledTask.class));
+        assertEquals(3, scheduledWorkers.get());
+        assertFalse(MigrationLock.isLocked(), "stopping before resumed snapshot initialization releases the lock");
     }
 
     @Test

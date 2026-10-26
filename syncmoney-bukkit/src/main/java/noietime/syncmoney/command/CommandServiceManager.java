@@ -3,6 +3,7 @@ package noietime.syncmoney.command;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyFacade;
+import noietime.syncmoney.economy.EventConsumerManager;
 import noietime.syncmoney.economy.EconomyServiceManager;
 import noietime.syncmoney.economy.FallbackEconomyWrapper;
 import noietime.syncmoney.economy.EconomyWriteQueue;
@@ -35,6 +36,7 @@ public class CommandServiceManager {
     private final EconomyFacade economyFacade;
     private final StorageManager storageManager;
     private final EconomyServiceManager economyServiceManager;
+    private final EventConsumerManager eventConsumerManager;
     private final PubsubSubscriber pubsubSubscriber;
     private final BaltopManager baltopManager;
     private final AuditLogger auditLogger;
@@ -50,6 +52,7 @@ public class CommandServiceManager {
 
     private MoneyCommand moneyCommand;
     private PayCommand payCommand;
+    private MigrationCommand migrationCommand;
 
     public CommandServiceManager(
             Syncmoney plugin,
@@ -57,6 +60,7 @@ public class CommandServiceManager {
             EconomyFacade economyFacade,
             StorageManager storageManager,
             EconomyServiceManager economyServiceManager,
+            EventConsumerManager eventConsumerManager,
             PubsubSubscriber pubsubSubscriber,
             BaltopManager baltopManager,
             AuditLogger auditLogger,
@@ -69,6 +73,7 @@ public class CommandServiceManager {
         this.economyFacade = economyFacade;
         this.storageManager = storageManager;
         this.economyServiceManager = economyServiceManager;
+        this.eventConsumerManager = eventConsumerManager;
         this.pubsubSubscriber = pubsubSubscriber;
         this.baltopManager = baltopManager;
         this.auditLogger = auditLogger;
@@ -127,6 +132,9 @@ public class CommandServiceManager {
      * Shutdown command service and cleanup resources.
      */
     public void shutdown() {
+        if (migrationCommand != null) {
+            migrationCommand.shutdown();
+        }
         plugin.getLogger().fine("Command layer shutdown");
     }
 
@@ -151,33 +159,32 @@ public class CommandServiceManager {
                 plugin,
                 config,
                 economyFacade,
-                cacheManager,
-                redisManager,
                 nameResolver,
                 fallbackWrapper,
                 transferLockManager,
                 cooldownManager,
-                dbWriteQueue,
-                economyWriteQueue,
-                pubsubSubscriber,
-                baltopManager,
                 config.pay().getPayMinAmount(),
                 config.pay().getPayMaxAmount(),
                 config.isPayAllowedInDegraded(),
                 config.isLocalMode());
         register("pay", payCommand, payCommand);
 
-        MigrationCommand migrationCommand = new MigrationCommand(
+        this.migrationCommand = new MigrationCommand(
                 plugin,
                 config,
                 economyFacade,
                 storageManager.getDatabaseManager(),
                 redisManager,
-                nameResolver);
+                nameResolver,
+                storageManager::acquireDatabaseUseLease);
         syncmoneyRouter.register("migrate", migrationCommand);
 
         AuditCommand auditCommand = new AuditCommand(plugin, auditLogger, hybridAuditManager, nameResolver, economyServiceManager.getLocalEconomyHandler());
         syncmoneyRouter.register("audit", auditCommand);
+
+        RecoveryCommand recoveryCommand = new RecoveryCommand(
+                plugin, eventConsumerManager);
+        syncmoneyRouter.register("recovery", recoveryCommand);
 
         BaltopCommand baltopCommand = new BaltopCommand(plugin, config, baltopManager, economyFacade);
         register("baltop", baltopCommand);

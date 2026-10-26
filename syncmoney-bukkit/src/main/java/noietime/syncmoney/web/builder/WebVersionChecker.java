@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 
 /**
  * Checks GitHub releases for the latest web frontend version.
@@ -28,9 +29,12 @@ public class WebVersionChecker {
         try {
             String apiUrl = "https://api.github.com/repos/" + githubRepo + "/releases/latest";
 
-            HttpClient client = HttpClient.newHttpClient();
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .build();
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl))
+                    .timeout(Duration.ofSeconds(10))
                     .header("Accept", "application/vnd.github+json")
                     .GET()
                     .build();

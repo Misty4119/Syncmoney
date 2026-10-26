@@ -39,4 +39,15 @@ class MoneyPolicyTest {
         assertTrue(MoneyPolicy.canAdd(new BigDecimal("1.00"), new BigDecimal("2.00")));
         assertFalse(MoneyPolicy.canAdd(MoneyPolicy.MAX_BALANCE, new BigDecimal("0.01")));
     }
+
+    @Test
+    void enforcesSharedSqlDecimal20_2CapacityWithoutChangingLocalPolicy() {
+        BigDecimal sharedMaximum = new BigDecimal("999999999999999999.99");
+        assertEquals(sharedMaximum, MoneyPolicy.MAX_SHARED_BALANCE);
+        assertTrue(MoneyPolicy.canAddWithin(
+                sharedMaximum.subtract(new BigDecimal("0.01")), new BigDecimal("0.01"), sharedMaximum));
+        assertFalse(MoneyPolicy.canAddWithin(sharedMaximum, new BigDecimal("0.01"), sharedMaximum));
+        assertTrue(MoneyPolicy.isValidBalance(MoneyPolicy.MAX_BALANCE),
+                "the shared storage bound must not narrow the existing LOCAL policy ceiling");
+    }
 }

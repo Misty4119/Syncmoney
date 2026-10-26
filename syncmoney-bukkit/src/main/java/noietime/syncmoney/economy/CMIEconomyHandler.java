@@ -11,7 +11,9 @@ import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.util.NumericUtil;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,6 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class CMIEconomyHandler {
 
+    private static final int MAX_LAST_APPLIED_VERSION_ENTRIES = 10_000;
+
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
     private final RedisManager redisManager;
@@ -43,7 +47,7 @@ public class CMIEconomyHandler {
     }
 
     private final ConcurrentHashMap<UUID, BalanceObservation> balanceObservations = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Long> lastAppliedVersion = new ConcurrentHashMap<>();
+    private final LinkedHashMap<UUID, Long> lastAppliedVersion = new LinkedHashMap<>(16, 0.75f, true);
     private final AtomicLong versionCounter = new AtomicLong(0L);
     private final Object joinReconciliationGate = new Object();
     private volatile boolean joinReconciliationStopped;
@@ -84,7 +88,7 @@ public class CMIEconomyHandler {
     public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance, Long appliedVersion) {
         updateSyncBaseline(uuid, absoluteBalance);
         if (appliedVersion != null) {
-            lastAppliedVersion.put(uuid, appliedVersion);
+            recordLastAppliedVersion(uuid, appliedVersion);
         }
         if (cmiListener != null) {
             cmiListener.notifyInboundApplied(uuid, absoluteBalance);
@@ -127,8 +131,12 @@ public class CMIEconomyHandler {
                 return true;
             }
 
-            long version = setRedisBalanceWithVersion(uuid, newBalance);
-            lastAppliedVersion.put(uuid, version);
+            OptionalLong writtenVersion = setRedisBalanceWithVersion(uuid, newBalance);
+            if (writtenVersion.isEmpty()) {
+                return false;
+            }
+            long version = writtenVersion.getAsLong();
+            recordLastAppliedVersion(uuid, version);
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 String eventType = isDeposit ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
@@ -215,6 +223,22 @@ public class CMIEconomyHandler {
                 current == null ? null : current.apiAuthorityBalance()));
     }
 
+    private void recordLastAppliedVersion(UUID uuid, long version) {
+        synchronized (lastAppliedVersion) {
+            lastAppliedVersion.put(uuid, version);
+            if (lastAppliedVersion.size() > MAX_LAST_APPLIED_VERSION_ENTRIES) {
+                UUID oldest = lastAppliedVersion.keySet().iterator().next();
+                lastAppliedVersion.remove(oldest);
+            }
+        }
+    }
+
+    private long getLastAppliedVersion(UUID uuid) {
+        synchronized (lastAppliedVersion) {
+            return lastAppliedVersion.getOrDefault(uuid, 0L);
+        }
+    }
+
     /**
      * Read the current CMI balance via the CMI API (used by the polling fallback).
      *
@@ -292,7 +316,7 @@ public class CMIEconomyHandler {
     }
 
     private void applyJoinMirrorWhileActive(UUID uuid, BigDecimal mirror, long mirrorVersion) {
-        long lastApplied = lastAppliedVersion.getOrDefault(uuid, 0L);
+        long lastApplied = getLastAppliedVersion(uuid);
         if (!CMIVersioning.isNewer(mirrorVersion, lastApplied)) {
             BigDecimal local = getCMILocalBalance(uuid);
             if (local != null && admitJoinReconciliationUpdate()) {
@@ -331,6 +355,7 @@ public class CMIEconomyHandler {
                 BigDecimal observed = getCMILocalBalance(uuid);
                 if (observed == null || observed.compareTo(normalizedMirror) != 0) {
                     invalidateCachedBalanceForApi(uuid);
+                    return;
                 }
             }
             notifyInboundApplied(uuid, normalizedMirror, version);
@@ -396,10 +421,15 @@ public class CMIEconomyHandler {
      *
      * @return the version written
      */
-    private long setRedisBalanceWithVersion(UUID uuid, BigDecimal balance) {
+    private OptionalLong setRedisBalanceWithVersion(UUID uuid, BigDecimal balance) {
         long version = generateNewVersion();
-        redisMirror.write(uuid, balance, version);
-        return version;
+        CMIRedisMirror.WriteResult result = redisMirror.compareAndWrite(uuid, balance, version);
+        if (result != CMIRedisMirror.WriteResult.ACCEPTED) {
+            plugin.getLogger().warning("CMI Redis mirror rejected outbound update for " + uuid
+                    + " (" + result + "); no cross-server update was published");
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(version);
     }
 
     /**
@@ -413,7 +443,11 @@ public class CMIEconomyHandler {
         }
         try (writeLease) {
             BigDecimal newBalance = getRedisBalance(uuid).add(amount);
-            long version = setRedisBalanceWithVersion(uuid, newBalance);
+            OptionalLong writtenVersion = setRedisBalanceWithVersion(uuid, newBalance);
+            if (writtenVersion.isEmpty()) {
+                return BigDecimal.valueOf(-1);
+            }
+            long version = writtenVersion.getAsLong();
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_DEPOSIT", amount.doubleValue(), "CMI");
@@ -437,7 +471,11 @@ public class CMIEconomyHandler {
             }
 
             BigDecimal newBalance = current.subtract(amount);
-            long version = setRedisBalanceWithVersion(uuid, newBalance);
+            OptionalLong writtenVersion = setRedisBalanceWithVersion(uuid, newBalance);
+            if (writtenVersion.isEmpty()) {
+                return BigDecimal.valueOf(-1);
+            }
+            long version = writtenVersion.getAsLong();
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_WITHDRAW", -amount.doubleValue(), "CMI");
@@ -462,7 +500,11 @@ public class CMIEconomyHandler {
             return BigDecimal.valueOf(-1);
         }
         try (writeLease) {
-            long version = setRedisBalanceWithVersion(uuid, newBalance);
+            OptionalLong writtenVersion = setRedisBalanceWithVersion(uuid, newBalance);
+            if (writtenVersion.isEmpty()) {
+                return BigDecimal.valueOf(-1);
+            }
+            long version = writtenVersion.getAsLong();
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 syncManager.publishCMIUpdate(uuid, newBalance, version, "CMI_SET_BALANCE", newBalance.doubleValue(), "CMI");

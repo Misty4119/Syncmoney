@@ -22,11 +22,13 @@
 
 1.4.0 target 的 build 與 runtime 最低為 Java 25，Paper 最低為 1.21.6。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0；這些僅是歷史基準，不是 1.4.0 的 toolchain 或 runtime minimum。
 
+**截至 2026-10-26 R63 R9，1.4.0 整體狀態為 BLOCKED / NOT VERIFIED。** 使用本機 `-PreleaseVersion=1.4.0` override，Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，以及 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation，以及 frontend typecheck、4 個 unit files／22 個 tests 與 production build 均通過。Core JAR 為 31,646,522 bytes，SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`；PAPI JAR 為 13,872 bytes，SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`；acceptance JAR 為 54,905 bytes，SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`。R63 驗證 live queued `/pay` recovery；ADR-16 不涵蓋 direct Vault/plugin recovery，該項依 ADR-07 維持 `DEFERRED / NOT VERIFIED`。Exact-candidate Paper runtime／T22 Beta、storage-service integration、minimum-Paper SQL、licensed/live CMI（授權 UNKNOWN）、廣泛 V03、完整 public API 相容性與 T21 完成仍為 `NOT VERIFIED` 或 `BLOCKED`；Stable 與外部發布仍為 `NOT VERIFIED / NOT PERFORMED`。Stable metadata 維持 1.3.2；沒有執行外部發布。
+
 ## 2. Repository map
 
 | Path | 用途 |
 |---|---|
-| `src/main/java/noietime/syncmoney` | Core plugin |
+| `syncmoney-bukkit/src/main/java/noietime/syncmoney` | Core plugin |
 | `src/main/resources/config.yml` | Shipped configuration |
 | `src/main/resources/plugin.yml` | Plugin descriptor、commands、permissions |
 | `src/main/resources/syncmoney-web/dist` | Embedded built frontend |
@@ -82,6 +84,10 @@ Expected artifact：
 
 Money 使用 `BigDecimal` 與既有 normalization。失敗/拒絕 transaction 不得建立或消滅資金。
 
+Syncmoney-owned `LOCAL_REDIS` 與 `SYNC` write 的單一 balance 不得超過 `999999999999999999.99`，也就是 shared SQL `DECIMAL(20,2)` 與 Redis cents 上限。Projected deposit 要在 write admission 前，以及 account lock 內的 commit 路徑再次檢查。保留既有 `LOCAL` policy 與 stored values；這項 guard 不 clamp 或 migration local balance。明確執行 LOCAL-to-SYNC migration 時，會先在 normalization 前拒絕 SQLite 原始負餘額，包括原本會四捨五入成 0.00 的負 sub-cent 值；接著在準備 insert-only 或 force-replacement SQL 前，拒絕正規化後超過此上限的餘額。來源 player UUID 文字必須使用標準 36 字元的 8-4-4-4-12 十六進位格式（不區分大小寫）；即使 `UUID.fromString` 接受，也會拒絕縮寫形式。缺失、格式錯誤或非標準 UUID 會在 shared SQL／Redis 寫入前讓整個 snapshot 失敗，並將來源列記錄為失敗。遭拒列在 LOCAL 的原值維持不變，也不會寫入 Redis。
+
+將舊版較寬鬆 balance policy 的既有 Redis data 移入 shared `LOCAL_REDIS` 或 `SYNC` 前，請以 arbitrary-precision decimal 比較檢查實際儲存值是否超過此上限。1.4.0 不會掃描、clamp 或 migration 舊值；deposit、withdraw、transfer 會在記憶體 mutation 前拒絕既有餘額超限的 account。啟用 shared mode 前，先備份 authority data，並明確 reconciliation 所有超限 account。Admin set 是 operator 明確更改帳戶，不是自動 migration；audit 開啟時，若 set 的 delta 超出 SQL `DECIMAL(20,2)`，系統會在 mutation 前拒絕。若沒有經驗證的 reconciliation 流程，先不要讓這些資料進入 1.4.0 shared-mode deployment。
+
 Failure path 也必須測試，至少涵蓋：
 
 - insufficient funds；
@@ -103,12 +109,16 @@ Vault 是 synchronous，因此 Vault-facing read 必須保持 memory-backed；ca
 
 ### 5.4 Versions and cross-server state
 
-Redis-backed economy update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived version，clock rollback、restart 或多伺服器時不保證 global monotonic。CMI callback 套用前仍須重新比對本機已觀察到的 freshness。主要 channel：
+Redis-backed economy update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived version，clock rollback、restart 或多伺服器時不保證 global monotonic。共享 CMI Redis balance/version pair 現在使用 atomic compare-and-write，並以精確十進位字串排序版本；過期版本、同版餘額衝突、不完整或格式錯誤的 pair，以及 Redis 不可用都會被拒絕。Inbound CMI work 只有在 Redis 接受 pair 後才更新本機 watermark 或排程 entity mutation；outbound caller 不會發布遭 mirror 拒絕的寫入。此排序 guard 不會令 CMI version 具備 global monotonic；licensed/live CMI 行為仍為 NOT VERIFIED。主要 channel：
 
 - `syncmoney:balance:update`
 - `syncmoney:cmi:balance:update`
 
 CMI remote apply 要 suppress outbound echo。
+
+live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。Exact-candidate Paper runtime acceptance 仍為 NOT VERIFIED。
+
+沒有 caller-supplied stable operation ID 的 Redis add/set/transfer 相容性 overload，會使用 300 秒 receipt TTL 限制 key 累積。queued `/pay` recovery path 會提供 stable ID；這些 receipt 不會自動到期，只能在明確完成 recovery acknowledgement 後移除。
 
 ## 6. Scheduler 規則
 
@@ -166,6 +176,10 @@ CMI 為授權軟體，不隨 repository 分發；acceptance 需要本機合法 p
 先前的 `1.4.0-alpha.1` 候選版使用本機提供的 CMI 9.8.10.5 與 CMILib 1.6.0.1，在 Paper 1.21.6 上對一名線上玩家進行過一次有界唯讀檢查；CMI direct balance、Syncmoney CMI route 與公開的 `BalanceSnapshot` API 讀值相符。最終候選版的 CMI runtime acceptance 仍為 **NOT VERIFIED**。此結果不能證明 CMI license 目前有效，也未驗證 CMI mode 下 Syncmoney Vault provider 的註冊、任何 mutation、跨服行為或 Folia/Canvas 行為。依 ADR-12，CMI mode 不屬於 1.4.0 已驗證的支援範圍，未驗證可用於正式環境；完整 CMI runtime acceptance 仍為 **NOT VERIFIED**。
 
 CMI mode 會停用 `/syncmoney admin` 餘額操作及 `/syncmoney sync-balance`，因為這些命令不會更新 CMI 的權威餘額。
+
+CMI mode 也會停用 Syncmoney `/pay`，因為 adapter 沒有原子式雙帳戶轉帳契約。命令會在餘額 mutation 前拒絕，並將回覆排至付款者的 entity owner。這項 source-level 行為不代表 licensed/live CMI acceptance 已通過。
+
+相同的 fail-closed 限制也適用於 Vault 指定目標玩家與 plugin transfer、VaultUnlocked transfer 委派呼叫，以及公開的低階 Redis transfer API。這些入口會在修改 Syncmoney memory、queue 或 Redis 前拒絕。CMI 單帳戶操作仍由 CMI 維持 authority。Exact-candidate licensed/live CMI acceptance 仍為 **NOT VERIFIED**。
 
 ## 10. Web Admin backend development
 
@@ -257,6 +271,12 @@ Top-level commands 為 `/money`、`/pay`、`/baltop`、`/syncmoney`。
 
 Permission behavior 同時由 `plugin.yml` 與 command router/subcommand checks 決定。重要 nodes 包括 `syncmoney.money`、`syncmoney.money.others`、`syncmoney.pay`、`syncmoney.admin` 與專用 `syncmoney.admin.*` permissions。
 
+Migration commands 會在 Paper async scheduler 執行資料庫、SQLite preview 與 checkpoint 工作。回覆會回到 sender 所屬 scheduler：玩家使用 entity scheduler、command block 使用所屬 region scheduler、console 使用 global scheduler。因此 preview 輸出可能在 command handler 返回後才送達。
+
+LOCAL-to-SYNC migration 必須視為離線維護操作，不是有玩家在線時的 live conversion。其 write lease 只會 fence 同一 JVM 內的 Syncmoney operation，不能停止其他 server 或 out-of-band SQL、Redis、CMI writer。開始前先停止所有共用目的地 store 節點的 economy activity，禁止玩家及其他 economy producer 寫入，並確認 accepted LOCAL write 已 drain 或 recovery。SQL 與 Redis population 並非同一個跨 store transaction：若外部 writer 在 preflight 後建立 Redis account，insert-only Redis write 會 fail closed 並將該列記入 checkpoint，但 shared SQL insert 可能已先完成。維持 maintenance，檢查 checkpoint 並 reconciliation 兩個 store 後，才切換到 SYNC。有玩家在線的 migration 與 shared destination concurrent writer 情境仍為 NOT VERIFIED。
+
+/syncmoney migrate stop 會要求工作在安全邊界暫停。回覆代表要求已接受，不代表遷移已停止。LOCAL-to-SYNC 會在帳戶處理之間及 transaction-history 原子 SQL 匯入返回後檢查停止要求；若要求在匯入期間送達，會等 transaction 返回後才檢查。任一遷移仍執行或等待收尾時，`/syncmoney migrate clear` 會拒絕刪除 checkpoint。使用 /syncmoney migrate status 查看 checkpoint。Admin give/take 不得同步載入 cold balance；若 take 失敗且餘額不在記憶體中，回覆會顯示 N/A。
+
 新增或修改 command 時，要驗證 permission denial、console/player restriction、player action 的 scheduler ownership、tab-completion cost、user-facing message，以及兩種語言/config default。
 
 ## 16. Events 與 third-party integration
@@ -278,6 +298,8 @@ Permission behavior 同時由 `plugin.yml` 與 command router/subcommand checks 
 實機驗收依 `tools/plugdev/README.md` 執行。PlugDev 是 development tooling，不是 production dependency。
 
 Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不能只靠 compilation 驗證。需分別記錄實際 Minecraft/Paper/Folia/Canvas version、runtime Java version、Syncmoney artifact/version、實際存在的 optional dependency versions、player-side behavior、startup/shutdown logs、適用時的 cross-server propagation，以及無法測試的 scenario。
+
+較早的 pre-fix 66a25c4 artifact smoke（JAR SHA-256 663B1FB6CD3B4FD83F94C0CEEE69AD93252268E066F36ABC940634218F0D0D18）、歷史 r24 snapshot（JAR SHA-256 390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E）及 R29 artifact（JAR SHA-256 4BE022B1760209D610A390144D5B3328A094E290C2AB53A9E557BDF27FAA92F6）仍是各自 binary 的歷史結果。R39 core JAR SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19 在 Paper 1.21.6#48／Java 25.0.4+7-LTS-189／LOCAL／合成帳戶上記錄 API CLASSLOADER PASS 與 ACCEPTANCE PASS total=1520.00。獨立 read-only recovery 驗證重啟讀取 cold-vault-a=NaN、cold-vault-unlocked-b=null、a=1000.00、b=520.00、vault-unlocked-b=520.00，並觀察到 graceful final stop。Composite watcher action 保留為 failed；recovery action 為 confirmed。此結果僅是 PASS_BOUNDED_SUBCASE；完整 T22 Beta 仍為 NOT VERIFIED。Storage-service integration 仍為 DEFERRED / NOT VERIFIED。
 
 1.4.0 使用 JDK 25 或更新版本及 repository Gradle 9.8.0 wrapper；server 必須使用 Java 25 或更新版本與 Paper 1.21.6 或更新版本。Java 21／Gradle 9.1.0 僅描述 1.3.2 baseline。
 
@@ -305,7 +327,7 @@ Scheduler、lifecycle、storage、CMI、cross-server synchronization 變更不�
 3. 將 candidate JAR 換成 checksum 已驗證的 1.3.2 JAR，同時保留相容的目前資料與版本。確認 1.3.2 能讀取升級期間寫入的交易。可行時保留 Java 25 與受支援的 server；如果也要降級 JVM 或 server，必須選 1.3.2 支援的版本，不可假設較新的 server 能在 Java 21 執行。
 4. 一般 rollback 不可 flush Redis、重設餘額或還原升級前備份。舊備份會丟失其建立後的有效交易。重新使用 1.3.2 也會重新引入已知 stale SQL-writer 限制，因此不得讓新舊 writer 同時運作。
 
-目前 M01–M03 runtime reports 覆蓋六個 user-pinned Paper/Folia/Canvas endpoints 上的兩個 synthetic nodes；另有一份 supplemental current-stable Paper report。它們驗證這些測試節點的正常停止、candidate writes、data snapshots 與 recovery journal state，尚未證明 production fleet-wide quiescence、完整 drain counters 或完整 CMI acceptance。依 ADR-12，完整 CMI mode 及尚未執行的 T21 案例不屬於 1.4.0 已驗證的支援聲明。T00A minimum-Paper smoke 步驟見 [`tools/plugdev/README.md`](../tools/plugdev/README.md)；此 smoke 不取代 V03/M00–M12 完整 persisted-state upgrade 與 rollback gate。
+既有 M01–M03 runtime reports 覆蓋六個 user-pinned Paper/Folia/Canvas endpoints 上的兩個 synthetic nodes，另有一份 supplemental current-stable Paper report。這些報告來自較早候選版，不能證明最終候選版的 upgrade／rollback acceptance 或 production fleet-wide quiescence；也未證明完整 drain counters 或完整 CMI acceptance。依 ADR-12，完整 CMI mode 及尚未執行的 T21 案例不屬於 1.4.0 已驗證的支援聲明。2026-10-24 r24 minimum-Paper smoke 使用 r24 candidate JAR SHA-256 `390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E`，通過一項有界 `LOCAL` transaction 與 persisted-read subcase。它不能代表整個 Paper／Java 範圍或完整 T22 Beta，也不能取代 V03/M00–M12 的 persisted-state upgrade 與 rollback gate。
 
 ## 18. Documentation、security 與 release hygiene
 

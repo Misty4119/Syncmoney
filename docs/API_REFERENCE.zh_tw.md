@@ -253,13 +253,13 @@ Node handler 對 duplicate method/path 較晚註冊，因此提供目前有效�
 
 ### `GET /api/nodes`
 
-列出 nodes。
+列出 nodes。Node URL 欄位與 central-node `selfUrl` 會移除 URI user-info、query 與 fragment；無效 URL 以 `[invalid URL]` 表示。
 ### `POST /api/nodes`
 
-依目前 request model 建立/註冊 node。
+依目前 request model 建立/註冊 node。URL 不得包含 URI user-info、query 或 fragment，並須通過設定的 address restriction。
 ### `PUT /api/nodes/{index}`
 
-更新指定 index node。
+更新指定 index node。若有提供 URL，不得包含 URI user-info、query 或 fragment，並須通過設定的 address restriction。
 ### `DELETE /api/nodes/{index}`
 
 刪除指定 index node。
@@ -268,10 +268,10 @@ Node handler 對 duplicate method/path 較晚註冊，因此提供目前有效�
 執行 node ping/health。
 ### `GET /api/nodes/status`
 
-node status。
+node status；URL 欄位會在 API response 與 SSE broadcast 前移除 URI user-info、query 與 fragment，無效 URL 以 `[invalid URL]` 表示。
 ### `POST /api/nodes/{index}/proxy`
 
-透過 central node handler proxy 允許的 request；node URL、credential 與 proxy restriction 屬安全敏感內容。
+透過 central node handler proxy 允許的 request。`path` 必須是 `/api` 下不含 authority 或 fragment 的相對 URI；可選 query string 會原樣轉送至同一個設定的 node origin。Absolute URL、URI authority、fragment、dot-segment traversal（包含 percent-encoded 形式）與過度編碼都會被拒絕。允許的 proxy method 為 `GET`、`HEAD`、`OPTIONS`、`POST`、`PUT`、`PATCH`、`DELETE`。受 scope 限制的 API key 必須具備 `syncmoney.web.nodes.view` 才能使用此 endpoint，且也必須具備 target path 對應的 permission；未映射的 target path 只允許 `syncmoney.web.central`。會改變狀態的 method（`POST`、`PUT`、`PATCH`、`DELETE`）還需要 `syncmoney.web.nodes.manage` 或 `syncmoney.web.central`。不支援的 method 或權限不足會在使用已設定的 node key 前被拒絕。外層 request body 上限為 1 MiB；超過時會在 JSON 解析或使用 node key 前回 HTTP 413。上游 response body 會先完整讀入最多 8 MiB 的有界 buffer，再送出 response；超過上限時回 HTTP 502，且不會轉送部分內容。`POST`、`PUT`、`PATCH` 可在 `body` 欄位提供任意 JSON value，並以 JSON 傳送；其他 method 不會帶 request body。只有 path 與權限檢查通過後，request 才會送往設定的 node origin 並附上該 node 的 Bearer API key。設定的 node URL 會拒絕 user-info、query、fragment 與靜態列出的 local/special-use IPv4 位址範圍，包括 shared、protocol-assignment、documentation、benchmarking、multicast 與 reserved 區段，並拒絕 IPv6 unspecified、loopback、link-local、site-local、multicast 與 ULA 位址。Node URL 驗證失敗時只記錄例外類型，不會記錄 URL、user-info、query 或 fragment。Node URL 與 credential 屬安全敏感內容。DNS rebinding 防護為 `DEFERRED / NOT VERIFIED`；請將 server egress 限制於預期 node，並把受信任的 Web Admin API key 視為高權限憑證。
 ### `POST /api/nodes/sync`
 
 同步所有 configured nodes。
@@ -290,7 +290,9 @@ Registered API extension 位於此 prefix；實際 child route 由已安裝/註�
 
 ## 15. CORS、rate limit 與 proxy 部署
 
-Shipped `config.yml` 中 Web Admin 預設 disabled、host `localhost`、port `8080`、rate limit enabled 且 120/minute、`cors-allowed-origins` 為空 list。`WebAdminConfig` 在 key 缺失時有自己的 fallback，包括 `*` CORS fallback。
+Shipped `config.yml` 中 Web Admin 預設 disabled、host `localhost`、port `8080`、rate limit enabled 且 120/minute、`cors-allowed-origins` 為空 list。缺少或空值會拒絕跨來源瀏覽器存取。可設定 YAML list，或以逗號分隔的 scalar；只有明確設定 `*` 才允許 wildcard，origin 以完整字串比對。允許的 origin 會在 REST 與 SSE 的成功及錯誤 response 收到 `Access-Control-Allow-Origin`；service 不啟用 credential sharing。未列入的 origin 不會收到此 header。CORS 是瀏覽器 response policy，不能取代 Bearer API-key authentication，也不會阻止非瀏覽器 client。
+
+Node proxy path 限制在已設定 node origin 的 `/api` 路徑下。靜態 node URL 檢查會拒絕 user-info、query、fragment 與 local/special-use address range，但不會將 DNS 結果固定至最終 HTTP connection，因此 DNS rebinding 防護仍為 `DEFERRED / NOT VERIFIED`。請保護 Web Admin API key，並限制對外 network access 只到預期 node host。
 
 Internet-facing reverse proxy 應：
 

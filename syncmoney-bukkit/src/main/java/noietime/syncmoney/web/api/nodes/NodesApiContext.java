@@ -8,6 +8,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.web.api.AbstractApiHandler;
 import noietime.syncmoney.web.security.NodeApiKeyStore;
 import noietime.syncmoney.web.security.PermissionChecker;
+import noietime.syncmoney.web.nodes.NodeUrlSanitizer;
 
 import java.net.InetAddress;
 import java.net.URI;
@@ -70,6 +71,10 @@ public abstract class NodesApiContext extends AbstractApiHandler {
         return key.substring(0, 4) + "****" + key.substring(key.length() - 4);
     }
 
+    protected String sanitizeUrlForResponse(String url) {
+        return NodeUrlSanitizer.sanitizeForDisplay(url);
+    }
+
     /**
      * Validates that a URL/path does not point to internal or blocked resources (SSRF protection).
      * Checks against blocked hostnames, private IP prefixes, loopback, and link-local addresses.
@@ -84,6 +89,8 @@ public abstract class NodesApiContext extends AbstractApiHandler {
             URI uri = new URI(decodedUrl);
             String host = uri.getHost();
             if (host == null || host.isBlank()) return false;
+            if (uri.getRawUserInfo() != null || uri.getRawQuery() != null
+                    || uri.getRawFragment() != null) return false;
 
             String hostLower = host.toLowerCase();
             if (BLOCKED_HOSTNAMES.contains(hostLower) || hostLower.endsWith(".local")) {
@@ -93,14 +100,55 @@ public abstract class NodesApiContext extends AbstractApiHandler {
                 if (hostLower.startsWith(prefix)) return false;
             }
             InetAddress address = InetAddress.getByName(host);
-            if (address.isLoopbackAddress() || address.isLinkLocalAddress()) return false;
+            if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                    || address.isLinkLocalAddress() || address.isSiteLocalAddress()
+                    || address.isMulticastAddress() || isUniqueLocalIpv6Address(address)
+                    || isBlockedIpv4Address(address)) {
+                return false;
+            }
 
             String scheme = uri.getScheme();
             return scheme != null && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"));
         } catch (Exception e) {
-            plugin.getLogger().fine("URL validation error for " + urlString + ": " + e.getMessage());
+            plugin.getLogger().fine("URL validation error: " + e.getClass().getSimpleName());
             return false;
         }
+    }
+
+    private static boolean isBlockedIpv4Address(InetAddress address) {
+        byte[] bytes = address.getAddress();
+        if (bytes.length == 16 && isIpv4MappedIpv6(bytes)) {
+            return isBlockedIpv4Octets(Byte.toUnsignedInt(bytes[12]), Byte.toUnsignedInt(bytes[13]),
+                    Byte.toUnsignedInt(bytes[14]));
+        }
+        if (bytes.length != 4) return false;
+        return isBlockedIpv4Octets(Byte.toUnsignedInt(bytes[0]), Byte.toUnsignedInt(bytes[1]),
+                Byte.toUnsignedInt(bytes[2]));
+    }
+
+    private static boolean isBlockedIpv4Octets(int first, int second, int third) {
+        return first == 0 || first == 10 || first == 127
+                || (first == 100 && second >= 64 && second <= 127)
+                || (first == 169 && second == 254)
+                || (first == 172 && second >= 16 && second <= 31)
+                || (first == 192 && (second == 0 && (third == 0 || third == 2)
+                || (second == 88 && third == 99) || second == 168))
+                || (first == 198 && ((second == 18 || second == 19)
+                || (second == 51 && third == 100)))
+                || (first == 203 && second == 0 && third == 113)
+                || first >= 224;
+    }
+
+    private static boolean isIpv4MappedIpv6(byte[] address) {
+        for (int i = 0; i < 10; i++) {
+            if (address[i] != 0) return false;
+        }
+        return address[10] == (byte) 0xff && address[11] == (byte) 0xff;
+    }
+
+    private static boolean isUniqueLocalIpv6Address(InetAddress address) {
+        byte[] rawAddress = address.getAddress();
+        return rawAddress.length == 16 && (rawAddress[0] & 0xfe) == 0xfc;
     }
 
     protected String getMasterKey() {

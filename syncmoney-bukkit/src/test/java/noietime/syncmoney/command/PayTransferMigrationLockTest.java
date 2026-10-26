@@ -5,20 +5,14 @@ import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
 import io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import noietime.syncmoney.Syncmoney;
-import noietime.syncmoney.baltop.BaltopManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
-import noietime.syncmoney.economy.EconomyWriteQueue;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
 import noietime.syncmoney.migration.MigrationLock;
-import noietime.syncmoney.storage.CacheManager;
-import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.TransferLockManager;
-import noietime.syncmoney.storage.db.DbWriteQueue;
-import noietime.syncmoney.sync.PubsubSubscriber;
 import noietime.syncmoney.uuid.NameResolver;
 import org.bukkit.Server;
 import org.bukkit.entity.Player;
@@ -36,6 +30,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -80,7 +75,6 @@ class PayTransferMigrationLockTest {
 
         verify(fixture.nameResolver, never()).resolve("target");
         verify(fixture.transferLockManager, never()).acquireDualLock(fixture.senderUuid, fixture.targetUuid);
-        verify(fixture.redisManager, never()).getResource();
     }
 
     @Test
@@ -96,7 +90,7 @@ class PayTransferMigrationLockTest {
     }
 
     @Test
-    void sharedPayUsesPairedMemoryAdmissionInsteadOfWritingRedisBeforeQueueingLegs() throws Exception {
+    void sharedPayUsesPairedFacadeAdmissionAndWaitsForTransferOutcome() throws Exception {
         Fixture fixture = new Fixture(false);
         SyncmoneyEventBus eventBus = resetEventBus(fixture);
         when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
@@ -108,8 +102,6 @@ class PayTransferMigrationLockTest {
 
         verify(fixture.economyFacade).atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
                 eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER));
-        verify(fixture.luaScriptManager, never()).evalTransfer(any(), any(), any());
-        verify(fixture.economyWriteQueue, never()).offer(any());
         verify(fixture.plugin, never()).getMessage("pay.success-sender");
         verify(fixture.plugin, never()).getMessage("pay.transfer-failed");
         verify(fixture.sender, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
@@ -118,6 +110,37 @@ class PayTransferMigrationLockTest {
 
         verify(fixture.plugin).getMessage("pay.success-sender");
         verify(fixture.sender).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void sharedPayCompletionUsesSenderNameCapturedBeforeAsyncCallback() throws Exception {
+        Fixture fixture = new Fixture(false);
+        SyncmoneyEventBus eventBus = resetEventBus(fixture);
+        when(fixture.transferLockManager.acquireDualLock(fixture.senderUuid, fixture.targetUuid)).thenReturn(true);
+        when(fixture.economyFacade.atomicTransfer(eq(fixture.senderUuid), eq(fixture.targetUuid),
+                eq(new BigDecimal("10.00")), eq(EconomyEvent.EventSource.PLAYER_TRANSFER)))
+                .thenReturn(new BigDecimal("90.00"));
+
+        Thread commandThread = Thread.currentThread();
+        AtomicReference<Thread> nameReadThread = new AtomicReference<>();
+        doAnswer(invocation -> {
+            nameReadThread.set(Thread.currentThread());
+            return "sender";
+        }).when(fixture.sender).getName();
+        org.mockito.Mockito.clearInvocations(fixture.sender);
+
+        fixture.executor.executeTransferAsync(fixture.sender, "target", new BigDecimal("10.00"));
+        assertSame(commandThread, nameReadThread.get(), "the command path should capture the sender name");
+
+        Thread completionWorker = new Thread(
+                () -> eventBus.callEvent(transferEvent(fixture, true, new BigDecimal("90.00"), null)),
+                "pay-completion-worker");
+        completionWorker.start();
+        completionWorker.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertFalse(completionWorker.isAlive(), "the transfer completion callback should finish");
+        assertSame(commandThread, nameReadThread.get(), "async completion must reuse the captured sender name");
+        verify(fixture.sender, times(1)).getName();
     }
 
     @Test
@@ -176,8 +199,6 @@ class PayTransferMigrationLockTest {
                 new BigDecimal("10.00"), EconomyEvent.EventSource.PLAYER_TRANSFER);
         verify(fixture.economyFacade, never()).withdraw(any(), any(), any());
         verify(fixture.economyFacade, never()).deposit(any(), any(), any());
-        verify(fixture.luaScriptManager, never()).evalTransfer(any(), any(), any());
-        verify(fixture.redisManager, never()).getResource();
         verify(fixture.plugin, never()).getMessage("pay.transfer-failed");
     }
 
@@ -232,11 +253,7 @@ class PayTransferMigrationLockTest {
         private final Syncmoney plugin = mock(Syncmoney.class);
         private final EconomyFacade economyFacade = mock(EconomyFacade.class);
         private final NameResolver nameResolver = mock(NameResolver.class);
-        private final RedisManager redisManager = mock(RedisManager.class);
-        private final CacheManager cacheManager = mock(CacheManager.class);
         private final TransferLockManager transferLockManager = mock(TransferLockManager.class);
-        private final EconomyWriteQueue economyWriteQueue = mock(EconomyWriteQueue.class);
-        private final PayLuaScriptManager luaScriptManager = mock(PayLuaScriptManager.class);
         private final UUID senderUuid = UUID.randomUUID();
         private final UUID targetUuid = UUID.randomUUID();
         private final Player sender = mock(Player.class);
@@ -278,10 +295,7 @@ class PayTransferMigrationLockTest {
             }).when(asyncScheduler).runNow(eq(plugin), any());
 
             executor = new PayTransferExecutor(plugin, mock(SyncmoneyConfig.class), economyFacade,
-                    cacheManager, redisManager, nameResolver, transferLockManager,
-                    mock(DbWriteQueue.class), economyWriteQueue,
-                    mock(PubsubSubscriber.class), mock(BaltopManager.class),
-                    luaScriptManager, localMode);
+                    nameResolver, transferLockManager, localMode);
         }
 
         private void runWhileLocked() {

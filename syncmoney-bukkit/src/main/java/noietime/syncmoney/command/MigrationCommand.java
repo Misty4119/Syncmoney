@@ -10,10 +10,13 @@ import noietime.syncmoney.storage.db.DatabaseManager;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
+import org.bukkit.Location;
+import org.bukkit.command.BlockCommandSender;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.math.BigDecimal;
@@ -21,6 +24,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Migration command handler.
@@ -40,6 +45,7 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
     private final MigrationCheckpoint checkpoint;
     private final LocalToSyncMigrationTask localToSyncMigrationTask;
     private final noietime.syncmoney.breaker.DiscordWebhookNotifier discordNotifier;
+    private final AtomicBoolean shuttingDown = new AtomicBoolean();
 
     private CMIDatabaseReader cmiReader;
     private CMIMultiServerReader cmiMultiServerReader;
@@ -49,6 +55,15 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                             DatabaseManager databaseManager,
                             RedisManager redisManager,
                             NameResolver nameResolver) {
+        this(plugin, config, economyFacade, databaseManager, redisManager, nameResolver, null);
+    }
+
+    public MigrationCommand(Syncmoney plugin, SyncmoneyConfig config,
+                            EconomyFacade economyFacade,
+                            DatabaseManager databaseManager,
+                            RedisManager redisManager,
+                            NameResolver nameResolver,
+                            Supplier<? extends AutoCloseable> databaseUseLeaseSupplier) {
         this.plugin = plugin;
         this.config = config;
         this.discordNotifier = new noietime.syncmoney.breaker.DiscordWebhookNotifier(plugin, config);
@@ -58,11 +73,13 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
 
         this.migrationTask = new MigrationTask(
                 plugin, config, null, economyFacade,
-                databaseManager, redisManager, nameResolver, checkpoint, backup, economyDisabler
+                databaseManager, redisManager, nameResolver, checkpoint, backup, economyDisabler,
+                databaseUseLeaseSupplier
         );
 
         this.localToSyncMigrationTask = new LocalToSyncMigrationTask(
-                plugin, config, economyFacade, databaseManager, redisManager, checkpoint, backup
+                plugin, config, economyFacade, databaseManager, redisManager, checkpoint, backup,
+                databaseUseLeaseSupplier
         );
 
         migrationTask.setProgressCallback(new MigrationTask.MigrationProgressCallback() {
@@ -140,35 +157,89 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        SenderReplyTarget replyTarget = captureReplyTarget(sender);
         if (!sender.hasPermission("syncmoney.admin")) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("general.no-permission"));
+            sendMessage(replyTarget, plugin.getMessage("general.no-permission"));
             return true;
         }
 
         if (args.length < 1) {
-            sendUsage(sender);
+            sendUsage(replyTarget);
             return true;
         }
 
-        String subCommand = args[0].toLowerCase();
-
-        switch (subCommand) {
-            case "cmi" -> handleCMIMigration(sender, args);
-            case "local-to-sync" -> handleLocalToSyncMigration(sender, args);
-            case "status" -> handleStatus(sender);
-            case "stop" -> handleStop(sender);
-            case "resume" -> handleResume(sender);
-            case "clear" -> handleClear(sender);
-            default -> sendUsage(sender);
-        }
+        String[] commandArgs = args.clone();
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            if (!shuttingDown.get()) {
+                dispatchCommand(replyTarget, commandArgs);
+            }
+        });
 
         return true;
+    }
+
+    /** Stops both migration producers before their shared storage dependencies are closed. */
+    public void shutdown() {
+        if (!shuttingDown.compareAndSet(false, true)) {
+            return;
+        }
+        migrationTask.shutdown();
+        localToSyncMigrationTask.stop();
+    }
+
+    private SenderReplyTarget captureReplyTarget(CommandSender sender) {
+        if (sender instanceof Player player) {
+            return new SenderReplyTarget(sender, player, null);
+        }
+        if (sender instanceof BlockCommandSender blockSender) {
+            return new SenderReplyTarget(sender, null, blockSender.getBlock().getLocation().clone());
+        }
+        return new SenderReplyTarget(sender, null, null);
+    }
+
+    private void dispatchCommand(SenderReplyTarget replyTarget, String[] args) {
+        switch (args[0].toLowerCase()) {
+            case "cmi" -> handleCMIMigration(replyTarget, args);
+            case "local-to-sync" -> handleLocalToSyncMigration(replyTarget, args);
+            case "status" -> handleStatus(replyTarget);
+            case "stop" -> handleStop(replyTarget);
+            case "resume" -> handleResume(replyTarget);
+            case "clear" -> handleClear(replyTarget);
+            default -> sendUsage(replyTarget);
+        }
+    }
+
+    private void sendMessage(SenderReplyTarget replyTarget, String message) {
+        if (replyTarget.player() != null) {
+            Player player = replyTarget.player();
+            player.getScheduler().run(plugin, task -> {
+                if (player.isOnline()) {
+                    MessageHelper.sendMessage(player, message);
+                }
+            }, null);
+            return;
+        }
+
+        if (replyTarget.blockLocation() != null) {
+            plugin.getServer().getRegionScheduler().run(plugin, replyTarget.blockLocation(),
+                    task -> MessageHelper.sendMessage(replyTarget.sender(), message));
+            return;
+        }
+
+        plugin.getServer().getGlobalRegionScheduler().run(plugin,
+                task -> MessageHelper.sendMessage(replyTarget.sender(), message));
+    }
+
+    private record SenderReplyTarget(CommandSender sender, Player player, Location blockLocation) {
     }
 
     /**
      * Handles CMI migration.
      */
-    private void handleCMIMigration(CommandSender sender, String[] args) {
+    private void handleCMIMigration(SenderReplyTarget replyTarget, String[] args) {
+        if (shuttingDown.get()) {
+            return;
+        }
         boolean preview = Arrays.asList(args).contains("-preview");
 
         if (cmiReader == null) {
@@ -188,37 +259,40 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         }
 
         if (useMultiServer) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.multi-server-start"));
+            sendMessage(replyTarget, plugin.getMessage("migration.multi-server-start"));
 
             try {
                 cmiMultiServerReader = new CMIMultiServerReader(plugin, config);
                 cmiMultiServerReader.initialize();
+                if (shuttingDown.get()) {
+                    return;
+                }
 
                 if (!cmiMultiServerReader.testConnections()) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.cmi-connection-failed")
+                    sendMessage(replyTarget, plugin.getMessage("migration.cmi-connection-failed")
                             .replace("{error}", "Failed to connect to some databases"));
                     return;
                 }
 
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.multi-server-db-count")
+                sendMessage(replyTarget, plugin.getMessage("migration.multi-server-db-count")
                         .replace("{count}", String.valueOf(cmiMultiServerReader.getDbPaths().size())));
                 for (String path : cmiMultiServerReader.getDbPaths()) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.multi-server-db-path")
+                    sendMessage(replyTarget, plugin.getMessage("migration.multi-server-db-path")
                             .replace("{path}", path));
                 }
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.multi-server-strategy")
+                sendMessage(replyTarget, plugin.getMessage("migration.multi-server-strategy")
                         .replace("{strategy}", cmiMultiServerReader.getMergeStrategy().name()));
 
                 if (preview) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-header"));
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-header"));
                     List<CMIDatabaseReader.CMIPlayerData> players = cmiMultiServerReader.readAndMergePlayers();
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-count")
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-player-count")
                             .replace("{count}", String.valueOf(players.size())));
                     int count = 0;
                     BigDecimal total = BigDecimal.ZERO;
                     for (CMIDatabaseReader.CMIPlayerData p : players) {
                         if (count < 10) {
-                            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-line")
+                            sendMessage(replyTarget, plugin.getMessage("migration.preview-player-line")
                                     .replace("{player}", p.playerName())
                                     .replace("{balance}", p.balance().toString()));
                         }
@@ -226,17 +300,17 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
                         count++;
                     }
                     if (count > 10) {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-more-players")
+                        sendMessage(replyTarget, plugin.getMessage("migration.preview-more-players")
                                 .replace("{count}", String.valueOf(count - 10)));
                     }
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-total")
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-total")
                             .replace("{total}", total.toString()));
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-execute-hint"));
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-execute-hint"));
                     return;
                 }
 
             } catch (Exception e) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.cmi-connection-failed")
+                sendMessage(replyTarget, plugin.getMessage("migration.cmi-connection-failed")
                         .replace("{error}", e.getMessage()));
                 plugin.getLogger().warning("CMI Multi-Server Reader initialization failed: " + e.getMessage());
                 return;
@@ -244,33 +318,36 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         } else {
             try {
                 cmiReader.initialize();
+                if (shuttingDown.get()) {
+                    return;
+                }
 
                 if (preview) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-header"));
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-header"));
                     int totalPlayers = cmiReader.getTotalPlayerCount();
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.single-db-player-count")
+                    sendMessage(replyTarget, plugin.getMessage("migration.single-db-player-count")
                             .replace("{count}", String.valueOf(totalPlayers)));
 
                     List<CMIDatabaseReader.CMIPlayerData> players = cmiReader.readPlayers(0, Math.min(10, totalPlayers));
                     BigDecimal total = BigDecimal.ZERO;
                     for (CMIDatabaseReader.CMIPlayerData p : players) {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-line")
+                        sendMessage(replyTarget, plugin.getMessage("migration.preview-player-line")
                                 .replace("{player}", p.playerName())
                                 .replace("{balance}", p.balance().toString()));
                         total = total.add(p.balance());
                     }
                     if (totalPlayers > 10) {
-                        MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-more-players")
+                        sendMessage(replyTarget, plugin.getMessage("migration.preview-more-players")
                                 .replace("{count}", String.valueOf(totalPlayers - 10)));
                     }
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.single-db-preview-total")
+                    sendMessage(replyTarget, plugin.getMessage("migration.single-db-preview-total")
                             .replace("{total}", total.toString()));
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-execute-hint"));
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-execute-hint"));
                     return;
                 }
 
             } catch (Exception e) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.cmi-connection-failed")
+                sendMessage(replyTarget, plugin.getMessage("migration.cmi-connection-failed")
                         .replace("{error}", e.getMessage()));
                 plugin.getLogger().warning("CMI Reader initialization failed: " + e.getMessage());
                 return;
@@ -281,45 +358,52 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
         boolean backup = !Arrays.asList(args).contains("-no-backup") && config.migration().isMigrationAutoBackup();
 
         if (migrationTask.isRunning()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
+            sendMessage(replyTarget, plugin.getMessage("migration.already-running"));
             return;
         }
 
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.started"));
+        if (shuttingDown.get()) {
+            return;
+        }
+
+        sendMessage(replyTarget, plugin.getMessage("migration.started"));
         migrationTask.start(force, backup, useMultiServer ? cmiMultiServerReader : null);
     }
 
     /**
      * Handles local-to-sync migration.
      */
-    private void handleLocalToSyncMigration(CommandSender sender, String[] args) {
+    private void handleLocalToSyncMigration(SenderReplyTarget replyTarget, String[] args) {
+        if (shuttingDown.get()) {
+            return;
+        }
         boolean preview = Arrays.asList(args).contains("-preview");
         boolean force = Arrays.asList(args).contains("-force");
         boolean backup = !Arrays.asList(args).contains("-no-backup") && config.migration().isMigrationAutoBackup();
 
         if (localToSyncMigrationTask.isRunning()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
+            sendMessage(replyTarget, plugin.getMessage("migration.already-running"));
             return;
         }
 
         if (preview) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-header"));
+            sendMessage(replyTarget, plugin.getMessage("migration.preview-header"));
             LocalToSyncMigrationTask.PreviewResult result = localToSyncMigrationTask.preview();
 
             if (result == null) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-no-data"));
+                sendMessage(replyTarget, plugin.getMessage("migration.preview-no-data"));
                 return;
             }
 
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-count")
+            sendMessage(replyTarget, plugin.getMessage("migration.preview-player-count")
                     .replace("{count}", String.valueOf(result.playerCount())));
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-total")
+            sendMessage(replyTarget, plugin.getMessage("migration.preview-total")
                     .replace("{total}", result.totalBalance().toString()));
 
             int count = 0;
             for (LocalToSyncMigrationTask.LocalPlayerData player : result.samplePlayers()) {
                 if (count < 10) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-player-line")
+                    sendMessage(replyTarget, plugin.getMessage("migration.preview-player-line")
                             .replace("{player}", player.name() != null ? player.name() : player.uuid().toString())
                             .replace("{balance}", player.balance().toString()));
                 }
@@ -327,49 +411,52 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
             }
 
             if (result.playerCount() > 10) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-more-players")
+                sendMessage(replyTarget, plugin.getMessage("migration.preview-more-players")
                         .replace("{count}", String.valueOf(result.playerCount() - 10)));
             }
 
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.preview-execute-hint"));
+            sendMessage(replyTarget, plugin.getMessage("migration.preview-execute-hint"));
             return;
         }
 
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.local-to-sync-started"));
+        if (shuttingDown.get()) {
+            return;
+        }
+        sendMessage(replyTarget, plugin.getMessage("migration.local-to-sync-started"));
         localToSyncMigrationTask.start(force, backup);
     }
 
     /**
      * Handles status query.
      */
-    private void handleStatus(CommandSender sender) {
+    private void handleStatus(SenderReplyTarget replyTarget) {
         MigrationCheckpoint.MigrationState state = checkpoint.getState();
 
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-state")
+        sendMessage(replyTarget, plugin.getMessage("migration.status-header"));
+        sendMessage(replyTarget, plugin.getMessage("migration.status-state")
                 .replace("{state}", getStateColor(state) + state.name()));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-total-players")
+        sendMessage(replyTarget, plugin.getMessage("migration.status-total-players")
                 .replace("{count}", String.valueOf(checkpoint.getTotalPlayers())));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-migrated")
+        sendMessage(replyTarget, plugin.getMessage("migration.status-migrated")
                 .replace("{count}", String.valueOf(checkpoint.getMigratedCount())));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-failed")
+        sendMessage(replyTarget, plugin.getMessage("migration.status-failed")
                 .replace("{count}", String.valueOf(checkpoint.getFailedCount())));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-progress")
+        sendMessage(replyTarget, plugin.getMessage("migration.status-progress")
                 .replace("{percent}", FormatUtil.formatPercentRaw(checkpoint.getProgressPercent())));
 
         if (checkpoint.getStartTime() != null) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-start-time")
+            sendMessage(replyTarget, plugin.getMessage("migration.status-start-time")
                     .replace("{time}", checkpoint.getStartTime().toString()));
         }
 
         if (checkpoint.getEstimatedRemainingSeconds() > 0) {
             long seconds = checkpoint.getEstimatedRemainingSeconds();
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-remaining")
+            sendMessage(replyTarget, plugin.getMessage("migration.status-remaining")
                     .replace("{seconds}", String.valueOf(seconds)));
         }
 
         if (!checkpoint.getFailures().isEmpty()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.status-failures")
+            sendMessage(replyTarget, plugin.getMessage("migration.status-failures")
                     .replace("{count}", String.valueOf(checkpoint.getFailures().size())));
         }
     }
@@ -377,53 +464,65 @@ public final class MigrationCommand implements CommandExecutor, TabCompleter {
     /**
      * Handles stop migration.
      */
-    private void handleStop(CommandSender sender) {
-        if (!migrationTask.isRunning()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.not-running"));
+    private void handleStop(SenderReplyTarget replyTarget) {
+        boolean stopped = false;
+        if (migrationTask.isRunning()) {
+            migrationTask.stop();
+            stopped = true;
+        }
+        if (localToSyncMigrationTask.isRunning()) {
+            stopped = localToSyncMigrationTask.stop() || stopped;
+        }
+        if (!stopped) {
+            sendMessage(replyTarget, plugin.getMessage("migration.not-running"));
             return;
         }
 
-        migrationTask.stop();
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.stopped"));
+        sendMessage(replyTarget, plugin.getMessage("migration.stop-requested"));
     }
 
     /**
      * Handles resume migration.
      */
-    private void handleResume(CommandSender sender) {
+    private void handleResume(SenderReplyTarget replyTarget) {
         if (migrationTask.isRunning() || localToSyncMigrationTask.isRunning()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.already-running"));
+            sendMessage(replyTarget, plugin.getMessage("migration.already-running"));
             return;
         }
 
         if (!migrationTask.resume()) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("migration.error")
+            sendMessage(replyTarget, plugin.getMessage("migration.error")
                     .replace("{error}", "Could not safely resume migration; check the server log"));
             return;
         }
 
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.resuming"));
+        sendMessage(replyTarget, plugin.getMessage("migration.resuming"));
     }
 
     /**
      * Handles checkpoint clearing.
      */
-    private void handleClear(CommandSender sender) {
+    private void handleClear(SenderReplyTarget replyTarget) {
+        if (migrationTask.isRunning() || localToSyncMigrationTask.isRunning()) {
+            sendMessage(replyTarget, plugin.getMessage("migration.already-running"));
+            return;
+        }
+
         checkpoint.clear();
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.cleared"));
+        sendMessage(replyTarget, plugin.getMessage("migration.cleared"));
     }
 
     /**
      * Sends usage instructions.
      */
-    private void sendUsage(CommandSender sender) {
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-cmi"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-local-to-sync"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-status"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-resume"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-stop"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("migration.usage-clear"));
+    private void sendUsage(SenderReplyTarget replyTarget) {
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-header"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-cmi"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-local-to-sync"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-status"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-resume"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-stop"));
+        sendMessage(replyTarget, plugin.getMessage("migration.usage-clear"));
     }
 
     /**

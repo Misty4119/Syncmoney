@@ -2,6 +2,7 @@ package noietime.syncmoney.storage;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.protocol.RedisKeys;
+import noietime.syncmoney.protocol.RedisOperationFingerprint;
 import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
@@ -28,10 +29,35 @@ import java.util.UUID;
  */
 public final class CacheManager {
 
+    public enum OperationStatus { APPLIED, REJECTED, IN_FLIGHT, COLLISION }
+
+    public record ReceiptAccount(UUID playerUuid, BigDecimal balance, long version, boolean present) {
+        public ReceiptAccount {
+            Objects.requireNonNull(playerUuid, "playerUuid");
+            if (present && (balance == null || version < 0L)) {
+                throw new IllegalArgumentException("present receipt accounts require a balance and non-negative version");
+            }
+            if (!present && (balance != null || version != -1L)) {
+                throw new IllegalArgumentException("absent receipt accounts must not carry a balance or version");
+            }
+        }
+    }
+
+    public record OperationReceipt(String operationId, String fingerprint, OperationStatus status,
+            String reason, List<ReceiptAccount> accounts) {
+        public OperationReceipt {
+            Objects.requireNonNull(operationId, "operationId");
+            Objects.requireNonNull(fingerprint, "fingerprint");
+            Objects.requireNonNull(status, "status");
+            accounts = List.copyOf(Objects.requireNonNull(accounts, "accounts"));
+        }
+    }
+
     /**
      * [TASK-444 FIX] Maximum cache size for LRU eviction.
      */
     private static final int MAX_CACHE_SIZE = 10000;
+    private static final int LEGACY_OPERATION_RECEIPT_TTL_SECONDS = 300;
 
     private final RedisManager redisManager;
     private final Plugin plugin;
@@ -43,6 +69,7 @@ public final class CacheManager {
     private final Map<UUID, CachedBalance> memoryCache;
 
     private final boolean redisRequired;
+    private final boolean pairedTransfersEnabled;
 
     private volatile String atomicSetBalanceSha;
     private volatile String atomicAddBalanceSha;
@@ -59,9 +86,15 @@ public final class CacheManager {
     private final int expirationMinutes = Constants.DEFAULT_EXPIRATION_MINUTES;
 
     public CacheManager(Plugin plugin, RedisManager redisManager, boolean redisRequired) {
+        this(plugin, redisManager, redisRequired, false);
+    }
+
+    CacheManager(Plugin plugin, RedisManager redisManager, boolean redisRequired,
+            boolean pairedTransfersEnabled) {
         this.plugin = plugin;
         this.redisManager = redisManager;
         this.redisRequired = redisRequired;
+        this.pairedTransfersEnabled = pairedTransfersEnabled;
 
 
         this.memoryCache = Collections.synchronizedMap(
@@ -176,14 +209,15 @@ public final class CacheManager {
     public BigDecimal getBalance(UUID uuid) {
         CachedBalance cached = memoryCache.get(uuid);
         if (cached != null && !cached.isExpired(expirationMinutes)) {
-            cacheHits.incrementAndGet();
-
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
-                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
-            return cached.balance();
+            CachedBalance refreshed = touchCurrentCacheEntry(uuid);
+            if (refreshed != null && !refreshed.isExpired(expirationMinutes)) {
+                cacheHits.incrementAndGet();
+                return refreshed.balance();
+            }
         }
 
         cacheMisses.incrementAndGet();
+        CachedBalance cachedAtReadStart = memoryCache.get(uuid);
 
         try (var jedis = redisManager.getResource()) {
             List<String> values = jedis.mget(RedisKeys.balance(uuid), RedisKeys.version(uuid));
@@ -195,14 +229,19 @@ public final class CacheManager {
             if (balanceStr == null && versionStr != null) {
                 throw new IllegalStateException("Redis account version exists without a balance");
             }
+            if (balanceStr == null) {
+                clearCachedAccountIfUnchanged(uuid, cachedAtReadStart);
+                CachedBalance refreshed = memoryCache.get(uuid);
+                if (refreshed != null && !refreshed.isExpired(expirationMinutes)) {
+                    return refreshed.balance();
+                }
+                return rememberConfirmedSnapshot(uuid, BigDecimal.ZERO, 0L, false).balance();
+            }
             BigDecimal balance = balanceStr != null ?
                 NumericUtil.normalize(balanceStr) :
                 BigDecimal.ZERO;
             long version = versionStr != null ? Long.parseLong(versionStr) : 0L;
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
-                    balance, version, System.currentTimeMillis(), balanceStr != null));
-
-            return balance;
+            return rememberConfirmedSnapshot(uuid, balance, version, true).balance();
         } catch (Exception e) {
             return BigDecimal.ZERO;
         }
@@ -214,15 +253,20 @@ public final class CacheManager {
     public long getVersion(UUID uuid) {
         CachedBalance cached = memoryCache.get(uuid);
         if (cached != null && !cached.isExpired(expirationMinutes)) {
-
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
-                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
-            return cached.version();
+            CachedBalance refreshed = touchCurrentCacheEntry(uuid);
+            if (refreshed != null && !refreshed.isExpired(expirationMinutes)) {
+                return refreshed.version();
+            }
         }
 
         try (var jedis = redisManager.getResource()) {
             String versionStr = jedis.get(RedisKeys.version(uuid));
-            return versionStr != null ? Long.parseLong(versionStr) : 0L;
+            long observedVersion = versionStr != null ? Long.parseLong(versionStr) : 0L;
+            CachedBalance refreshed = memoryCache.get(uuid);
+            return refreshed != null && !refreshed.isExpired(expirationMinutes)
+                    && refreshed.version() > observedVersion
+                    ? refreshed.version()
+                    : observedVersion;
         } catch (Exception e) {
             plugin.getLogger().warning("Failed to get version for " + uuid + ": " + e.getMessage());
             return 0L;
@@ -293,24 +337,47 @@ public final class CacheManager {
 
     /** Apply a set and return the exact balance/version pair returned by this mutation. */
     public ConfirmedAccount atomicSetBalanceReceipt(UUID uuid, BigDecimal newBalance) {
-        if (atomicSetBalanceSha == null) {
+        return atomicSetBalanceReceipt(uuid, newBalance, legacyOperationId(),
+                LEGACY_OPERATION_RECEIPT_TTL_SECONDS);
+    }
+
+    /** Apply or replay a set using its stable recovery operation ID. */
+    public ConfirmedAccount atomicSetBalanceReceipt(UUID uuid, BigDecimal newBalance, String operationId) {
+        return atomicSetBalanceReceipt(uuid, newBalance, operationId, 0);
+    }
+
+    private ConfirmedAccount atomicSetBalanceReceipt(UUID uuid, BigDecimal newBalance, String operationId,
+            int receiptTtlSeconds) {
+        if (atomicSetBalanceSha == null && !redisRequired) {
             plugin.getLogger().severe("Lua script atomicSetBalance not loaded! Mode: "
                     + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
-            throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
+            throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                    "Lua script atomicSetBalance was unavailable before mutation", null);
         }
 
         String keyBalance = RedisKeys.balance(uuid);
         String keyVersion = RedisKeys.version(uuid);
         BigDecimal confirmedBalance = NumericUtil.normalize(newBalance);
+        String fingerprint = RedisOperationFingerprint.set(uuid, confirmedBalance);
+        String receiptKey = RedisKeys.operationReceipt(operationId);
 
         Jedis resource = acquireRedisResource("atomic set");
         if (resource == null) return null;
         try (var jedis = resource) {
             Object result = evalScriptWithNoscriptReload(jedis, atomicSetBalanceSha, atomicSetBalanceScript,
-                    2, new String[] {keyVersion, keyBalance, confirmedBalance.toPlainString()},
+                    3, new String[] {keyVersion, keyBalance, receiptKey,
+                            confirmedBalance.toPlainString(), fingerprint, Integer.toString(receiptTtlSeconds)},
                     sha -> atomicSetBalanceSha = sha);
-            long confirmedVersion = Long.parseLong(result.toString());
-            ConfirmedAccount confirmed = new ConfirmedAccount(uuid, confirmedBalance, confirmedVersion);
+            OperationReceipt receipt = parseOperationReceipt(result, operationId, fingerprint, List.of(uuid));
+            if (receipt.status() == OperationStatus.REJECTED) {
+                throw rejected("Redis explicitly rejected atomic set: " + receipt.reason(), null);
+            }
+            if (receipt.status() != OperationStatus.APPLIED || receipt.accounts().size() != 1
+                    || !receipt.accounts().get(0).present()) {
+                throw sentUnknown("Redis atomic set returned an incomplete operation receipt", null);
+            }
+            ReceiptAccount account = receipt.accounts().get(0);
+            ConfirmedAccount confirmed = new ConfirmedAccount(uuid, account.balance(), account.version());
             rememberConfirmedAccount(confirmed);
             return confirmed;
         } catch (RedisMutationException e) {
@@ -326,6 +393,105 @@ public final class CacheManager {
         }
     }
 
+    /** Reads an exact stored operation receipt; callers must use this on an async thread. */
+    public Optional<OperationReceipt> readOperationReceipt(String operationId, String expectedFingerprint,
+            List<UUID> accountUuids) {
+        String key = RedisKeys.operationReceipt(operationId);
+        try (Jedis jedis = redisManager.getResource()) {
+            String raw = jedis.get(key);
+            if (raw == null) return Optional.empty();
+            return Optional.of(parseOperationReceipt(raw, operationId, expectedFingerprint, accountUuids));
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IllegalStateException("Failed to read Redis operation receipt " + operationId, failure);
+        }
+    }
+
+    /** Removes only a completed receipt after its local recovery checkpoint has been durably acknowledged. */
+    public boolean acknowledgeOperationReceipt(String operationId) {
+        String key = RedisKeys.operationReceipt(operationId);
+        try (Jedis jedis = redisManager.getResource()) {
+            String raw = jedis.get(key);
+            if (raw == null) return true;
+            String[] fields = raw.split("\\|", -1);
+            if (fields.length < 5 || !"v1".equals(fields[0])
+                    || !fields[1].matches("[0-9a-f]{64}")
+                    || !("APPLIED".equals(fields[2]) || "REJECTED".equals(fields[2]))) {
+                return false;
+            }
+            return jedis.del(key) == 1L;
+        } catch (Exception failure) {
+            plugin.getLogger().warning("Could not retire acknowledged Redis operation receipt " + operationId
+                    + ": " + failure.getMessage());
+            return false;
+        }
+    }
+
+    private OperationReceipt parseOperationReceipt(Object rawResult, String operationId,
+            String expectedFingerprint, List<UUID> accountUuids) {
+        if (rawResult == null || expectedFingerprint == null || accountUuids == null) {
+            throw new IllegalArgumentException("An operation receipt requires result, fingerprint, and account IDs");
+        }
+        return parseOperationReceipt(rawResult.toString(), operationId, expectedFingerprint, accountUuids);
+    }
+
+    private OperationReceipt parseOperationReceipt(String raw, String operationId,
+            String expectedFingerprint, List<UUID> accountUuids) {
+        String[] fields = raw.split("\\|", -1);
+        if (fields.length < 5 || !"v1".equals(fields[0])
+                || !fields[1].matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("Redis returned a malformed operation receipt");
+        }
+        if (!fields[1].equals(expectedFingerprint)) {
+            return new OperationReceipt(operationId, fields[1], OperationStatus.COLLISION,
+                    "OPERATION_ID_COLLISION", List.of());
+        }
+
+        OperationStatus status;
+        try {
+            status = OperationStatus.valueOf(fields[2]);
+        } catch (IllegalArgumentException invalidStatus) {
+            throw new IllegalArgumentException("Redis returned an unknown operation receipt state", invalidStatus);
+        }
+        String reason = "-".equals(fields[3]) ? null : fields[3];
+        int accountCount;
+        try {
+            accountCount = Integer.parseInt(fields[4]);
+        } catch (NumberFormatException invalidCount) {
+            throw new IllegalArgumentException("Redis returned an invalid operation receipt account count", invalidCount);
+        }
+        if (accountCount < 0 || accountCount > accountUuids.size()
+                || fields.length != 5 + accountCount * 2
+                || status == OperationStatus.IN_FLIGHT && accountCount != 0
+                || status == OperationStatus.APPLIED && accountCount != accountUuids.size()) {
+            throw new IllegalArgumentException("Redis returned an incomplete operation receipt");
+        }
+
+        List<ReceiptAccount> accounts = new ArrayList<>(accountCount);
+        for (int index = 0; index < accountCount; index++) {
+            String balance = fields[5 + index * 2];
+            String version = fields[6 + index * 2];
+            if ("~".equals(balance) && "-1".equals(version)) {
+                accounts.add(new ReceiptAccount(accountUuids.get(index), null, -1L, false));
+                continue;
+            }
+            try {
+                BigDecimal parsedBalance = new BigDecimal(balance);
+                long parsedVersion = Long.parseLong(version);
+                accounts.add(new ReceiptAccount(accountUuids.get(index), parsedBalance, parsedVersion, true));
+            } catch (RuntimeException invalidAccount) {
+                throw new IllegalArgumentException("Redis returned an invalid account in its operation receipt",
+                        invalidAccount);
+            }
+        }
+        return new OperationReceipt(operationId, fields[1], status, reason, accounts);
+    }
+
+    private static String legacyOperationId() {
+        return "legacy:" + UUID.randomUUID();
+    }
+
     private Jedis acquireRedisResource(String operation) {
         try {
             return redisManager.getResource();
@@ -338,6 +504,20 @@ public final class CacheManager {
 
     private Object evalScriptWithNoscriptReload(Jedis jedis, String sha, String script,
             int keyCount, String[] parameters, java.util.function.Consumer<String> shaUpdater) {
+        if (sha == null || sha.isBlank()) {
+            try {
+                String loadedSha = jedis.scriptLoad(script);
+                if (loadedSha == null || loadedSha.isBlank()) {
+                    throw new IllegalStateException("Redis returned an empty script SHA");
+                }
+                shaUpdater.accept(loadedSha);
+                sha = loadedSha;
+            } catch (Exception loadFailure) {
+                throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                        "Redis script load failed before mutation", loadFailure);
+            }
+        }
+
         try {
             return jedis.evalsha(sha, keyCount, parameters);
         } catch (JedisNoScriptException missingScript) {
@@ -376,9 +556,14 @@ public final class CacheManager {
                 || message.contains("NEGATIVE_BALANCE")
                 || message.contains("INVALID_KEY_TYPE")
                 || message.contains("INVALID_BALANCE")
+                || message.contains("INVALID_ACCOUNT_STATE")
+                || message.contains("INVALID_INITIALIZATION_MODE")
                 || message.contains("INVALID_VERSION")
                 || message.contains("VERSION_OVERFLOW")
-                || message.contains("SELF_TRANSFER");
+                || message.contains("ACCOUNT_MISSING")
+                || message.contains("ACCOUNT_APPEARED")
+                || message.contains("SELF_TRANSFER")
+                || message.contains("OPERATION_ID_COLLISION");
     }
 
     private RedisMutationException sentUnknown(String message, Throwable cause) {
@@ -410,45 +595,76 @@ public final class CacheManager {
 
     /** Apply an add and retain the balance/version pair returned by the same Lua execution. */
     public ConfirmedAccount atomicAddBalanceReceipt(UUID uuid, BigDecimal amount) {
-        if (atomicAddBalanceSha == null) {
+        return atomicAddBalanceReceipt(uuid, amount, "ALLOW_ABSENT", legacyOperationId(),
+                LEGACY_OPERATION_RECEIPT_TTL_SECONDS);
+    }
+
+    /** Apply or replay an add using its stable recovery operation ID. */
+    public ConfirmedAccount atomicAddBalanceReceipt(UUID uuid, BigDecimal amount, String operationId) {
+        return atomicAddBalanceReceipt(uuid, amount, "ALLOW_ABSENT", operationId, 0);
+    }
+
+    /** Apply an add only if the account pair was present when the caller read Redis. */
+    public ConfirmedAccount atomicAddBalanceReceiptRequireExisting(UUID uuid, BigDecimal amount) {
+        return atomicAddBalanceReceipt(uuid, amount, "REQUIRE_EXISTING", legacyOperationId(),
+                LEGACY_OPERATION_RECEIPT_TTL_SECONDS);
+    }
+
+    public ConfirmedAccount atomicAddBalanceReceiptRequireExisting(UUID uuid, BigDecimal amount, String operationId) {
+        return atomicAddBalanceReceipt(uuid, amount, "REQUIRE_EXISTING", operationId, 0);
+    }
+
+    /** Initialize an account only while both Redis keys remain absent. */
+    public ConfirmedAccount atomicAddBalanceReceiptRequireAbsent(UUID uuid, BigDecimal amount) {
+        return atomicAddBalanceReceipt(uuid, amount, "REQUIRE_ABSENT", legacyOperationId(),
+                LEGACY_OPERATION_RECEIPT_TTL_SECONDS);
+    }
+
+    public ConfirmedAccount atomicAddBalanceReceiptRequireAbsent(UUID uuid, BigDecimal amount, String operationId) {
+        return atomicAddBalanceReceipt(uuid, amount, "REQUIRE_ABSENT", operationId, 0);
+    }
+
+    private ConfirmedAccount atomicAddBalanceReceipt(UUID uuid, BigDecimal amount, String accountPolicy,
+            String operationId, int receiptTtlSeconds) {
+        if (atomicAddBalanceSha == null && !redisRequired) {
             plugin.getLogger().severe("Lua script atomicAddBalance not loaded! Mode: "
                     + (redisRequired ? "CROSS_SERVER" : "LOCAL"));
-            throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
+            throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                    "Lua script atomicAddBalance was unavailable before mutation", null);
         }
 
         String keyBalance = RedisKeys.balance(uuid);
         String keyVersion = RedisKeys.version(uuid);
         BigDecimal normalizedAmount = NumericUtil.normalize(amount);
+        String fingerprint = RedisOperationFingerprint.add(uuid, normalizedAmount);
+        String receiptKey = RedisKeys.operationReceipt(operationId);
 
         Jedis resource = acquireRedisResource("atomic add");
         if (resource == null) return null;
         try (var jedis = resource) {
             Object result = evalScriptWithNoscriptReload(jedis, atomicAddBalanceSha, atomicAddBalanceScript,
-                    2, new String[] {keyBalance, keyVersion, normalizedAmount.toPlainString()},
+                    3, new String[] {keyBalance, keyVersion, receiptKey,
+                            normalizedAmount.toPlainString(), accountPolicy, fingerprint,
+                            Integer.toString(receiptTtlSeconds)},
                     sha -> atomicAddBalanceSha = sha);
-            if (result instanceof List<?> values) {
-                if (values.size() < 2) {
-                    throw sentUnknown("Lua add returned an incomplete authority receipt", null);
-                }
-                BigDecimal confirmedBalance = NumericUtil.normalize(values.get(0).toString());
-                long confirmedVersion = Long.parseLong(values.get(1).toString());
-                ConfirmedAccount confirmed = new ConfirmedAccount(uuid, confirmedBalance, confirmedVersion);
-                rememberConfirmedAccount(confirmed);
-                return confirmed;
+            OperationReceipt receipt = parseOperationReceipt(result, operationId, fingerprint, List.of(uuid));
+            if (receipt.status() == OperationStatus.REJECTED) {
+                throw rejected("Redis explicitly rejected atomic add: " + receipt.reason(), null);
             }
-            if (result instanceof String errorMessage) {
-                if (isKnownNoMutationError(errorMessage)) {
-                    throw rejected("Redis explicitly rejected atomic add without mutation: " + errorMessage, null);
-                }
-                throw sentUnknown("Lua add returned an unrecognized error response", null);
+            if (receipt.status() != OperationStatus.APPLIED || receipt.accounts().size() != 1
+                    || !receipt.accounts().get(0).present()) {
+                throw sentUnknown("Lua add returned an incomplete authority receipt", null);
             }
-            throw sentUnknown("Lua add returned an invalid authority receipt", null);
+            ReceiptAccount account = receipt.accounts().get(0);
+            ConfirmedAccount confirmed = new ConfirmedAccount(uuid, account.balance(), account.version());
+            rememberConfirmedAccount(confirmed);
+            return confirmed;
         } catch (RedisMutationException e) {
             throw e;
         } catch (JedisDataException e) {
             if (isKnownNoMutationError(e.getMessage())) {
                 plugin.getLogger().warning("Redis rejected atomic add for " + uuid + ": " + e.getMessage());
-                throw rejected("Redis explicitly rejected atomic add without mutation", e);
+                throw rejected("Redis explicitly rejected atomic add without mutation: " + e.getMessage(), e);
             }
             throw sentUnknown("Redis atomic add outcome is unknown for " + uuid, e);
         } catch (Exception e) {
@@ -456,14 +672,19 @@ public final class CacheManager {
         }
     }
     public java.util.Optional<CachedBalance> getBalanceSnapshotStrict(UUID uuid) {
-        CachedBalance cached = memoryCache.get(uuid);
+        CachedBalance cached = memoryCache.computeIfPresent(uuid, (key, current) -> {
+            if (current.accountPresent() && !current.isExpired(expirationMinutes)) {
+                return new CachedBalance(
+                        current.balance(), current.version(), System.currentTimeMillis(), current.accountPresent());
+            }
+            return current;
+        });
         if (cached != null && cached.accountPresent() && !cached.isExpired(expirationMinutes)) {
             cacheHits.incrementAndGet();
-            memoryCache.compute(uuid, (k, v) -> new CachedBalance(
-                    cached.balance(), cached.version(), System.currentTimeMillis(), cached.accountPresent()));
             return java.util.Optional.of(cached);
         }
 
+        CachedBalance cachedAtReadStart = memoryCache.get(uuid);
         cacheMisses.incrementAndGet();
         try (var jedis = redisManager.getResource()) {
             List<String> values = jedis.mget(RedisKeys.balance(uuid), RedisKeys.version(uuid));
@@ -473,6 +694,12 @@ public final class CacheManager {
             String balanceStr = values.get(0);
             String versionStr = values.get(1);
             if (balanceStr == null && versionStr == null) {
+                clearCachedAccountIfUnchanged(uuid, cachedAtReadStart);
+                CachedBalance refreshed = memoryCache.get(uuid);
+                if (refreshed != null && refreshed.accountPresent()
+                        && !refreshed.isExpired(expirationMinutes)) {
+                    return java.util.Optional.of(refreshed);
+                }
                 return java.util.Optional.empty();
             }
             if (balanceStr == null) {
@@ -481,8 +708,8 @@ public final class CacheManager {
             BigDecimal balance = NumericUtil.normalize(balanceStr);
             long version = versionStr != null ? Long.parseLong(versionStr) : 0L;
             CachedBalance snapshot = new CachedBalance(balance, version);
-            memoryCache.compute(uuid, (k, v) -> snapshot);
-            return java.util.Optional.of(snapshot);
+            return java.util.Optional.of(rememberConfirmedAccount(
+                    new ConfirmedAccount(uuid, snapshot.balance(), snapshot.version())));
         }
     }
 
@@ -572,12 +799,28 @@ public final class CacheManager {
      * @param fromUuid Sender's UUID
      * @param toUuid Receiver's UUID
      * @param amount Amount to transfer
-     * @return TransferResult with new balances and versions
+     * @return TransferResult with new balances and versions, or {@code null} when paired transfers are disabled
      */
     public TransferResult atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount) {
-        if (atomicTransferSha == null) {
+        return atomicTransfer(fromUuid, toUuid, amount, legacyOperationId(),
+                LEGACY_OPERATION_RECEIPT_TTL_SECONDS);
+    }
+
+    /** Apply or replay a paired transfer using its stable recovery operation ID. */
+    public TransferResult atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount, String operationId) {
+        return atomicTransfer(fromUuid, toUuid, amount, operationId, 0);
+    }
+
+    private TransferResult atomicTransfer(UUID fromUuid, UUID toUuid, BigDecimal amount,
+            String operationId, int receiptTtlSeconds) {
+        if (!pairedTransfersEnabled) {
+            plugin.getLogger().warning("Atomic transfer rejected because paired transfers are disabled for this economy mode");
+            return null;
+        }
+        if (atomicTransferSha == null && !redisRequired) {
             plugin.getLogger().severe("Lua script atomicTransfer not loaded!");
-            throw new IllegalStateException("Lua script not available. Please check economy mode configuration.");
+            throw new RedisMutationException(RedisMutationException.ExecutionState.NOT_SENT,
+                    "Lua script atomicTransfer was unavailable before mutation", null);
         }
 
         String fromBalanceKey = RedisKeys.balance(fromUuid);
@@ -586,6 +829,8 @@ public final class CacheManager {
         String toVersionKey = RedisKeys.version(toUuid);
 
         amount = NumericUtil.normalize(amount);
+        String fingerprint = RedisOperationFingerprint.transfer(fromUuid, toUuid, amount);
+        String receiptKey = RedisKeys.operationReceipt(operationId);
 
         Jedis resource = acquireRedisResource("atomic transfer");
         if (resource == null) {
@@ -594,37 +839,24 @@ public final class CacheManager {
         }
         try (var jedis = resource) {
             Object result = evalScriptWithNoscriptReload(jedis, atomicTransferSha, atomicTransferScript,
-                    4, new String[] {fromBalanceKey, fromVersionKey, toBalanceKey, toVersionKey,
-                            amount.toPlainString()},
+                    5, new String[] {fromBalanceKey, fromVersionKey, toBalanceKey, toVersionKey,
+                            receiptKey, amount.toPlainString(), fingerprint, Integer.toString(receiptTtlSeconds)},
                     sha -> atomicTransferSha = sha);
-
-            if (result instanceof java.util.List) {
-                @SuppressWarnings("unchecked")
-                var list = (java.util.List<?>) result;
-                if (list.size() < 4) {
-                    throw sentUnknown("Lua transfer returned an incomplete authority receipt", null);
-                }
-
-                BigDecimal fromNewBalance = NumericUtil.normalize(list.get(0).toString());
-                BigDecimal toNewBalance = NumericUtil.normalize(list.get(1).toString());
-                long fromNewVersion = Long.parseLong(list.get(2).toString());
-                long toNewVersion = Long.parseLong(list.get(3).toString());
-
-                memoryCache.compute(fromUuid, (k, v) -> new CachedBalance(fromNewBalance, fromNewVersion));
-                memoryCache.compute(toUuid, (k, v) -> new CachedBalance(toNewBalance, toNewVersion));
-
-                return new TransferResult(fromNewBalance, toNewBalance, fromNewVersion, toNewVersion);
-            } else if (result instanceof String) {
-                String errorMsg = result.toString();
-                if (isKnownNoMutationError(errorMsg)) {
-                    if (errorMsg.contains("INSUFFICIENT_FUNDS")) return TransferResult.insufficientFunds();
-                    throw rejected("Redis explicitly rejected atomic transfer without mutation: " + errorMsg,
-                            null);
-                }
-                throw sentUnknown("Lua transfer returned an unrecognized error response", null);
+            OperationReceipt receipt = parseOperationReceipt(result, operationId, fingerprint,
+                    List.of(fromUuid, toUuid));
+            if (receipt.status() == OperationStatus.REJECTED) {
+                if ("INSUFFICIENT_FUNDS".equals(receipt.reason())) return TransferResult.insufficientFunds();
+                throw rejected("Redis explicitly rejected atomic transfer: " + receipt.reason(), null);
             }
-
-            throw sentUnknown("Lua transfer returned an invalid authority receipt", null);
+            if (receipt.status() != OperationStatus.APPLIED || receipt.accounts().size() != 2
+                    || !receipt.accounts().get(0).present() || !receipt.accounts().get(1).present()) {
+                throw sentUnknown("Lua transfer returned an incomplete authority receipt", null);
+            }
+            ReceiptAccount from = receipt.accounts().get(0);
+            ReceiptAccount to = receipt.accounts().get(1);
+            rememberConfirmedAccount(new ConfirmedAccount(fromUuid, from.balance(), from.version()));
+            rememberConfirmedAccount(new ConfirmedAccount(toUuid, to.balance(), to.version()));
+            return new TransferResult(from.balance(), to.balance(), from.version(), to.version());
         } catch (RedisMutationException e) {
             throw e;
         } catch (JedisDataException e) {
@@ -721,6 +953,7 @@ public final class CacheManager {
         public final long toNewVersion;
         public final boolean fromAccountPresent;
         public final boolean toAccountPresent;
+        public final String operationId;
 
         private static final TransferResult INSUFFICIENT_FUNDS_INSTANCE =
                 new TransferResult(null, null, -1, -1, false, false);
@@ -737,12 +970,23 @@ public final class CacheManager {
 
         public TransferResult(BigDecimal fromBalance, BigDecimal toBalance, long fromVersion, long toVersion,
                 boolean fromAccountPresent, boolean toAccountPresent) {
+            this(fromBalance, toBalance, fromVersion, toVersion, fromAccountPresent, toAccountPresent, null);
+        }
+
+        public TransferResult(BigDecimal fromBalance, BigDecimal toBalance, long fromVersion, long toVersion,
+                boolean fromAccountPresent, boolean toAccountPresent, String operationId) {
             this.fromNewBalance = fromBalance;
             this.toNewBalance = toBalance;
             this.fromNewVersion = fromVersion;
             this.toNewVersion = toVersion;
             this.fromAccountPresent = fromAccountPresent;
             this.toAccountPresent = toAccountPresent;
+            this.operationId = operationId;
+        }
+
+        public TransferResult withOperationId(String operationId) {
+            return new TransferResult(fromNewBalance, toNewBalance, fromNewVersion, toNewVersion,
+                    fromAccountPresent, toAccountPresent, operationId);
         }
     }
 
@@ -762,9 +1006,29 @@ public final class CacheManager {
         return updated[0];
     }
 
+    private CachedBalance touchCurrentCacheEntry(UUID uuid) {
+        long now = System.currentTimeMillis();
+        return memoryCache.computeIfPresent(uuid, (key, current) -> new CachedBalance(
+                current.balance(), current.version(), now, current.accountPresent()));
+    }
+
+    private CachedBalance rememberConfirmedSnapshot(UUID uuid, BigDecimal balance, long version,
+            boolean accountPresent) {
+        if (accountPresent) {
+            return rememberConfirmedAccount(new ConfirmedAccount(uuid, balance, version));
+        }
+        long now = System.currentTimeMillis();
+        return memoryCache.compute(uuid, (key, existing) -> {
+            if (existing != null && existing.version() >= version) {
+                return existing;
+            }
+            return new CachedBalance(balance, version, now, false);
+        });
+    }
+
     /** Remember a confirmed Redis pair without letting a delayed response regress this node's cache. */
-    private void rememberConfirmedAccount(ConfirmedAccount confirmed) {
-        memoryCache.compute(confirmed.playerUuid(), (key, existing) -> {
+    private CachedBalance rememberConfirmedAccount(ConfirmedAccount confirmed) {
+        return memoryCache.compute(confirmed.playerUuid(), (key, existing) -> {
             if (existing != null && existing.version() > confirmed.version()) {
                 return existing;
             }
@@ -818,21 +1082,11 @@ public final class CacheManager {
             return false;
         }
 
-        try (var jedis = redisManager.getResource()) {
-            String keyBalance = RedisKeys.balance(uuid);
-            String keyVersion = RedisKeys.version(uuid);
-
-
-            Object result = evalScriptWithNoscriptReload(jedis, atomicSetBalanceSha, atomicSetBalanceScript,
-                    2, new String[] {keyVersion, keyBalance, balance.toPlainString()},
-                    sha -> atomicSetBalanceSha = sha);
-
-            long newVersion = Long.parseLong(result.toString());
-
-
-            memoryCache.put(uuid, new CachedBalance(balance, newVersion));
-
-            plugin.getLogger().info("Force sync to Redis successful for " + uuid + ": " + balance + " (version: " + newVersion + ")");
+        try {
+            ConfirmedAccount receipt = atomicSetBalanceReceipt(uuid, balance);
+            if (receipt == null) return false;
+            plugin.getLogger().info("Force sync to Redis successful for " + uuid + ": " + receipt.balance()
+                    + " (version: " + receipt.version() + ")");
             return true;
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to force sync to Redis: " + e.getMessage());

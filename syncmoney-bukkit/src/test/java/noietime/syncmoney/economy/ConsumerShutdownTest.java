@@ -117,7 +117,7 @@ class ConsumerShutdownTest {
         EconomyWriteQueue queue = new EconomyWriteQueue(10);
         EconomyWriteQueue.Reservation acceptedBeforeShutdown = queue.tryReserve(player);
         assertNotNull(acceptedBeforeShutdown);
-        when(cache.atomicSetBalanceReceipt(player, BigDecimal.TEN))
+        when(cache.atomicSetBalanceReceipt(player, BigDecimal.TEN, "shutdown-reservation"))
                 .thenReturn(new ConfirmedAccount(player, BigDecimal.TEN, 1L));
 
         EconomyEventConsumer consumer = new EconomyEventConsumer(plugin, config, queue, cache,
@@ -152,7 +152,7 @@ class ConsumerShutdownTest {
             shutdown.join(5_000);
             assertFalse(shutdown.isAlive(), "shutdown must return after the accepted write is completed");
             assertFalse(queue.hasOutstandingWrites(), "completed accepted write ownership must be released");
-            verify(cache).atomicSetBalanceReceipt(player, BigDecimal.TEN);
+            verify(cache).atomicSetBalanceReceipt(player, BigDecimal.TEN, "shutdown-reservation");
         } finally {
             queue.closeAdmission();
             acceptedBeforeShutdown.close();
@@ -170,7 +170,7 @@ class ConsumerShutdownTest {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, RETURNS_DEEP_STUBS);
         CacheManager cache = mock(CacheManager.class);
         UUID player = UUID.randomUUID();
-        when(cache.atomicSetBalanceReceipt(player, BigDecimal.TEN))
+        when(cache.atomicSetBalanceReceipt(eq(player), eq(BigDecimal.TEN), anyString()))
                 .thenReturn(new ConfirmedAccount(player, BigDecimal.TEN, 1L));
         EconomyWriteQueue queue = new EconomyWriteQueue(100);
         for (int i = 0; i < 20; i++) assertTrue(queue.offer(new EconomyEvent(player,
@@ -181,6 +181,8 @@ class ConsumerShutdownTest {
         consumer.start();
         consumer.shutdown();
         assertTrue(queue.isEmpty());
-        verify(cache, times(20)).atomicSetBalanceReceipt(player, BigDecimal.TEN);
+        for (int i = 0; i < 20; i++) {
+            verify(cache).atomicSetBalanceReceipt(player, BigDecimal.TEN, "shutdown-" + i);
+        }
     }
 }

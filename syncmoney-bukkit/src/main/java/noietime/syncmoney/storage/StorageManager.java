@@ -55,7 +55,7 @@ public class StorageManager {
 
         this.redisManager = new RedisManager(plugin, config, redisRequired);
 
-        this.cacheManager = new CacheManager(plugin, redisManager, redisRequired);
+        this.cacheManager = new CacheManager(plugin, redisManager, redisRequired, !config.isCMIMode());
 
         EconomyMode mode = config.getEconomyMode();
         boolean databaseRequiredForMode = mode == EconomyMode.SYNC

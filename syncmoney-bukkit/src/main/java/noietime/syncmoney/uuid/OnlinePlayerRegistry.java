@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 public final class OnlinePlayerRegistry {
@@ -32,9 +33,10 @@ public final class OnlinePlayerRegistry {
     private final SyncmoneyConfig config;
     private final RedisManager redisManager;
 
+    private final Map<UUID, String> localOnlineNames = new ConcurrentHashMap<>();
     private volatile Set<String> crossServerNameCache = Set.of();
-
     private volatile ScheduledTask heartbeatTask;
+    private volatile boolean stopped;
 
     public OnlinePlayerRegistry(Plugin plugin, SyncmoneyConfig config, RedisManager redisManager) {
         this.plugin = plugin;
@@ -47,20 +49,43 @@ public final class OnlinePlayerRegistry {
     }
 
     public void register(Player player) {
-        if (player == null) {
-            return;
-        }
-        if (player.hasMetadata(NPC_METADATA)) {
-            return;
-        }
+        PlayerSnapshot snapshot = snapshotPlayer(player);
+        if (snapshot == null) return;
         if (!isRedisAvailable()) {
             return;
         }
-        final UUID uuid = player.getUniqueId();
-        final String name = player.getName();
         final String server = config.getServerName();
 
-        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> writeRegister(uuid, name, server));
+        plugin.getServer().getAsyncScheduler().runNow(plugin,
+                task -> writeRegister(snapshot.uuid(), snapshot.name(), server));
+    }
+
+    /** Seed reconnect/reload cases without reading any player outside its entity owner. */
+    public void seedOnlinePlayers() {
+        if (stopped) return;
+        plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> {
+            if (stopped) return;
+            List<Player> online = List.copyOf(plugin.getServer().getOnlinePlayers());
+            for (Player player : online) {
+                player.getScheduler().run(plugin, entityTask -> snapshotPlayer(player), null);
+            }
+        });
+    }
+
+    private PlayerSnapshot snapshotPlayer(Player player) {
+        if (player == null || stopped) return null;
+        UUID uuid = player.getUniqueId();
+        if (!player.isOnline() || player.hasMetadata(NPC_METADATA)) {
+            localOnlineNames.remove(uuid);
+            return null;
+        }
+        String name = player.getName();
+        if (name == null || name.isBlank()) {
+            localOnlineNames.remove(uuid);
+            return null;
+        }
+        localOnlineNames.put(uuid, name);
+        return new PlayerSnapshot(uuid, name);
     }
 
     private void writeRegister(UUID uuid, String name, String server) {
@@ -85,6 +110,7 @@ public final class OnlinePlayerRegistry {
         if (uuid == null) {
             return;
         }
+        localOnlineNames.remove(uuid);
         if (!isRedisAvailable()) {
             return;
         }
@@ -103,28 +129,23 @@ public final class OnlinePlayerRegistry {
     }
 
     public void startHeartbeat() {
-        if (heartbeatTask != null || redisManager == null
+        if (stopped || heartbeatTask != null || redisManager == null
                 || config.getEconomyMode() == noietime.syncmoney.economy.EconomyMode.LOCAL) {
             return;
         }
         this.heartbeatTask = plugin.getServer().getAsyncScheduler().runAtFixedRate(plugin, task -> {
-            if (!isRedisAvailable()) {
-                return;
-            }
-            plugin.getServer().getGlobalRegionScheduler().run(plugin, regionTask -> {
-                Map<UUID, String> snapshot = new HashMap<>();
-                for (Player p : plugin.getServer().getOnlinePlayers()) {
-                    if (p.hasMetadata(NPC_METADATA)) {
-                        continue;
-                    }
-                    snapshot.put(p.getUniqueId(), p.getName());
-                }
-                plugin.getServer().getAsyncScheduler().runNow(plugin, t -> {
-                    heartbeatWrite(snapshot);
-                    refreshCrossServerCache();
-                });
-            });
+            if (stopped || !isRedisAvailable()) return;
+            heartbeatWrite(Map.copyOf(localOnlineNames));
+            refreshCrossServerCache();
         }, HEARTBEAT_INITIAL_DELAY_SECONDS, HEARTBEAT_PERIOD_SECONDS, TimeUnit.SECONDS);
+    }
+
+    public Set<UUID> getLocalOnlinePlayerIds() {
+        return Set.copyOf(localOnlineNames.keySet());
+    }
+
+    public String getLocalOnlinePlayerName(UUID uuid) {
+        return uuid == null ? null : localOnlineNames.get(uuid);
     }
 
     private void heartbeatWrite(Map<UUID, String> snapshot) {
@@ -185,13 +206,7 @@ public final class OnlinePlayerRegistry {
     }
 
     public List<String> suggestOnlinePlayerNames(String prefix, boolean preferCrossServer) {
-        Set<String> names = new HashSet<>();
-        for (Player p : plugin.getServer().getOnlinePlayers()) {
-            if (p.hasMetadata(NPC_METADATA)) {
-                continue;
-            }
-            names.add(p.getName());
-        }
+        Set<String> names = new HashSet<>(localOnlineNames.values());
         if (preferCrossServer && isRedisAvailable()) {
             names.addAll(crossServerNameCache);
         }
@@ -204,6 +219,7 @@ public final class OnlinePlayerRegistry {
     }
 
     public void shutdown() {
+        stopped = true;
         if (heartbeatTask != null) {
             try {
                 heartbeatTask.cancel();
@@ -211,5 +227,10 @@ public final class OnlinePlayerRegistry {
             }
             heartbeatTask = null;
         }
+        localOnlineNames.clear();
+        crossServerNameCache = Set.of();
+    }
+
+    private record PlayerSnapshot(UUID uuid, String name) {
     }
 }

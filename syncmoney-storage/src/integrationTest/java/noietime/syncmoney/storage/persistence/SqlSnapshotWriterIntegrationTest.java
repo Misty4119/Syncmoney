@@ -75,6 +75,34 @@ class SqlSnapshotWriterIntegrationTest {
         }
     }
 
+    @Test
+    void migrationInsertIfAbsentPreservesExistingSharedSqliteRow() throws Exception {
+        try (DisposableSqliteDatabase database = DisposableSqliteDatabase.open()) {
+            database.executeScript("""
+                    CREATE TABLE players (
+                        player_uuid TEXT PRIMARY KEY,
+                        player_name TEXT,
+                        balance DECIMAL(20,2) NOT NULL,
+                        version BIGINT NOT NULL,
+                        last_server TEXT,
+                        updated_at TIMESTAMP
+                    )
+                    """);
+            UUID player = UUID.randomUUID();
+            Instant originalTime = BASE_TIME.plusSeconds(10);
+            PlayerSnapshot local = snapshot(player, "Local", "local-server", "12.50", 3, originalTime);
+            PlayerSnapshot shared = snapshot(player, "Shared", "shared-server", "900.00", 41,
+                    BASE_TIME.plusSeconds(20));
+
+            assertTrue(SqlSnapshotWriter.insertPlayerIfAbsentForMigration(
+                    database.connection(), local, SqlDialect.SQLITE));
+            assertFalse(SqlSnapshotWriter.insertPlayerIfAbsentForMigration(
+                    database.connection(), shared, SqlDialect.SQLITE));
+
+            assertRow(database.connection(), player, "Local", "local-server", "12.50", 3, originalTime);
+        }
+    }
+
     private static void persistLocal(Connection connection, String name, ConfirmedAccount account, long updatedAt)
             throws SQLException {
         SqlSnapshotWriter.persistLocalBalance(connection, account.playerUuid(), name, account.balance(),
@@ -220,6 +248,8 @@ class SqlSnapshotWriterIntegrationTest {
     }
 
     private static void assertSnapshotSemantics(Connection connection, SqlDialect dialect) throws SQLException {
+        assertMigrationInsertIfAbsent(connection, dialect);
+
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         SqlSnapshotWriter.persistPlayers(connection, List.of(
@@ -273,6 +303,20 @@ class SqlSnapshotWriterIntegrationTest {
         assertRow(connection, staleFirst, "NewerFirst", "server-b", "110.00", 11,
                 BASE_TIME.plusSeconds(1));
         assertRow(connection, conflictingSecond, "ConflictSecond", "server-a", "50.00", 10, BASE_TIME);
+    }
+
+    private static void assertMigrationInsertIfAbsent(Connection connection, SqlDialect dialect) throws SQLException {
+        UUID player = UUID.randomUUID();
+        Instant localTime = BASE_TIME.plusSeconds(10);
+        PlayerSnapshot local = snapshot(player, "Local", "local-server", "12.50", 3, localTime);
+        PlayerSnapshot shared = snapshot(player, "Shared", "shared-server", "900.00", 41,
+                BASE_TIME.plusSeconds(20));
+
+        assertTrue(SqlSnapshotWriter.insertPlayerIfAbsentForMigration(connection, local, dialect),
+                "the first migration insert must create the row");
+        assertFalse(SqlSnapshotWriter.insertPlayerIfAbsentForMigration(connection, shared, dialect),
+                "an existing shared row must be reported as not inserted");
+        assertRow(connection, player, "Local", "local-server", "12.50", 3, localTime);
     }
 
     private static void assertConcurrentSnapshotSemantics(Connection lockHolder, Connection contender,

@@ -397,6 +397,35 @@ public final class DatabaseManager implements AutoCloseable {
         }
     }
 
+    /** Insert a player snapshot for migration without replacing an existing shared row. */
+    public boolean insertPlayerIfAbsentForMigration(UUID uuid, String name, BigDecimal balance, long version,
+            String server) throws SQLException {
+        PlayerSnapshot snapshot = new PlayerSnapshot(
+                new ConfirmedAccount(uuid, balance, version), name, server, Instant.now());
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                boolean inserted = SqlSnapshotWriter.insertPlayerIfAbsentForMigration(conn, snapshot,
+                        SqlDialect.fromDatabaseType(databaseType));
+                conn.commit();
+                return inserted;
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackFailure) {
+                    e.addSuppressed(rollbackFailure);
+                }
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException failure) {
+            plugin.getLogger().severe("Failed to insert player during migration " + uuid + ": "
+                    + failure.getMessage());
+            throw failure;
+        }
+    }
+
     private void writePlayerSnapshot(PlayerSnapshot snapshot, boolean migrationOverride) throws SQLException {
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);

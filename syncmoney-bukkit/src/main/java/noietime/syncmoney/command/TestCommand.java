@@ -4,6 +4,7 @@ import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.economy.EconomyEvent;
 import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyMode;
+import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
@@ -13,14 +14,14 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * [SYNC-TEST-001] Stress testing command for validating data consistency under concurrent multi-threaded operations.
@@ -100,102 +101,145 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
 
         UUID userA = UUID.nameUUIDFromBytes("syncmoney-test-a".getBytes());
         UUID userB = UUID.nameUUIDFromBytes("syncmoney-test-b".getBytes());
-
-
+        MessageHelper.SenderContext replyContext = MessageHelper.captureSender(sender);
         var guard = plugin.getPlayerTransactionGuard();
         if (guard != null) {
             guard.setTestModeBypass(true);
             MessageHelper.sendMessage(sender, plugin.getMessage("test.mode-enabled"));
         }
 
-        BigDecimal initialAmount = BigDecimal.valueOf(1000000);
-        economyFacade.setBalance(userA, initialAmount, EconomyEvent.EventSource.TEST);
-        economyFacade.setBalance(userB, initialAmount, EconomyEvent.EventSource.TEST);
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            try {
+                BigDecimal initialAmount = BigDecimal.valueOf(1000000);
+                BigDecimal balanceA = economyFacade.setBalance(userA, initialAmount, EconomyEvent.EventSource.TEST);
+                BigDecimal balanceB = economyFacade.setBalance(userB, initialAmount, EconomyEvent.EventSource.TEST);
+                if (balanceA == null || balanceA.signum() < 0 || balanceB == null || balanceB.signum() < 0) {
+                    throw new IllegalStateException("Virtual account initialization was rejected");
+                }
+                plugin.getServer().getAsyncScheduler().runDelayed(plugin,
+                        delayed -> runConcurrentPay(replyContext, threads, iterations, userA, userB,
+                                initialAmount, guard), 500L, TimeUnit.MILLISECONDS);
+            } catch (RuntimeException failure) {
+                plugin.getLogger().warning("Concurrent pay test initialization failed");
+                finishTestMode(replyContext, guard);
+                replyContext.sendMessage(plugin, plugin.getMessage("test.concurrent-pay.start-failed"));
+            }
+        });
+    }
 
-        try {
-            Thread.sleep(500);
-        } catch (InterruptedException ignored) {
-        }
-
-        BigDecimal initialTotal = initialAmount.multiply(BigDecimal.valueOf(2));
-        BigDecimal expectedTotal = initialTotal;
-
+    private void runConcurrentPay(MessageHelper.SenderContext replyContext, int threads, int iterations,
+            UUID userA, UUID userB, BigDecimal initialAmount, PlayerTransactionGuard guard) {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failCount = new AtomicInteger(0);
-        CountDownLatch latch = new CountDownLatch(threads);
-
+        ArrayList<CompletableFuture<Void>> workers = new ArrayList<>(threads);
         long start = System.currentTimeMillis();
 
         for (int i = 0; i < threads; i++) {
-            final int threadId = i;
-            plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-                for (int j = 0; j < iterations; j++) {
+            CompletableFuture<Void> worker = new CompletableFuture<>();
+            workers.add(worker);
+            try {
+                plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
                     try {
-                        BigDecimal withdrawResult = economyFacade.withdraw(userA, BigDecimal.ONE,
-                                EconomyEvent.EventSource.TEST);
-                        if (withdrawResult.compareTo(BigDecimal.ZERO) >= 0) {
-                            BigDecimal depositResult = economyFacade.deposit(userB, BigDecimal.ONE,
-                                    EconomyEvent.EventSource.TEST);
-                            if (depositResult.compareTo(BigDecimal.ZERO) >= 0) {
-                                successCount.incrementAndGet();
-                            } else {
-                                economyFacade.deposit(userA, BigDecimal.ONE, EconomyEvent.EventSource.TEST);
+                        for (int j = 0; j < iterations; j++) {
+                            try {
+                                BigDecimal withdrawResult = economyFacade.withdraw(userA, BigDecimal.ONE,
+                                        EconomyEvent.EventSource.TEST);
+                                if (withdrawResult != null && withdrawResult.compareTo(BigDecimal.ZERO) >= 0) {
+                                    BigDecimal depositResult = economyFacade.deposit(userB, BigDecimal.ONE,
+                                            EconomyEvent.EventSource.TEST);
+                                    if (depositResult != null && depositResult.compareTo(BigDecimal.ZERO) >= 0) {
+                                        successCount.incrementAndGet();
+                                    } else {
+                                        economyFacade.deposit(userA, BigDecimal.ONE, EconomyEvent.EventSource.TEST);
+                                        failCount.incrementAndGet();
+                                    }
+                                } else {
+                                    failCount.incrementAndGet();
+                                }
+                            } catch (RuntimeException failure) {
                                 failCount.incrementAndGet();
                             }
-                        } else {
-                            failCount.incrementAndGet();
                         }
-                    } catch (Exception e) {
-                        failCount.incrementAndGet();
+                        worker.complete(null);
+                    } catch (RuntimeException failure) {
+                        worker.completeExceptionally(failure);
                     }
-                }
-                latch.countDown();
-            });
+                });
+            } catch (RuntimeException rejected) {
+                worker.completeExceptionally(rejected);
+            }
+        }
+
+        CompletableFuture.allOf(workers.toArray(CompletableFuture[]::new)).whenComplete((ignored, failure) -> {
+            try {
+                plugin.getServer().getAsyncScheduler().runNow(plugin,
+                        task -> finishConcurrentPay(replyContext, initialAmount, userA, userB, start,
+                                successCount, failCount, guard, failure));
+            } catch (RuntimeException schedulingFailure) {
+                plugin.getLogger().warning("Concurrent pay test could not schedule result processing");
+                finishTestMode(replyContext, guard);
+            }
+        });
+    }
+
+    private void finishConcurrentPay(MessageHelper.SenderContext replyContext, BigDecimal initialAmount,
+            UUID userA, UUID userB, long start, AtomicInteger successCount, AtomicInteger failCount,
+            PlayerTransactionGuard guard, Throwable failure) {
+        if (failure != null) {
+            plugin.getLogger().warning("Concurrent pay test worker failed");
+            finishTestMode(replyContext, guard);
+            replyContext.sendMessage(plugin, plugin.getMessage("test.concurrent-pay.start-failed"));
+            return;
         }
 
         try {
-            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            BigDecimal initialTotal = initialAmount.multiply(BigDecimal.valueOf(2));
+            BigDecimal finalA = economyFacade.getBalance(userA);
+            BigDecimal finalB = economyFacade.getBalance(userB);
+            BigDecimal finalTotal = finalA.add(finalB);
+            long elapsedMillis = System.currentTimeMillis() - start;
+            boolean zeroLoss = finalTotal.compareTo(initialTotal) == 0;
+
+            resetTestMode(guard);
+            List<String> output = new ArrayList<>(12);
+            output.add(plugin.getMessage("test.concurrent-pay.result.header"));
+            output.add(plugin.getMessage("test.concurrent-pay.result.time")
+                    .replace("{time}", String.valueOf(elapsedMillis)));
+            output.add(plugin.getMessage("test.concurrent-pay.result.success")
+                    .replace("{success}", String.valueOf(successCount.get()))
+                    .replace("{fail}", String.valueOf(failCount.get())));
+            output.add(plugin.getMessage("test.concurrent-pay.result.balance-header"));
+            output.add(plugin.getMessage("test.concurrent-pay.result.account-a")
+                    .replace("{balance_a}", FormatUtil.formatCurrency(finalA)));
+            output.add(plugin.getMessage("test.concurrent-pay.result.account-b")
+                    .replace("{balance_b}", FormatUtil.formatCurrency(finalB)));
+            output.add(plugin.getMessage("test.concurrent-pay.result.total-header"));
+            output.add(plugin.getMessage("test.concurrent-pay.result.initial-total")
+                    .replace("{initial_total}", FormatUtil.formatCurrency(initialTotal)));
+            output.add(plugin.getMessage("test.concurrent-pay.result.final-total")
+                    .replace("{final_total}", FormatUtil.formatCurrency(finalTotal)));
+            output.add(zeroLoss ? plugin.getMessage("test.concurrent-pay.result.zero-loss-pass")
+                    : plugin.getMessage("test.concurrent-pay.result.zero-loss-fail")
+                            .replace("{difference}", FormatUtil.formatCurrency(finalTotal.subtract(initialTotal))));
+            if (guard != null) output.add(plugin.getMessage("test.mode-disabled"));
+            replyContext.sendMessages(plugin, output);
+        } catch (RuntimeException failureDuringResult) {
+            finishTestMode(replyContext, guard);
+            plugin.getLogger().warning("Concurrent pay test result processing failed");
+            replyContext.sendMessage(plugin, plugin.getMessage("test.concurrent-pay.start-failed"));
         }
+    }
 
-        BigDecimal finalA = economyFacade.getBalance(userA);
-        BigDecimal finalB = economyFacade.getBalance(userB);
-        BigDecimal finalTotal = finalA.add(finalB);
-
-        long end = System.currentTimeMillis();
-        boolean isZeroLoss = finalTotal.compareTo(expectedTotal) == 0;
-
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.time")
-                .replace("{time}", String.valueOf(end - start)));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.success")
-                .replace("{success}", String.valueOf(successCount.get()))
-                .replace("{fail}", String.valueOf(failCount.get())));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.balance-header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.account-a")
-                .replace("{balance_a}", FormatUtil.formatCurrency(finalA)));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.account-b")
-                .replace("{balance_b}", FormatUtil.formatCurrency(finalB)));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.total-header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.initial-total")
-                .replace("{initial_total}", FormatUtil.formatCurrency(initialTotal)));
-        MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.final-total")
-                .replace("{final_total}", FormatUtil.formatCurrency(finalTotal)));
-
-        if (isZeroLoss) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.zero-loss-pass"));
-        } else {
-            BigDecimal difference = finalTotal.subtract(expectedTotal);
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.concurrent-pay.result.zero-loss-fail")
-                    .replace("{difference}", FormatUtil.formatCurrency(difference)));
-        }
-
-
+    private void finishTestMode(MessageHelper.SenderContext replyContext,
+            PlayerTransactionGuard guard) {
         if (guard != null) {
-            guard.setTestModeBypass(false);
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.mode-disabled"));
+            resetTestMode(guard);
+            replyContext.sendMessage(plugin, plugin.getMessage("test.mode-disabled"));
         }
+    }
+
+    private static void resetTestMode(PlayerTransactionGuard guard) {
+        if (guard != null) guard.setTestModeBypass(false);
     }
 
     /**
@@ -208,17 +252,17 @@ public final class TestCommand implements CommandExecutor, TabCompleter {
         }
 
         MessageHelper.sendMessage(sender, plugin.getMessage("test.total-supply.checking"));
+        MessageHelper.SenderContext replyContext = MessageHelper.captureSender(sender);
 
         plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
             BigDecimal total = redisManager.getTotalBalance();
-
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.total-supply.result.header"));
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.total-supply.result.total")
-                    .replace("{amount}", FormatUtil.formatCurrency(total)));
-
             int cachedPlayers = economyFacade.getCachedPlayerCount();
-            MessageHelper.sendMessage(sender, plugin.getMessage("test.total-supply.result.cached-players")
-                    .replace("{count}", String.valueOf(cachedPlayers)));
+            replyContext.sendMessages(plugin, List.of(
+                    plugin.getMessage("test.total-supply.result.header"),
+                    plugin.getMessage("test.total-supply.result.total")
+                            .replace("{amount}", FormatUtil.formatCurrency(total)),
+                    plugin.getMessage("test.total-supply.result.cached-players")
+                            .replace("{count}", String.valueOf(cachedPlayers))));
         });
     }
 

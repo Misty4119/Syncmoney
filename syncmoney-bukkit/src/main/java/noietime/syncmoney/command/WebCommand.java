@@ -20,6 +20,7 @@ import java.awt.GraphicsEnvironment;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -97,6 +98,7 @@ public class WebCommand implements CommandExecutor, TabCompleter {
         Path tarGzPath = webDir.resolve("syncmoney-web.tar.gz");
         String repo = plugin.getSyncmoneyConfig().getConfig()
                 .getString("web-admin.web.github-repo", Constants.DEFAULT_GITHUB_REPO);
+        MessageHelper.SenderContext replyContext = MessageHelper.captureSender(sender);
 
         MessageHelper.sendMessage(sender, plugin.getMessage("web.download.starting"));
 
@@ -112,44 +114,44 @@ public class WebCommand implements CommandExecutor, TabCompleter {
                 }
 
                 if (!downloaded) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("web.download.failed"));
+                    replyContext.sendMessage(plugin, plugin.getMessage("web.download.failed"));
                     return;
                 }
 
-                MessageHelper.sendMessage(sender, plugin.getMessage("web.download.success"));
+                replyContext.sendMessage(plugin, plugin.getMessage("web.download.success"));
 
 
                 WebBuilder builder = new WebBuilder(plugin, webDir);
                 if (!builder.isBuildable()) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("web.build.not-found"));
+                    replyContext.sendMessage(plugin, plugin.getMessage("web.build.not-found"));
                     return;
                 }
 
-                MessageHelper.sendMessage(sender, plugin.getMessage("web.build.starting"));
+                replyContext.sendMessage(plugin, plugin.getMessage("web.build.starting"));
                 boolean built = builder.buildAll();
 
                 if (!built) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("web.build.failed"));
+                    replyContext.sendMessage(plugin, plugin.getMessage("web.build.failed"));
                     return;
                 }
 
-                MessageHelper.sendMessage(sender, plugin.getMessage("web.build.success"));
+                replyContext.sendMessage(plugin, plugin.getMessage("web.build.success"));
 
 
                 plugin.getServer().getGlobalRegionScheduler().run(plugin, t -> {
                     if (plugin.getWebAdminServer() != null) {
                         try {
                             plugin.getWebAdminServer().reloadWebRoot();
-                            MessageHelper.sendMessage(sender, plugin.getMessage("web.reload.success"));
+                            replyContext.sendMessage(plugin, plugin.getMessage("web.reload.success"));
                         } catch (Exception e) {
-                            MessageHelper.sendMessage(sender, plugin.getMessage("web.reload.failed")
+                            replyContext.sendMessage(plugin, plugin.getMessage("web.reload.failed")
                                     .replace("{error}", e.getMessage()));
                         }
                     }
                 });
 
             } catch (Exception e) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("web.download.error")
+                replyContext.sendMessage(plugin, plugin.getMessage("web.download.error")
                         .replace("{error}", e.getMessage()));
                 plugin.getLogger().severe("Web download error: " + e.getMessage());
             }
@@ -163,6 +165,7 @@ public class WebCommand implements CommandExecutor, TabCompleter {
     private void handleBuild(CommandSender sender) {
         Path webDir = plugin.getDataFolder().toPath().resolve("syncmoney-web");
         WebBuilder builder = new WebBuilder(plugin, webDir);
+        MessageHelper.SenderContext replyContext = MessageHelper.captureSender(sender);
 
         if (!builder.isBuildable()) {
             MessageHelper.sendMessage(sender, plugin.getMessage("web.build.not-found"));
@@ -176,7 +179,7 @@ public class WebCommand implements CommandExecutor, TabCompleter {
                 boolean success = builder.buildAll();
 
                 if (!success) {
-                    MessageHelper.sendMessage(sender, plugin.getMessage("web.build.failed"));
+                    replyContext.sendMessage(plugin, plugin.getMessage("web.build.failed"));
                     return;
                 }
 
@@ -188,11 +191,11 @@ public class WebCommand implements CommandExecutor, TabCompleter {
                             plugin.getLogger().warning("Web reload after build failed: " + e.getMessage());
                         }
                     }
-                    MessageHelper.sendMessage(sender, plugin.getMessage("web.build.success"));
+                    replyContext.sendMessage(plugin, plugin.getMessage("web.build.success"));
                 });
 
             } catch (Exception e) {
-                MessageHelper.sendMessage(sender, plugin.getMessage("web.build.error")
+                replyContext.sendMessage(plugin, plugin.getMessage("web.build.error")
                         .replace("{error}", e.getMessage()));
                 plugin.getLogger().severe("Web build error: " + e.getMessage());
             }
@@ -325,40 +328,40 @@ public class WebCommand implements CommandExecutor, TabCompleter {
     private void handleCheck(CommandSender sender) {
         String repo = plugin.getSyncmoneyConfig().getConfig()
                 .getString("web-admin.web.github-repo", Constants.DEFAULT_GITHUB_REPO);
+        MessageHelper.SenderContext replyContext = MessageHelper.captureSender(sender);
+        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
+            WebVersionChecker checker = new WebVersionChecker(plugin, repo);
+            String latest = checker.checkLatestVersion();
+            if (latest == null) {
+                replyContext.sendMessage(plugin, plugin.getMessage("web.version.check-failed"));
+                return;
+            }
 
-        WebVersionChecker checker = new WebVersionChecker(plugin, repo);
-        String latest = checker.checkLatestVersion();
+            String bundled = plugin.getWebAdminConfig().getBundledVersion();
+            String local = getLocalVersionFromDisk();
+            List<String> messages = new ArrayList<>();
+            messages.add(plugin.getMessage("web.version.header"));
+            messages.add(plugin.getMessage("web.version.bundled").replace("{version}", bundled));
+            messages.add(plugin.getMessage("web.version.current").replace("{version}", local));
+            messages.add(plugin.getMessage("web.version.latest").replace("{version}", latest));
 
-        if (latest == null) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("web.version.check-failed"));
-            return;
-        }
-
-        String bundled = plugin.getWebAdminConfig().getBundledVersion();
-        String local   = getLocalVersionFromDisk();
-
-        MessageHelper.sendMessage(sender, plugin.getMessage("web.version.header"));
-        MessageHelper.sendMessage(sender, plugin.getMessage("web.version.bundled").replace("{version}", bundled));
-        MessageHelper.sendMessage(sender, plugin.getMessage("web.version.current").replace("{version}", local));
-        MessageHelper.sendMessage(sender, plugin.getMessage("web.version.latest").replace("{version}", latest));
-
-        if (checker.hasNewerVersion(latest, local)) {
-            MessageHelper.sendMessage(sender, plugin.getMessage("web.version.update-available"));
-
-
-            Component clickMsg = Component.text()
-                    .append(Component.text(
-                            plugin.getMessage("web.check.update-available-clickable")
-                                    .replace("{latest}", latest)))
-                    .append(Component.text("/syncmoney web download", NamedTextColor.AQUA)
-                            .clickEvent(ClickEvent.suggestCommand("/syncmoney web download"))
-                            .hoverEvent(HoverEvent.showText(
-                                    Component.text("Click to fill the download command", NamedTextColor.GREEN))))
-                    .build();
-            sender.sendMessage(clickMsg);
-        } else {
-            MessageHelper.sendMessage(sender, plugin.getMessage("web.version.up-to-date"));
-        }
+            Component clickMsg = null;
+            if (checker.hasNewerVersion(latest, local)) {
+                messages.add(plugin.getMessage("web.version.update-available"));
+                clickMsg = Component.text()
+                        .append(Component.text(
+                                plugin.getMessage("web.check.update-available-clickable")
+                                        .replace("{latest}", latest)))
+                        .append(Component.text("/syncmoney web download", NamedTextColor.AQUA)
+                                .clickEvent(ClickEvent.suggestCommand("/syncmoney web download"))
+                                .hoverEvent(HoverEvent.showText(
+                                        Component.text("Click to fill the download command", NamedTextColor.GREEN))))
+                        .build();
+            } else {
+                messages.add(plugin.getMessage("web.version.up-to-date"));
+            }
+            replyContext.sendMessages(plugin, messages, clickMsg);
+        });
     }
 
 

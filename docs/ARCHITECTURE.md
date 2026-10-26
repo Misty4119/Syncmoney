@@ -13,7 +13,7 @@ Syncmoney is a Minecraft economy plugin with a synchronous Vault-facing API and 
 
 The repository has three runtime deliverables:
 
-- the core plugin from `src/main/java/noietime/syncmoney`;
+- the core plugin from `syncmoney-bukkit/src/main/java/noietime/syncmoney`;
 - the separate PlaceholderAPI expansion from `syncmoney-papi-expansion`;
 - the Vue Web Admin frontend from `syncmoney-web`, embedded into the core JAR at `src/main/resources/syncmoney-web/dist`.
 
@@ -88,13 +88,19 @@ Changes to this ordering require a dependency analysis, not just a compile check
 
 The internal router selects the active implementation. In Syncmoney-owned modes, the economy facade, memory state, writer, persistence, and synchronization paths cooperate. In `cmi` mode, CMI remains the economy authority; Syncmoney observes/synchronizes it rather than silently becoming the source of truth.
 
+Syncmoney `/pay` is disabled in CMI mode because the adapter does not expose an atomic two-account transfer contract. The command fails closed before balance mutation.
+
+All Syncmoney-owned paired-transfer entrypoints follow that boundary: explicit Vault target-player and plugin transfers, VaultUnlocked delegates, and the public low-level Redis transfer API reject CMI-mode requests before Syncmoney memory, queue, or Redis mutation. CMI continues to own single-account operations. These source-level checks do not establish licensed/live CMI acceptance; CMI remains outside the verified 1.4.0 support scope.
+
 Migration and Shadow Sync are separate explicit workflows. They are not live authority switches.
 
 ## 4. Economy state and transaction flow
 
 ### 4.1 Money representation
 
-Money is represented with `BigDecimal` and existing normalization rules. New code must preserve precision, configured decimal behavior, non-negative/insufficient-funds constraints, and the current response semantics.
+Money is represented with `BigDecimal` and existing normalization rules. New code must preserve precision, configured decimal behavior, non-negative/insufficient-funds constraints, and the current response semantics. Syncmoney-owned shared `LOCAL_REDIS` and `SYNC` modes cap each balance at `999999999999999999.99`, matching SQL `DECIMAL(20,2)` and the Redis scripts' cents range. Projected deposits are checked before write admission and again while holding the account mutation lock. This does not narrow the existing `LOCAL` policy or clamp or migrate local balances as part of the shared-mode guard. The explicit LOCAL-to-SYNC migration rejects raw negative SQLite balances before normalization, including negative sub-cent values that would otherwise round to 0.00, then rejects normalized balances above this ceiling before preparing either insert-only or force-replacement SQL. Rejected rows remain unchanged in LOCAL and are not copied to Redis.
+
+Existing Redis values written under an earlier, wider balance policy are not automatically scanned or migrated. Deposits, withdrawals, and transfers reject an over-ceiling stored account before memory mutation. Operators must back up and explicitly reconcile such accounts before moving them to the 1.4.0 shared-mode scope; an admin set is a deliberate balance change, not a migration. When audit is enabled, a set whose delta exceeds SQL `DECIMAL(20,2)` is rejected before mutation. Until reconciliation, these accounts are outside the verified support scope.
 
 ### 4.2 Read path
 
@@ -118,13 +124,14 @@ Important semantics:
 - Accepted writes become queued economic work; they must not be silently discarded on ordinary logout, teleport timeout, or shutdown.
 - `PostTransactionEvent` is emitted after the result is known and is also used by live telemetry.
 - Transfers must preserve both sides of the operation under failure; insufficient funds and partial persistence failure are correctness cases.
+- Queued `/pay` transfers use the existing `recovery-v1.jsonl` spool. Startup validates the queued spool and legacy overflow log before opening shared-mode write admission; unreadable or malformed recovery evidence keeps admission closed, while affected accounts remain unavailable until their pending recovery is resolved. A forced `RETRYABLE` paired-admission checkpoint precedes queue commit. After Redis dispatch, `ATTEMPTING`/`AMBIGUOUS` outcomes remain quarantined across restart and are visible through admin-only `/syncmoney recovery list|inspect|reconcile <id>` (permission `syncmoney.admin.recovery` or `syncmoney.admin`). Reconciliation runs asynchronously and accepts only an exact Redis receipt matching the stable operation ID, canonical fingerprint, account pair, and versions. Missing, malformed, colliding, in-flight, mismatched, or unreadable receipts retain quarantine; balances alone do not resolve an ambiguous operation, and there is no automatic replay or force-clear path. FileChannel force supports local process-restart recovery; power-loss and storage-device durability beyond that behavior are not claimed. Direct Vault/plugin atomic-transfer recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; no direct-transfer journal, capability, provider wiring, or command recovery path is included. Exact-candidate Paper runtime acceptance remains NOT VERIFIED.
 - Queue saturation/backpressure and recovery paths are part of the money-safety contract.
 
 ## 5. Distributed synchronization
 
 ### 5.1 Versions
 
-Redis-backed economy balance updates use per-account Redis versions. CMI retains its legacy timestamp-derived numeric version; it can repeat or regress across wall-clock rollback, restart, counter wrap, or server clock skew and does not establish global order. CMI entity callbacks re-check the handler's current watermark before applying a balance.
+Redis-backed economy balance updates use per-account Redis versions. CMI retains its legacy timestamp-derived numeric version; it can repeat or regress across wall-clock rollback, restart, counter wrap, or server clock skew and does not establish global order. CMI entity callbacks re-check the handler's current watermark before applying a balance. The in-memory inbound watermark no longer expires entries by age; it holds up to 10,000 accounts and evicts the oldest entry only when the cap is exceeded. This source-level behavior is not licensed/live CMI runtime evidence.
 
 ### 5.2 Redis
 
@@ -294,7 +301,10 @@ pnpm test:unit --run
 pnpm build
 ```
 
-The 1.4.0 target compiles and runs on Java 25 or newer and requires Paper 1.21.6 or newer. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0.
+Historical R52F r8 source/package evidence (superseded by r9): the Java 25.0.4 / Gradle 9.8.0 gate passed 68/68 tasks, 163 unit suites / 909 tests, and 9 Sync integration suites / 39 tests. Its artifact pins remain historical and are superseded below.
+Historical R52F r9 source/package and bounded M04 evidence were superseded by R11; R11 is also historical and does not identify the current integration candidate. R11 passed 68/68 tasks on Java 25.0.4 / Gradle 9.8.0, with 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests (952 total), zero failures, errors, or skips. The R11 core JAR was 31,605,493 bytes, SHA-256 `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09`; the five artifact pins and gate log digest are recorded in Proposal 06. R11 rejects abbreviated UUID strings accepted by Java parsing. The earlier exact-r9 M04 result remains PASS_BOUNDED_SUBCASE only and does not validate the R11 JAR. Exact-R11 runtime, full LOCAL support, and full T22 Beta remain NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS. Storage-service integration and full public API compatibility remain NOT VERIFIED. Stable metadata remains 1.3.2; no external release action occurred.
+
+The historical R52F R14 source/package gate revalidated the R11 code candidate on Java 25.0.4 / Gradle 9.8.0: 68/68 tasks; 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests (952 total), with zero failures, errors, or skips. The five R14 artifact pins are recorded in Proposal 06. The later exact-candidate runtime attempt used that JAR, but `smaccept` returned 0 without a PASS/FAIL marker within 90 seconds; only two synthetic fixture rows were confirmed, no restart-read ran, and Paper stopped gracefully with both ports closed. Exact-candidate runtime acceptance and full T22 Beta remain NOT VERIFIED. Storage-service integration remains NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS; broad V03 is SKIPPED / NOT VERIFIED; minimum-Paper SQL initial schema and licensed/live CMI are BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); full public API compatibility is NOT VERIFIED. Overall release readiness remains BLOCKED / NOT VERIFIED. Stable metadata remains 1.3.2; no external release action occurred.
 
 Release automation builds preview versions through a Gradle property, publishes the Web archive before the core JARs, and gates stable publication through the `production-release` environment. The Web archive excludes generated `dist`, dependency, coverage, Playwright, and editor directories because the plugin builds the frontend after downloading it.
 
@@ -312,3 +322,11 @@ Architecture-affecting changes should answer:
 6. Is the feature optional, and is disabled state cheap?
 7. Does a configuration change require restart?
 8. Do the English and Traditional Chinese docs, REST contract, frontend client, and tests still agree?
+
+
+## Historical 2026-10-26 R62 — raw Lua fixtures and test-only gate result (superseded by R63)
+
+R62 changed only the RedisMutationSafetyIT and RedisMissingAccountMutationIT raw Lua fixtures to supply receipt keys/canonical fingerprints and assert the current receipt envelope. All 23 raw-fixture tests passed. The full `:syncmoney-sync:integrationTest` task failed with 3 `PayLuaScriptManagerNoscriptIT` failures (41/44 passed, 0 errors, 0 skipped). That class had no production caller, so those failures did not exercise or establish a failure in live `/pay`. `verifyArchitecture` and `verifyPackaging` with `-PreleaseVersion=1.4.0` passed; storage-service integration was not run. The on-disk artifact hashes were not bound to a current source manifest. These are historical R62 observations only.
+## 2026-10-26 R63 source/package evidence and recovery contract
+
+**Current 1.4.0 status (2026-10-26 R63 R9): BLOCKED / NOT VERIFIED.** With the local `-PreleaseVersion=1.4.0` override, the Java 25.0.4 / Gradle 9.8.0 source/package gate passed 59 actionable tasks (59 executed): 170 unit suites / 945 tests and 9 Sync integration suites / 44 tests (179 suites / 989 tests total), with zero failures, errors, or skips. Architecture, packaging (classfile major 69), API-consumer/acceptance packaging, Central publisher isolation, and frontend typecheck, 4 unit files / 22 tests, and production build passed. Current core JAR: 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`; PAPI JAR: 13,872 bytes / `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`; acceptance JAR: 54,905 bytes / `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`. R63 verifies durable recovery for the live queued `/pay` path; ADR-16 does not cover direct Vault/plugin recovery, which remains `DEFERRED / NOT VERIFIED` under ADR-07. Exact-candidate Paper runtime/T22 Beta, storage-service integration, minimum-Paper SQL, licensed/live CMI (authorization UNKNOWN), broad V03, full public API compatibility, and T21 completion remain `NOT VERIFIED` or `BLOCKED`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2; no external release action occurred.

@@ -7294,3 +7294,1153 @@ The exact-final-candidate Beta/Stable gate remains NOT VERIFIED. R6 remains BLOC
 The read-only review receipt `build/reports/foundation/T24/cmi-static-binary-source-review-20261023-r1.md` is 2,269 bytes, SHA-256 `F74062555D1B890FD500480C157271485C399AF19CDBA86C621EE68B256D3F95`. The independent reviewer found no new actionable production or acceptance-probe defect in the current diff. Static inspection of supplied CMI `9.8.10.5` / CMILib `1.6.0.1` JARs confirmed the `users.player_uuid`, `username`, and `Balance` schema names used by `CMIDatabaseWriter`, plus the class/method signatures reflected by `CMIApi`; exact JAR hashes match the user-supplied files. No CMI runtime was started by this review, and it did not inspect license settings, credentials, or player rows. This is binary-surface evidence only, not a live compatibility test; the prior R2 live read uses an older candidate hash.
 
 The known no-CAS limitation remains: an authority change during CMI's unconditional SQL update can allow a stale value to land temporarily despite freshness checks and later correction. Stale-write-free mirroring is not claimed. The Beta exact-candidate runtime, all applicable endpoint/mode and upgrade/wire acceptance, full licensed CMI, and Stable/external release gates remain NOT VERIFIED or BLOCKED as recorded above.
+
+
+## 2026-10-24 pre-fix candidate source and bounded runtime snapshot (historical)
+
+This section initially superseded the prior r4 route assessment for one minimum-Paper smoke, but the source and artifact were subsequently corrected. It is retained as historical evidence for commit `66a25c4` and its pre-fix JAR only. It does not provide runtime evidence for the current corrected candidate and does not close T21 or the complete T22 Beta matrix.
+
+The earlier source/build state was commit 66a25c4f8327932eae850bcfa52b1060942b1fd3. Its Java 25.0.4 / Gradle 9.8.0 gate ended with BUILD SUCCESSFUL and 68 actionable tasks. Its XML inventory recorded 152 unit suites / 781 tests, plus 7 syncmoney-sync integration suites / 35 tests, with zero failures, errors, and skips. The source gate log is 10,464 bytes, SHA-256 518814D9AAE06D605E98E1E373E3D006A445F1E529054D0F41305A208629E9A6. This earlier source count is superseded by the corrected-candidate gate below. `syncmoney-storage:integrationTest` was not invoked and remains NOT VERIFIED.
+
+### Historical pre-fix artifact pins
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,586,067 | 663B1FB6CD3B4FD83F94C0CEEE69AD93252268E066F36ABC940634218F0D0D18 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| Local API aggregation ZIP | 4,156,932 | C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C |
+
+These pins match only the pre-fix build outputs at commit 66a25c4. The corrected-candidate pins are listed separately below. The API aggregation result is unsigned local packaging/validation only; it was not staged, uploaded, or published.
+
+### Bounded exact-candidate runtime result
+
+One newly isolated workspace was used: Paper 1.21.6#48, Java 25.0.4+7-LTS-189, LOCAL, optional features off, synthetic AcceptanceA/AcceptanceB, VaultUnlocked 2.20.2. The Paper JAR was 52,639,704 bytes, SHA-256 35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214. VaultUnlocked was 2.20.2, 134,928 bytes, SHA-256 BD9E7A31F1B2D31A591497174887EEA7AE7E632C6B179DA13E4F0AD732DE2DF7.
+
+API CLASSLOADER PASS and ACCEPTANCE PASS were observed for the pinned candidate, acceptance probe, and API consumer JARs. After a normal stop and restart, the exact read predicate passed: cold-vault-a=NaN, cold-vault-unlocked-b=null, a=1000, b=520, vault-unlocked-b=520. The final Paper stop exited normally, logged Stopping server, exited the listener-owning Java process, and closed ports 25675/35675. A log-rotation issue interrupted one intermediate startup monitor; the read command was confirmed not to have been delivered during that attempt. The same isolated profile/run then passed the restart-read predicate and normal stop. Full details are in build/reports/foundation/T24/minimum-paper-smoke-20261024.md (4,334 bytes; SHA-256 8BC191730B972FF073F91BFF8B33178DF8C3B21BA0BA588A97936FA4EDCA273D). This is PASS_BOUNDED_SUBCASE for one exact selector only.
+
+### Bounded API signature comparison
+
+Java 25 `javap -public` comparison against the committed 1.3.2 legacy signature fixture checked five frozen public classes: 120 baseline declarations, 126 candidate declarations, 0 removed, 6 added after normalizing the `synchronized` modifier on `reloadPluginConfig`. The original summary report is `build/reports/foundation/T24/legacy-public-signature-diff-20261024.md` (1,146 bytes; SHA-256 `AC146CB73FF5DD2AB3C8224066814FC7262E48F92D7744D90EFFD3299AC2FD29`); its displayed added-declaration list was incomplete. A read-only supplemental audit preserves the full six declarations and rechecked counts: `build/reports/foundation/T24/legacy-public-signature-diff-audit-20261024-r1.md` (1,823 bytes; SHA-256 `C933F37A27587F5FF4CE15D9B972BC7CA526F85939E5BFEE45243B065501523A`). This remains a bounded descriptor comparison, not a full japicmp/Revapi check or semantic review of every public class; full API compatibility remains NOT VERIFIED.
+
+### Current release gate disposition
+
+| Gate | Status | Evidence / remaining boundary |
+|---|---|---|
+| Java 25 local source/build and Sync integration | PASS_BOUNDED_SUBCASE | Fresh 68-task log and current XML inventory above. |
+| Storage-service integration | DEFERRED / NOT VERIFIED | Database services were unavailable; task was not invoked in the fresh gate. |
+| Targeted legacy public signatures | PASS_BOUNDED_SUBCASE | Five frozen public classes; no removed declarations. Full japicmp/Revapi and all-public-surface review remain NOT VERIFIED. |
+| T21 | PARTIAL / IN_PROGRESS | Accepted 9/9 current-maximum seeded-row matrix and Paper M12 were not repeated. Broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper MySQL/MariaDB initial-schema remains BLOCKED / NOT VERIFIED. |
+| Full licensed CMI | BLOCKED / NOT VERIFIED | License state remains UNKNOWN; no license settings were inspected. CMI is excluded from verified 1.4.0 support claims. |
+| Pre-fix Paper runtime smoke | PASS_BOUNDED_SUBCASE for historical JAR only / current runtime NOT VERIFIED | Paper 1.21.6#48 LOCAL smoke used the `663B…0D18` JAR from commit `66a25c4`. It does not apply to the corrected artifact. Latest Paper, Folia/Canvas, other modes, PAPI cross-pair, upgrade/rollback, and bidirectional wire criteria remain absent. |
+| T23/T24 Stable and external release | NOT VERIFIED / NOT PERFORMED | Stable metadata remains 1.3.2. No tag, push, Portal staging/signing, upload, or publication occurred. |
+
+The bilingual user/developer documentation records this bounded smoke as historical pre-fix evidence only; it is not current exact-candidate runtime evidence. The remaining NOT VERIFIED/DEFERRED criteria are preserved. Source-manifest rule: generate the current manifest from the final committed tracked-source tree, then record its entry count and digest in the ignored local readiness checkpoint and UPAW artifact registry. The 2026-10-23 r5 manifest is historical and does not cover later tracked documentation edits. The earlier statement that no product source/build input changed after that build was superseded by the corrections below.
+
+### 2026-10-24 verified-scope boundary and deferred criteria
+
+The historical pre-fix runtime observation in this checkpoint covers one selector only: Paper `1.21.6#48`, Java `25.0.4`, `LOCAL`, optional features off, synthetic AcceptanceA/AcceptanceB, and VaultUnlocked `2.20.2`. The Java 25 / Paper `1.21.6+` values remain the 1.4.0 target baseline; they are not evidence for every runtime version or the corrected artifact. Current exact-candidate runtime remains `NOT VERIFIED`. The formal Beta and Stable criteria below remain intact. Deferral narrows verified claims and does not satisfy or rewrite an original criterion.
+
+| Original criterion | Disposition | Reason and current evidence | Evidence required to close |
+|---|---|---|---|
+| T21 broad V03 mode/resource/failure and SQL-dialect coverage recorded in the T21 plan | `SKIPPED / NOT VERIFIED` | No finite next selector, fixture, acceptance predicate, and report auditor were defined. The accepted 9/9 current-maximum seeded-row matrix and Paper M12 remain accepted and were not repeated. | Define one bounded selector, fixture, predicate, and offline auditor for each proposed cell, then obtain authorization for that expanded matrix. |
+| Minimum-Paper MySQL and MariaDB initial-schema denial cases (SQL provisioning contract; 04 §10/§29) | `BLOCKED / NOT VERIFIED` | The existing maintainer disposition preserves the provisioning contract and explicitly leaves both criteria blocked; these cells were not retried. | A separately authorized isolated database fixture and exact main-pool/schema denial predicate, without changing the original contract. |
+| Storage-service integration task | `DEFERRED / NOT VERIFIED` | The fresh source gate did not invoke `syncmoney-storage:integrationTest` because configured database services were unavailable. An older failed report is excluded from current counts. | Run the integration task against an isolated supported database service and retain its current exact-candidate output. |
+| Full licensed CMI mode | `BLOCKED / NOT VERIFIED` | License authorization remains `UNKNOWN`; no CMI license setting, credential, or real player row was inspected. Static binary and synthetic SQLite checks do not establish licensed live behavior. | A maintainer-authorized licensed test environment and exact-candidate runtime evidence for CMI registration, reads/writes, scheduler ownership, and recovery. |
+| Full T22 Beta runtime matrix (04 §24): minimum/latest Paper, applicable supported modes, supported Folia/Canvas, old-PAPI cross-pair, state upgrade/rollback, and bidirectional wire | `NOT VERIFIED` | Only the pre-fix `663B…0D18` JAR passed the bounded selector above. It does not verify the corrected artifact. Each remaining platform/mode, compatibility, migration, and wire predicate needs its own exact selector and fixture; earlier Alpha reports are version-bound and are not substituted. | Complete and audit the exact-final-candidate cells selected for any future verified support claim. Until then, README and paired guides keep the broader range and all omitted cells `NOT VERIFIED`. |
+| Full public API compatibility comparison (04 §8) | `NOT VERIFIED` | The old compiled API consumer/classloader smoke and `javap` comparison cover a bounded surface: 120 baseline declarations versus 126 candidate declarations across five frozen classes, zero removals and six additions. No full japicmp/Revapi review of the public surface ran. | Run the approved full public-surface compatibility checker and review every reported change alongside the compiled old consumer. |
+| Stable/external release conditions (04 §29, T23/T24) | `NOT VERIFIED / NOT PERFORMED` | This authorization stops before stable metadata, tags, Portal staging/signing, upload, or publication. The local unsigned API bundle is not external release evidence. | After the final human release decision, complete the separately authorized account, staging, signing, consumer-resolution, metadata, and publication workflow. |
+
+These dispositions preserve the original acceptance requirements and keep `PASS_BOUNDED_SUBCASE`, `DEFERRED`, `BLOCKED`, `NOT VERIFIED`, and `NOT PERFORMED` distinct. The pre-fix smoke supports only its exact old JAR and selector; it does not verify the current corrected candidate or close T21, full Beta, the full API comparison, storage integration, licensed CMI, or the external Stable gate.
+
+## 2026-10-24 shared-mode balance ceiling correction
+
+Two independent read-only source reviews confirmed a persistence-range mismatch in the pre-fix candidate `66a25c4`: `MoneyPolicy.MAX_BALANCE` allowed up to 36 integer digits, while the shared `players.balance` SQL column is `DECIMAL(20,2)` and Redis Lua accepts at most `99999999999999999999` cents (`999999999999999999.99`). `TransactionWriter` could accept a deposit whose projected balance exceeded the shared backend's capacity, leaving memory ahead of a rejected persistence operation. This was a confirmed admission-boundary defect; no persisted corruption was observed.
+
+The correction is bounded to shared `LOCAL_REDIS` and `SYNC` paths. `MoneyPolicy.MAX_SHARED_BALANCE` is `999999999999999999.99`; amount checks, transfer receiver checks, and set-balance validation use that bound when `TransactionWriter` is not in `LOCAL`. Deposit projection is checked before write reservation and again inside `MemoryStateManager.compute` while the account mutation lock is held. The second check is required because another accepted deposit can consume the remaining capacity after preflight. The existing `LOCAL` balance ceiling was not narrowed. LOCAL SQLite rows were not inspected or modified; no clamp, migration, or data repair was performed.
+
+The new regression tests were observed RED before production changes: 2 of 7 `TransactionWriterOutcomeTest` tests failed, covering a deposit at the ceiling and a concurrent stale preflight. After implementation, the focused Java 25 run passed 5 `MoneyPolicyTest` and 8 `TransactionWriterOutcomeTest` tests, with zero failures/errors/skips. Captured output: `build/reports/foundation/T24/amount-boundary-focused-20261024.log`, 3,317 bytes, SHA-256 `7BCC421722885F977D81B75B42533FA31626D28069F048C0432550E89BD7A9C1`. This focused run is not the complete source gate.
+
+The pre-fix core JAR was 31,586,067 bytes, SHA-256 `663B1FB6CD3B4FD83F94C0CEEE69AD93252268E066F36ABC940634218F0D0D18`. The focused run rebuilt the core JAR after the correction to 31,586,474 bytes, SHA-256 `867B6DC19AA1DEEF7EBC61AD87EBBF57C6F2B968B905AE6490A721021B8C4DF6`; these are intermediate pins and must be replaced by the final full-gate/committed artifact pins.
+
+The Paper `1.21.6#48` smoke report remains valid only for the pre-fix `66a25c4` JAR (`663B…0D18`). It does not verify the corrected artifact. The single isolated workspace already holds persistent synthetic state and logs, so no safe non-overwriting rerun route was established; current exact-candidate runtime is `NOT VERIFIED`. Do not create a second workspace, reset or overwrite that profile, or reinterpret the old smoke as current-candidate acceptance.
+
+The direct Redis transfer `SENT_UNKNOWN` review finding is retained fail-closed. The generated operation ID is not sent as a Redis idempotency key/receipt. In the normal non-CMI runtime, a successful recovery-spool checkpoint persists `AMBIGUOUS`; startup restores both account quarantines without replay, and the operation requires operator reconciliation. If no durable checkpoint was written, restart safety is unknown. A balance snapshot cannot exclude a delayed Redis mutation; blind retry is unsafe. Safe automated reconciliation/idempotency remains `NOT VERIFIED` and is documented in English/Traditional Chinese developer guidance.
+
+The current source/test/architecture/packaging gate and artifact pins are recorded below. The final tracked-source manifest, complete-range reviews, and local main integration remain pending. Storage-service integration remains `DEFERRED / NOT VERIFIED`; T21 stays `PARTIAL / IN_PROGRESS`; current exact-candidate runtime, full Beta, licensed CMI, full public API compatibility, and Stable/external release remain `NOT VERIFIED` or `NOT PERFORMED` as listed above.
+
+## 2026-10-24 corrected candidate — r2 source-gate snapshot (superseded by r3 below)
+
+The tested r2 source state was candidate branch `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3` plus the then-current 24 tracked working-tree corrections. The invocation was:
+
+```powershell
+.\gradlew.bat --no-daemon '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The captured output `build/reports/foundation/T24/integration-20261024-final-source-gate-r2.log` is 10,005 bytes, SHA-256 `44DD45188DD7FE6DE9F71E0F17D5CC49E9A9C5037E6E01B8A9FE0574E3768E63`; it ends with `BUILD SUCCESSFUL`, 68 actionable tasks, 17 executed and 51 up-to-date. The r2 unit XML inventory was 152 suites / 787 tests; Sync integration was 7 suites / 35 tests. Both have zero failures, errors, and skips. `verifyArchitecture`, `verifyPackaging`, `verifyCentralPublisherIsolation`, and `nmcpZipAggregation` passed. The old `syncmoney-storage:integrationTest` XML records a failure from 2026-10-22, is not part of this run, and is excluded from these totals. Storage-service integration remains `DEFERRED / NOT VERIFIED` because no supported database service was available.
+
+### Corrected-candidate artifact pins
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,586,506 | `61E3F2727C197B5E5756CBEB6A1D3A41FFAE981B4237D883466737C90820D295` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+These hashes were the r2 source-gate outputs and are superseded by the r3 pins below. The release version was supplied only by `-PreleaseVersion=1.4.0`; stable metadata remains `1.3.2`. The local API aggregation is unsigned local packaging evidence, not Central staging or publication. The final deterministic source manifest will be generated from the reviewed committed tracked tree and pinned in the ignored local readiness record and existing UPAW work; the 2026-10-23 r5 manifest is historical and does not cover later tracked corrections.
+
+### Support and release disposition at r2 (superseded by current record below)
+
+| Criterion | Disposition at r2 | Evidence boundary |
+|---|---|---|
+| Java 25 toolchain / Gradle 9.8 source gate | `PASS_BOUNDED_SUBCASE` | Current code and packaging checks listed above. This is source-level evidence. |
+| Paper runtime for corrected candidate | `NOT VERIFIED` | The `663B…0D18` smoke used the pre-fix `66a25c4` artifact. Current JAR `61E3…0D295` has not been run in PlugDev. The only authorized profile contains retained synthetic data, and its runner overwrites profile/config/plugin files; it will not be reused, and no second workspace will be created. |
+| Full T22 Beta / Java-Paper range | `NOT VERIFIED` | Java 25+ and Paper 1.21.6+ remain target requirements, not blanket compatibility evidence. The old bounded smoke does not verify the corrected JAR or intervening server builds. |
+| T21 | `PARTIAL / IN_PROGRESS` | Accepted 9/9 current-maximum seeded-row matrix and Paper M12 were not repeated. Broad V03 is `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial-schema remains `BLOCKED / NOT VERIFIED`. |
+| Shared-balance correction | `PASS` at source/test level | `LOCAL_REDIS` / `SYNC` are bounded to `999999999999999999.99`; projected deposits are checked before admission and under the mutation lock. `LOCAL` policy/data are unchanged and were not migrated. No runtime/database-service acceptance is implied. |
+| Direct Redis `SENT_UNKNOWN` recovery | `NOT VERIFIED` | A successful recovery-spool checkpoint persists `AMBIGUOUS`, and startup restores both account quarantines without replay in the normal non-CMI runtime. Operator reconciliation is still required; automated reconciliation/idempotency is not verified. Do not retry or clear quarantine from a balance snapshot. |
+| Storage-service integration | `DEFERRED / NOT VERIFIED` | Task not invoked in the current source gate; earlier failure XML is not counted as current evidence. |
+| Licensed/live CMI | `BLOCKED / NOT VERIFIED` | Authorization remains `UNKNOWN`; no license settings, credentials, or real player rows were inspected. |
+| Full public API compatibility | `NOT VERIFIED` | Existing five-class `javap` comparison is bounded; full japicmp/Revapi and semantic public-surface review did not run. |
+| T23/T24 Stable / external release | `NOT VERIFIED / NOT PERFORMED` | Stable metadata remains `1.3.2`; no push, tag, staging, signing, upload, or publication was performed. |
+
+The English and Traditional Chinese overview, contributor, architecture, and developer documents describe the pre-fix smoke as historical and keep the current corrected candidate runtime `NOT VERIFIED`. The complete source-range reviews, deterministic final manifest, preservation of the five ignored target-main collisions, local fast-forward, and post-merge UPAW gate remain required and have not yet been completed or recorded. No external release action is authorized by this checkpoint.
+
+## 2026-10-24 current corrected-candidate source gate r3
+
+The r3 source state is candidate branch `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3` plus the 26 tracked working-tree edits. The exact command was:
+
+```powershell
+.\gradlew.bat --no-daemon '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The captured output `build/reports/foundation/T24/integration-20261024-final-source-gate-r3.log` is 10,005 bytes, SHA-256 `2B1A707E973C76505DC8CB8BD2A03F54F2B572A647B4D65A67BA582B79BD3970`. It ends with `BUILD SUCCESSFUL`: 68 actionable tasks, 17 executed, 51 up-to-date. Recalculated JUnit XML inventory: 152 unit suites / 791 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, and skips. The 159-report digest inventory is `build/reports/foundation/T24/release-candidate-test-summary-20261024-r3.json` (33,402 bytes; SHA-256 `6AFC537A7A2706BE35480B719AA7C44DE8949DE20093003FE51D2CCC7FCE5DD0`). `verifyArchitecture`, `verifyPackaging`, `verifyCentralPublisherIsolation`, and `nmcpZipAggregation` passed. `verifyPackaging` confirms Java 25 classfile major 69. Gradle 9.8 used the configured Java 25 compiler/test toolchain; the wrapper launcher was Java 21. The historical `syncmoney-storage:integrationTest` failure XML from 2026-10-22 was excluded; no storage-service integration task ran, so it remains `DEFERRED / NOT VERIFIED`.
+
+### r3 exact local artifact pins
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,586,868 | `3FA2EE11F92CA9193B3B38537DB61F46E6DE42FF9DB1C58EB373D4E4F8CC6588` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+The JAR pins bind the r3 source gate after the cache monotonic-read correction and shared-balance bound tests. They are local build evidence only; the API aggregation remains unsigned and was not staged or published. Stable metadata remains `1.3.2`, with `-PreleaseVersion=1.4.0` used only for this invocation.
+
+### Current verified scope and remaining release gates
+
+| Criterion | Current disposition | Evidence boundary |
+|---|---|---|
+| Java 25 / Gradle 9.8 source and packaging checks | `PASS_BOUNDED_SUBCASE` | Current source gate and exact r3 artifact pins above; this is not runtime evidence. |
+| Shared balance ceiling and delayed cache snapshot regressions | `PASS` at source/test level | 791 unit tests include shared-cap admission and version-monotonic cache regressions. Shared `LOCAL_REDIS`/`SYNC` balances are bounded to `999999999999999999.99`; existing over-ceiling Redis accounts are outside verified scope until explicitly checked and reconciled. `LOCAL` policy and data are not migrated. |
+| Exact corrected-candidate runtime / full T22 Beta | `NOT VERIFIED` | No r3 JAR was run. The single retained PlugDev profile contains persistent synthetic state and its runner overwrites profile files; it will not be reused, and no second workspace will be created. |
+| T21 | `PARTIAL / IN_PROGRESS` | Accepted 9/9 current-maximum seeded-row matrix and Paper M12 were not repeated. Broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial-schema remains `BLOCKED / NOT VERIFIED`. |
+| Direct Redis `SENT_UNKNOWN` recovery | `NOT VERIFIED` | Fail-closed quarantine and operator reconciliation remain required; automated idempotency/recovery is not verified. |
+| Storage-service integration | `DEFERRED / NOT VERIFIED` | Not invoked in r3 because no supported database service was available. |
+| Licensed/live CMI | `BLOCKED / NOT VERIFIED` | License authorization remains `UNKNOWN`; no license settings, credentials, or real player rows were inspected. |
+| Full public API compatibility | `NOT VERIFIED` | Existing five-class signature comparison is bounded; no full japicmp/Revapi or semantic review ran. |
+| T23/T24 Stable and external release | `NOT VERIFIED / NOT PERFORMED` | Stable metadata remains `1.3.2`; no push, PR, tag, staging, signing, upload, or publication was performed. |
+
+The shared-balance compatibility boundary is an execution disposition under the user's explicit authority to defer or exclude unsupported legacy data; it does not rewrite original acceptance criteria. Before entering shared `LOCAL_REDIS`/`SYNC`, operators must back up authority data, inspect balances with arbitrary-precision comparison, and explicitly reconcile any balance over the limit. An admin set is an operator-selected balance change, not automatic migration. The unchanged `LOCAL` policy and values are outside this correction.
+
+The candidate worktree and target main were rechecked before edits: candidate branch `linco/t21-currentmax-guard` at `66a25c4`, 350 commits ahead / 0 behind `main`; target main remained clean at `71cc55d` and aligned with `origin/main`. At r3, final documentation review, complete-range reviewer receipts, candidate commit, final tracked-source manifest, preservation of the five ignored target-main collisions, local fast-forward, and post-merge UPAW gate remained pending. Continue only after two current read-only reviewers accept the full `main...candidate` range plus the final tracked diff. No external action is authorized.
+
+### Final source gate and exact artifact pins — 2026-10-24 r11
+
+The exact local candidate source passed under Java 25.0.4+7-LTS-189 / Gradle 9.8.0:
+
+./gradlew.bat --no-daemon '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation --console=plain --rerun-tasks
+
+Result: BUILD SUCCESSFUL; 68 actionable tasks, all executed. JUnit inventory: 153 unit suites / 796 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, or skips. Architecture, packaging (classfile major 69), publisher isolation, and API aggregation passed. The output is build/reports/foundation/T24/integration-20261024-final-source-gate-r11.log (10,406 bytes; SHA-256 FB3C6D96C856965C6717F0C9427CE29311CE113657F52FDD7344E71D966B3C74). The recalculated JUnit inventory is build/reports/foundation/T24/release-candidate-test-summary-20261024-r11.json (66,949 bytes; SHA-256 3AAECE7C1D53F119D51C6BD6F7E6AA00FE3379D9E92AF4A91DAF8A449CC39ACE). Aggregate: 160 suites / 831 tests. Storage-service integration did not run because no supported database service was available; it remains DEFERRED / NOT VERIFIED.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,581,442 | B8AA41581A231C4439789178D9D8BB27F34FBDBC58E3D1707E37D477DA53A46D |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+The CMI source boundary now rejects all Syncmoney paired transfers: /pay, explicit Vault target-player and plugin routes, VaultUnlocked delegates, and the low-level Redis transfer API. CMI remains authority for single-account operations. These local source tests do not establish licensed/live CMI or cross-server behavior.
+
+The retained PlugDev profile was read-only checked: 3,618 files, 1,739 directories, five Java processes, and deployed Syncmoney JAR hash 663B1FB6CD3B4FD83F94C0CEEE69AD93252268E066F36ABC940634218F0D0D18, not the current B8AA…A46D artifact. It was not used or overwritten. Exact-candidate runtime / T22 Beta stays NOT VERIFIED.
+
+| Gate | Disposition | Evidence / limit |
+|---|---|---|
+| T21 | PARTIAL / IN_PROGRESS | Accepted 9/9 current-maximum matrix and Paper M12 were not repeated. |
+| Broad V03 | SKIPPED / NOT VERIFIED | Deferred by scope. |
+| Minimum-Paper MySQL/MariaDB initial schema | BLOCKED / NOT VERIFIED | No runtime acceptance was added. |
+| Licensed/live CMI | BLOCKED / NOT VERIFIED | License UNKNOWN; no license settings, credentials, or player rows were inspected. |
+| Exact-candidate runtime / T22 Beta | NOT VERIFIED | Only old 663B…D0D18 artifact is deployed in retained profile. |
+| Storage-service integration | DEFERRED / NOT VERIFIED | No supported database service was available. |
+| Full public API compatibility | NOT VERIFIED | Prior five-class check was bounded; no complete japicmp/Revapi and semantic review ran. |
+| Web release provenance | NOT VERIFIED | Workflow checks release existence, not remote tag commit or archive content/hash against this source. |
+| T23/T24 Stable / external release | NOT VERIFIED / NOT PERFORMED | Stable metadata remains 1.3.2; no push, PR, tag, staging, signing, upload, or publication. |
+
+Generate the final tracked-source manifest after the reviewed candidate commit. Complete-range independent reviews, preservation of five ignored target-main collisions, local fast-forward, and post-merge UPAW gate are pending. These source gates do not establish Beta, Stable, runtime, storage-service, API-compatibility, CMI license, or external provenance acceptance.
+
+## 2026-10-24 r13 current source-gate and review update
+
+The latest exact candidate source state was branch `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, plus the reviewed tracked working-tree corrections and `PayTransferCmiModeTest.java`. Stable release metadata remains `1.3.2`; the command used the local preview override.
+
+After the PlugDev overwrite guard and regression test were added, the Java 25.0.4+7-LTS-189 / Gradle 9.8.0 source and packaging gate was run with:
+
+```powershell
+.\gradlew.bat --no-daemon '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar apiConsumerJar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport :syncmoney-sync:integrationTest verifyCentralPublisherIsolation :syncmoney-api:check :syncmoney-api:publishAllPublicationsToNmcpRepository nmcpCheckAggregationFiles nmcpZipAggregation verifyArchitecture verifyPackaging
+```
+
+Result: `BUILD SUCCESSFUL`; 75 actionable tasks, 9 executed and 66 up-to-date. The current XML inventory is 153 unit suites / 798 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, or skips. Architecture, packaging (classfile major 69), Central publisher isolation, API checks, and local API aggregation passed. The retained raw log is `build/reports/foundation/T24/integration-20261024-full-source-gate-r13.log` (7,779 bytes; SHA-256 `BB50E22B42017398B1D55D233B8AD1EEC1C8DFFBF8EA3DA6F30B21598591C289`). The Node regression/lifecycle assertions passed 46/46: `prepareProfile` refuses an existing `.plugdev` path without changing its profile, and the documented fresh-copy workflow reserves the absent path before writing.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,581,556 | `3B8804294EB8FE4726487B235FAF3007967C44EEA0880395C81D007A5663596C` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+The test command did not invoke `:syncmoney-storage:integrationTest`. All nine `SYNCMONEY_TEST_{POSTGRES,MYSQL,MARIADB}_{URL,USER,PASSWORD}` environment variables were unset; although local PostgreSQL and MySQL-compatible listeners were observed, no database connection was attempted because no designated test endpoints were configured. Storage-service integration therefore remains `DEFERRED / NOT VERIFIED`. The only authorized PlugDev workspace still exists with retained state; it was not read, reused, changed, or started. Current exact-candidate runtime and T22 Beta remain `NOT VERIFIED`.
+
+The independent documentation review found no major English/Traditional Chinese contradiction. The independent source review found no confirmed issue in the specifically inspected SQL receipt, migration fencing, local journal, economy transfer, scheduler, and lifecycle paths, but did not claim line-by-line coverage of all 350 commits. The infrastructure review found no confirmed build/publisher defect; its `prepare.mjs` overwrite warning was fixed and independently rechecked. These are scoped reviews, not proof of every runtime combination.
+
+T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial-schema remains `BLOCKED / NOT VERIFIED`; live licensed CMI remains `BLOCKED / NOT VERIFIED`; full public API compatibility and web archive provenance remain `NOT VERIFIED`; T23/T24 Stable and all external release actions remain `NOT VERIFIED / NOT PERFORMED`. The accepted 9/9 matrix and Paper M12 were not repeated, and R6/R8D/R8E were not replayed. Stable metadata, tags, remotes, staging, signing, upload, and publication were not changed.
+
+The r5 tracked-source manifest is historical because it predates the current edits. Generate the final manifest after the reviewed candidate commit. Recheck the full merge range and final dirty diff, preserve and hash-verify the five ignored target-main collisions into a new absent directory, then commit only reviewed tracked files and fast-forward only the designated local `main`. The post-merge identity/status/diff/artifact pins and UPAW gate remain pending.
+
+## 2026-10-24 r20 final candidate validation — monotonic cache correction
+
+This is the current source-level validation record and supersedes r18/r19 totals and artifact pins. The source identity is candidate branch linco/t21-currentmax-guard, commit 66a25c4f8327932eae850bcfa52b1060942b1fd3 plus tracked working-tree corrections; stable metadata was not changed and the build used -PreleaseVersion=1.4.0.
+
+An independent review identified that delayed transfer/read receipts could regress CacheManager to an older version. The first new delayed-transfer regression failed on the previous source; after changing confirmed cache writes to version-aware updates, the focused suite passed. Follow-up review identified a confirmed-absence edge case where an expired positive cache entry could survive. Its regression failed before the fix. The current ordinary read now clears only the same entry observed before Redis I/O when Redis confirms absence, while retaining a newer concurrent Pub/Sub snapshot. The focused CacheManagerTransferExecutionTest result is 7 tests, 0 failures/errors/skips. This is local JUnit evidence.
+
+The exact full gate was:
+.\gradlew.bat --no-daemon --rerun-tasks -PreleaseVersion=1.4.0 test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation --console=plain
+
+The captured r20 log ended BUILD SUCCESSFUL, 68 actionable tasks executed. JUnit XML totals are 155 unit suites / 818 tests and 7 Sync integration suites / 35 tests; failures, errors, and skips are all zero. Architecture, packaging/classfile-major-69, publisher isolation, API consumer/acceptance packaging, and local aggregation passed. Separately, node --test tools/plugdev/prepare.test.mjs tools/plugdev/player-scheduler-lifecycle-assertions.test.mjs passed 46/46.
+
+| Artifact/evidence | Bytes | SHA-256 |
+|---|---:|---|
+| build/libs/Syncmoney-1.4.0.jar | 31,585,403 | 8A9D741D3CD1543D6DAC5D34EA72A586D22C0ED2BF9716BDF96DB1083A810366 |
+| syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| build/acceptance/SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| build/acceptance/SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| build/nmcp/zip/aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+| r20 source-gate log | 10,406 | C915CC0E70C32511F3379D353D3F9123C6D34848FC3E30A37A5F62E8B12DCA10 |
+| r20 JUnit inventory | 44,114 | 7ED8A7CF9C8CEE6F4854FFCD596606360ED025CF8FC20C487ED9C4BA99875C31 |
+| r20 PlugDev helper log | 4,487 | B2FC3D4C027FCA107B861641B574C5C174B033CC8B212E19A410D7AEF0497ABA |
+
+The source manifest will be refreshed after the reviewed candidate commit; the 2026-10-23 r5 manifest is historical and not current provenance. The local aggregation is unsigned packaging evidence, not staging or publication.
+
+Storage-service integration was not invoked because no configured test endpoints were present; it remains DEFERRED / NOT VERIFIED. No exact-candidate runtime was executed. The existing isolated workspace contains the older pre-fix 663B JAR and retained synthetic state, so current exact-candidate runtime and T22 Beta remain NOT VERIFIED. T21 stays PARTIAL / IN_PROGRESS; broad V03 is SKIPPED / NOT VERIFIED; minimum-Paper database initial-schema and licensed/live CMI remain BLOCKED / NOT VERIFIED; full public API compatibility remains NOT VERIFIED; T23/T24 Stable/external release remains NOT VERIFIED / NOT PERFORMED. No accepted 9/9 matrix or Paper M12 was repeated; R6/R8D/R8E were not replayed.
+
+## 2026-10-24 r21 targeted review-finding regressions
+
+The r20 gate above is historical and does not cover the later corrections in the working tree. A two-file TAR extraction regression was added to `WebDownloaderExtractionTest`; it failed before the parser correction because the second member was not extracted, then the full class passed after the reader began tracking and skipping member padding even when the payload had already been consumed. The reader also fails on truncated member data instead of silently treating a short skip as end-of-archive.
+
+An audit-enabled shared admin-set regression uses a synthetic legacy balance three times the shared ceiling and targets an in-range value. It failed before the change because the set was accepted with an audit delta too large for the `DECIMAL(20,2)` audit column. `TransactionWriter` now rejects this case before mutation, version advance, or write-queue admission. The existing explicit reconciliation regression remains and passed with the focused class. The two affected test classes passed together after both corrections; this focused run is not the full source gate.
+
+The direct Vault/plugin transfer path in `TransferOrchestrator` returns on `SENT_UNKNOWN` after an in-memory quarantine and has no `RecoverySpool` dependency. The durable `AMBIGUOUS` checkpoint description applies to queued event-consumer paths only. This is a documentation correction under the existing ADR-07 deferral; no new recovery format or automatic recovery behavior was introduced. Direct-path restart safety remains NOT VERIFIED.
+
+When audit is enabled, shared admin reconciliation is possible through `setBalance` only if the amount delta is representable in `DECIMAL(20,2)`. Larger legacy deltas are rejected before acceptance. Such accounts remain outside verified shared-mode support until an operator completes a separately reviewed reconciliation. No real player data or runtime was used.
+
+## 2026-10-24 r24 exact-candidate source/package and bounded runtime evidence
+
+This section supersedes the earlier r20 source totals, pins, and statements that no current-candidate runtime was run. It does not close the full T22 Beta or release gate.
+
+Candidate: `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, 350 commits ahead of local main `71cc55dfeefe9a8f40a3835b051ddd324d353767`, plus 56 tracked edits and three new test paths. Stable metadata remains `1.3.2`; candidate build used `-PreleaseVersion=1.4.0`.
+
+The fresh Java `25.0.4+7-LTS-189` / Gradle `9.8.0` gate used `--rerun-tasks`: 68/68 actionable tasks executed; 155 unit suites / 823 tests and 7 Sync integration suites / 35 tests, zero failures, errors, or skips. Architecture, classfile-major-69 packaging, Central publisher isolation, API consumer/acceptance JARs, and aggregation ZIP passed. PlugDev helper tests passed 46/46. Storage-service integration was not invoked because no database endpoint was configured; keep it `DEFERRED / NOT VERIFIED`.
+
+| Artifact/evidence | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,585,674 | `390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+| r24 source/package log | 10,406 | `BE9AC3DA38ED74E6EB1DEC5CD49EB9CA51E5E0C8C024267EC13C2F11951C638A` |
+| r24 JUnit inventory | 58,480 | `8BD54CC45A501DFED39C65308D0B10A0639D6B145F33C49805719A5D7F64384F` |
+| r24 PlugDev helper log | 4,490 | `AA77A2CFB055E34A72837C072156EDEBBE20D53DFF81387C80933982B9B8B3D0` |
+
+One new isolated profile at `C:\Users\margo\.codex\syncmoney-140-runtime-20261024-r24` used Paper `1.21.6#48` (52,639,704 bytes; SHA-256 `35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214`), Java `25.0.4+7-LTS-189`, `LOCAL`, features off, synthetic AcceptanceA/AcceptanceB, and VaultUnlocked `2.20.2`. Loaded core, Acceptance, and API Consumer JARs matched the pins above. API classloading, the synthetic transaction probe, graceful stop, restart persisted-read marker `ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1000.00 b=520.00 vault-unlocked-b=520.00`, and final graceful stop were observed; selected ports closed. No additional transaction write was sent after the first probe.
+
+The original runner file `evidence/runtime-acceptance.json` remains unchanged at `NOT VERIFIED` because its session lifecycle predicates did not complete. An observer first searched for `ACCEPTANCE READ a=` while the valid marker begins `ACCEPTANCE READ cold-vault-a=`. The read-only local auditor `C:\Users\margo\.codex\syncmoney-140-runtime-20261024-r24\evidence\runtime-followup-audit-r24.json` confirms exact artifact hashes, success/failure markers, graceful shutdown markers, and closed ports; 1,985 bytes, SHA-256 `4A23FD2C652A57919DC1EC80F633B1F5A98F576232609F11789E44E66DDCF044`. It records one `PASS_BOUNDED_SUBCASE` only, not full T22 Beta or end-to-end PlugDev lifecycle acceptance. Broader Paper/Java, Folia/Canvas, other modes, PAPI pairing, upgrade/rollback, bidirectional wire, SQL service, licensed/live CMI, full API compatibility, and Stable/external release remain `NOT VERIFIED` or `NOT PERFORMED`.
+
+T21 remains `PARTIAL / IN_PROGRESS`; broad V03 `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration `DEFERRED / NOT VERIFIED`; full Beta and public API compatibility `NOT VERIFIED`; Stable/external release `NOT VERIFIED / NOT PERFORMED`. The r5 source manifest is historical; generate the deterministic tracked-source manifest after candidate commit. Two reviews, candidate commit, ignored-collision preservation, local fast-forward, and post-merge UPAW gate remain pending. Do not repeat accepted 9/9 or Paper M12, replay R6/R8D/R8E, inspect CMI license settings, change stable metadata, or perform external release actions.
+
+
+## 2026-10-24 r26 corrected-candidate source/package evidence (historical; superseded by r27 below)
+
+At the r26 checkpoint, this source-level result superseded earlier test totals and artifact pins, including r24. The r27 section below supersedes its counts and artifact pins; neither result updates or inherits the r24 bounded runtime result.
+
+The candidate source snapshot was `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3` plus tracked working-tree changes. The exact command was `.\gradlew.bat --no-daemon -PreleaseVersion=1.4.0 test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. The saved r26 test inventory records 155 unit suites / 823 tests and 7 Sync integration suites / 35 tests; all failures, errors, and skips are zero. The source-gate summary records 68/68 actionable tasks and passing architecture, classfile-major-69 packaging, Central publisher isolation, API consumer/acceptance packaging, and aggregation. `:syncmoney-storage:integrationTest` was not run because no database endpoint was configured; it remains `DEFERRED / NOT VERIFIED`. The full Gradle console log was not retained, so the compact summaries and per-suite JUnit XML are the available local evidence.
+
+The targeted `WebDownloaderExtractionTest` class passed 13/13 tests after the fix. It verifies truncated TAR payload/padding rejection before replacing an existing target or installing a new file.
+
+| Artifact/evidence | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,585,752 | `703CC16A204CE481D06A691C3C32526EE0A5DD3989A2CAE7AF4292C2BACE2140` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+| `release-candidate-test-summary-20261024-r26.json` | 61,595 | `49C5903FC4BD473D1A5FE385CD8D334EC0F923833DA1EEA8D48DFA3F4F897328` |
+| `integration-20261024-final-source-gate-r26-summary.txt` | 1,503 | `C76C44F960E7DC8E266FD0568C124BC52940114C18D586F2A0442CAE3EDCBCFA` |
+
+These artifact pins apply to the tested r26 source/build snapshot. At that checkpoint, exact-candidate runtime acceptance was `NOT VERIFIED`; the previous `390499...` JAR had a separate historical `PASS_BOUNDED_SUBCASE` and did not validate the r26 JAR. T21 was `PARTIAL / IN_PROGRESS`; broad V03 was `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial-schema and licensed/live CMI were `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration was `DEFERRED / NOT VERIFIED`; full T22 Beta and full API compatibility were `NOT VERIFIED`; Stable/external release was `NOT VERIFIED / NOT PERFORMED`. No new runtime profile was created or started at that checkpoint, no accepted 9/9 matrix or Paper M12 was repeated, and R6/R8D/R8E were not replayed.
+
+## 2026-10-24 r27 exact-candidate source/package evidence
+
+This source result supersedes r26 counts and artifact pins. It does not establish exact-candidate runtime acceptance or inherit the bounded r24 runtime result.
+
+The candidate was `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3` plus tracked working-tree corrections and three untracked tests; `.upaw/` was excluded. The exact command was `.\gradlew.bat --no-daemon --console=plain '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. Java 25.0.4+7-LTS-189 and Gradle 9.8.0 were present. The gate completed 68 actionable tasks (14 executed, 54 up-to-date), 155 unit suites / 825 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, or skips. Architecture, classfile-major-69 packaging, publisher isolation, API consumer/acceptance packaging, and aggregation passed. `:syncmoney-storage:integrationTest` was not invoked and remains `DEFERRED / NOT VERIFIED`.
+
+The focused `TransactionWriterOutcomeTest` class passed 15/15. The audit-delta race regression failed before the source fix, demonstrating that stale pre-lock balance could accept the mutation and queue a write; the corrected code now computes and guards the audit delta under the account mutation lock and uses that value for its event. A second test verifies the accepted event's delta against a newer remote snapshot.
+
+| Artifact/evidence | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,585,938 | `1805BBE027AD1707A9D90EB3EA6AC7B54FFC618483C9D6B471DC9D0FF19505BE` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+| `integration-final-source-gate-r27.log` | 10,048 | `D1BCAEF53ED9D07E425A75B4C0AD7928913A252D7CDD9043DC3499D5CCCAA6E5` |
+| `release-candidate-test-summary-20261024-r27.json` | 46,004 | `E187342F370E7E93A4A4C46CE2C6FA80DE1C91F16B198AF8728124CC0FECF2E5` |
+
+The report and complete Gradle log are under `build/reports/foundation/T24/`. The JSON inventory binds every counted JUnit XML file and the five current package artifacts. Runtime for the exact candidate remains `NOT VERIFIED`; no runtime was started in this source-gate step. Do not repeat the accepted 9/9 seeded-row matrix or Paper M12, or replay R6/R8D/R8E. Stable metadata remains 1.3.2; no external release action was performed.
+
+## 2026-10-24 r37 exact source/package evidence
+
+This is the current Java 25 source/package run for candidate `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3` plus 58 tracked follow-up changes and three untracked regression-test paths. It supersedes prior source-gate totals and binary pins; it does not establish full runtime or release acceptance.
+
+The exact command was `.\gradlew.bat --no-daemon --console=plain --rerun-tasks '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. Java was `25.0.4+7-LTS-189`; Gradle was `9.8.0`. The raw log is `build/reports/foundation/T24/integration-20261024-final-source-gate-r37.log`, 10,433 bytes, SHA-256 `53FA0325681ABA57F398A334B78BAD6B4BB9567C0E33164CEFAC46B176C99C8A`. It ends `BUILD SUCCESSFUL in 2m 59s` with 68 actionable tasks executed. Architecture verification, packaging verification (classfile major 69), Central publisher isolation, API consumer/acceptance packaging, and local aggregation passed.
+
+The per-file JUnit inventory is `build/reports/foundation/T24/release-candidate-test-summary-20261024-r37.json`, 69,113 bytes, SHA-256 `A9E1AD93F24C3E106D5C465441F30EFA438516A9E1A8D87C0C7ABC715F3D73D0`. It binds each XML report by size and SHA-256. The 155 unit suites / 833 tests and seven Sync integration suites / 35 tests each have zero failures, errors, and skips. The targeted `WebDownloaderExtractionTest` is 14/14; `PayTransferCmiModeTest` is 5/5; `OnlinePlayerRegistryTest` is 3/3. The two changed PlugDev helper suites were rerun separately with Node `24.19.0`: 46/46 passed. Their log is `build/reports/foundation/T24/plugdev-helper-tests-20261024-r37.log`, 4,496 bytes, SHA-256 `C43001C14213ECDC23FD4D4B4A9F0315909EB6E533DEC8A7414F8DB6E89AFEC5`.
+
+| Current local artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,586,629 | `C48EC0EA68071857FFBFBB2902ED0D19EA6C97CC4E79B74E58FC87A85580210D` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `build/nmcp/zip/aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+The aggregation ZIP is local unsigned packaging evidence only. No Portal staging/signing/upload/publication was performed. `:syncmoney-storage:integrationTest` was not invoked because no explicit test database endpoint was configured; keep this gate `DEFERRED / NOT VERIFIED`.
+
+R29 is a separate historical bounded runtime subcase, not a result for this JAR. The read-only report `build/reports/foundation/T24/exact-candidate-runtime-audit-20261024-r29.json` is SHA-256 `7EE7E87817032357F1D99591F533E0CDB7BFAA8B03BEC7C2D3994E86B412C34B`. It verifies a bounded `PASS_BOUNDED_SUBCASE` on Paper `1.21.6#48` / Java `25.0.4+7-LTS` / `LOCAL` / features off / synthetic accounts, deployed JAR SHA-256 `4BE022B1760209D610A390144D5B3328A094E290C2AB53A9E557BDF27FAA92F6`: API classloader pass, transaction total `1520.00`, persisted restart read A=`1000.00` and B=`520.00`, stop responses and closed ports. The watcher did not produce a complete lifecycle report because its log offset was stale, so the original full runner predicate remains `NOT VERIFIED`. Current JAR `C48EC0...` postdates that run and has no exact-candidate runtime evidence. The one authorized profile has persistent synthetic state and must not be reused or modified; no second runtime may be created.
+
+T21 remains `PARTIAL / IN_PROGRESS`; broad V03 `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI `BLOCKED / NOT VERIFIED` (CMI license status `UNKNOWN`); storage-service integration `DEFERRED / NOT VERIFIED`; full T22 Beta, current exact-candidate runtime and full public API compatibility `NOT VERIFIED`; Stable/external release `NOT VERIFIED / NOT PERFORMED`. Generate the deterministic tracked-source manifest after the reviewed candidate commit. Do not repeat accepted 9/9 or Paper M12, replay R6/R8D/R8E, alter stable metadata, or publish.
+
+
+## 2026-10-24 r38 evidence revalidation
+
+This is a content recheck of the r37 candidate evidence, not a new build or runtime result. The recorded Gradle log SHA-256 is `53FA0325681ABA57F398A334B78BAD6B4BB9567C0E33164CEFAC46B176C99C8A`; its output ends with `BUILD SUCCESSFUL` and 68/68 actionable tasks executed. The r37 JUnit inventory lists 162 XML files; every current file byte count and SHA-256 matched its inventory. The five package artifacts matched their recorded sizes and SHA-256 values. The PlugDev helper log SHA-256 is `C43001C14213ECDC23FD4D4B4A9F0315909EB6E533DEC8A7414F8DB6E89AFEC5` and reports 46/46 passing.
+
+The deterministic final candidate source manifest is recorded as `build/reports/foundation/T24/release-candidate-source-manifest-20261024-r38.json`; its file inventory and SHA-256 will be registered with the final UPAW integration evidence after the candidate is frozen. The final fingerprint binds the full 350-commit range, current tracked working changes, three regression-test additions, and the two explicitly authorized release-readiness documents. `.upaw/`, generated build reports, runtime state, and secrets are excluded from source artifacts.
+
+Current exact-candidate runtime/full T22 Beta remain `NOT VERIFIED`; R29 evidence applies only to the older `4BE022B…` core JAR. Storage-service integration remains `DEFERRED / NOT VERIFIED`; T21 remains `PARTIAL / IN_PROGRESS`; broad V03 is `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain `BLOCKED / NOT VERIFIED`; full API compatibility remains `NOT VERIFIED`; Stable/external release remains `NOT VERIFIED / NOT PERFORMED`. Stable release metadata remains `1.3.2`.
+
+
+## 2026-10-25 R39 current candidate evidence
+
+This section supersedes prior R38/current artifact statements while retaining their dated results as history. Candidate source is branch linco/t21-currentmax-guard at 66a25c4f8327932eae850bcfa52b1060942b1fd3 with 63 modified tracked paths and three untracked regression-test files in the candidate working tree. Stable metadata remains 1.3.2; the candidate build used -PreleaseVersion=1.4.0.
+
+### Source/package gate
+
+R39 used Java 25.0.4+7-LTS-189 and Gradle 9.8.0. The combined source/package command completed successfully: 68/68 tasks; 155 unit suites / 834 tests; 7 Sync integration suites / 35 tests; zero failures, errors, and skips. Architecture, classfile-major-69 packaging, Central publisher isolation, API consumer/acceptance packaging, and aggregation passed. Storage-service integration was not run and remains DEFERRED / NOT VERIFIED.
+
+| Artifact/evidence | Bytes | SHA-256 |
+|---|---:|---|
+| Core Syncmoney-1.4.0.jar | 31,587,551 | 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+| Full source/package gate log | 10,406 | 1CBB7F2432F216D3D66980F6B9D9FF480659DFE9CD5832D897C0D85DBDCCDEDD |
+| JUnit/artifact inventory JSON | 66,186 | 9845EEB9FDA5F97228CCD16ACE5E9D051413A793316012878209A0BA38AC91BB |
+
+The source gate log is build/reports/foundation/T24/integration-final-source-gate-20261025-r39.log. The inventory is build/reports/foundation/T24/release-candidate-test-summary-20261025-r39.json. Both are local ignored evidence and are excluded from the source commit.
+
+### Exact-candidate runtime subcase
+
+The isolated runtime loaded the same 31,587,551-byte core JAR with SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19. Runtime identity was Paper 1.21.6-48-main@4d854e6, Java 25.0.4+7-LTS-189, LOCAL, synthetic Acceptance accounts, and VaultUnlocked 2.20.2 (134,928 bytes; SHA-256 BD9E7A31F1B2D31A591497174887EEA7AE7E632C6B179DA13E4F0AD732DE2DF7).
+
+Observed first-start markers were API CLASSLOADER PASS, T21_VERSION_PASS expected=1.4.0 actual=1.4.0, and ACCEPTANCE PASS total=1520.00. A later read-only recovery start recorded API CLASSLOADER PASS and ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1000.00 b=520.00 vault-unlocked-b=520.00, followed by a graceful stop. The Paper process exited and dedicated ports 25675/35675 were closed.
+
+| Retained runtime evidence | Bytes | SHA-256 |
+|---|---:|---|
+| First-start archived log | 3,044 | 018D933037F78708A4ABFD029CF0952BDC8CDC533BF8E2061C9959A95B45B49B |
+| Interrupted-start archived log | 1,879 | 5070BB92FD07EA08553CA7DA57F8A5527936923CC10407341E52BECB9EBD9585 |
+| Recovery/final-stop latest.log | 10,289 | F74C7F4028386BB57EA8747AB25302910273537C593A9B42756C45529569E681 |
+| Bounded runtime report | 4,830 | 6AEEEB1492802DB921FABC81D6121227EFEC2C1BBD67D241B6AB5866D9DC1B0D |
+
+The composite action ACT-SYNC140-R39-PAPER-LOCAL-SMOKE-20261025 is failed: a stale-offset watcher was interrupted before the read predicate, and that attempt did not issue smaccept read or emit a normal stop marker. The independent read-only recovery action ACT-SYNC140-R39-PAPER-COLD-READ-RECOVERY-20261025 is confirmed. This paired evidence supports PASS_BOUNDED_SUBCASE only; it does not close full T22 Beta.
+
+The ignored report is build/reports/foundation/T24/r39-exact-candidate-runtime-20261025.md. The retained profile is C:\Users\margo\.codex\syncmoney-140-runtime-20261025-r39. Its world, config, SQLite state, logs, and generated files remain in place; do not clean, reuse, or copy runtime data to source.
+
+### Current release-gate crosswalk
+
+| Gate | R39 disposition |
+|---|---|
+| T21 | PARTIAL / IN_PROGRESS; accepted 9/9 current-maximum seeded-row matrix and Paper M12 were not repeated |
+| Broad V03 | SKIPPED / NOT VERIFIED |
+| Minimum-Paper MySQL/MariaDB initial schema | BLOCKED / NOT VERIFIED |
+| Licensed/live CMI | BLOCKED / NOT VERIFIED; license authorization UNKNOWN |
+| Storage-service integration | DEFERRED / NOT VERIFIED |
+| Exact-candidate runtime | PASS_BOUNDED_SUBCASE only on Paper 1.21.6#48 / Java 25 / LOCAL synthetic accounts |
+| Full T22 Beta / full public API compatibility | NOT VERIFIED |
+| Stable / external release | NOT VERIFIED / NOT PERFORMED |
+
+No stable metadata change, tag, push, PR, Central staging/signing, upload, or publication was performed.
+
+## R45 Java 25 source/package validation and current artifact pins (2026-10-25)
+
+The current candidate is versioned locally with -PreleaseVersion=1.4.0; committed stable metadata remains 1.3.2. The candidate toolchain target is Java 25, Gradle 9.8.0, and Paper API minimum 1.21.6. The retained gate log build/reports/foundation/T24/integration-final-source-gate-20261025-r45.log (SHA-256 502AE25693708D27B5D16514A8DAD6ED5FF8B9BD4FA3A160249DA57FA0DFA488) records BUILD SUCCESSFUL, 68/68 actionable tasks, architecture/package checks, publisher isolation, API consumer/acceptance packaging, and nmcpZipAggregation. Current XML results independently recount 157 unit suites / 851 tests and 7 Sync integration suites / 35 tests, zero failures/errors/skips.
+
+| R45 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Core Syncmoney-1.4.0.jar | 31,590,940 | C12F52AAA5EE3F03E8582CB706703495B11D34564485FF4EED95BF880E83129A |
+| PAPI SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| Acceptance SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| API consumer SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| NMCP aggregation aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+The source gate did not run :syncmoney-storage:integrationTest or any PlugDev runtime. The stale storage-service XML dated 2026-10-23 reports absent MySQL/MariaDB/PostgreSQL test URL configuration; it is retained as a prior negative result, not attributed to R45. Storage-service integration remains DEFERRED / NOT VERIFIED.
+
+R39's bounded Paper 1.21.6#48 / Java 25 / LOCAL result (PASS_BOUNDED_SUBCASE) is tied to R39 core SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19. It does not establish current R45 runtime behavior. No new runtime was started; exact-candidate R45 runtime and full T22 Beta remain NOT VERIFIED.
+
+| Gate | R45 disposition |
+|---|---|
+| T21 | PARTIAL / IN_PROGRESS; accepted 9/9 current-maximum seeded-row matrix and Paper M12 were not repeated |
+| Broad V03 | SKIPPED / NOT VERIFIED |
+| Minimum-Paper MySQL/MariaDB initial schema | BLOCKED / NOT VERIFIED |
+| Licensed/live CMI | BLOCKED / NOT VERIFIED; authorization UNKNOWN |
+| Storage-service integration | DEFERRED / NOT VERIFIED |
+| Exact-candidate R45 runtime / full T22 Beta | NOT VERIFIED |
+| Full public API compatibility | NOT VERIFIED |
+| Stable / external release | NOT VERIFIED / NOT PERFORMED |
+
+DNS-rebinding SSRF resistance and WebDownloader transfer/decompression/entry-count bounds remain DEFERRED / NOT VERIFIED. No stable metadata change, push, PR, tag, Central staging/signing, upload, or publication occurred.
+
+### R45 runtime scope decision
+
+The user authorized at most one new isolated disposable PlugDev runtime profile, but the R45 exact-candidate runtime was not started: the retained candidate `.plugdev/run` remains excluded, the expected pinned Paper artifact is absent at the recorded input path, and no R45-specific bounded runner/auditor with current-artifact predicates was selected. The previous R39 bounded observation remains tied to its own core JAR SHA-256 `63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19`. R39 runtime evidence does not transfer to the R45 core JAR. Full T22 Beta remains NOT VERIFIED. This is a deliberate defer; no R45 runtime failure or pass is claimed.
+
+No push, PR, tag, stable metadata change, Central staging/signing, upload, or publication was performed.
+## R46 Java 25 source/package gate and current artifact pins (2026-10-25)
+
+The local R46 source gate ran with JDK 25.0.4 and Gradle 9.8.0 using -PreleaseVersion=1.4.0. The retained log is build/reports/foundation/T24/r46-full-source-package-20261025.log (SHA-256 81739BCA7161427A56CF990DA7AAEF3F2AB5CFF00FCB38D26B12EBC599B5787A). It records BUILD SUCCESSFUL, 68/68 Gradle tasks (14 executed, 54 up-to-date), Sync integrationTest, verifyArchitecture, classfile-major-69 verifyPackaging, Central publisher isolation, apiConsumerJar, acceptanceJar, and nmcpZipAggregation. Current XML recount is 157 unit suites / 854 tests and 7 Sync integration suites / 35 tests, zero failures/errors/skips. The focused node-proxy regression log is build/reports/foundation/T24/r46-node-proxy-targeted-20261025-r2.log (SHA-256 E42B74A92F86367DA75DF0057AF41906723B986181EDE23886F1864D12D0725B); WebNodeProxyAuthTest passed 12/12. No storage-service integration or runtime was invoked for this source-gate record.
+
+### R46 exact-candidate runtime disposition
+
+The PlugDev profile-helper safety tests passed 13/13 under Node 24.19.0. They verify isolated profile construction and refusal to overwrite an existing .plugdev/ directory; they do not audit runtime acceptance.
+
+The optional one-workspace runtime authorization was considered and deferred. The pinned Paper `1.21.6#48` JAR is present locally and matches SHA-256 `35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214`. The documented smoke case has a finite Paper/Java/LOCAL selector, synthetic Acceptance accounts, and log predicates, but no report-specific offline auditor was found that binds the exact candidate and dependency hashes to acceptance, persisted restart reads, and normal shutdown. The PlugDev source checkouts remain locally modified. No new runtime profile was created; R46 runtime and full T22 Beta remain `NOT VERIFIED`. This is a deliberate deferral, not a runtime failure, and does not block the separately authorized source-level local integration.
+
+| R46 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Core Syncmoney-1.4.0.jar | 31,591,955 | FE754399BCB0F625AEA005D5CF1511AD7CB8B7618AF6F4816D2839A4A8547094 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+R39's bounded Paper 1.21.6#48 / Java 25 / LOCAL runtime result is tied to its older core SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19 and does not transfer to R46. Exact-candidate R46 runtime and full T22 Beta remain NOT VERIFIED. Storage-service integration remains DEFERRED / NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); full public API compatibility and Stable remain NOT VERIFIED; external release remains NOT PERFORMED. Stable metadata stays 1.3.2.
+
+## 2026-10-25 R47–R49 focused source regressions
+
+Focused tests ran on JDK 25.0.4 / Gradle 9.8.0 with `-PreleaseVersion=1.4.0`:
+
+```powershell
+.\gradlew.bat -PreleaseVersion=1.4.0 :syncmoney-bukkit:test --rerun-tasks --tests noietime.syncmoney.storage.CacheManagerTransferExecutionTest --tests noietime.syncmoney.vault.unlocked.SyncmoneyVaultUnlockedProviderTest --tests noietime.syncmoney.web.api.nodes.WebNodeProxyAuthTest
+```
+
+The final command ended `BUILD SUCCESSFUL` with 18/18 actionable tasks executed. Fresh XML results report CacheManagerTransferExecutionTest 8/8, SyncmoneyVaultUnlockedProviderTest 9/9, and WebNodeProxyAuthTest 20/20 (37 total; zero failures, errors, or skips). The retained log is `build/reports/foundation/T24/r49-targeted-tests-final-20261025.log`, 2,784 bytes, SHA-256 `3032DA9C25B95F6B165B81CA66DEA86214A80E27528F613F580BA39E8B70C8D6`.
+
+Regression controls observed the expected failures before the fixes: public CacheManager construction reached Redis, VaultUnlocked CMI transfer read balances, and view-only admin/unmapped proxy paths were forwarded (HTTP 200). For the body-cap regression, with its synthetic fixture corrected, temporarily disabling both size checks caused the known- and unknown-length over-limit requests to reach the remote fixture (HTTP 200 instead of the expected 413); the production checks were immediately restored. The final fresh test run passed both variants, verified no more than 1 MiB+1 bytes are consumed for unknown content length, verified zero bytes consumed for an oversized declared length, and confirmed no credential decryption or remote dispatch.
+
+These are unit/handler tests using an in-process synthetic HTTP fixture; they are not PlugDev or deployed runtime acceptance. The earlier R46 full source/package gate and artifact pins predate these changes and are invalid for current candidate content. A new applicable full source/package gate and fresh artifact pins are pending. No storage-service integration, exact-candidate runtime, licensed/live CMI, or external release action was performed.
+
+## 2026-10-25 R49 final source/package gate
+The final Java 25.0.4 / Gradle 9.8.0 source/package gate log is `build/reports/foundation/T24/r49-full-source-package-final-20261025.log` (7,821 bytes; SHA-256 `BF4B998EC60278DE1BBCD9247405C00C1AFA064EEE1F69F022A4A73434FCD103`): `BUILD SUCCESSFUL`, 68 actionable tasks (10 executed, 58 up-to-date). The current unit XML inventory totals 157 suites / 864 tests; Sync integration totals 7 suites / 35 tests. Failures, errors, and skips are zero. `verifyArchitecture`, `verifyPackaging` (classfile major 69), `verifyCentralPublisherIsolation`, acceptance and API consumer packaging, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `DEFERRED / NOT VERIFIED`.
+
+| Current artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,593,700 | `E1564BADC993B9792D963806BC5D878CE8FDAAADBC7227765F3A7970CF4C3CA7` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+The R47 red/green fixture evidence is preserved in `r47-transfer-integration-red-r2-20261025.log` (SHA-256 `A231F05CD38A74943D1A81E7151DFBA71634EC1CD0CEF1C9829AC8CD0D88B878`) and `r47-transfer-integration-green-20261025.log` (SHA-256 `2E4357F65DD7BA2AEBADBAA80950973BE44C899E21ABC6E8F2CBB7361EB23F36`). The tests exposed test fixtures using the intentionally fail-closed public CacheManager constructor; a test-only factory gives the two synchronized transfer fixtures explicit package-scoped enabled construction. Four selected tests pass after the fixture correction; production defaults remain fail closed.
+
+The log does not include storage-service integration or real-server acceptance. These current artifact hashes supersede every earlier R46/R48 pin. Exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`; licensed/live CMI and minimum-Paper initial SQL remain `BLOCKED / NOT VERIFIED`; broad V03 remains `SKIPPED / NOT VERIFIED`; T21 remains `PARTIAL / IN_PROGRESS`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`.
+
+
+## 2026-10-25 R50 final Java 25 source/package gate
+
+R50 addresses static node URL rejection and bounds only the node-proxy upstream response body. `NodesApiContext` rejects unspecified, loopback, link-local, site-local, multicast, IPv4 private/blocked-prefix, and IPv6 ULA addresses during validation. This does not pin DNS results to the eventual HTTP connection. `NodeProxyHandler` reads at most 8 MiB plus one byte; it returns 502 before forwarding any partial response when the declared or streamed body exceeds the cap. Other node response readers were not changed. The 1 MiB request cap remains specific to the proxy request.
+
+Red/green evidence: `r50-address-response-red-r2-20261025.log` (SHA-256 `BA3DB3BD7BD69BE3EE6331B6ADA2C08016D92E15951DBB474078A601AEFEF8CB`) records 30 selected tests with eight expected pre-fix failures: six local/reserved address cases and both declared/streamed upstream overflow cases. The fresh Java 25 targeted recheck is `build/reports/foundation/T24/r50-targeted-tests-rechecked-20261025.log` (3,244 bytes; SHA-256 `C87E3A41A4BE87EA2E3B338A59288792E13AE3F5F7D6A1D5558F722F432C3931`); `NodeOperationsConfigTest` passed 8/8 and `WebNodeProxyAuthTest` passed 22/22, zero failures/errors/skips.
+
+The full source/package command was:
+
+```powershell
+.\gradlew.bat --no-daemon --console=plain --rerun-tasks '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+JDK 25.0.4 and Gradle 9.8.0 were selected explicitly. The full log is `build/reports/foundation/T24/r50-full-source-package-20261025.log` (10,610 bytes; SHA-256 `505D6511AE97D0F4481EF94AE28D8940CE01E5CDAFC2D4FAB6DF0BEA01EFDA8E`): `BUILD SUCCESSFUL`, 68/68 actionable tasks executed. Fresh XML totals are 157 unit suites / 872 tests and 7 Sync integration suites / 35 tests; failures, errors, and skips are zero. `verifyArchitecture`, classfile-major-69 `verifyPackaging`, `verifyCentralPublisherIsolation`, API consumer and acceptance packaging, and local NMCP aggregation passed. The NMCP archive was generated locally; no Central Portal staging, signing, upload, publication, push, PR, tag, or stable metadata change occurred. `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `DEFERRED / NOT VERIFIED`.
+
+| R50 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,595,122 | `A2100C7A28075F94C305AB5BEAFF4E0F31B027C99A70A9B6F39C6B6643981A7A` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+Node URL validation rejects ULA and other local/reserved address classes; DNS rebinding remains DEFERRED / NOT VERIFIED.
+
+Node proxy upstream response bodies are capped at 8 MiB; oversized responses return HTTP 502 without partial forwarding.
+
+R50 targeted Java 25 regressions passed for address filtering and bounded proxy responses.
+
+English and Traditional Chinese docs match the 1 MiB request cap, 8 MiB response cap, and deferred DNS-rebinding limitation.
+
+R50 Java 25 / Gradle 9.8.0 full source/package gate: BUILD SUCCESSFUL.
+
+DNS rebinding and exact-candidate runtime remain NOT VERIFIED; no external release action was performed.
+
+These are source/package and synthetic handler-test results, not PlugDev or deployed runtime acceptance. The single authorized new runtime workspace was not used: the route has a selector and synthetic fixture but no report-specific offline auditor binding the final artifact/dependency pins to startup, acceptance, restart-read, and shutdown; PlugDev source checkouts also have local changes. No server or new profile was started. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 is SKIPPED / NOT VERIFIED; minimum-Paper SQL and licensed/live CMI remain BLOCKED / NOT VERIFIED; Stable and external release remain NOT VERIFIED / NOT PERFORMED. Stable metadata remains 1.3.2.
+
+## 2026-10-25 R50 review-fix gate and current artifact pins
+
+This is the current R50 source/package evidence; the earlier R50 record above is retained as historical evidence for the pre-review-fix snapshot. The review found two node-URL filter/logging gaps. Regression tests reproduced the missing special-use IPv4 rejection and confirmed URL user-info must not be logged. The red run `r50-special-ip-red-073210.log` (5,328 bytes; SHA-256 `C614F6BD67655042E563ACA501A5330DA37892C4B47455F0642174211688E85E`) recorded 19 tests / 11 failures. After the fix, `r50-special-ip-green-073350.log` (3,067 bytes; SHA-256 `F5FE0884413A73E5906223DA174A5E2F7A269B9EC03004B1C5C32491808C3032`) completed BUILD SUCCESSFUL; the subsequent full-gate JUnit XML confirms `NodeOperationsConfigTest` 19/19, zero failures/errors/skips. URL user-info is rejected and validation errors log only exception type.
+
+The latest applicable Java 25.0.4 / Gradle 9.8.0 source/package gate is `build/reports/foundation/T24/r50-review-fix-source-package-073840.log` (10,433 bytes; SHA-256 `710D67799ABE8AF31A0E4ADD8DFCC3D64330D31FCE7A75D5BCD71B7461686FF6`). It completed BUILD SUCCESSFUL with 68/68 tasks executed. Re-read XML totals: 157 unit suites / 883 tests and 7 Sync integration suites / 35 tests, all with zero failures, errors, or skips. Architecture verification, classfile-major-69 packaging, Central publisher isolation, acceptance/API-consumer packaging, and local NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `DEFERRED / NOT VERIFIED`.
+
+| Current R50 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,595,683 | `FB8BF366395E9119AD766711583490569C2DB1E4AABBEF7554773B7227C8800A` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+The exact-candidate runtime, full T22 Beta, full public API compatibility, storage-service integration, broad V03, minimum-Paper SQL initial schema, and licensed/live CMI are not established by this source/package gate. Keep their existing `NOT VERIFIED`, `DEFERRED`, `SKIPPED`, and `BLOCKED` dispositions. Stable metadata remains 1.3.2; no push, PR, tag, staging, signing, upload, or publication occurred.
+
+## 2026-10-25 R50 final exact-version source/package gate and refreshed pins
+
+This record supersedes the preceding R50 source/package counts and artifact pins for the current candidate. The final run explicitly used JDK 25.0.4 (`C:\Program Files\Java\jdk-25.0.4`), Gradle 9.8.0, and the local `-PreleaseVersion=1.4.0` override. Command:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The raw log is `build/reports/foundation/T24/r50-final-source-package-20261025-r3.log` (10,433 bytes; SHA-256 `10AAC2364DFE2151BE31AC78E658D88837BCBE49B5E9AD01992881FC5AC23543`). It ends with `BUILD SUCCESSFUL` and 68 actionable tasks, all executed. JUnit XML was re-read after completion: 157 unit suites / 884 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, and skips. The focused node response/proxy/route set accounts for `NodeOperationsStatusCacheTest` 2/2, `NodeOperationsConfigTest` 19/19, `WebNodeProxyAuthTest` 22/22, and `WebRouteRegistryTest` 7/7. `verifyArchitecture`, classfile-major-69 `verifyPackaging`, Central publisher isolation, acceptance/API-consumer packaging, and local NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `DEFERRED / NOT VERIFIED`.
+
+| Current R50 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,596,440 | `F493F561429D7AA84B6D32F28D3D722108366F4F83D8A05EC939A1E701818ACC` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+This is source/package evidence only. It does not establish live server behavior, DNS-rebinding resistance, licensed/live CMI, minimum-Paper MySQL/MariaDB schema initialization, storage-service integration, or complete public API compatibility. Exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`; T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper SQL and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2. The no-version-override build that produced a 1.3.2-named JAR is excluded from this evidence; the 1.4.0 version override was independently checked through Gradle project properties and verified by the packaging task. No runtime, push, PR, tag, staging, signing, upload, or publication occurred.
+
+## 2026-10-25 R51 health-check disclosure fix and final source/package gate
+
+The R3 independent review found that failed health checks could expose URL user-info through logs and node-status SSE. R51 now logs only the exception type on failure and sanitizes URI user-info in node-status SSE using the same display sanitizer as the node API. Outbound health-check URL construction is unchanged. The focused synthetic red run build/reports/foundation/T24/r51-node-health-url-red-r2-20261025.log (3,404 bytes; SHA-256 F6021FEBC5CEC2F9C022AD3BD63BC2CF49B4FF79A979C74C1F51A1C50075799F) detected the pre-fix disclosure. The green run build/reports/foundation/T24/r51-node-health-url-green-20261025.log (2,915 bytes; SHA-256 DF5BF8635F0B5933A46DE63D91FC2F069A961AA590969A93C64C6B0096ECADE3) passed NodeHealthCheckerTest 1/1, NodeUrlSanitizerTest 2/2, and NodeOperationsConfigTest 19/19, with zero failures, errors, or skips.
+
+The full Java 25.0.4 / Gradle 9.8.0 gate log is build/reports/foundation/T24/r51-full-source-package-java25-20261025.log (10,433 bytes; SHA-256 85260AD3C5D7E77276F7ECB4B1B5C635977FAF36AE935DE991A1914D72C83696). It reports BUILD SUCCESSFUL and 68/68 actionable tasks executed. Independently recounted test XML reports 159 unit suites / 887 tests and 7 Sync integration suites / 35 tests, with zero failures, errors, and skips. Architecture verification, classfile-major-69 packaging, Central publisher isolation, acceptance/API-consumer packaging, and local NMCP aggregation passed. The gate did not invoke syncmoney-storage integration; storage-service integration remains DEFERRED / NOT VERIFIED.
+
+| R51 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,597,492 | BEDDD3F2F62961E98B3F21A600544FD2F3FF140725518062A15DD9300FCDAC46 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,156,932 | C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C |
+
+These pins identify the current local candidate source/package snapshot only. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper SQL initial-schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); full public API compatibility remains NOT VERIFIED; storage-service integration remains DEFERRED / NOT VERIFIED; Stable and external release remain NOT VERIFIED / NOT PERFORMED. Stable metadata remains 1.3.2. No runtime, push, PR, tag, staging, signing, upload, or publication occurred.
+
+The R3 source manifest and review were rejected and are not approval for integration. A refreshed manifest must bind the full 350-commit range and all included current working-tree source/document/test content; two independent read-only reviews of the same digest are still required before local integration.
+
+
+## 2026-10-25 R52 node URL disclosure regression and source/package gate
+
+### Focused URL regression
+
+The synthetic URL regression covered display sanitization, URL validation, and the effective routed `GET /api/nodes` response. The pre-fix run completed 28 tests with 7 expected assertion failures: raw/percent-decoded query or fragment values were accepted, and query/fragment canaries escaped through sanitization and the routed response. After the fix, 29/29 focused tests passed, including `NodeHealthCheckerTest`. Sanitization preserves HTTP(S) origin/path while removing user-info, query, and fragment; malformed values return `[invalid URL]`; new/updated URL validation rejects raw and percent-decoded query/fragment values. The outbound health-check URL construction was not changed. Full details: `build/reports/foundation/T24/r52-focused-url-regression-evidence-20261025.md`.
+
+### Fresh Java 25 / Gradle 9.8.0 source and package gate
+
+The R52 full gate passed with 68 actionable tasks (14 executed, 54 up-to-date), 159 unit suites / 892 tests and 7 Sync integration suites / 35 tests. Failures, errors, and skips were all zero. Architecture verification, classfile-major-69 packaging, Central publisher isolation, acceptance/API-consumer packaging, and local NMCP aggregation passed. Storage-service integration was not invoked and remains `DEFERRED / NOT VERIFIED`.
+
+- Log: `build/reports/foundation/T24/r52-full-source-package-java25-20261025.log`
+- Bytes: 10,076
+- SHA-256: `379CD3472689151F786CF0D40C09B3ADBA20949FDF47C46A47CBE2851BE36F37`
+- Toolchain: Oracle JDK 25.0.4+7-LTS-189 and Gradle 9.8.0; build override `-PreleaseVersion=1.4.0`
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,597,376 | `8295A8B9D0CB0E17D5CCBAED07B4163949AF4AD48947EE1D00A0C75EB137F8E4` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+The five pins are recorded in ignored local evidence `build/reports/foundation/T24/r52-artifact-pins-20261025.json`; each current file was rehashed and matched its pinned byte count and SHA-256. The source manifest/review package must be regenerated after the bilingual documentation edits. These build results do not establish exact-candidate runtime, full T22 Beta, full public API compatibility, broad V03, minimum-Paper SQL, or licensed/live CMI acceptance. Keep their existing `NOT VERIFIED`, `SKIPPED`, `BLOCKED`, or `DEFERRED` labels; do not transfer R39 runtime evidence from its different artifact.
+
+## 2026-10-25 R52C Java 25 source/package gate and refreshed artifact pins
+
+This entry supersedes the R52 source/package counts and current artifact pins above. The earlier R52B full gate failed with seven test failures; that log is retained as `build/reports/foundation/T24/r52b-full-source-package-java25-20261025.log` (7,896 bytes; SHA-256 `60504C21CD1299200817609CB3384C0FE9B26E40BF6FBBC3713460F4EFAAA1F5`). The seven failures were `ReceiptPairingTest.delayedRedisReceiptDoesNotRegressTheLocalCache`, five `LocalToSyncMigrationLockTest` cases, and `CacheManagerDegradedStateTest.addTransportFailureImmediatelyMarksSharedRedisDegraded`; this failed attempt is retained and is not counted as a pass.
+
+After applying the regression fixes and adjusting test fixtures/assertions to the current migration and Lua-script contracts, the R52C full source/package command completed successfully:
+
+```powershell
+.\gradlew.bat --no-daemon test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging --console=plain
+```
+
+The log `build/reports/foundation/T24/r52c-full-source-package-java25-20261025.log` is 8,863 bytes, SHA-256 `C48B370B30CC6CEF9DF9E60B35425AFAF448176EA2D9105B3554E72F1A861AED`, and ends with `BUILD SUCCESSFUL`: 58 actionable tasks (11 executed, 47 up-to-date). Current JUnit output contains 162 unit suites / 899 tests and 8 Sync integration suites / 38 tests, with zero failures, errors, or skips. `verifyArchitecture` and `verifyPackaging` passed, including classfile major 69. The old storage integration XML is from a separate older task output; storage-service integration was not invoked in R52C and remains `DEFERRED / NOT VERIFIED`.
+
+The current XML inventory confirms `RedisMissingAccountMutationIT` 3/3, `LocalToSyncTransactionHistoryAtomicityTest` 1/1, `LocalToSyncMigrationOverwriteTest` 2/2, and `MemoryStateManagerCleanupReservationTest` 2/2 within the passing full gate. The test-summary JSON is `build/reports/foundation/T24/r52c-test-summary-20261025.json` (56,304 bytes; SHA-256 `98A52783C2D4F1E2411E8B4D81ADBE549470A8004ECE5731420B8B40CBE4D044`) and records per-suite XML hashes. The artifact-pin JSON is `build/reports/foundation/T24/r52c-artifact-pins-20261025.json` (2,742 bytes; SHA-256 `71113B79F3A66467296483990F20911F6415E290BE24BE07F099FAC23912B39E`). The earlier failed full-gate log remains available and is not overwritten. Current artifact files were re-hashed from their paths; all five match these current pins:
+
+| Current R52C artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,520 | `FD06656233434508FE967B7373C74F1298EFAE8445AFCACA4A46A1E7CB154D60` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,156,932 | `C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C` |
+
+A separate current-candidate packaging check then passed 15 actionable tasks (6 executed, 9 up-to-date): `apiConsumerJar` was up-to-date, `verifyCentralPublisherIsolation` passed, and `nmcpZipAggregation` completed. Its log `build/reports/foundation/T24/r52c-supplemental-packaging-20261025.log` is 2,063 bytes, SHA-256 `3095131F2E022832A88401266E90DC7CD18CEFBF259858FD4B96591E9B493D73`; the evidence JSON is `build/reports/foundation/T24/r52c-supplemental-packaging-20261025.json`. It ran no tests and re-hashing confirmed all five artifact pins were unchanged.
+
+The earlier R52 core artifact, 31,597,376 bytes / SHA-256 `8295A8B9D0CB0E17D5CCBAED07B4163949AF4AD48947EE1D00A0C75EB137F8E4`, is historical and superseded by R52C. R52C source/package evidence does not establish runtime acceptance, storage-service integration, minimum-Paper MySQL/MariaDB initialization, licensed/live CMI, full public API compatibility, or broad V03.
+
+Exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`; T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); full public API compatibility remains `NOT VERIFIED`; storage-service integration remains `DEFERRED / NOT VERIFIED`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2. No runtime, push, PR, tag, staging, signing, upload, or publication occurred.
+
+## 2026-10-25 R52D post-fix Java 25 source/package gate and artifact pins
+
+After the R52D review fixes, the full source/package command completed successfully:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The Gradle launcher/daemon ran on Java 21.0.6; compilation used the Java 25.0.4 toolchain. Gradle version was 9.8.0 and the packaged classfile major was 69. The log is `build/reports/foundation/T24/r52d-final-source-package-20261025-r1.log` (10,406 bytes; SHA-256 `EA335EC2242117BA440FFC22DE3F851CEC5D86B7C49E3AE03FCFB4F015FCCC22`). All 68 actionable tasks executed. JUnit results were 163 unit suites / 901 tests and 9 Sync integration suites / 39 tests, with zero failures, errors, or skips. `verifyArchitecture`, `verifyPackaging`, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed.
+
+Focused result XML from that full run records `SqlSnapshotWriterMigrationInsertTest` 2/2, `LocalToSyncMigrationOverwriteTest` 2/2, and `EconomyEventConsumerAuthorityRecoveryIT` 1/1. The last test used a disposable loopback Redis process and a synthetic strict SQL record at 900.00/version 41; Redis keys stayed absent, the SQL fixture remained unchanged, and the accepted stale event remained quarantined and unacknowledged. These are source/integration results, not live MySQL service or Paper runtime acceptance. MySQL/MariaDB storage-service integration was not invoked and remains `NOT VERIFIED`.
+
+All five output artifacts were rehashed after the build:
+
+| R52D artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,526 | `FD06DE8DF79B5D16714A10603DB04525F25171761618C74733B8CCE17E8DAF9E` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+The pins are recorded in `build/reports/foundation/T24/r52d-artifact-pins-20261025.json`. The earlier R52D manifest/review package is stale and was rejected at source digest `a8e47d921113dce4860319bcf0fe56927832ba8b308bd05ac37484ee9aa7b59e`; it does not bind the post-fix migration/Redis files and latest documents. Generate a new complete manifest/package after freezing bilingual docs, then obtain two independent reviews of that exact new digest before any commit.
+
+The gate does not establish optional storage-service integration, exact-candidate runtime or full T22 Beta, T21 completion, broad V03, minimum-Paper MySQL/MariaDB initial schema, licensed/live CMI, full public API compatibility, Stable, or external release. These remain `NOT VERIFIED`, `PARTIAL / IN_PROGRESS`, `SKIPPED`, `BLOCKED`, `DEFERRED`, or `NOT PERFORMED` as listed in the release-readiness record. Stable metadata remains 1.3.2.
+
+## 2026-10-25 R52F LOCAL-to-SYNC migration ceiling and full source/package gate
+
+R52F validates the normalized source balance against `MoneyPolicy.MAX_SHARED_BALANCE` (`999999999999999999.99`) before preparing SQL in both `insertPlayerIfAbsentForMigration(...)` and `replacePlayerForMigration(...)`. An over-limit balance is rejected without clamping; the source LOCAL value is unchanged. The non-force caller regression verifies that a SQL-rejected row does not issue Redis balance or leaderboard mutations. Exact-limit acceptance, both over-limit SQL paths, and the Redis no-write case are synthetic-source tests; they do not establish MySQL/MariaDB service behavior.
+
+The focused red/green evidence is preserved in `build/reports/foundation/T24/r52f-migration-guard-red-20261025-r1.log` (2 expected failures among 5 tests; SHA-256 `498C5EDA4B7769D57B6A230EFEBE8AE9C43E8E297BDB46C0C0B532DB3DF2C84E`) and `r52f-migration-guard-green-20261025-r1.log` (SHA-256 `0270CFF6BD77D63E27390312DB62A2796D2346A2BEC6BFC388EDDB0C5BAAC066`). The new over-limit insert and force-replacement assertions failed before the guard when SQL preparation was reached, then passed after the guard. The final focused results in the full gate XML are `SqlSnapshotWriterMigrationInsertTest` 5/5 and `LocalToSyncMigrationOverwriteTest` 3/3.
+
+The full source/package command was:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The refreshed log `build/reports/foundation/T24/r52f-final-source-package-20261025-r2.log` is 10,406 bytes, SHA-256 `F1FDB7698DC6E6004F4AD2CA44E8FDA69AFDDB290681864B0FFB5AE0FB6C88E0`, and ends with `BUILD SUCCESSFUL`: 68 actionable tasks, all executed. This r2 log supersedes the r1 log as the current R52F gate record. Gradle 9.8.0 used the Java 25.0.4 compilation toolchain; the launcher/daemon JVM was Java 21.0.6. Independently read JUnit XML totals are 163 unit suites / 905 tests plus 9 Sync integration suites / 39 tests (172 suites / 944 tests total); failures, errors, and skips were all zero. The current machine-readable test inventory is `r52f-test-summary-20261025-r2.json` (1,221 bytes; SHA-256 `D05ED8E59C56D138807034223218D807D0CD9BA0E8BC6E11C1EB6446FF6EBCD5`). The five rehashed outputs are pinned in `r52f-artifact-pins-20261025-r2.json` (1,715 bytes; SHA-256 `2AA595ED65648EB3329E1EEAA40D2F0D2F07AC9B2D4E90BED0DCD8D31A51E28D`). The old storage-service integration XML was excluded; `:syncmoney-storage:integrationTest` was not invoked. Architecture verification, classfile-major-69 packaging, API consumer, Central publisher isolation, and local NMCP aggregation passed.
+
+| R52F artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,719 | `B1BEF45BB4E58A3CCE2A7B18FD7F94BDC6B45D5485981B88AE389CF76D35A878` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+All five artifacts were rehashed from the candidate worktree after the r2 gate. These are local candidate pins; they do not establish exact-candidate server acceptance. No PlugDev runtime profile was created or started because the current LOCAL smoke lacks a report-specific offline auditor for candidate/dependency identity, both startups, acceptance results, restart persistence, normal shutdown, and cleanup. Full T22 Beta remains `NOT VERIFIED`. T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration and full public API compatibility remain `NOT VERIFIED`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2. No push, PR, tag, staging, signing, upload, or publication occurred.
+
+## 2026-10-25 R52F runtime route recheck
+
+A new route preflight is recorded in `build/reports/foundation/T24/exact-candidate-runtime-route-preflight-20261025-r52f.md`. The M04 runner and report-specific auditor now exist, but the single-profile route cannot be exercised from current local inputs: the designated Paper `1.21.6#48` JAR is absent, neither available 1.3.2 JAR matches the required baseline artifact pin, `sqlite3` is unavailable, and the existing PlugDev checkouts are dirty. The fixed runner ports were closed at inspection but that alone does not satisfy its artifact/tool preconditions. No profile or runtime was started. This updates the reason for deferral; it does not change the scope or result: exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`. Current English/Traditional Chinese user docs already state that limitation, so no user-facing support claim was changed.
+
+## 2026-10-25 R52F r3 historical candidate gate and bounded T21 M04 result (superseded by r5)
+
+This r3 snapshot is historical and superseded by the r4 and then r5 source/package gates; prior r2 records remain historical.
+
+Exact command:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The fresh r3 JUnit XML contains 163 unit suites / 906 tests and 9 Sync integration suites / 39 tests (172 suites / 945 tests total), all with zero failures, errors, or skips. The earlier r3 test-summary JSON counted one stale storage integration XML whose Gradle task was not run; preserve that JSON unchanged as an incorrect intermediate inventory and use the r4 summary for the current gate.
+
+The r3 gate log is `build/reports/foundation/T24/r52f-final-source-package-20261025-r3.log` (11,564 bytes; SHA-256 `6186D58EB4B80F4EF671BF02E9EB863F074BA6A9F7CCF7AC192D96523ABD1DAF`). Machine-readable records: `r52f-test-summary-20261025-r3.json` (SHA-256 `28491D6E901B82BA95A282FCBB319BBC97AD662CF66D7D74420E7E82733C46FC`) and `r52f-artifact-pins-20261025-r3.json` (SHA-256 `619AEB4321CD3C05FB5114966DDFA23386A781864901417B2FC67F45E10488DF`).
+
+| R52F r3 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,746 | `7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+### T21 M04 exact-artifact bounded runtime subcase
+
+The fresh isolated run is reported at `build/reports/foundation/T21-upgrade-cycles/paper-1.21.6-48-20261025-174300-874b832228cc47368f2acf44b77df366/result.json` (22,987 bytes; SHA-256 `13659D97DCE11D648EA27272C953EA8B2F5A6065B841BE7711734B4E21CDAD82`). A sanitized machine-readable runtime summary is `r52f-m04-runtime-summary-20261025-r1.json` (SHA-256 `BA867316DBFA589B6EB1FDA3915D8A73E2769E83B13C756B3E8FA685A380375C`). The retained console record is `C:/Users/margo/.codex/worktrees/syncmoney-r52f-runtime/build-logs/r52f-m04-paper-1.21.6-48-local-normal-drain-20261025-r1.log` (23,855 bytes; SHA-256 `211FDFD558391BF0F3912732EA97B87C6910F3EAA45CABDBF7CE91CD293B3B30`). The report-specific offline auditor returned PASS with 398 assertions; its source hash is `1f01bc4826438432537983b655cb0a22bba4840b39f4661bb3f0204f56c39d17`.
+
+Selector: Paper `1.21.6#48` (server SHA-256 `35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06ce8afeda5c214`), Java `25.0.4`, `LOCAL`, features off, `guard-on`, `normal-drain`, synthetic SQLite fixture SHA-256 `ff8eefd9d71b6cb9c78e052ea791aa89e5dacc2b4e23f8debadd4ba16fa346d3`. Candidate JAR SHA-256 exactly matches the r3 core pin above. Baseline 1.3.2 JAR rebuilt from `71cc55d` matched the runner pin (`442A404276B538CE807B0F063FB37920BE85E60961A52A475B3F3524D08F4F10`). Baseline, candidate, and rollback version probes passed; candidate API classloader passed; all three servers stopped by owned-session RCON with process exit verified and no forced cleanup. Synthetic balances were `100.00 / 0.00` before the upgrade and `1337.25 / 765.50` after candidate normal stop and again after the 1.3.2 rollback. The run stopped its owned Gradle daemon successfully.
+
+This is `PASS_BOUNDED_SUBCASE` for this exact scenario only. It does not establish full LOCAL mode, full T22 Beta, other modes, Folia/Canvas coverage, storage-service integration, minimum-Paper MySQL/MariaDB schema, licensed/live CMI, or full public API compatibility. Keep T21 `PARTIAL / IN_PROGRESS`, full T22 Beta `NOT VERIFIED`, broad V03 `SKIPPED / NOT VERIFIED`, minimum-Paper SQL and licensed/live CMI `BLOCKED / NOT VERIFIED`, storage-service integration and full public API compatibility `NOT VERIFIED`, and Stable/external release `NOT VERIFIED / NOT PERFORMED`.
+
+## 2026-10-25 R52F r5 Java 25 source/package gate and current artifact pins
+
+This r5 record supersedes r4 for current source/package evidence. The full command was:
+
+```powershell
+.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation
+```
+
+The gate log is `build/reports/foundation/T24/r52f-final-source-package-20261025-r5.log` (10,406 bytes; SHA-256 `AE06C193923338674C78102F03778776D8C063D9880BE4182116DA270329BEFF`). It ends with `BUILD SUCCESSFUL`; all 68 actionable tasks executed. Gradle 9.8.0 used Java 25.0.4 for compilation and Java 21.0.6 for the launcher. Independent JUnit XML counts are 163 unit suites / 908 tests and 9 Sync integration suites / 39 tests (172 suites / 947 tests total), all with zero failures, errors, and skips. The old storage-service integration XML was excluded because `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `NOT VERIFIED`. Architecture verification, classfile-major-69 packaging, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed.
+
+The machine-readable inventory is `r52f-test-summary-20261025-r5.json` (2,334 bytes; SHA-256 `8324AFFCD7694471F09627F83C25F5F4741B30C21F87593BF3057B4F0C6CF8E7`). The current pin record is `r52f-artifact-pins-20261025-r5.json` (1,481 bytes; SHA-256 `F2460A99A5D7FDB684B19AA02F06F5526FAE068577A771E7A013C6DC2E3CEFCD`). The gate log digest matches the `gateLog` value in both JSON records.
+
+| R52F r5 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,861 | `46A593BBEC73FE7BA8759ED822EF1734ED6704CAD1688A1BF61150906FDE2DD4` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+The reviewed migration code rejects negative and above-maximum normalized LOCAL balances before shared SQL preparation; the r5 suite includes negative-balance and sub-cent consistency regressions. The focused migration-ceiling RED/GREEN logs remain `r52f-migration-guard-red-20261025-r1.log` / `r52f-migration-guard-green-20261025-r1.log`; sub-cent normalization RED/GREEN logs are `r52f-subcent-red-20261025-r2.log` / `r52f-subcent-green-20261025-r1.log`. These results are synthetic/source-level and do not establish live MySQL/MariaDB service behavior.
+
+The bounded T21 M04 report and 398-assertion audit are for the older r3 core JAR (`7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8`) only. No r5 exact-candidate server runtime was run; the one isolated PlugDev workspace has already been used and remains retained. Exact-candidate runtime and full T22 Beta are `NOT VERIFIED`. T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration and full public API compatibility remain `NOT VERIFIED`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2.
+
+## 2026-10-25 R52F r6 final source/package gate
+
+The r6 candidate is `linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, based on `71cc55dfeefe9a8f40a3835b051ddd324d353767`, 350 commits ahead and zero behind. The specified target local `main` remains clean at that base and aligned with `origin/main`. The candidate has 92 modified tracked paths, 15 untracked source/test paths, zero staged paths, plus separate local `.upaw/` and `docs/superpowers/` directories; only approved reviewed source paths may be committed.
+
+The focused `-0.004` SQLite regression used the public `preview()` and `start()` paths. Before the fix, the new test failed because preview accepted the negative sub-cent balance after normalization. After the fix, `LocalToSyncMigrationOverwriteTest` passed 6/6 with zero failures/errors/skips. The test verifies the shared SQL insert/replace methods are not called, Redis resource/set/zadd are not called, memory is not updated, and the synthetic LOCAL SQLite value remains `-0.004`. The positive `1.234` case remains `1.23` in preview and migration targets.
+
+| Focused evidence | Bytes | SHA-256 | Result |
+|---|---:|---|---|
+| `r52f-negative-subcent-red-20261025-r1.log` | 4,224 | `3E79070361B729330EA4FA643C73DDAD59DDC35E2E280D43BECC9B43A8C10669` | Expected RED, exit 1 |
+| `r52f-negative-subcent-green-20261025-r1.log` | 3,737 | `3E3395EE88B0578A01675CDDE0E54908DB52888A45ABF0FA9DD98D7C6872282E` | GREEN, exit 0 |
+
+Final command: `.\\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. Result `BUILD SUCCESSFUL`; Gradle 9.8.0, launcher JVM 21.0.6, Java 25.0.4 toolchain; 68/68 actionable tasks executed. JUnit XML contains 163 unit suites / 909 tests and 9 Sync integration suites / 39 tests (172 suites / 948 tests), zero failures/errors/skips. Architecture, classfile-major-69 packaging, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked and remains NOT VERIFIED.
+
+| Current r6 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,873 | `E4260F3CDDD01151702FBCD7A4056E3F47CCD9973D54A1A2D125473D57520980` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+Final log: `build/reports/foundation/T24/r52f-final-source-package-20261025-r6.log`, 10,406 bytes, SHA-256 `641C0E6C69ABB2A873968DB36588EB47D1D33752CB95E089A5A29B32EBAF44C7`. Test summary JSON `r52f-test-summary-20261025-r6.json`: 2,047 bytes, SHA-256 `5E1C05711EBD9E67C3BE880746062FDD9D46B5918351F9CA2600B36C599A6D8E`. Artifact pins JSON `r52f-artifact-pins-20261025-r6.json`: 1,528 bytes, SHA-256 `AD839FE6E51D10C7FF9C6C84A548759F79398EF361CCF11D68B067D14BD1EE1F`.
+
+The run used no server or PlugDev runtime. The one authorized isolated PlugDev workspace was already used for the historical R52F r3 M04 case; that result does not verify the r6 artifact. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED. The five ignored target-main collisions have not been backed up yet; do so only after both independent reviewers approve one frozen digest.
+
+## Historical R52F r8 final source/package and frontend build evidence (superseded by r9)
+
+This gate supersedes r6 for the current candidate package. It followed the embedded-build script correction and includes the exact current candidate tree. The correction changes only the helper command to `corepack pnpm run build`, honoring `package.json`'s pnpm 10.22.0 pin on Windows where PATH's pnpm was 12.5.1.
+
+Final command: `.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. Result `BUILD SUCCESSFUL`; Gradle 9.8.0, launcher JVM 21.0.6, Oracle JDK 25.0.4 toolchain; 68/68 actionable tasks executed. JUnit XML contains 163 unit suites / 909 tests and 9 Sync integration suites / 39 tests (172 suites / 948 tests), zero failures/errors/skips. `verifyArchitecture`, classfile-major-69 `verifyPackaging`, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked; the older XML timestamp is from an earlier run and remains NOT VERIFIED.
+
+| Current r8 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,601,873 | `E4260F3CDDD01151702FBCD7A4056E3F47CCD9973D54A1A2D125473D57520980` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+Gate log `build/reports/foundation/T24/r52f-final-source-package-20261025-r8.log`: 10,406 bytes, SHA-256 `2F02895B1D065D1F5A5A7AC26D4AF51D29B659AA0916B65ED9978256B241C2C2`. The corresponding machine-readable test summary and artifact pins are `r52f-test-summary-20261025-r8.json` and `r52f-artifact-pins-20261025-r8.json`.
+
+Frontend validation used Node 24.19.0 / Corepack pnpm 10.22.0: `typecheck` passed; `test:unit --run` passed 4 files / 22 tests; production `build` passed; `build:embedded` passed and synchronized 39 generated files. The first embedded attempt failed because PATH resolved pnpm 12.5.1; after the helper was changed to dispatch through Corepack, the retry passed. Generated embedded `dist` and `WebAdminServer.extractIndividualFiles` had no additional tracked changes. The five frontend log records and their SHA-256 values are in the R8 evidence report.
+
+No server/PlugDev runtime was started. The historical r3 M04 result does not validate the r8 JAR. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS; broad V03 SKIPPED / NOT VERIFIED; minimum-Paper SQL initial schema and licensed/live CMI BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility NOT VERIFIED; Stable and external release NOT VERIFIED / NOT PERFORMED. Stable metadata remains 1.3.2.
+
+## Historical 2026-10-25 R52F r9 source/package gate and exact-candidate bounded M04 runtime (superseded by r10)
+
+At that checkpoint, the R9 source/package gate superseded r8; the R10 record below is current. Candidate branch/head: linco/t21-currentmax-guard / 66a25c4f8327932eae850bcfa52b1060942b1fd3; merge-base: 71cc55dfeefe9a8f40a3835b051ddd324d353767; 350 commits ahead, zero behind. Stable root build metadata remains 1.3.2; the gate used only the invocation override releaseVersion=1.4.0. Java 25.0.4 was the toolchain and Gradle 9.8.0 the build version (launcher JVM 21.0.6).
+
+Command: .\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation. Result BUILD SUCCESSFUL; 68/68 actionable tasks executed. JUnit XML: 164 unit suites / 911 tests plus 9 Sync integration suites / 39 tests (173 suites / 950 tests), zero failures, errors, or skips. Architecture, classfile-major-69 packaging, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed. The focused MigrationCommandAsyncIoTest is included (2/2). The storage-service integration task was not invoked and remains NOT VERIFIED.
+
+Evidence: gate log build/reports/foundation/T24/r52f-final-source-package-20261025-r9.log, 10,406 bytes, SHA-256 8e8021cae26a5b26bb9496ea25d6088e06f8d88121b46ba0f2f4bce88fb0fb66; test summary build/reports/foundation/T24/r52f-test-summary-20261025-r9.json, SHA-256 be0147fc96adb80e8d3477ba4894547386f4a127a937b8bfb4c9ad2a68f509ca; artifact-pin record build/reports/foundation/T24/r52f-artifact-pins-20261025-r9.json, SHA-256 8d76c23128ce73e8623e35d8107aacf6e539f5442ee0dad30023a57969e0611d.
+
+| R52F r9 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,604,354 | 93c20c49fc40f2fa9c7cc9c716c1882c88451efe64c12b31617573d3292d84fd |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c |
+| SyncmoneyAcceptance.jar | 54,905 | 29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e |
+| aggregation.zip | 4,162,102 | ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d |
+
+The separate post-build runtime report used the exact same core JAR SHA-256 93c20c49fc40f2fa9c7cc9c716c1882c88451efe64c12b31617573d3292d84fd. Its result file is C:/Users/margo/.codex/worktrees/syncmoney-r52f-r10-runtime/candidate-runtime-source/build/reports/foundation/T21-upgrade-cycles/paper-1.21.6-48-20261025-212807-8854c04fd0ef4dac8af761878727a089/result.json, SHA-256 8bab087aca408487f4e60ec75b6e7b8219a105e368f7c1ccf0774dfbee19db30. It recorded PASS for Paper 1.21.6 build 48 / Java 25.0.4, LOCAL / guard-on / normal-drain with a synthetic SQLite fixture; candidate bytes were 31,604,354, baseline 1.3.2 SHA-256 442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10 from source 71cc55d, Paper SHA-256 35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214, and VaultUnlocked 2.20.2 SHA-256 bd9e7a31f1b2d31a591497174887eea7ae7e632c6b179da13e4f0ad732de2df7. Baseline, upgrade, and rollback start/stop exit codes were 0; process exit was verified; no forced cleanup occurred; isolated Gradle daemon stop exit was 0. The report-specific offline auditor passed 398 assertions. Audit log C:/Users/margo/.codex/worktrees/syncmoney-r52f-r10-runtime/m04-audit-r10.log SHA-256 is b5116799a53f50289abf64f285fc235175670f3c376168603b371334ff56791b; auditor source SHA-256 is 1f01bc4826438432537983b655cb0a22bba4840b39f4661bb3f0204f56c39d17. Result: PASS_BOUNDED_SUBCASE only.
+
+Do not infer full LOCAL support, complete T21, broad Paper/Folia/Canvas coverage, licensed CMI behavior, or full T22 Beta from this one case. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper MySQL/MariaDB initial-schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED; full T22 Beta remains NOT VERIFIED; Stable/external release remain NOT VERIFIED / NOT PERFORMED. Stable metadata remains 1.3.2. The isolated runtime workspace remains preserved; no further runtime is authorized or needed. Do not rerun the accepted 9/9 current-maximum matrix or Paper M12, and do not replay R6/R8D/R8E.
+
+
+## 2026-10-25 R52F r10 final source/package gate and invalid-UUID migration correction
+
+Exact command: .\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation. Result: BUILD SUCCESSFUL, 68/68 actionable tasks executed. Gradle 9.8.0 ran under Java 21.0.6 and selected the Java 25.0.4 compile toolchain.
+
+Current JUnit XML contains 164 unit suites / 912 tests and 9 Sync integration suites / 39 tests (173 suites / 951 tests total), with zero failures, errors, or skips. The older syncmoney-storage:integrationTest XML timestamp is from 2026-10-25 11:07 local time and is not part of this R10 gate; that service integration remains NOT VERIFIED. verifyArchitecture, classfile-major-69 verifyPackaging, API-consumer packaging, Central publisher isolation, and NMCP aggregation passed.
+
+R10 gate log: build/reports/foundation/T24/r52f-final-source-package-20261025-r10.log, 10,406 bytes, SHA-256 48adab7934d50427d7c901a2f8f632bc6d815dfc9b957cd6c3f09720353eaefb. Test summary: r52f-test-summary-20261025-r10.json. Rehashed artifact pin record: r52f-artifact-pins-20261025-r10.json.
+
+| R52F r10 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,605,447 | 5c4e70294cdc39fa1f21adc312adb99e699e6fd814550bdafc48b6735fefe771 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c |
+| SyncmoneyAcceptance.jar | 54,905 | 29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e |
+| aggregation.zip | 4,162,102 | ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d |
+
+The R9 Standards review found that malformed UUID rows could be skipped while migration continued, omitting an account. R10 fails the SQLite snapshot for a missing/invalid UUID, records the failing local row in the checkpoint, and performs no shared SQL or Redis writes. The mixed-row regression is included in the full gate and passed. The previous task handoff records a focused 7-test RED run with one expected failure before the change and 7/7 GREEN afterward; no standalone focused log was present in the current reports when this record was written.
+
+The R9 M04 runtime result remains bound to its exact R9 JAR and is historical. Its isolated workspace already contains that run and is preserved; it is not reused. R10 did not run a server runtime, so exact-R10 runtime and full T22 Beta remain NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED; Stable/external release remain NOT VERIFIED / NOT PERFORMED. Stable metadata remains 1.3.2. No runtime reuse, candidate commit, main fast-forward, push, PR, tag, staging, signing, upload, or publication is recorded here.
+
+## 2026-10-25 R52F R10 source/package gate and runtime-artifact reconciliation
+
+The current source/package gate is R52F R10. The exact command, summary JSON, artifact pins, focused migration note, and documentation crosswalk are under `build/reports/foundation/T24`. Gradle 9.8.0 ran with launcher Java 21.0.6 and Java 25.0.4 compilation toolchain. The full gate completed `BUILD SUCCESSFUL`, 68/68 actionable tasks; independently counted JUnit XML contains 164 unit suites / 912 tests and 9 Sync integration suites / 39 tests (173 suites / 951 tests total), zero failures/errors/skips. Architecture, packaging/classfile major 69, API-consumer packaging, acceptance packaging, Central publisher isolation, and NMCP aggregation passed. The stale storage integration XML predates R10 and `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `NOT VERIFIED`.
+
+The current gate log is 10,406 bytes, SHA-256 `48ADAB7934D50427D7C901A2F8F632BC6D815DFC9B957CD6C3F09720353EAEFB`. The test-summary JSON is 1,699 bytes, SHA-256 `89FF1A6AA5461492E87A0E3B2CA3FC555812348829FCD6D9CDB36EF99E83B2F5`; the artifact-pin JSON is 1,257 bytes, SHA-256 `AD51075ACEFE890CBD4A8A210A0A2600B125C2F4B2D0B04C4267EBB2E68B7ADA`. Current artifact files were independently rehashed:
+
+| R52F R10 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,605,447 | `5C4E70294CDC39FA1F21ADC312ADB99E699E6FD814550BDAFC48B6735FEFE771` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+| `aggregation.zip` | 4,162,102 | `AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D` |
+
+R10 also closes the malformed-UUID migration review finding at source level: missing/invalid UUIDs fail the local snapshot, record the offending source row as failed, and prevent target SQL or Redis writes. The R10 JUnit XML reports `malformedUuidInMixedSnapshotFailsBeforeAnySharedWrite()` passing within `LocalToSyncMigrationOverwriteTest` (7/7). The task handoff records a focused 7-test red/green run, but no separate focused log is available in the report directory; this limitation is retained.
+
+The isolated Paper M04 result currently stored under the R10-named workspace is not R10 runtime evidence. Its result JSON SHA-256 is `8BAB087ACA408487F4E60EC75B6E7B8219A105E368F7C1CCF0774DFBEE19DB30`; it records a PASS for Paper `1.21.6#48`, Java `25.0.4`, `LOCAL`, `guard-on`, `normal-drain`, synthetic SQLite, and candidate checkout `66a25c4`, but pins candidate plugin SHA-256 `93c20c49fc40f2fa9c7cc9c716c1882c88451efe64c12b31617573d3292d84fd` (31,604,354 bytes), the R9 binary. The offline auditor log SHA-256 is `B5116799A53F50289ABF64F285FC235175670F3C376168603B371334FF56791B` and reports 398 assertions passed. A separate retained console record SHA-256 `FFC892D5A1B311B614E4BBAA1BF088361A58B29D4EAC53026C11D17F2818B2B0` reports a preflight exception resolving candidate checkout metadata. These files remain unchanged in the isolated workspace. The M04 result is historical R9 `PASS_BOUNDED_SUBCASE` only; the R10 core JAR hash above does not match it, so exact-R10 runtime and full T22 Beta remain `NOT VERIFIED`. Do not create or reuse another runtime workspace.
+
+Overall release readiness remains `BLOCKED / NOT VERIFIED`: T21 `PARTIAL / IN_PROGRESS`; broad V03 `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial schema and licensed/live CMI `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration, exact-R10 runtime, and full public API compatibility `NOT VERIFIED`; full T22 Beta and Stable/external release `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2. No push, PR, tag, stable metadata change, remote change, staging, signing, upload, or publication occurred.
+
+
+## 2026-10-25 R52F R11 exact UUID-format migration correction and source/package gate
+
+The R10 Spec review found that `UUID.fromString` accepts abbreviated source text. On the Java 25.0.4 runtime, `UUID.fromString("1-1-1-1-1")` returned `00000001-0001-0001-0001-000000000001`; the parsed value does not equal the original text ignoring case. The former migration reader therefore did not fully enforce the documented malformed-UUID source-row failure.
+
+`LocalToSyncMigrationTask` now accepts only standard 36-character 8-4-4-4-12 hexadecimal UUID text, case-insensitively. `abbreviatedUuidInMixedSnapshotFailsBeforeAnySharedWriteAndPreservesLocalSource` exercises `start(false, false)`, verifies no shared SQL, Redis, or memory mutation, requires the row failure and failed checkpoint, and confirms the LOCAL row remains at `99.00`. Before the fix, the regression failed because `insertPlayerIfAbsentForMigration` was invoked; after the fix the complete `LocalToSyncMigrationOverwriteTest` class passed, and the new case passes in the full gate. The focused run's console evidence is summarized in ignored report `build/reports/foundation/T24/r52f-canonical-uuid-guard-20261025-r11.md`; the full-gate JUnit XML is the current independently recountable result.
+
+Full command: `./gradlew.bat -PreleaseVersion=1.4.0 --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`.
+
+The Java 25 toolchain / Gradle 9.8.0 gate completed `BUILD SUCCESSFUL`, 68/68 actionable tasks. Current XML counts: 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests (173 suites / 952 tests), zero failures/errors/skips. Architecture verification passed; packaging verified classfile major 69, unique classes, descriptors/resources, unrelocated API, relocated Gson, and runtime-only server APIs; API consumer and acceptance packaging, publisher isolation, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked and remains `NOT VERIFIED`.
+
+Gate log `build/reports/foundation/T24/r52f-final-source-package-20261025-r11.log`: 10,406 bytes, SHA-256 `b7e899aa9d52169457c4b7f8a702c65fc8c34297d22966161d0a13327501119e`. Test summary `r52f-test-summary-20261025-r11.json`; artifact pins `r52f-artifact-pins-20261025-r11.json`.
+
+| R52F R11 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,605,493 | `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e` |
+| `aggregation.zip` | 4,162,102 | `ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d` |
+
+The R10 review results (Standards approve; Spec reject) are bound only to R10 digest `99f347f156777c2c73278ef9416536037f55e5f51e7d5d79e8ba622a2aa37182`; neither result approves the changed R11 source. The R10 verdicts do not apply to R11; final review disposition is recorded in the separate local readiness checkpoint, and this source/package gate is not Beta or Stable acceptance. Runtime scope and all other T21/T22/SQL/CMI/V03/storage/API/Stable/external-release states remain as documented; no runtime or external release action occurred.
+
+
+## 2026-10-25 R52F R12 source/package gate (R11 code candidate)
+
+This full Java 25 / Gradle 9.8.0 gate was rerun after the current R11 documentation reconciliation. Command: -PreleaseVersion=1.4.0 --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation. Result: BUILD SUCCESSFUL, 68/68 actionable tasks executed. JUnit XML: 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests (173 suites / 952 tests), zero failures/errors/skips. Architecture, classfile-major-69 packaging, API consumer, acceptance, Central publisher isolation, and NMCP aggregation passed. :syncmoney-storage:integrationTest was not invoked; its older XML was excluded, so storage-service integration remains NOT VERIFIED.
+
+R12 gate log: build/reports/foundation/T24/r52f-final-source-package-20261025-r12.log, 10,406 bytes, SHA-256 b7e899aa9d52169457c4b7f8a702c65fc8c34297d22966161d0a13327501119e. Test-summary JSON SHA-256: d8b01313e3b92d1514c6a2d7c22a1ced7db143d4483e0bf06b87c0ae5d0fc1e6. Artifact-pin JSON SHA-256: ff5bf610f3b3fedebf11e2ebd9725f913f244e2b84111e34270ef9de3e4742ba. These pins bind the R11 code candidate; no Java source changed during this rerun.
+
+| R52F R12 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,605,493 | 6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c |
+| SyncmoneyAcceptance.jar | 54,905 | 29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e |
+| aggregation.zip | 4,162,102 | ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d |
+
+The R11 UUID-format regression remains 8/8 in LocalToSyncMigrationOverwriteTest, including abbreviatedUuidInMixedSnapshotFailsBeforeAnySharedWriteAndPreservesLocalSource(). Stable metadata remains 1.3.2. Exact-R11 runtime, full T22 Beta, and all other open T21/SQL/CMI/V03/storage/API/Stable/external-release gates retain their documented NOT VERIFIED, PARTIAL, SKIPPED, BLOCKED, or NOT PERFORMED states. This is source/package evidence only; no runtime or external release action occurred.
+## 2026-10-26 R52F R14 source/package evidence and runtime acceptance disposition
+
+The R52F R14 command used Java 25 toolchains and Gradle 9.8.0 with `-PreleaseVersion=1.4.0`; it completed 68 actionable tasks. Current JUnit XML reports 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests (173 suites / 952 tests total), zero failures/errors/skips. `verifyArchitecture`, classfile-major-69 packaging, API-consumer and acceptance packaging, Central publisher isolation, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not invoked; storage-service integration remains `NOT VERIFIED`.
+
+Gate log: `build/reports/foundation/T24/r52f-final-source-package-20261026-r14-retry1.log` (10,406 bytes; SHA-256 `b267f577fbfa2c37b90ea646fe7bb08cba511ed2999bc3260f27605f69dfe6e6`). Test summary JSON SHA-256: `edcb3874fa4428fe5c2b9aa259c73b6d2dc405e759fbb946f8f6f5a9e38133f2`. Artifact pin record SHA-256: `a43c0b1bae30aef2530c919d468537f69b003b45bb259ffcaad6d18696a32d31`.
+
+| R52F R14 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Syncmoney-1.4.0.jar` | 31,605,493 | `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09` |
+| `SyncmoneyExpansion-1.4.0.jar` | 13,872 | `a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c` |
+| `SyncmoneyAcceptance.jar` | 54,905 | `29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824` |
+| `SyncmoneyApiConsumer.jar` | 2,760 | `49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e` |
+| `aggregation.zip` | 4,162,102 | `ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d` |
+
+Each listed size and SHA-256 was freshly recomputed against the R14 pin record. The isolated runtime source-copy manifest verified 736 files and 3 artifacts; its `source_copy_sha256` is `62d9c25bb8ec7ea6ac13534031497796522a891fd01e78836d76d34117c99a64`. The R14 exact-candidate runtime attempt is recorded in `build/reports/foundation/T24/r14-runtime-acceptance-follow-up-20261026.md`; an acceptance PASS/FAIL marker was absent, so runtime acceptance and full T22 Beta remain `NOT VERIFIED`. Stable metadata remains 1.3.2; no external release action occurred.
+
+
+## 2026-10-26 R52R exact source/package gate (current candidate)
+
+Command in the isolated source copy: .\gradlew.bat -PreleaseVersion=1.4.0 --no-daemon --console=plain test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation. Final post-document-reconciliation gate log: `build/reports/foundation/T24/R52R/r52r-final-source-package-20261026-r3.log`, 7,361 bytes, SHA-256 `8c61095de19eac7a0d2400f8fbdb1b6d4732a066f6e6e9c4229ec3a769879213`. The full-range source manifest/package digest and same-digest review receipts are maintained in the ignored local readiness checkpoint and UPAW records, outside the source commit. Result: BUILD SUCCESSFUL; 68 actionable tasks. Java 25.0.4 toolchain / Gradle 9.8.0. JUnit XML: 164 suites / 920 tests and 10 Sync integration suites / 42 tests (174 suites / 962 tests), zero failures/errors/skips. Architecture, classfile-major-69 packaging, API consumer, acceptance packaging, Central publisher isolation, and NMCP aggregation passed. Storage-service integration was not invoked and remains NOT VERIFIED.
+
+Frontend: pnpm typecheck passed; pnpm test:unit --run passed 4 files / 22 tests; pnpm build passed; pnpm build:embedded passed and synchronized 39 files. Candidate and generated embedded dist plus WebAdminServer.extractIndividualFiles were byte-identical after generation. Dependency install used pnpm install --frozen-lockfile in the isolated source copy.
+
+Focused review-fix evidence: CmiOwnerFreshnessTest first failed the new cleanupDoesNotDiscardAnAccountFreshnessWatermark test before the fix; after removal of age-based watermark expiry, the full focused class passed. LocalToSyncMigrationOverwriteTest passed, covering pre-existing Redis accounts, partial pairs, the race after preflight, and absent-only writes. The current candidate's node proxy/API docs already describe full bounded response buffering; the reported streaming discrepancy was not present.
+
+| R52R artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,608,675 | 4629284db89ea05336c49fb224208d8ccf0f4a8f9bc32c7cd23d201478c2a10a |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c |
+| SyncmoneyAcceptance.jar | 54,905 | 29c41c996026b6275ad9276587d05e800759c710e4b485e5891cf1f85c281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325f358195be3f0f1d4f99b2babbb6db3c26c212e2e5da7dc9f4209a2a396e |
+| aggregation.zip | 4,162,102 | ae49d7f4f1b89bf5b7e9afb259459551d52467d6840b61eab12b7568dab6c29d |
+
+Exact-candidate runtime acceptance was not attempted. The single isolated runtime authorization was not exercised because the available R52R runner/auditor did not prove a safe session/readiness-timeout/stop lifecycle, and its manifest omitted source-gate and PlugDev/dependency pins; no Paper, PlugDev runtime profile, or dependency runtime was created. Keep full T22 Beta NOT VERIFIED. Stable metadata stays 1.3.2; no push, PR, tag, remote change, staging, signing, upload, or publication occurred.
+
+
+R52R final evidence-log pins (local source/package execution):
+- Gradle source/package gate log: 7,361 bytes; SHA-256 `8c61095de19eac7a0d2400f8fbdb1b6d4732a066f6e6e9c4229ec3a769879213`.
+- Frontend typecheck log: 131 bytes; SHA-256 `c5118e041f3a83886bea2aec65e569efa344b4f94850c81527248ee676a05c80`.
+- Frontend unit log: 404 bytes; SHA-256 `01da23aae4d1d46096341887606c4f1ec6e24e9163875df4044521ac00f95bce` (4 files / 22 tests).
+- Embedded production build log: 4,153 bytes; SHA-256 `5fbd4e1d2534c06a7047cc362ad48a8b6f38dd510c4e3110f80264afc9e6fdf3` (39 generated files synchronized).
+The R52R build copy and candidate were compared by SHA-256 across 720 tracked paths and 17 selected new source/test paths. After the R53 documentation append, exactly three doc-only files differ (`Proposal/05`, `Proposal/06`, and `tools/plugdev/README.md`); all 623 checked build-input paths (Gradle configuration, module/root source and tests, and frontend files) still match. No Java, test, resource, frontend, or Gradle input changed after the R52R gate. JUnit XML was recounted from the build copy: 164 unit suites / 920 tests plus 10 Sync integration suites / 42 tests; zero failures, errors, or skips. The R52R focused Bukkit test log records an executed test task; the R2 full gate records 34 executed / 34 up-to-date tasks; the final R3 doc-reconciliation gate records 9 executed / 59 up-to-date tasks. These checks reuse the recorded R52R execution evidence; they did not rerun Gradle or frontend commands.
+
+R52R execution-log pins: full source/package gate R2, 8,243 bytes, SHA-256 `5c99df37a097ce1e62e912acc2a701b2df9cc98de0075fc9b8cd96d2a727dbcf` (68 tasks, 34 executed / 34 up-to-date); focused Bukkit test log, 3,781 bytes, SHA-256 `c8f1483cb0e66ca7ef6bce8da8e684e45267b1720d16f4eeca4783262278c047` (`:syncmoney-bukkit:test` executed, `BUILD SUCCESSFUL`); final R3 source/package gate and frontend log pins are listed above. The final R3 Gradle run had 9 executed / 59 up-to-date tasks.
+
+
+
+## 2026-10-26 R53 r2 isolated source-copy gate (historical; superseded by the r3b candidate gate below)
+
+This retained source-copy result is not the current candidate artifact pin or the final R53 source/package gate. The current r3b gate and artifact pins are recorded in the later section.
+
+The designated candidate was built from an isolated source copy using Java 25.0.4 and Gradle 9.8.0. Command: gradlew.bat -PreleaseVersion=1.4.0 --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation. Result: BUILD SUCCESSFUL, 68/68 actionable tasks executed. JUnit XML reports 166 unit suites / 924 tests and 10 Sync integration suites / 42 tests (176 suites / 966 tests), zero failures, errors, or skips. Architecture verification, classfile-major-69 packaging, API-consumer and acceptance packaging, Central publisher isolation, and NMCP aggregation passed. The :syncmoney-storage:integrationTest task was not run; storage-service integration remains NOT VERIFIED.
+
+Frontend checks passed: pnpm typecheck; pnpm test:unit (4 files / 22 tests); pnpm build; and pnpm build:embedded, which synchronized 39 files. The initial pnpm test:unit --run wrapper invocation did not execute tests; the corrected pnpm test:unit invocation passed. No Java, resource, test, Gradle, or frontend build input changed after the R53 source/package gate. The source-copy comparison found no mismatch among the 623 checked build-input paths; differences were documentation-only. The full-range r53-r1 manifest omitted two candidate tests (AdminCommandColdBalanceTest and MigrationCommandStopTest) that were present in the built source copy, so its manifest and reviews are superseded. The final full-range manifest includes all 19 new source/test paths and current docs; its exact digest and review package/review receipts are in the ignored local readiness checkpoint and UPAW state.
+
+| R53 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,609,611 | C1637BE14BE3C59706EAD81F30F9B983490A45CC05670E1EA2C63ED56D4416F1 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,156,932 | C0580F7492A60702BA0AAD70430A09809452AD615A18FB46731E87BE20D42C3C |
+
+R53 source/package evidence pins (local-only build/reports/foundation/T24/R53):
+- Gradle gate log: 10,421 bytes; SHA-256 BD9A54A700B302B35F20165D2EA2B564DE10EEE2E8467D0A3171FCA64A52BA06.
+- Test summary JSON: 3,562 bytes; SHA-256 C95ED06A777F87BD9BA3670869EC82CA0D1760C540ADEEEA84E1A121C06C3602.
+- Artifact pins JSON: 1,830 bytes; SHA-256 2CF9AE13EB52832ABA2FA7943D5ED3F9219E630D1BA4BDBABB5D551C2E4CF734.
+- Frontend typecheck log: 122 bytes; SHA-256 C708DA95D3BE537DD4FE3FF150DB503FBEE972738EDD0C9618382353A031A4E2.
+- Frontend unit log: 386 bytes; SHA-256 C20519A4A37D9ED30AC4FE5EC375022F64A1D7895C4F555D539091436E8BC1CC.
+- Frontend production build log: 3,541 bytes; SHA-256 ED394A4C12DCFF50726F175EE7E67A9DBED6040631B0174BAF60AF6401CFA0A7.
+- Embedded build log: 4,126 bytes; SHA-256 2F527B762958BEBA243267AF1A2911DBDA9067D779F0CB2B3B066F50117900DB.
+
+The R53 artifact pins were independently recomputed against the isolated source-copy outputs. Exact-candidate runtime acceptance was not run: the read-only route review returned DO NOT RUN YET because the runner manifest lacks source-gate and PlugDev/dependency pins, readiness timeout may leave an untracked server process, RCON loopback binding is not proven before the first start, and stop/session cleanup predicates disagree. R53's prepare helper now refuses an existing .plugdev directory but does not fix those lifecycle gaps. No server or new runtime profile was created. Keep exact-candidate runtime and full T22 Beta NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper SQL initial schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED. Stable metadata remains 1.3.2; no push, PR, tag, staging, signing, upload, or publication occurred.
+
+## 2026-10-26 R53 r3b candidate source/package evidence (historical; superseded by R4)
+
+After the R53 r2 P1 review finding, the CMI migration stop/resume race and checkpoint-clear concurrency were corrected with regression coverage. The exact candidate worktree (`linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, base `71cc55dfeefe9a8f40a3835b051ddd324d353767`) was built with Java 25.0.4 / Gradle 9.8.0. Command: `gradlew.bat '-PreleaseVersion=1.4.0' test :syncmoney-papi-expansion:test :syncmoney-sync:integrationTest shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation nmcpCheckAggregationFiles`. Result: BUILD SUCCESSFUL, 68/68 actionable tasks; 166 unit suites / 926 tests and 10 Sync integration suites / 42 tests (176 suites / 968 tests), zero failures/errors/skips. Architecture, classfile-major-69 packaging, API consumer and acceptance artifacts, Central publisher isolation, and NMCP aggregation passed. `:syncmoney-storage:integrationTest` was not run and remains NOT VERIFIED.
+
+Frontend typecheck, 4 unit files / 22 tests, production build, and embedded bundle synchronization of 39 files passed. The 95 tracked `syncmoney-web` source input paths match the R53 frontend build copy byte-for-byte; the generated embedded bundle and `WebAdminServer` extractor also match that copy. The four raw logs are retained under `C:\Users\margo\.codex\syncmoney-r53-final-20261026-r1\frontend-r53-r2-input-identical`:
+- `r53-pnpm-typecheck-20261026-r1.log`: 122 bytes; SHA-256 `C708DA95D3BE537DD4FE3FF150DB503FBEE972738EDD0C9618382353A031A4E2`.
+- `r53-pnpm-unit-20261026-r2.log`: 386 bytes; SHA-256 `C20519A4A37D9ED30AC4FE5EC375022F64A1D7895C4F555D539091436E8BC1CC`.
+- `r53-pnpm-build-20261026-r1.log`: 3,541 bytes; SHA-256 `ED394A4C12DCFF50726F175EE7E67A9DBED6040631B0174BAF60AF6401CFA0A7`.
+- `r53-pnpm-build-embedded-20261026-r1.log`: 4,126 bytes; SHA-256 `2F527B762958BEBA243267AF1A2911DBDA9067D779F0CB2B3B066F50117900DB`.
+
+| R53 r3b artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,609,927 | 3C119D0CFDF3DAC29AEA670B2C86AD8EB0B3DD13F9AB46EC8AF9D2651367E041 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+R3b Gradle log: 9,918 bytes; SHA-256 `ACC550AFA8219AFCCCC4909A5F9D33E22BB203EE366FC6ADBD9CE78A283168E3`. Test summary JSON: 2,386 bytes; SHA-256 `F6500BC1337F70AF91D74CBC49979EEC915BD59A3C580BEB8266A2D108D28900`. Artifact-pins JSON: 2,409 bytes; SHA-256 `4C254ABA5DD9A6B8A82B9C7C30674A85983D4DD35D7E8791483DD1702460AD45`. The exact full-range source manifest and review package are refreshed for r3 after documentation reconciliation; their identities and independent review receipts are in the ignored R53 local readiness checkpoint and UPAW evidence.
+
+The fresh PlugDev route review remains DO NOT RUN YET because complete runner/source/dependency pins, readiness-timeout process cleanup, pre-start RCON loopback binding, and consistent stop/session cleanup are not proven. No new profile or server was created, no existing PlugDev data was reused, and no R14/R6/R8D/R8E action was replayed. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper SQL initial schema and live licensed CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED. Stable metadata remains 1.3.2. No push, PR, tag, staging, signing, upload, or publication occurred.
+
+## Historical 2026-10-26 R53 R4 exact-candidate source/package gate (superseded by R5)
+
+The designated candidate (`linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, base `71cc55dfeefe9a8f40a3835b051ddd324d353767`) passed a fresh Java 25.0.4 / Gradle 9.8.0 source/package gate with `-PreleaseVersion=1.4.0`: 68/68 actionable tasks executed; 167 unit suites / 931 tests and 10 Sync integration suites / 42 tests (177 suites / 973 tests), zero failures, errors, or skips. Architecture, classfile-major-69 packaging, API-consumer and acceptance packaging, Central publisher isolation, and NMCP aggregation passed. Five targeted regression classes passed 36 tests total. The storage-service integration task was not invoked and remains NOT VERIFIED.
+
+The exact command was `.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. The final gate log is `build/reports/foundation/T24/R53/r53-final-source-package-20261026-r4.log` (10,406 bytes; SHA-256 `75E56EB23E82F141FA2E9C0960EF1B931EC13C32BE1DB60093AD70786CAB5DCB`). Frontend typecheck, 4 unit files / 22 tests, production build, and 39-file embedded synchronization remain applicable: their source, embedded bundle, and extractor inputs match the R3c manifest and the corresponding logs remain unchanged.
+
+| R53 R4 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,613,386 | AAE5B297D9553109C9619ECF02CF373EE0444B5C056447817A9DD7A66138C660 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+The five R4 artifact sizes and SHA-256 values were recomputed from the current candidate build. The test summary, artifact-pin JSON, complete 350-commit source manifest, review package, and its `source_snapshot_sha256` are local-only evidence under `build/reports/foundation/T24/R53/`; they do not enter the source commit. The current exact-candidate runtime route remains DO NOT RUN YET, so runtime acceptance and full T22 Beta remain NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper MySQL/MariaDB initial-schema and live licensed CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED. Stable metadata remains 1.3.2; Stable and external release remain NOT VERIFIED / NOT PERFORMED.
+
+
+## Historical 2026-10-26 R53 R5 exact-candidate source/package gate (superseded by R54 disposition)
+
+The designated candidate (`linco/t21-currentmax-guard` at `66a25c4f8327932eae850bcfa52b1060942b1fd3`, based on `71cc55dfeefe9a8f40a3835b051ddd324d353767`) passed the fresh Java 25.0.4 / Gradle 9.8.0 source/package gate with `-PreleaseVersion=1.4.0`: 68/68 actionable tasks executed; 167 unit suites / 932 tests and 10 Sync integration suites / 42 tests (177 suites / 974 tests), zero failures, errors, or skips. Six targeted regression classes passed 39 tests: `MigrationTaskLockTest` (21), `LocalToSyncMigrationLockTest` (8), `MigrationCommandAsyncIoTest` (2), `MigrationCommandStopTest` (4), `CMIEconomyHandlerApiCacheTest` (3), and `BaltopCommandTest` (1). Architecture, classfile-major-69 packaging, API-consumer and acceptance packaging, Central publisher isolation, and NMCP aggregation passed. The storage-service integration task was not invoked and remains NOT VERIFIED.
+
+The exact command was `.\gradlew.bat '-PreleaseVersion=1.4.0' --no-daemon --console=plain --rerun-tasks test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar :syncmoney-sync:integrationTest verifyArchitecture verifyPackaging verifyCentralPublisherIsolation nmcpZipAggregation`. The log is `build/reports/foundation/T24/R53/r53-final-source-package-20261026-r5.log` (10,406 bytes; SHA-256 `1DC9AC0B42BDCB3055CE7CF493B7BAE4F82005BB4A6C614CA6B96A69F3706B5C`).
+
+| R53 R5 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Syncmoney-1.4.0.jar | 31,614,140 | D2DD4DC274946DDA0B4D3E475241E67C9726674E17A7F52E13E282E8720D7FC3 |
+| SyncmoneyExpansion-1.4.0.jar | 13,872 | A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C |
+| SyncmoneyAcceptance.jar | 54,905 | 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824 |
+| SyncmoneyApiConsumer.jar | 2,760 | 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E |
+| aggregation.zip | 4,162,102 | AE49D7F4F1B89BF5B7E9AFB259459551D52467D6840B61EAB12B7568DAB6C29D |
+
+Frontend typecheck, 4 unit files / 22 tests, production build, and 39-file embedded synchronization remain applicable because their source, embedded bundle, and extractor inputs are unchanged since their recorded R53 checks. Their log digests and the R5 source snapshot/review package digests are recorded in the local ignored readiness checkpoint. Exact-candidate runtime acceptance and full T22 Beta remain NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper initial-schema and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); storage-service integration and full public API compatibility remain NOT VERIFIED. Stable metadata remains 1.3.2; no external release action occurred.
+
+
+## 2026-10-26 R54 disposition and current validation result
+
+**Decision:** the user chose to retain ADR-07, not adopt ADR-15, defer the direct Vault/plugin transfer recovery repair/integration, and leave local `main` unmerged at `71cc55d` / stable metadata `1.3.2`. The R5 findings remain `BLOCKED / NOT VERIFIED`: direct-transfer `SENT_UNKNOWN` quarantine may be lost after restart; the old overflow log cannot safely resolve it; no operator-resolution path is verified. Do not treat R54 recovery code or `/syncmoney recovery` as verified support.
+
+**Earliest partial attempt:** the 05:33 UTC Java gate captured nine failed-test markers, but its retained log has no terminal test/build summary. The log is `.upaw/artifacts/r54-java-gate-20261026T053309201Z/java-source-package-gate.log` (6,966 bytes; SHA-256 `3EDE5621000EB609BE2BFC748DFDC7933E83A1796F93B57234AD8578F8BD5843`); a 21,099-byte worker thread dump was saved separately. This is incomplete evidence, not a pass.
+
+A separate 05:47 UTC focused run recorded 9 tests completed with 1 failure in `ConsumerFailureSemanticsTest.rejectedAuthorityMutationWaitsForReceiptThenReleasesWithoutRetrying`; its log is `.upaw/artifacts/r54-receipt-fixture-tests-20261026T054714428Z/focused-tests.log` (3,918 bytes; SHA-256 `650D00554F2A349D867AF20C26E1DBCAAAB5360C452341F51E77DD5D95C2B6FB`). It was not a passing result.
+
+**05:52 UTC validation:** the Java 25 / Gradle 9.8.0 single-worker gate reached `:syncmoney-bukkit:test` and logged three failures: `ConsumerShutdownTest.shutdownClosesAdmissionAndDrainsAProducerReservationAcceptedBeforeShutdown`, `ConsumerShutdownTest.shutdownDrainsAcceptedWritesBeforeReturning`, and `EconomyEventConsumerConcurrencyTest.testZeroLossZeroDuplicationUnderConcurrentSubmission`. Sync integration, architecture, and packaging did not complete. Its log is 4,847 bytes, SHA-256 `23A07F6FCFB5F57C34766ADD9C042A953676393BF740C92C11C2CC25F854B75D`, at `.upaw/artifacts/r54-source-gate-20261026T055255Z/java-source-package-gate.log`.
+
+**Latest validation:** the 06:17 UTC Java 25 / Gradle 9.8.0 source/package attempt completed 201 tests with 10 failures and 1 skipped, then Gradle Test Executor 4 failed with `Java heap space` at `:syncmoney-bukkit:test`. The log shows `:apiConsumerJar`, `:acceptanceJar`, and `:shadowJar` were reached before the test failure. The overall gate failed; Sync integration, architecture, and later verification tasks were not established. The log is `.upaw/artifacts/r54-source-gate-20261026T061738Z/java-source-package-gate.log` (9,284 bytes; SHA-256 `44C49CDB9176D739E30479A00ED10E933E020FCB3D0EF026FF6B426BC72519E1`). No complete current source/package gate, source manifest, or verified artifact pin exists. The current ignored readiness snapshot is `Proposal/1.4.0-Architecture-Foundation/13-release-readiness-2026-10-26-r54.md`; the earlier 12 checkpoint remains preserved.
+
+The existing `build/libs/Syncmoney-1.4.0.jar` is 31,661,116 bytes, SHA-256 `5699B42B709751430F349F338130FE0A88BF76B041D7D566C940086C8400DD53`. The 06:17 log shows `:shadowJar` was reached before the overall gate failed at `:syncmoney-bukkit:test`; no current source manifest or current exact-candidate artifact pin was generated. The observed file hash is not a verified release artifact pin. R53 R5 pins remain historical and cannot be promoted to current evidence.
+
+T21 remains `PARTIAL / IN_PROGRESS`; broad V03 remains `SKIPPED / NOT VERIFIED`; minimum-Paper MySQL/MariaDB initial-schema and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); storage-service integration, current exact-candidate runtime, full T22 Beta, and full public API compatibility remain `NOT VERIFIED`; Stable/external release remain `NOT VERIFIED / NOT PERFORMED`. Do not rerun the accepted 9/9 matrix, Paper M12, R6, R8D, or R8E. No runtime or external release action occurred.
+
+
+## 2026-10-26 R56 source-test result and integration hold
+
+The three focused runs for ConsumerFailureSemanticsTest, EconomyEventConsumerTest, and EconomyEventConsumerTransferTest each ended with BUILD SUCCESSFUL; the transfer-focused run covered 16 tests. This bounded result does not replace the full task.
+
+The subsequent :syncmoney-bukkit:test run ended BUILD FAILED: 771 tests, 6 failures, 0 errors, and 0 skipped. Raw log: .upaw/artifacts/r56-bukkit-full-20261026T073638827Z/bukkit-test.log, 5,464 bytes, SHA-256 b7d2363c7946f42c243788e68cfffb38ff92720c839f7925669dacdea1f40d0b. The six failed tests were:
+
+- MemoryPendingStateTest.newerRemoteAuthorityConvergesAfterPendingWriteCompletes — accepted pending ownership remained and memory stayed at 110.00/version 8 instead of converging to 130.00/version 10.
+- ReceiptPairingTest.delayedRedisReceiptDoesNotRegressTheLocalCache — mock receipt parsing failed; the Redis outcome was treated as unknown.
+- ReceiptPairingTest.publishAndPersistenceUseTheRedisReceiptAfterTheCacheAdvances — the confirmed snapshot did not reach the SQL queue.
+- CacheManagerDegradedStateTest.addTransportFailureImmediatelyMarksSharedRedisDegraded — expected degraded-state notification was not observed.
+- CacheManagerDegradedStateTest.setTransportFailureImmediatelyMarksSharedRedisDegraded — expected degraded-state notification was not observed.
+- CacheManagerTransferExecutionTest.delayedTransferReceiptCannotRegressNewerPubSubSnapshots — mock receipt parsing failed; the Redis transfer outcome was treated as unknown.
+
+No fix or cause classification is asserted here. Sync integration, architecture, packaging, and frontend gates have no current R56 pass from this run. Storage-service integration remains NOT VERIFIED.
+
+The R56 failed-test log `.upaw/artifacts/r56-bukkit-full-20261026T073638827Z/bukkit-test.log` (5,464 bytes; SHA-256 `b7d2363c7946f42c243788e68cfffb38ff92720c839f7925669dacdea1f40d0b`) records `:shadowJar UP-TO-DATE` before `:syncmoney-bukkit:test` fails. That is the task result for this invocation; the same run completed 771 tests with 6 failures and is not release qualification. No current source manifest or exact-candidate artifact pin binds the observed on-disk JAR (31,661,116 bytes; SHA-256 `5699b42b709751430f349f338130fe0a88bf76b041d7d566c940086c8400dd53`) to a reviewed source snapshot. The R5 source manifest is historical (720 entries; SHA-256 48743deb58c8552a2bb636714332f73483c510986835163c91e9d797f7f899b9) and is not a current source snapshot pin.
+
+The user reaffirmed ADR-07 and chose to defer repair/integration and leave local main unmerged. Keep the R5 funds-safety findings BLOCKED / NOT VERIFIED; do not treat direct-transfer recovery or /syncmoney recovery as verified support. Exact-candidate runtime/T22 Beta remain NOT VERIFIED; T21 remains PARTIAL / IN_PROGRESS; broad V03 remains SKIPPED / NOT VERIFIED; minimum-Paper SQL and licensed/live CMI remain BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN); Stable/external release remain NOT VERIFIED / NOT PERFORMED.
+
+## 2026-10-26 R57 read-only audit and source-gate hold
+
+The user reaffirmed ADR-07, deferred the direct-transfer recovery repair/integration, and left target `main` at `71cc55d` / stable `1.3.2`. The R5 findings remain `BLOCKED / NOT VERIFIED`: direct Vault/plugin-transfer `SENT_UNKNOWN` quarantine may be lost after restart, the legacy overflow log cannot safely settle the outcome, and an operator-resolution path is not verified. ADR-15 remains not adopted.
+
+The R56 `:syncmoney-bukkit:test` run completed 771 tests with 6 failures. Its raw log is `.upaw/artifacts/r56-bukkit-full-20261026T073638827Z/bukkit-test.log` (5,464 bytes; SHA-256 `B7D2363C7946F42C243788E68CFFFB38FF92720C839F7925669DACDEA1F40D0B`). The failures are `MemoryPendingStateTest.newerRemoteAuthorityConvergesAfterPendingWriteCompletes`; `ReceiptPairingTest.delayedRedisReceiptDoesNotRegressTheLocalCache`; `ReceiptPairingTest.publishAndPersistenceUseTheRedisReceiptAfterTheCacheAdvances`; `CacheManagerDegradedStateTest.addTransportFailureImmediatelyMarksSharedRedisDegraded`; `CacheManagerDegradedStateTest.setTransportFailureImmediatelyMarksSharedRedisDegraded`; and `CacheManagerTransferExecutionTest.delayedTransferReceiptCannotRegressNewerPubSubSnapshots`.
+
+A read-only production/test call-path audit found evidence consistent with stale mocks: the tests stub earlier overloads, argument/key counts, or bare-list receipts, while current paths use stable operation IDs and a structured receipt envelope. This is not a validated fix: no fixture was changed and no focused rerun occurred. The six failures therefore remain unresolved and the source gate remains blocked. Sync integration, architecture, packaging, frontend, API-consumer, and storage-service gates were not established by this R56 test run.
+
+The observed 31,661,116-byte candidate JAR (`5699B42B709751430F349F338130FE0A88BF76B041D7D566C940086C8400DD53`) is not verified against the current dirty source. The R5 manifest (720 entries; SHA-256 `48743DEB58C8552A2BB636714332F73483C510986835163C91E9D797F7F899B9`) and all prior artifact pins are historical. No current source manifest or exact-candidate artifact pin was generated. Direct-recovery code is dirty-only and its wiring spans shared modified files; no reviewed ADR-07-compliant allowlist exists.
+
+No code/test/build input, runtime, target main, stable metadata, or external state changed during R57. Existing PlugDev data was preserved; no runtime or software test was started in R57. Keep exact-candidate runtime/T22 Beta `NOT VERIFIED`; T21 `PARTIAL / IN_PROGRESS`; broad V03 `SKIPPED / NOT VERIFIED`; minimum-Paper SQL and licensed/live CMI `BLOCKED / NOT VERIFIED`; storage-service integration and full public API compatibility `NOT VERIFIED`; Stable/external release `NOT VERIFIED / NOT PERFORMED`. Full detail is in the ignored R57 readiness record.
+
+## 2026-10-26 R59 — Revalidated Bukkit test evidence
+
+R58 focused log: .upaw/artifacts/r58-focused-bukkit-20261026-171331.log (3,077 bytes; SHA-256 48A327DF38C9C69C3BCBB2DD2862E417C86148C8A02207124440889BE1567CEC). It reports BUILD SUCCESSFUL. The current XML for the four reviewed classes recounts 33 tests: MemoryPendingStateTest 16, ReceiptPairingTest 6, CacheManagerDegradedStateTest 3, and CacheManagerTransferExecutionTest 8; all passed.
+
+R58 full Bukkit log: .upaw/artifacts/r58-bukkit-full-20261026-171410.log (3,501 bytes; SHA-256 883AD2F4089B06095533F51A7A012AB65D682874D8D51816DFE5D3DB79EF6364). It reports BUILD SUCCESSFUL. Current syncmoney-bukkit test XML recount: 134 suites, 771 tests, 0 failures, 0 errors, 0 skipped. The four-class patch is 18,226 bytes; SHA-256 746807276EE3767C1CE232498A3E7F400BB6D2224E8E6F5D3DAABCA7343D72F1. The R58 validation summary SHA-256 is 6C16FB2D73C1E187D1F24C71071D4ADC9E2A11AE6C5ADD6EB034B8EB94684A77. These files were rehashed and read; no test was rerun in R59.
+
+Two independent read-only R59 reviews approved the complete existing four-class diff; the R59 UPAW gate passed and its review work item completed. The original R58 work item remains BLOCKED under its narrower fixture-only review contract; R59 separately records the complete bounded diff review. Do not promote this test result to a full source/package gate.
+
+The observed 31,661,116-byte candidate JAR SHA-256 5699B42B709751430F349F338130FE0A88BF76B041D7D566C940086C8400DD53 remains unverified against the dirty source because shadowJar was previously UP-TO-DATE. The 720-entry R5 manifest SHA-256 48743DEB58C8552A2BB636714332F73483C510986835163C91E9D797F7F899B9 is historical. No current source manifest or exact-candidate artifact pin exists. Sync integration, architecture, packaging, API-consumer, frontend, and storage-service results were not established by the R58 Bukkit-only run.
+
+The user retained ADR-07 and deferred direct-transfer recovery repair/integration. Keep direct-transfer SENT_UNKNOWN restart safety and operator resolution BLOCKED / NOT VERIFIED; keep T21 PARTIAL / IN_PROGRESS, broad V03 SKIPPED / NOT VERIFIED, minimum-Paper SQL and licensed/live CMI BLOCKED / NOT VERIFIED (CMI authorization UNKNOWN), storage-service integration/full API compatibility/exact-candidate runtime/T22 Beta NOT VERIFIED, and Stable/external release NOT VERIFIED / NOT PERFORMED. No runtime or external release action occurred.
+
+## Historical 2026-10-26 R62 — raw Lua fixtures and test-only gate result (superseded by R63)
+
+R62 changed only the raw Redis Lua fixture adapters in RedisMutationSafetyIT and RedisMissingAccountMutationIT. Both now provide the required receipt key and canonical payload fingerprint and assert the v1 receipt status, reason, account count, account values, and existing no-mutation behavior. The complete R62 `:syncmoney-sync:integrationTest` task ran 44 tests: 41 passed, 3 failed, 0 errors, 0 skipped. The two raw-fixture classes passed all 23 tests. The remaining three failures were in `PayLuaScriptManagerNoscriptIT`, which had no production caller; those tests did not exercise or establish a failure in live `/pay`. The full task failed, but no live `/pay` defect was established by that obsolete fixture.
+
+R62 verifyArchitecture passed. verifyPackaging passed with -PreleaseVersion=1.4.0 and classfile major 69. Storage-service integration was not run. Current on-disk JAR hashes are recorded in Proposal/1.4.0-Architecture-Foundation/19-release-readiness-2026-10-26-r62.md; no current source manifest exists, so those observations are not source-bound release pins. The R5 720-entry manifest remains historical. The user retained ADR-07, did not adopt ADR-15, deferred direct-transfer recovery repair/integration, and left target main unmerged at stable 1.3.2. Exact-candidate runtime/T22 Beta remain NOT VERIFIED; all other T21, SQL, CMI, storage, API, and external release limits remain as listed in the R62 readiness note. No runtime or external release action occurred.
+
+## 2026-10-26 R63 — durable paired-transfer recovery and gate evidence
+
+The R62 integration failures in `PayLuaScriptManagerNoscriptIT` were test-only failures in an unused manager; they did not exercise or establish a failure in the live `/pay` call path. R63 removes that stale integration class and adds `EconomyEventConsumerAuthorityRecoveryIT` for the production-used queued transfer/recovery route, including real isolated Redis receipt behavior. Queued `/pay` checkpoints and direct Vault/plugin transfer intents remain separate recovery contracts and files.
+
+Preliminary R63 evidence read from the recorded logs:
+
+- `r63-focused-recovery-20261026-r4.log`: `:syncmoney-bukkit:test --tests '*DirectTransferRecoveryStoreTest' --tests '*TransferUnknownOutcomeTest' --tests '*EconomyEventConsumerRecoveryTest' --tests '*EconomyEventConsumerTransferTest'` completed successfully; XML recount is 79 tests, zero failures/errors/skips.
+- `r63-recovery-command-20261026-r2.log`: `RecoveryCommandTest` completed successfully; XML recount is 4 tests, zero failures/errors/skips.
+- `r63-sync-integration-20261026-r1.log`: `:syncmoney-sync:integrationTest` completed successfully; XML recount is 41 tests, zero failures/errors/skips. This is isolated Redis integration, not a Paper/PlugDev runtime.
+
+These are prior focused runs and do not qualify the final source snapshot. The Java 25 / Gradle 9.8.0 full unit/package/architecture gate, final Sync integration gate, frontend gate, deterministic source manifest, current artifact pins, source/doc crosswalk, and two same-digest independent reviews must be recorded below before local integration. Storage-service integration, exact-candidate PlugDev runtime/Beta, minimum-Paper SQL initial schema, licensed/live CMI (authorization `UNKNOWN`), broad V03, Stable, and external publication remain `NOT VERIFIED`, `BLOCKED`, or `NOT PERFORMED` according to their current evidence. No accepted historical runtime matrix is to be repeated.
+
+## 2026-10-26 R63 scope clarification — live queued `/pay` only
+
+The latest user decision limits the ADR-16 recovery amendment to live queued `/pay` transfers. Earlier R63 text describing a direct Vault/plugin recovery journal records a superseded broader interpretation and is not the current implementation scope. ADR-07 remains in force; direct Vault/plugin recovery repair and integration are `DEFERRED / NOT VERIFIED`.
+
+For current R63 evidence, the queue-path acceptance contract is: a forced `RETRYABLE` paired admission checkpoint exists before queue commit; restart-loaded `ATTEMPTING`/`AMBIGUOUS` operations are visible to the admin list/inspect path, stay quarantined, and are not automatically replayed; and operator reconciliation accepts only an exact Redis receipt matching stable operation ID, canonical fingerprint, pair, and versions. The existing `recovery-v1.jsonl` spool and legacy overflow inspection are in scope. A direct-transfer journal/capability/provider/command path is out of scope and must not be included in the candidate source commit.
+
+The exact-candidate Paper runtime route remains `BLOCKED / NOT VERIFIED`: the latest route review still says `DO NOT RUN YET` because safe readiness-timeout cleanup, pre-start loopback RCON binding, and stop/session cleanup are not proven, and the local PlugDev checkouts have existing changes. No new runtime profile is created until that route is proven safe; the prior runtime workspace is retained and cannot be reused. Storage-service integration, minimum-Paper SQL, licensed/live CMI, broad V03, T21 completion, Stable, and external release remain separately gated.
+
+## 2026-10-26 R63 final source gate and scope boundary
+
+Effective recovery scope: live queued /pay only. The previous broad ADR-16 draft is superseded for direct-transfer recovery; ADR-07 remains in force, and no direct-transfer journal, capability, Vault provider wiring, or direct recovery command behavior is included. The candidate's tracked source tree contains no DirectTransferRecoveryStore or DirectTransferRecoveryCapability implementation. Existing direct-only drafts and local evidence remain preserved under the ignored deferred-direct-transfer-recovery evidence directory; do not stage them.
+
+The earlier R5 Java 25.0.4 / Gradle 9.8.0 gate was run with the local releaseVersion override. The successful log is build/reports/foundation/T24/r63/r63-final-java-source-package-gate-20261026-r5.log. Gradle reports BUILD SUCCESSFUL, 58 actionable tasks (9 executed, 49 up-to-date). XML recount: 170 unit suites / 945 tests and 9 Sync integration suites / 42 tests, zero failures/errors/skips. verifyArchitecture, verifyPackaging (classfile major 69), apiConsumerJar, acceptanceJar, shadowJar, and verifyCentralPublisherIsolation passed. Frontend logs r63-frontend-typecheck-20261026-r2.log, r63-frontend-unit-20261026-r2.log, and r63-frontend-build-20261026-r2.log show typecheck pass, 4 test files / 22 tests pass, and production build pass.
+
+A first full-gate invocation failed before task execution because PowerShell split an unquoted -PreleaseVersion argument; this is recorded in r63-final-java-source-package-gate-20261026-r3.log. The corrected attempt r4 reached tests and found one newly added direct VaultUnlocked test that instantiated a provider in CMI mode. EconomyServiceManager skips Vault/VaultUnlocked registration in CMI mode, so this fixture tested an unreachable configuration and was outside the /pay queue scope. Only that added test and its fixture field were removed; no provider implementation or direct recovery code was changed. The complete r5 gate then passed.
+
+R63 isolated Redis integration includes RedisTransferPairIT.livePlayerTransferPersistsAdmissionBeforeQueueCommitAndAppliesOneRedisPair, which drives EconomyFacade atomicTransfer, the queue admission callback, EconomyEventConsumer, and real disposable Redis. No live Paper or PlugDev server was started. Existing .plugdev/run data contains worlds, configuration, logs, and an older alpha.1 plugin and is not reusable.
+
+Artifact pins recorded for the R5 candidate build: Syncmoney-1.4.0.jar 31,645,902 bytes / SHA-256 55486BE2DB3D7FA140BB2957F1585C53B720D380A66E281317DDA0A337A4C9CC; SyncmoneyExpansion-1.4.0.jar 13,872 bytes / SHA-256 A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C; SyncmoneyAcceptance.jar 54,905 bytes / SHA-256 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824. The API consumer fixture is 2,760 bytes / SHA-256 49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E. These are local preview artifacts built with releaseVersion=1.4.0; stable metadata remains 1.3.2.
+
+Current exact-candidate runtime/T22 Beta remains NOT VERIFIED. The latest runtime route review is DO NOT RUN YET: readiness-timeout cleanup, pre-start loopback RCON binding, complete source/dependency pins, and consistent stop/session cleanup remain unproven. PlugDev main has 3 tracked modifications and 2 untracked files; its two task worktrees retain 7 tracked deletions each. The candidate .plugdev/run still contains Syncmoney-1.4.0-alpha.1.jar with SHA-256 BDA7C79C8B7BA912B015BD6FB72D907F59BD6D8CDF6B8052201305BED7228070 and persistent data. Do not start, reuse, clean, or overwrite it.
+
+Storage-service integration was not invoked. Minimum-Paper MySQL/MariaDB initial schema remains BLOCKED / NOT VERIFIED. Licensed/live CMI remains BLOCKED / NOT VERIFIED with authorization UNKNOWN. Broad V03 remains SKIPPED / NOT VERIFIED. T21 remains PARTIAL / IN_PROGRESS. Full API compatibility, current exact-candidate runtime, and T22 Beta remain NOT VERIFIED. Stable and external release remain NOT VERIFIED / NOT PERFORMED. The accepted 9/9 matrix, Paper M12, R6, R8D, and R8E were not rerun.
+
+## 2026-10-26 R63 legacy Redis receipt retention follow-up
+
+The final source review found that no-ID add/set overloads also create operation receipts and would otherwise leave one permanent Redis key per mutation. The three receipt-producing Lua scripts now accept an optional TTL while defaulting omitted raw-script arguments to no expiry. CacheManager applies a 300-second TTL only to legacy/no-ID add, set, and paired-transfer overloads; stable operation IDs retain non-expiring receipts so queued `/pay` recovery can inspect the exact result until acknowledgement. This bounds compatibility-path key growth and is not a direct Vault/plugin recovery mechanism; ADR-07 remains in force for that deferred work.
+
+The isolated Redis red test `build/reports/foundation/T24/r63/r63-legacy-addset-receipt-red-20261026-r1.log` failed because legacy add/set receipts had no expiry. The follow-up `r63-legacy-addset-receipt-green-20261026-r3.log` passed the legacy add/set/force-sync cases, stable add/set receipt checks, and legacy transfer expiry check. This focused result is not a replacement for the full current-candidate Java/package gate or exact-candidate runtime acceptance.
+
+## 2026-10-26 R63 source-gate refresh — r7
+
+This R7 entry supersedes the earlier R5 test counts and artifact pins above. The latest source snapshot passed the Java 25.0.4 / Gradle 9.8.0 source/package gate: `BUILD SUCCESSFUL`, 58 actionable tasks (8 executed, 50 up-to-date), 170 unit suites / 945 tests, and 9 Sync integration suites / 44 tests, with zero failures, errors, or skips. Architecture, classfile-major-69 packaging, API consumer, acceptance, shadow JAR, and Central publisher isolation passed. Exact gate log: `build/reports/foundation/T24/r63/r63-final-java-source-package-gate-20261026-r7.log`.
+
+The bounded legacy receipt fix changes only receipt retention semantics for no-ID add/set/transfer overloads: those receipts use a 300-second TTL, while stable-ID receipts used by queued `/pay` recovery remain non-expiring until acknowledgement. The focused red run and final green run are recorded in `r63-legacy-addset-receipt-red-20261026-r1.log` and `r63-legacy-addset-receipt-green-20261026-r3.log`; the updated Lua-source digest test passed in `r63-lua-source-pin-20261026-r1.log`. This does not add direct Vault/plugin recovery; ADR-07 remains in force.
+
+Current local preview artifact pins: `Syncmoney-1.4.0.jar` 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`; `SyncmoneyExpansion-1.4.0.jar` 13,872 bytes / SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`; `SyncmoneyAcceptance.jar` 54,905 bytes / SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`; `SyncmoneyApiConsumer.jar` 2,760 bytes / SHA-256 `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E`. All were built with `-PreleaseVersion=1.4.0`; stable metadata remains 1.3.2.
+
+Frontend typecheck, 4 unit files / 22 tests, and production build remain supported by R63 logs for unchanged frontend source inputs. Storage-service integration and exact-candidate Paper runtime/T22 Beta remain `NOT VERIFIED`; minimum-Paper SQL and licensed/live CMI remain `BLOCKED / NOT VERIFIED` (CMI authorization `UNKNOWN`); broad V03 remains `SKIPPED / NOT VERIFIED`; T21 remains `PARTIAL / IN_PROGRESS`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. The final source manifest and two independent same-digest read-only reviews remain pending before local integration. No external release action occurred.
+
+## 2026-10-26 R63 source-gate refresh — R9
+
+This R9 entry supersedes the R7 gate counts and current artifact pins above. Effective recovery scope remains durable recovery for live queued `/pay` only. Direct Vault/plugin recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; the earlier broad ADR-16 wording is superseded as current scope while retained as decision history.
+
+The exact candidate Java 25.0.4 / Gradle 9.8.0 run with `-PreleaseVersion=1.4.0` is `build/reports/foundation/T24/r63/r63-final-java-source-package-gate-20261026-r9.log`. Gradle reported `BUILD SUCCESSFUL`, 59 actionable tasks (59 executed). Fresh XML reports recount 170 unit suites / 945 tests and 9 Sync integration suites / 44 tests, with zero failures, errors, or skips. `verifyArchitecture`, classfile-major-69 `verifyPackaging`, `apiConsumerJar`, `acceptanceJar`, `shadowJar`, and `verifyCentralPublisherIsolation` passed. Storage-service integration was not run.
+
+Current local preview artifact pins:
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `build/libs/Syncmoney-1.4.0.jar` | 31,646,522 | `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916` |
+| `syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar` | 13,872 | `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C` |
+| `build/acceptance/SyncmoneyAcceptance.jar` | 54,905 | `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824` |
+| `build/acceptance/SyncmoneyApiConsumer.jar` | 2,760 | `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E` |
+
+All four artifacts were rebuilt by the R9 gate with the local `releaseVersion=1.4.0` override; stable source metadata remains 1.3.2. Frontend typecheck, 4 unit files / 22 tests, and production build passed in the R3 logs after the frontend source inputs were last changed. R9 regression evidence includes the forced pre-queue admission checkpoint, restart-visible quarantine and exact-receipt reconciliation, plus an isolated Redis integration through the production `EconomyFacade` → `EconomyWriteQueue` → `EconomyEventConsumer` path. This is not Paper/PlugDev runtime acceptance.
+
+After the final tracked source/docs commit, the deterministic manifest digest, same-digest independent review records, and local integration result are recorded in the ignored R63 readiness checkpoint and existing UPAW state. These local checkpoint records are not manifest inputs. Exact-candidate Paper runtime/T22 Beta, storage-service integration, minimum-Paper SQL, licensed/live CMI, broad V03, T21 completion, Stable, and external release retain their separate `NOT VERIFIED`, `BLOCKED`, `PARTIAL`, or `NOT PERFORMED` status. The accepted 9/9 matrix, Paper M12, R6, R8D, and R8E were not rerun.

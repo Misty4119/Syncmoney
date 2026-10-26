@@ -7,8 +7,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.LinkOption;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.Duration;
@@ -103,11 +109,9 @@ public class WebDownloader {
     }
 
     private boolean download(String url, Path tarGzPath, Path extractDir) throws IOException, InterruptedException {
+        prepareExtractionRoot(extractDir);
+        Path archivePath = prepareDownloadArchivePath(tarGzPath);
         plugin.getLogger().fine("Downloading web frontend from: " + url);
-
-        if (!Files.exists(extractDir)) {
-            Files.createDirectories(extractDir);
-        }
 
         HttpClient client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -123,19 +127,34 @@ public class WebDownloader {
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
         if (response.statusCode() != 200) {
+            try (InputStream ignored = response.body()) {
+                // Release the response body without retaining an unsuccessful download.
+            }
             plugin.getLogger().warning("Download failed: HTTP " + response.statusCode() + " for " + url);
             return false;
         }
 
-        try (InputStream is = response.body();
-                FileOutputStream fos = new FileOutputStream(tarGzPath.toFile())) {
-            is.transferTo(fos);
-        }
-
+        Path temporaryArchive = Files.createTempFile(archivePath.getParent(), ".syncmoney-web-", ".download");
         try {
-            extractTarGz(tarGzPath, extractDir);
+            try (InputStream is = response.body();
+                    OutputStream os = Files.newOutputStream(temporaryArchive, StandardOpenOption.TRUNCATE_EXISTING,
+                            StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                is.transferTo(os);
+            }
+            try {
+                Files.move(temporaryArchive, archivePath, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporaryArchive, archivePath, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            try {
+                extractTarGz(archivePath, extractDir);
+            } finally {
+                Files.deleteIfExists(archivePath);
+            }
         } finally {
-            Files.deleteIfExists(tarGzPath);
+            Files.deleteIfExists(temporaryArchive);
         }
 
         plugin.getLogger().fine("Web frontend downloaded successfully");
@@ -147,39 +166,209 @@ public class WebDownloader {
      * Strips the first directory component (e.g., "syncmoney-web/") from entry
      * paths.
      */
-    private void extractTarGz(Path tarGzPath, Path targetDir) throws IOException {
+    static void extractTarGz(Path tarGzPath, Path targetDir) throws IOException {
+        Path targetRoot = prepareExtractionRoot(targetDir);
         try (InputStream fis = Files.newInputStream(tarGzPath);
                 GZIPInputStream gzis = new GZIPInputStream(fis);
                 TarInputStream tis = new TarInputStream(gzis)) {
 
             TarInputStream.TarEntry entry;
             while ((entry = tis.nextEntry()) != null) {
-                String entryName = entry.name();
+                if (entry.typeFlag() != 0 && entry.typeFlag() != '0' && entry.typeFlag() != '5') {
+                    throw new IOException("Unsupported TAR entry type: " + (int) entry.typeFlag());
+                }
 
                 /*
                  * Strip the first path component (GitHub wraps contents in a top-level folder).
                  */
-                int slashIndex = entryName.indexOf('/');
-                if (slashIndex > 0) {
-                    entryName = entryName.substring(slashIndex + 1);
-                }
-
-                if (entryName.isEmpty()) {
+                Path entryPath = resolveArchiveEntryPath(targetRoot, entry.name());
+                if (entryPath == null) {
                     continue;
                 }
-
-                Path entryPath = targetDir.resolve(entryName);
+                if (entryPath.equals(targetRoot) && !entry.isDirectory()) {
+                    throw new IOException("TAR file entry cannot replace the extraction root");
+                }
                 if (entry.isDirectory()) {
-                    Files.createDirectories(entryPath);
+                    tis.finishEntry();
+                    createDirectoriesWithoutLinks(targetRoot, entryPath);
                 } else {
-                    Files.createDirectories(entryPath.getParent());
-                    try (OutputStream os = Files.newOutputStream(entryPath)) {
-                        tis.copyEntryTo(os);
+                    Path parent = entryPath.getParent();
+                    createDirectoriesWithoutLinks(targetRoot, parent);
+                    Path temporaryFile = Files.createTempFile(parent, ".syncmoney-web-", ".tmp");
+                    try {
+                        try (OutputStream os = Files.newOutputStream(temporaryFile,
+                                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE,
+                                LinkOption.NOFOLLOW_LINKS)) {
+                            tis.copyEntryTo(os);
+                        }
+                        tis.finishEntry();
+                        rejectLinkOrSpecialComponents(targetRoot, entryPath);
+                        try {
+                            Files.move(temporaryFile, entryPath, StandardCopyOption.ATOMIC_MOVE,
+                                    StandardCopyOption.REPLACE_EXISTING);
+                        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                            Files.move(temporaryFile, entryPath, StandardCopyOption.REPLACE_EXISTING);
+                        }
+                    } finally {
+                        Files.deleteIfExists(temporaryFile);
                     }
                 }
             }
         }
-        plugin.getLogger().fine("Web frontend extracted to: " + targetDir);
+    }
+
+    private static Path prepareExtractionRoot(Path targetDir) throws IOException {
+        Path requestedRoot = targetDir.toAbsolutePath().normalize();
+        rejectLinkedOrSpecialDirectoryPath(requestedRoot, true);
+        Files.createDirectories(requestedRoot);
+        rejectLinkedOrSpecialDirectoryPath(requestedRoot, false);
+        return requestedRoot;
+    }
+
+    private static void rejectLinkedOrSpecialDirectoryPath(Path directory, boolean allowMissing)
+            throws IOException {
+        Path current = directory.getRoot();
+        if (current == null) {
+            throw new IOException("Extraction root must be an absolute directory path");
+        }
+        BasicFileAttributes attributes = readAttributesIfPresent(current);
+        if (attributes == null || attributes.isSymbolicLink() || attributes.isOther()
+                || !attributes.isDirectory()) {
+            throw new IOException("Extraction root path must start at a regular filesystem directory");
+        }
+
+        for (Path component : directory) {
+            current = current.resolve(component);
+            attributes = readAttributesIfPresent(current);
+            if (attributes == null) {
+                if (!allowMissing) {
+                    throw new IOException("Extraction root directory does not exist");
+                }
+                continue;
+            }
+            if (attributes.isSymbolicLink() || attributes.isOther()) {
+                throw new IOException("Refusing an extraction root path containing a link or special entry");
+            }
+            if (!attributes.isDirectory()) {
+                throw new IOException("Extraction root path contains a non-directory entry");
+            }
+        }
+    }
+
+    private static Path prepareDownloadArchivePath(Path archivePath) throws IOException {
+        Path absoluteArchivePath = archivePath.toAbsolutePath().normalize();
+        Path parent = absoluteArchivePath.getParent();
+        if (parent == null || parent.getRoot() == null) {
+            throw new IOException("Download archive must have an existing parent directory");
+        }
+
+        Path current = parent.getRoot();
+        BasicFileAttributes attributes = readAttributesIfPresent(current);
+        if (attributes == null || attributes.isSymbolicLink() || attributes.isOther() || !attributes.isDirectory()) {
+            throw new IOException("Download archive parent is not a regular directory");
+        }
+        for (Path component : current.relativize(parent)) {
+            current = current.resolve(component);
+            attributes = readAttributesIfPresent(current);
+            if (attributes == null || attributes.isSymbolicLink() || attributes.isOther()
+                    || !attributes.isDirectory()) {
+                throw new IOException("Download archive parent contains a link or non-directory entry");
+            }
+        }
+
+        attributes = readAttributesIfPresent(absoluteArchivePath);
+        if (attributes != null && (attributes.isSymbolicLink() || attributes.isOther()
+                || !attributes.isRegularFile())) {
+            throw new IOException("Download archive target is not a regular file");
+        }
+        return absoluteArchivePath;
+    }
+
+    private static Path resolveArchiveEntryPath(Path targetRoot, String archiveName) throws IOException {
+        String entryName = archiveName.replace('\\', '/');
+        rejectUnsafeArchiveName(entryName);
+
+        int slashIndex = entryName.indexOf('/');
+        if (slashIndex > 0) {
+            entryName = entryName.substring(slashIndex + 1);
+        }
+        if (entryName.isEmpty()) {
+            return null;
+        }
+        rejectUnsafeArchiveName(entryName);
+
+        Path relative;
+        try {
+            relative = targetRoot.getFileSystem().getPath(entryName);
+        } catch (java.nio.file.InvalidPathException invalidPath) {
+            throw new IOException("Invalid TAR entry path", invalidPath);
+        }
+        if (relative.isAbsolute() || relative.getRoot() != null) {
+            throw new IOException("Refusing absolute TAR entry path");
+        }
+
+        Path entryPath = targetRoot.resolve(relative).normalize();
+        if (!entryPath.startsWith(targetRoot)) {
+            throw new IOException("Refusing TAR entry outside extraction directory");
+        }
+        return entryPath;
+    }
+
+    private static void rejectUnsafeArchiveName(String entryName) throws IOException {
+        if (entryName.startsWith("/") || entryName.matches("^[A-Za-z]:.*")) {
+            throw new IOException("Refusing absolute TAR entry path");
+        }
+        for (String component : entryName.split("/", -1)) {
+            if (component.equals("..")) {
+                throw new IOException("Refusing TAR parent-directory entry");
+            }
+            if (component.endsWith(".") || component.endsWith(" ")) {
+                throw new IOException("Refusing TAR path component with Windows-normalized suffix");
+            }
+        }
+    }
+
+    private static void createDirectoriesWithoutLinks(Path targetRoot, Path directory) throws IOException {
+        Path current = targetRoot;
+        for (Path component : targetRoot.relativize(directory)) {
+            current = current.resolve(component);
+            BasicFileAttributes attributes = readAttributesIfPresent(current);
+            if (attributes == null) {
+                try {
+                    Files.createDirectory(current);
+                } catch (FileAlreadyExistsException racedCreation) {
+                    attributes = readAttributesIfPresent(current);
+                }
+                if (attributes == null) {
+                    attributes = readAttributesIfPresent(current);
+                }
+            }
+            if (attributes != null && (attributes.isSymbolicLink() || attributes.isOther())) {
+                throw new IOException("Refusing to extract through a link or special filesystem entry");
+            }
+            if (attributes != null && !attributes.isDirectory()) {
+                throw new IOException("TAR parent path is not a directory");
+            }
+        }
+    }
+
+    private static void rejectLinkOrSpecialComponents(Path targetRoot, Path entryPath) throws IOException {
+        Path current = targetRoot;
+        for (Path component : targetRoot.relativize(entryPath)) {
+            current = current.resolve(component);
+            BasicFileAttributes attributes = readAttributesIfPresent(current);
+            if (attributes != null && (attributes.isSymbolicLink() || attributes.isOther())) {
+                throw new IOException("Refusing to extract through a link or special filesystem entry");
+            }
+        }
+    }
+
+    private static BasicFileAttributes readAttributesIfPresent(Path path) throws IOException {
+        try {
+            return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException missing) {
+            return null;
+        }
     }
 
     /**
@@ -192,6 +381,7 @@ public class WebDownloader {
 
         private static final int BLOCK_SIZE = 512;
         private long remaining = 0;
+        private long padding = 0;
 
         TarInputStream(InputStream in) {
             super(in);
@@ -200,7 +390,7 @@ public class WebDownloader {
         /**
          * Represents a single entry in a TAR archive.
          */
-        record TarEntry(String name, long size, boolean isDirectory) {
+        record TarEntry(String name, long size, boolean isDirectory, char typeFlag) {
         }
 
         /**
@@ -209,26 +399,14 @@ public class WebDownloader {
          * @return The next TarEntry or null if the end of the archive is reached.
          */
         TarEntry nextEntry() throws IOException {
-            /*
-             * Skip remaining bytes from the previous entry, plus padding to the next
-             * 512-byte boundary.
-             */
-            if (remaining > 0) {
-                long skip = remaining;
-                long pad = (BLOCK_SIZE - (remaining % BLOCK_SIZE)) % BLOCK_SIZE;
-                skip += pad;
-                long skipped = 0;
-                while (skipped < skip) {
-                    long n = in.skip(skip - skipped);
-                    if (n <= 0)
-                        break;
-                    skipped += n;
-                }
-            }
+            finishEntry();
 
             byte[] header = in.readNBytes(BLOCK_SIZE);
+            if (header.length == 0) {
+                throw new EOFException("TAR archive ended without an end-of-archive block");
+            }
             if (header.length < BLOCK_SIZE) {
-                return null;
+                throw new EOFException("Unexpected end of TAR header");
             }
 
             /* An all-zero block signals end of archive. */
@@ -253,10 +431,38 @@ public class WebDownloader {
                 name = prefix + "/" + name;
             }
 
+            if (size < 0) {
+                throw new IOException("Invalid negative TAR entry size");
+            }
             boolean isDirectory = (typeFlag == '5') || name.endsWith("/");
-            remaining = isDirectory ? 0 : size;
+            remaining = size;
+            padding = (BLOCK_SIZE - (size % BLOCK_SIZE)) % BLOCK_SIZE;
 
-            return new TarEntry(name, size, isDirectory);
+            return new TarEntry(name, size, isDirectory, typeFlag);
+        }
+
+        /**
+         * Consume the current entry's payload and padding, failing if either is truncated.
+         */
+        void finishEntry() throws IOException {
+            /*
+             * Skip remaining bytes from the current entry, plus padding to the next
+             * 512-byte boundary.
+             */
+            long skip = remaining + padding;
+            while (skip > 0) {
+                long skipped = in.skip(skip);
+                if (skipped > 0) {
+                    skip -= skipped;
+                    continue;
+                }
+                if (in.read() < 0) {
+                    throw new EOFException("Unexpected end of TAR entry data");
+                }
+                skip--;
+            }
+            remaining = 0;
+            padding = 0;
         }
 
         @Override

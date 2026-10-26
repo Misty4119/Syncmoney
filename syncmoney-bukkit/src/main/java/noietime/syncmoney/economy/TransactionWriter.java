@@ -4,12 +4,12 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.event.AsyncPreTransactionEvent;
 import noietime.syncmoney.event.PostTransactionEvent;
 import noietime.syncmoney.event.SyncmoneyEventBus;
+import noietime.syncmoney.core.money.MoneyPolicy;
 import noietime.syncmoney.core.state.AccountState;
 import noietime.syncmoney.breaker.PlayerTransactionGuard;
 import noietime.syncmoney.breaker.PlayerTransactionGuard.CheckResult;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.core.state.AccountStateStore;
-import noietime.syncmoney.util.Constants;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.plugin.Plugin;
 
@@ -53,6 +53,14 @@ final class TransactionWriter {
         this.isLocalMode = isLocalMode;
     }
 
+    private BigDecimal maximumBalance() {
+        return isLocalMode ? MoneyPolicy.MAX_BALANCE : MoneyPolicy.MAX_SHARED_BALANCE;
+    }
+
+    private boolean isBalanceWithinMaximum(BigDecimal balance) {
+        return balance != null && balance.signum() >= 0 && balance.compareTo(maximumBalance()) <= 0;
+    }
+
     /**
      * [SYNC-ECO-102] Shared pre-transaction gate for deposit/withdraw: pre-transaction
      * event, circuit breaker, and amount-bounds validation. (The migration lock is checked
@@ -84,7 +92,7 @@ final class TransactionWriter {
             }
         }
 
-        if (amount.compareTo(BigDecimal.ZERO) <= 0 || amount.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+        if (amount.compareTo(BigDecimal.ZERO) <= 0 || amount.compareTo(maximumBalance()) > 0) {
             plugin.getLogger().warning(opLabel + " rejected: Amount out of bounds (" + amount.toPlainString() + ")");
             return false;
         }
@@ -159,7 +167,7 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
         BigDecimal normalizedAmount = NumericUtil.normalize(amount);
-        if (normalizedAmount.signum() <= 0 || normalizedAmount.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0
+        if (normalizedAmount.signum() <= 0 || normalizedAmount.compareTo(maximumBalance()) > 0
                 || rejectIfRedisUnavailable("Transfer")) {
             return BigDecimal.valueOf(-1);
         }
@@ -175,8 +183,9 @@ final class TransactionWriter {
                 || !canAdvanceLocalVersion(toUuid, initialTo)) {
             return BigDecimal.valueOf(-1);
         }
-        if (initialFrom.balance().compareTo(normalizedAmount) < 0
-                || initialTo.balance().add(normalizedAmount).compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+        if (!isBalanceWithinMaximum(initialFrom.balance())
+                || initialFrom.balance().compareTo(normalizedAmount) < 0
+                || !MoneyPolicy.canAddWithin(initialTo.balance(), normalizedAmount, maximumBalance())) {
             return BigDecimal.valueOf(-1);
         }
 
@@ -211,8 +220,9 @@ final class TransactionWriter {
             AccountState toState = stateManager.get(toUuid);
             if (fromState == null || toState == null || !canAdvanceLocalVersion(fromUuid, fromState)
                     || !canAdvanceLocalVersion(toUuid, toState)
+                    || !isBalanceWithinMaximum(fromState.balance())
                     || fromState.balance().compareTo(normalizedAmount) < 0
-                    || toState.balance().add(normalizedAmount).compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+                    || !MoneyPolicy.canAddWithin(toState.balance(), normalizedAmount, maximumBalance())) {
                 return BigDecimal.valueOf(-1);
             }
 
@@ -398,6 +408,10 @@ final class TransactionWriter {
                 AsyncPreTransactionEvent.TransactionType.DEPOSIT, amount, source, "Deposit", attribution)) {
             return BigDecimal.valueOf(-1);
         }
+        if (!MoneyPolicy.canAddWithin(currentBalance, amount, maximumBalance())) {
+            plugin.getLogger().warning("Deposit rejected before write admission: projected balance exceeds the configured backend maximum for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
 
         final EconomyWriteQueue.Reservation reservation = stateManager.tryReserveWrite(uuid, currentState);
         if (reservation == null) {
@@ -412,8 +426,16 @@ final class TransactionWriter {
         try (reservation) {
             long now = System.currentTimeMillis();
             AccountState newState = stateManager.compute(uuid, (key, existing) -> {
+                if (!canAdvanceLocalVersion(uuid, existing)) {
+                    return existing;
+                }
                 BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
                 long currentVersion = (existing != null) ? existing.version() : 0L;
+
+                if (!MoneyPolicy.canAddWithin(existingBalance, amount, maximumBalance())) {
+                    plugin.getLogger().warning("Deposit rejected at commit: projected balance exceeds the configured backend maximum for " + uuid);
+                    return existing;
+                }
 
                 boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
                 boolean skipGuard = skipGuardForLocalMode;
@@ -517,6 +539,10 @@ final class TransactionWriter {
             return BigDecimal.valueOf(-1);
         }
         BigDecimal currentBalance = (currentState != null) ? currentState.balance() : BigDecimal.ZERO;
+        if (!isBalanceWithinMaximum(currentBalance)) {
+            plugin.getLogger().warning("Withdraw rejected: current account balance exceeds the configured backend maximum for " + uuid);
+            return BigDecimal.valueOf(-1);
+        }
 
         if (!preTransactionChecks(uuid, playerName, amount, currentBalance,
                 AsyncPreTransactionEvent.TransactionType.WITHDRAW, amount.negate(), source, "Withdraw", attribution)) {
@@ -536,8 +562,16 @@ final class TransactionWriter {
             long now = System.currentTimeMillis();
             AtomicBoolean mutationAccepted = new AtomicBoolean();
             AccountState newState = stateManager.compute(uuid, (key, existing) -> {
+                if (!canAdvanceLocalVersion(uuid, existing)) {
+                    return existing;
+                }
                 BigDecimal existingBalance = (existing != null) ? existing.balance() : BigDecimal.ZERO;
                 long currentVersion = (existing != null) ? existing.version() : 0L;
+
+                if (!isBalanceWithinMaximum(existingBalance)) {
+                    plugin.getLogger().warning("Withdraw rejected at commit: current account balance exceeds the configured backend maximum for " + uuid);
+                    return existing;
+                }
 
                 boolean skipGuardForLocalMode = isLocalMode && !config.playerProtection().isPlayerProtectionEnabledInLocalMode();
                 boolean skipGuard = skipGuardForLocalMode
@@ -632,7 +666,7 @@ final class TransactionWriter {
 
     private BigDecimal setBalanceAdmitted(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source,
                                           MigrationLock.WriteLease writeLease) {
-        if (newBalance.compareTo(BigDecimal.ZERO) < 0 || newBalance.compareTo(Constants.MAX_DECIMAL_BALANCE) > 0) {
+        if (newBalance.compareTo(BigDecimal.ZERO) < 0 || newBalance.compareTo(maximumBalance()) > 0) {
             plugin.getLogger().warning("SetBalance rejected: Amount out of bounds (" + newBalance.toPlainString() + ")");
             return BigDecimal.valueOf(-1);
         }
@@ -653,7 +687,6 @@ final class TransactionWriter {
         if (!canAdvanceLocalVersion(uuid, existingState)) {
             return BigDecimal.valueOf(-1);
         }
-        BigDecimal oldBalance = (existingState != null) ? existingState.balance() : BigDecimal.ZERO;
 
         boolean migrationWorkerWrite = isLocalMode && source == EconomyEvent.EventSource.ADMIN_SET
                 && MigrationLock.isLocked();
@@ -667,14 +700,28 @@ final class TransactionWriter {
         try (reservation) {
             long now = System.currentTimeMillis();
             AtomicBoolean mutationAccepted = new AtomicBoolean();
+            AtomicBoolean auditDeltaRejected = new AtomicBoolean();
+            AtomicReference<BigDecimal> acceptedOldBalance = new AtomicReference<>();
+            AtomicReference<BigDecimal> acceptedBalanceDelta = new AtomicReference<>();
             boolean committedAtSourceBoundary = writeLease.commitMutationIfSourceStable(() -> {
                 stateManager.compute(uuid, (key, existing) -> {
+                    if (!canAdvanceLocalVersion(uuid, existing)) {
+                        return existing;
+                    }
+
+                    BigDecimal oldBalance = existing != null ? existing.balance() : BigDecimal.ZERO;
+                    BigDecimal balanceDelta = finalNewBalance.subtract(oldBalance);
+                    if (!isLocalMode && source != EconomyEvent.EventSource.TEST && config.audit().isAuditEnabled()
+                            && balanceDelta.abs().compareTo(MoneyPolicy.MAX_SHARED_BALANCE) > 0) {
+                        auditDeltaRejected.set(true);
+                        return existing;
+                    }
+
                     long currentVersion = (existing != null) ? existing.version() : 0L;
                     AccountState next = new AccountState(finalNewBalance, currentVersion + 1, now);
                     if (reservation != null) {
-                        BigDecimal delta = finalNewBalance.subtract(oldBalance);
                         EconomyEvent event = new EconomyEvent(
-                                uuid, delta, finalNewBalance, next.version(),
+                                uuid, balanceDelta, finalNewBalance, next.version(),
                                 EconomyEvent.EventType.SET_BALANCE, source,
                                 UUID.randomUUID().toString(), System.currentTimeMillis());
                         if (!commitAcceptedWrite(reservation, event)) {
@@ -682,15 +729,23 @@ final class TransactionWriter {
                             return existing;
                         }
                     }
+                    acceptedOldBalance.set(oldBalance);
+                    acceptedBalanceDelta.set(balanceDelta);
                     mutationAccepted.set(true);
                     return next;
                 });
                 return mutationAccepted.get();
             });
 
+            if (auditDeltaRejected.get()) {
+                plugin.getLogger().warning("SetBalance rejected before mutation because its audit delta exceeds DECIMAL(20,2) for " + uuid);
+            }
             if (!committedAtSourceBoundary || !mutationAccepted.get()) {
                 return BigDecimal.valueOf(-1);
             }
+
+            BigDecimal oldBalance = acceptedOldBalance.get();
+            BigDecimal balanceDelta = acceptedBalanceDelta.get();
 
             if (reservation != null) {
                 writeQueue.reportUsage();
@@ -698,7 +753,7 @@ final class TransactionWriter {
 
             String playerName = facade.resolvePlayerName(uuid);
             postTransactionEvent(uuid, playerName, AsyncPreTransactionEvent.TransactionType.SET_BALANCE,
-                    newBalance.subtract(oldBalance), oldBalance, newBalance, source.name(), null, null, null, true, null);
+                    balanceDelta, oldBalance, newBalance, source.name(), null, null, null, true, null);
 
             if (isLocalMode) {
                 if (migrationWorkerWrite && localEconomyHandler != null) {

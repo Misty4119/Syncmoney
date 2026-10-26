@@ -12,6 +12,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doThrow;
@@ -28,7 +29,7 @@ class CacheManagerDegradedStateTest {
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = preparedJedis(redisManager);
         doThrow(new JedisConnectionException("connection lost"))
-                .when(jedis).evalsha(eq("add-sha"), eq(2), anyString(), anyString(), anyString());
+                .when(jedis).evalsha(eq("add-sha"), eq(3), any(String[].class));
         CacheManager cacheManager = new CacheManager(plugin, redisManager, true);
 
         assertEquals(new BigDecimal("-1"), cacheManager.atomicAddBalance(UUID.randomUUID(), BigDecimal.ONE));
@@ -41,7 +42,7 @@ class CacheManagerDegradedStateTest {
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = preparedJedis(redisManager);
         doThrow(new JedisConnectionException("connection lost"))
-                .when(jedis).evalsha(eq("set-sha"), eq(2), anyString(), anyString(), anyString());
+                .when(jedis).evalsha(eq("set-sha"), eq(3), any(String[].class));
         CacheManager cacheManager = new CacheManager(plugin, redisManager, true);
 
         assertEquals(-1, cacheManager.atomicSetBalance(UUID.randomUUID(), new BigDecimal("40.00")));
@@ -54,7 +55,7 @@ class CacheManagerDegradedStateTest {
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = preparedJedis(redisManager);
         doThrow(new IllegalStateException("script rejected the request"))
-                .when(jedis).evalsha(eq("add-sha"), eq(2), anyString(), anyString(), anyString());
+                .when(jedis).evalsha(eq("add-sha"), eq(3), any(String[].class));
         CacheManager cacheManager = new CacheManager(plugin, redisManager, true);
 
         assertEquals(new BigDecimal("-1"), cacheManager.atomicAddBalance(UUID.randomUUID(), BigDecimal.ONE));

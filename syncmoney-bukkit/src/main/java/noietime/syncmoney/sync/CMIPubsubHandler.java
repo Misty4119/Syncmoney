@@ -25,12 +25,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class CMIPubsubHandler {
 
     private static final int MAX_VERSION_ENTRIES = 10_000;
-    private static final long VERSION_TTL_MS = 10 * 60 * 1000L;
     private static final long CLEANUP_INTERVAL_MS = 60_000L;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
-    private final RedisManager redisManager;
     private final CMIApi cmiApi;
     private final noietime.syncmoney.economy.CMIEconomyHandler cmiHandler;
     private final CMIRedisMirror redisMirror;
@@ -48,7 +46,8 @@ public final class CMIPubsubHandler {
     private volatile boolean stopped;
     private static final long NOTIFICATION_COOLDOWN_MS = 1_500L;
 
-    private record VersionEntry(long version, long timestamp) {}
+    // A failed application may accept the same version again without reopening older versions.
+    private record VersionEntry(long version, long timestamp, boolean retryable) {}
 
     public CMIPubsubHandler(Syncmoney plugin, SyncmoneyConfig config, RedisManager redisManager,
                             CMIApi cmiApi, noietime.syncmoney.economy.CMIEconomyHandler cmiHandler) {
@@ -60,7 +59,6 @@ public final class CMIPubsubHandler {
                      Clock clock) {
         this.plugin = plugin;
         this.config = config;
-        this.redisManager = redisManager;
         this.cmiApi = cmiApi;
         this.cmiHandler = cmiHandler;
         this.redisMirror = new CMIRedisMirror(redisManager, config.cmi().getCMIRedisPrefix());
@@ -89,9 +87,12 @@ public final class CMIPubsubHandler {
             long last = currentVersion(uuid);
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI Inbound] Received " + uuid + " balance=" + msg.getBalanceAsBigDecimal()
-                        + " v" + incoming + " from " + src + " (last applied v" + last + ", server=" + config.getServerName() + ")");
+                        + " v" + incoming + " from " + src + " (last inbound v" + last + ", server=" + config.getServerName() + ")");
             }
-            if (!CMIVersioning.isNewer(incoming, last)) {
+            VersionEntry currentEntry = lastUpdateVersion.get(uuid);
+            boolean retryingFailedVersion = currentEntry != null
+                    && incoming == currentEntry.version() && currentEntry.retryable();
+            if (!CMIVersioning.isNewer(incoming, last) && !retryingFailedVersion) {
                 if (config.isDebug()) {
                     plugin.getLogger().fine("[CMI Inbound] Rejected stale version for " + uuid
                             + " (current=" + last + " incoming=" + incoming + ")");
@@ -106,12 +107,16 @@ public final class CMIPubsubHandler {
             }
             boolean leaseTransferred = false;
             try {
-                updateRedisMirror(uuid, balance, incoming);
-                synchronized (lifecycleGate) {
-                    if (stopped) {
-                        return;
+                CMIRedisMirror.WriteResult mirrorWrite = updateRedisMirror(uuid, balance, incoming);
+                if (mirrorWrite != CMIRedisMirror.WriteResult.ACCEPTED) {
+                    if (config.isDebug()) {
+                        plugin.getLogger().fine("[CMI Inbound] Redis mirror rejected " + uuid
+                                + " v" + incoming + " (" + mirrorWrite + "); no CMI mutation scheduled");
                     }
-                    lastUpdateVersion.put(uuid, new VersionEntry(incoming, clock.millis()));
+                    return;
+                }
+                if (!claimInboundVersion(uuid, incoming)) {
+                    return;
                 }
                 maybeCleanup();
 
@@ -119,7 +124,7 @@ public final class CMIPubsubHandler {
                     final BigDecimal targetBalance = balance;
                     final long appliedVersion = incoming;
                     Player player = plugin.getServer().getPlayer(uuid);
-                    if (player != null && player.isOnline()) {
+                    if (player != null) {
                         PendingEntityApply pending = registerPendingEntityApply(writeLease);
                         if (pending != null) {
                             try {
@@ -128,7 +133,13 @@ public final class CMIPubsubHandler {
                                         return;
                                     }
                                     try {
-                                        if (stopped || currentVersion(uuid) != appliedVersion) return;
+                                        if (stopped || currentVersion(uuid) != appliedVersion) {
+                                            return;
+                                        }
+                                        if (!player.isOnline()) {
+                                            markInboundVersionRetryable(uuid, appliedVersion);
+                                            return;
+                                        }
                                         Double beforeObj = cmiApi.getBalance(uuid);
                                         if (!pending.beginApply(uuid, appliedVersion)) return;
                                         if (beforeObj == null) {
@@ -137,12 +148,9 @@ public final class CMIPubsubHandler {
                                             cmiHandler.recordApiAuthorityBalance(
                                                     uuid, NumericUtil.normalize(beforeObj));
                                         }
-                                        double before = beforeObj != null
-                                                ? beforeObj.doubleValue() : targetBalance.doubleValue();
-                                        if (Double.compare(before, targetBalance.doubleValue()) == 0) {
-                                            if (beforeObj != null) {
-                                                cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
-                                            }
+                                        if (beforeObj != null
+                                                && Double.compare(beforeObj, targetBalance.doubleValue()) == 0) {
+                                            cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
                                             cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
                                             return;
                                         }
@@ -151,14 +159,30 @@ public final class CMIPubsubHandler {
                                         boolean applied = cmiApi.setBalance(uuid, targetBalance.doubleValue());
                                         if (applied) {
                                             cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                                        } else {
+                                            Double afterObj = cmiApi.getBalance(uuid);
+                                            applied = afterObj != null
+                                                    && Double.compare(afterObj, targetBalance.doubleValue()) == 0;
+                                            if (applied) {
+                                                cmiHandler.recordApiAuthorityBalance(uuid, targetBalance);
+                                            }
                                         }
-                                        cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
-                                        notifyPlayerIfBalanceChanged(uuid, msg, before, targetBalance.doubleValue());
+                                        if (applied) {
+                                            cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
+                                            if (beforeObj != null) {
+                                                notifyPlayerIfBalanceChanged(uuid, msg, beforeObj,
+                                                        targetBalance.doubleValue());
+                                            }
+                                        } else {
+                                            cmiHandler.invalidateCachedBalanceForApi(uuid);
+                                            markInboundVersionRetryable(uuid, appliedVersion);
+                                        }
                                         if (config.isDebug()) {
                                             plugin.getLogger().fine("[CMI Inbound] CMI write " + uuid
-                                                    + " = " + targetBalance + " (before=" + before + ")");
+                                                    + " = " + targetBalance + " (before=" + beforeObj + ")");
                                         }
                                     } catch (Throwable th) {
+                                        markInboundVersionRetryable(uuid, appliedVersion);
                                         plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
                                                 + ": " + th.getMessage());
                                     } finally {
@@ -169,21 +193,25 @@ public final class CMIPubsubHandler {
                                 leaseTransferred = scheduled != null;
                                 if (!leaseTransferred) {
                                     pending.finish();
+                                    markInboundVersionRetryable(uuid, appliedVersion);
                                 }
                             } catch (Throwable schedEx) {
                                 pending.finish();
+                                markInboundVersionRetryable(uuid, appliedVersion);
                                 if (config.isDebug()) {
                                     plugin.getLogger().fine("[CMI Inbound] EntityScheduler.run failed for "
                                             + uuid + " (" + schedEx.getMessage() + "), CMI write skipped this tick");
                                 }
                             }
                         }
+                    } else if (!stopped) {
+                        markInboundVersionRetryable(uuid, appliedVersion);
                     }
                 } else if (!stopped) {
                         plugin.getLogger().fine("[CMI Inbound] CMI API unavailable on this server; "
                                 + "Redis mirror updated for " + uuid + " but in-game CMI will only sync on next join.");
                         cmiHandler.invalidateCachedBalanceForApi(uuid);
-                        cmiHandler.notifyInboundApplied(uuid, balance, incoming);
+                        markInboundVersionRetryable(uuid, incoming);
                     }
             } finally {
                 if (!leaseTransferred) {
@@ -192,7 +220,7 @@ public final class CMIPubsubHandler {
             }
 
             if (config.isDebug()) {
-                plugin.getLogger().fine("[CMI Inbound] Applied " + uuid + " = " + balance
+                plugin.getLogger().fine("[CMI Inbound] Processed mirror " + uuid + " = " + balance
                         + " v" + incoming + " from " + src);
             }
         } catch (Exception e) {
@@ -300,6 +328,37 @@ public final class CMIPubsubHandler {
         return entry != null ? entry.version() : 0L;
     }
 
+    private boolean claimInboundVersion(UUID uuid, long incoming) {
+        synchronized (lifecycleGate) {
+            if (stopped) {
+                return false;
+            }
+            VersionEntry current = lastUpdateVersion.get(uuid);
+            if (current != null) {
+                boolean retryingFailedVersion = incoming == current.version() && current.retryable();
+                if (!CMIVersioning.isNewer(incoming, current.version()) && !retryingFailedVersion) {
+                    return false;
+                }
+            } else if (!CMIVersioning.isNewer(incoming, 0L)) {
+                return false;
+            }
+            lastUpdateVersion.put(uuid, new VersionEntry(incoming, clock.millis(), false));
+            return true;
+        }
+    }
+
+    private void markInboundVersionRetryable(UUID uuid, long expectedVersion) {
+        synchronized (lifecycleGate) {
+            if (stopped) {
+                return;
+            }
+            VersionEntry current = lastUpdateVersion.get(uuid);
+            if (current != null && current.version() == expectedVersion) {
+                lastUpdateVersion.put(uuid, new VersionEntry(current.version(), clock.millis(), true));
+            }
+        }
+    }
+
     private void maybeCleanup() {
         long now = clock.millis();
         if (lastUpdateVersion.size() <= MAX_VERSION_ENTRIES && now - lastCleanupTime < CLEANUP_INTERVAL_MS) {
@@ -307,8 +366,8 @@ public final class CMIPubsubHandler {
         }
         lastCleanupTime = now;
 
-        lastUpdateVersion.entrySet().removeIf(e -> now - e.getValue().timestamp() > VERSION_TTL_MS);
-
+        // Age-based expiry can reopen the stale-message window if Redis mirror keys were evicted.
+        // Retain freshness watermarks until capacity pressure requires bounded oldest-entry eviction.
         while (lastUpdateVersion.size() > MAX_VERSION_ENTRIES) {
             List<Map.Entry<UUID, VersionEntry>> entries = new ArrayList<>(lastUpdateVersion.entrySet());
             int overflow = entries.size() - MAX_VERSION_ENTRIES;
@@ -322,15 +381,8 @@ public final class CMIPubsubHandler {
         }
     }
 
-    private void updateRedisMirror(UUID uuid, BigDecimal balance, long version) {
-        if (redisManager == null || redisManager.isDegraded()) {
-            return;
-        }
-        try {
-            redisMirror.write(uuid, balance, version);
-        } catch (Exception e) {
-            plugin.getLogger().warning("Failed to update CMI Redis mirror: " + e.getMessage());
-        }
+    private CMIRedisMirror.WriteResult updateRedisMirror(UUID uuid, BigDecimal balance, long version) {
+        return redisMirror.compareAndWrite(uuid, balance, version);
     }
 
     /**
@@ -359,9 +411,7 @@ public final class CMIPubsubHandler {
             trimSeenNotifications();
         }
         Player player = Bukkit.getServer().getPlayer(uuid);
-        if (player == null || !player.isOnline()) {
-            return;
-        }
+        if (player == null) return;
         String sourceServer = msg.getSourceServer();
         String key = delta > 0 ? "cross-server.money-received" : "cross-server.money-spent";
 
@@ -370,7 +420,7 @@ public final class CMIPubsubHandler {
                 return;
             }
             player.getScheduler().run(plugin, t -> {
-                if (stopped) {
+                if (!player.isOnline() || stopped) {
                     return;
                 }
                 String message = plugin.getMessage(key);

@@ -1,7 +1,10 @@
 -- Atomic set balance with globally monotonic version.
 -- KEYS[1] = version key (syncmoney:version:{uuid})
 -- KEYS[2] = balance key (syncmoney:balance:{uuid})
+-- KEYS[3] = operation receipt key (syncmoney:operation:receipt:{sha256(operationId)})
 -- ARGV[1] = new balance
+-- ARGV[2] = canonical operation payload fingerprint
+-- ARGV[3] = optional operation receipt TTL seconds; defaults to 0 (no expiry)
 
 local MAX_CENTS = '99999999999999999999'
 local MAX_VERSION = '9223372036854775807'
@@ -65,6 +68,59 @@ local function keyHasSupportedType(key)
     return typeName == 'none' or typeName == 'string'
 end
 
+local function splitReceipt(raw)
+    local fields = {}
+    for field in string.gmatch(raw .. '|', '(.-)|') do
+        table.insert(fields, field)
+    end
+    return fields
+end
+
+local function encodeReceipt(status, reason, accountValues)
+    local fields = {'v1', ARGV[2], status, reason or '-', tostring(#accountValues / 2)}
+    for _, value in ipairs(accountValues) do table.insert(fields, value) end
+    return table.concat(fields, '|')
+end
+
+local keyVersion = KEYS[1]
+local keyBalance = KEYS[2]
+local keyReceipt = KEYS[3]
+if not keyReceipt or not ARGV[2] or #ARGV[2] ~= 64 or not string.match(ARGV[2], '^[0-9a-f]+$') then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlRaw = ARGV[3] or '0'
+if not string.match(receiptTtlRaw, '^%d+$') or #receiptTtlRaw > 6 then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlSeconds = tonumber(receiptTtlRaw)
+if receiptTtlSeconds > 604800 then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+local function storeReceipt(raw)
+    if receiptTtlSeconds == 0 then
+        redis.call('SET', keyReceipt, raw)
+    else
+        redis.call('SET', keyReceipt, raw, 'EX', receiptTtlSeconds)
+    end
+end
+if not keyHasSupportedType(keyReceipt) then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+local priorRaw = redis.call('GET', keyReceipt)
+if priorRaw then
+    local fields = splitReceipt(priorRaw)
+    if #fields < 5 or fields[1] ~= 'v1' or not string.match(fields[2], '^[0-9a-f]+$')
+            or #fields[2] ~= 64 or (fields[3] ~= 'APPLIED' and fields[3] ~= 'REJECTED'
+            and fields[3] ~= 'IN_FLIGHT') then
+        return redis.error_reply('INVALID_OPERATION_RECEIPT')
+    end
+    if fields[2] ~= ARGV[2] then return redis.error_reply('OPERATION_ID_COLLISION') end
+    if fields[3] == 'IN_FLIGHT' then return redis.error_reply('OPERATION_IN_FLIGHT') end
+    return priorRaw
+end
+
+local function reject(reason)
+    local raw = encodeReceipt('REJECTED', reason, {})
+    storeReceipt(raw)
+    return raw
+end
+
 local function canIncrementVersion(key)
     local rawVersion = redis.call('GET', key)
     if not rawVersion then
@@ -86,17 +142,21 @@ local keyBalance = KEYS[2]
 local newBalanceCents, balanceError = parseCents(ARGV[1])
 
 if not newBalanceCents then
-    return redis.error_reply(balanceError)
+    return reject(balanceError)
 end
 if not keyHasSupportedType(keyVersion) or not keyHasSupportedType(keyBalance) then
-    return redis.error_reply('INVALID_KEY_TYPE')
+    return reject('INVALID_KEY_TYPE')
 end
 
 local versionCanAdvance, versionError = canIncrementVersion(keyVersion)
-if not versionCanAdvance then return redis.error_reply(versionError) end
+if not versionCanAdvance then return reject(versionError) end
 
 -- Exact decimal-string parsing preserves every cent through DECIMAL(20,2)'s full range.
 local resultBalance = formatCents(newBalanceCents)
+storeReceipt(encodeReceipt('IN_FLIGHT', '-', {}))
 redis.call('INCR', keyVersion)
 redis.call('SET', keyBalance, resultBalance)
-return redis.call('GET', keyVersion)
+local newVersion = redis.call('GET', keyVersion)
+local applied = encodeReceipt('APPLIED', '-', {resultBalance, newVersion})
+storeReceipt(applied)
+return applied

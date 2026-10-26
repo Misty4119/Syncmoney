@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -74,7 +75,8 @@ class CMIPubsubMigrationLockTest {
         Jedis jedis = mock(Jedis.class);
         when(redis.isDegraded()).thenReturn(false);
         when(redis.getResource()).thenReturn(jedis);
-        when(jedis.multi()).thenReturn(mock(redis.clients.jedis.Transaction.class));
+        when(jedis.eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(1L);
         CMIApi cmiApi = mock(CMIApi.class);
         when(cmiApi.isAvailable()).thenReturn(true);
         UUID account = UUID.randomUUID();

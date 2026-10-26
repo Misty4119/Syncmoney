@@ -1,4 +1,5 @@
 package noietime.syncmoney.storage.persistence;
+import noietime.syncmoney.core.money.MoneyPolicy;
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -41,6 +42,15 @@ public final class SqlSnapshotWriter {
             ON CONFLICT (player_uuid) DO UPDATE SET
                 player_name = EXCLUDED.player_name, balance = EXCLUDED.balance, version = EXCLUDED.version,
                 last_server = EXCLUDED.last_server, updated_at = EXCLUDED.updated_at
+            """;
+    private static final String INSERT_IF_ABSENT_MYSQL = """
+            INSERT IGNORE INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """;
+    private static final String INSERT_IF_ABSENT_POSTGRESQL = """
+            INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (player_uuid) DO NOTHING
             """;
     private static final String INSERT_MYSQL = """
             INSERT INTO players (player_uuid, player_name, balance, version, last_server, updated_at)
@@ -162,12 +172,13 @@ public final class SqlSnapshotWriter {
             throws SQLException {
         Objects.requireNonNull(connection, "connection");
         Objects.requireNonNull(snapshot, "snapshot");
+        ConfirmedAccount account = snapshot.account();
+        requireSharedMigrationBalance(account);
         String sql = switch (Objects.requireNonNull(dialect, "dialect")) {
             case MYSQL -> REPLACE_MYSQL;
             case POSTGRESQL -> REPLACE_POSTGRESQL;
             case SQLITE -> throw new IllegalArgumentException("shared migration writes require MySQL or PostgreSQL");
         };
-        ConfirmedAccount account = snapshot.account();
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, account.playerUuid().toString());
             statement.setString(2, snapshot.playerName());
@@ -176,6 +187,37 @@ public final class SqlSnapshotWriter {
             statement.setString(5, snapshot.lastServer());
             statement.setTimestamp(6, Timestamp.from(snapshot.updatedAt()));
             statement.executeUpdate();
+        }
+    }
+
+    /** Insert a migration row only when the shared destination has no account row. */
+    public static boolean insertPlayerIfAbsentForMigration(Connection connection, PlayerSnapshot snapshot,
+            SqlDialect dialect) throws SQLException {
+        Objects.requireNonNull(connection, "connection");
+        Objects.requireNonNull(snapshot, "snapshot");
+        ConfirmedAccount account = snapshot.account();
+        requireSharedMigrationBalance(account);
+        String sql = switch (Objects.requireNonNull(dialect, "dialect")) {
+            case MYSQL -> INSERT_IF_ABSENT_MYSQL;
+            case POSTGRESQL, SQLITE -> INSERT_IF_ABSENT_POSTGRESQL;
+        };
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, account.playerUuid().toString());
+            statement.setString(2, snapshot.playerName());
+            statement.setBigDecimal(3, account.balance());
+            statement.setLong(4, account.version());
+            statement.setString(5, snapshot.lastServer());
+            statement.setTimestamp(6, Timestamp.from(snapshot.updatedAt()));
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    private static void requireSharedMigrationBalance(ConfirmedAccount account) throws SQLException {
+        if (!MoneyPolicy.isNonNegative(account.balance())) {
+            throw new SQLException("Migration balance must be non-negative");
+        }
+        if (account.balance().compareTo(MoneyPolicy.MAX_SHARED_BALANCE) > 0) {
+            throw new SQLException("Migration balance exceeds shared SQL DECIMAL(20,2) maximum");
         }
     }
 

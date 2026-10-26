@@ -4,10 +4,14 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.ansi.ANSIComponentSerializer;
+import org.bukkit.Location;
+import org.bukkit.command.BlockCommandSender;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -205,6 +209,61 @@ public final class MessageHelper {
             ((Player) sender).sendMessage(component);
         } else {
             sender.sendMessage(ANSI_SERIALIZER.serialize(component));
+        }
+    }
+
+    /** Capture the sender's owner context while handling the command, before async work begins. */
+    public static SenderContext captureSender(CommandSender sender) {
+        if (sender instanceof Player player) {
+            return new SenderContext(sender, player, null);
+        }
+        if (sender instanceof BlockCommandSender blockSender) {
+            return new SenderContext(sender, null, blockSender.getBlock().getLocation());
+        }
+        return new SenderContext(sender, null, null);
+    }
+
+    /** Sender and owner information captured on the command's owning scheduler. */
+    public static final class SenderContext {
+        private final CommandSender sender;
+        private final Player player;
+        private final Location blockLocation;
+
+        private SenderContext(CommandSender sender, Player player, Location blockLocation) {
+            this.sender = sender;
+            this.player = player;
+            this.blockLocation = blockLocation;
+        }
+
+        public void runOnOwner(Plugin plugin, Runnable action) {
+            if (player != null) {
+                player.getScheduler().run(plugin, task -> {
+                    if (player.isOnline()) action.run();
+                }, null);
+            } else if (blockLocation != null) {
+                plugin.getServer().getRegionScheduler().run(plugin, blockLocation, task -> action.run());
+            } else {
+                plugin.getServer().getGlobalRegionScheduler().run(plugin, task -> action.run());
+            }
+        }
+
+        public void sendMessage(Plugin plugin, String message) {
+            runOnOwner(plugin, () -> MessageHelper.sendMessage(sender, message));
+        }
+
+        public void sendMessage(Plugin plugin, Component component) {
+            runOnOwner(plugin, () -> MessageHelper.sendMessage(sender, component));
+        }
+
+        public void sendMessages(Plugin plugin, List<String> messages) {
+            runOnOwner(plugin, () -> messages.forEach(message -> MessageHelper.sendMessage(sender, message)));
+        }
+
+        public void sendMessages(Plugin plugin, List<String> messages, Component finalComponent) {
+            runOnOwner(plugin, () -> {
+                messages.forEach(message -> MessageHelper.sendMessage(sender, message));
+                if (finalComponent != null) MessageHelper.sendMessage(sender, finalComponent);
+            });
         }
     }
 

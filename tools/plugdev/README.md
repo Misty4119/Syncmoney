@@ -1,17 +1,75 @@
 # PlugDev acceptance for Syncmoney 1.4.0
 
-Use the local PlugDev source checkout and its CLI build. Do not install or invoke the public npm package. The profile helper writes only ignored `.plugdev/` state and refuses to prepare a profile while a PlugDev server session is running. It pins the candidate JAR, VaultUnlocked 2.20.2, and acceptance version; PlugDev runs Gradle `help` and deploys that exact JAR without rebuilding it.
+## Current R63 source/package and runtime disposition
 
-## Minimum Paper smoke
+The user narrowed ADR-16 to live queued `/pay` recovery only; direct Vault/plugin recovery remains `DEFERRED / NOT VERIFIED` under ADR-07. The current R63 R9 Java 25.0.4 / Gradle 9.8.0 source/package gate passed 59 actionable tasks (59 executed): 170 unit suites / 945 tests plus 9 Sync integration suites / 44 tests (989 total), with zero failures, errors, or skips. Architecture, classfile-major-69 packaging, API-consumer/acceptance packaging, Central publisher isolation, frontend typecheck (4 files / 22 tests), and production build passed. Preview artifacts: core 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`; PAPI 13,872 bytes / SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`; acceptance 54,905 bytes / SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`; API consumer fixture 2,760 bytes / SHA-256 `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E`. The production queued `/pay` Redis integration passed. Exact-candidate Paper runtime/T22 Beta and storage-service integration remain NOT VERIFIED; minimum-Paper SQL and licensed/live CMI (authorization UNKNOWN) remain BLOCKED / NOT VERIFIED; broad V03 remains SKIPPED / NOT VERIFIED; full public API compatibility is NOT VERIFIED; T21 remains PARTIAL / IN PROGRESS. Stable metadata remains 1.3.2; Stable and external release remain NOT VERIFIED / NOT PERFORMED.
+
+The current exact-candidate runtime route remains DO NOT RUN YET because readiness-timeout process cleanup, pre-start loopback RCON binding, complete artifact/source/dependency pins, and consistent stop/session cleanup have not been proven. A read-only recheck found PlugDev main at b59871a with 3 tracked modifications and 2 untracked files, the db-init-failure worktree detached at b59871a with 7 tracked deletions, and ready-matcher at 002513a with 7 tracked deletions. The designated candidate's retained .plugdev/run contains worlds, configuration, logs, and Syncmoney-1.4.0-alpha.1.jar (SHA-256 BDA7C79C8B7BA912B015BD6FB72D907F59BD6D8CDF6B8052201305BED7228070). No new profile or server was created or launched; this older deployed artifact does not verify the current R63 JAR.
+
+
+
+
+## Historical R52F r9 exact-candidate T21 M04 bounded runtime evidence
+
+The single user-authorized isolated runtime workspace has been used and must not be reused or cleaned by this integration task. The historical R52F r9 core JAR (31,604,354 bytes; SHA-256 93c20c49fc40f2fa9c7cc9c716c1882c88451efe64c12b31617573d3292d84fd) completed one synthetic SQLite case on Paper 1.21.6#48 / Java 25.0.4 / LOCAL / guard-on / normal-drain. The baseline, candidate, and rollback stages started and stopped normally with process exit verified and no forced cleanup. The report-specific offline auditor passed 398 assertions. Result JSON SHA-256: 8bab087aca408487f4e60ec75b6e7b8219a105e368f7c1ccf0774dfbee19db30. This is PASS_BOUNDED_SUBCASE only; it does not establish full LOCAL support or full T22 Beta, and it does not validate the later R10 JAR (31,605,447 bytes; SHA-256 5c4e70294cdc39fa1f21adc312adb99e699e6fd814550bdafc48b6735fefe771) or the historical R14 JAR (31,605,493 bytes; SHA-256 6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09). Do not reuse this profile or any other retained run/worktree. A separate fresh-profile authorization may be used only after an exact-candidate selector/auditor and safe lifecycle route pass review.
+
+The historical R52F R14 Java 25 / Gradle 9.8.0 source/package gate passed 68/68 tasks, with 164 unit suites / 913 tests and 9 Sync integration suites / 39 tests. The historical R14 core JAR was 31,605,493 bytes (SHA-256 `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09`). The exact-candidate runtime attempt used the current artifact on Paper 1.21.6#48 / Java 25.0.4; API classloading and loopback listeners passed, but RCON `smaccept` returned 0 without a PASS/FAIL marker within 90 seconds. Only two synthetic fixture rows were confirmed; no restart-read was attempted. The server stopped gracefully and both ports closed. This is not a runtime acceptance pass. Exact-candidate runtime acceptance and full T22 Beta remain NOT VERIFIED. Storage-service integration remains NOT VERIFIED; Stable metadata remains 1.3.2; no external release action occurred.
+
+
+Use the local PlugDev source checkout and its CLI build. Do not install or invoke the public npm package. The profile helper pins the candidate JAR, VaultUnlocked 2.20.2, and acceptance version; PlugDev runs Gradle `help` and deploys that exact JAR without rebuilding it. The helper refuses any existing `.plugdev/` directory before creating a profile. The disposable-copy boundary remains required so stopped, retained run data is never reused.
+
+## Required isolation boundary
+
+Run these commands only from a newly created disposable copy of the exact candidate source. Do not run them from the primary checkout, the candidate worktree, or any retained PlugDev project. Before the first command, confirm that `.plugdev` does not exist in the disposable copy; do not copy an existing `.plugdev` directory into it. `prepare.mjs` refuses an existing `.plugdev` directory before writing and atomically reserves that path before creating its profile. Keep the profile, server data, logs, and worlds within that isolated copy.
+
+Historical R52F r5 candidate core JAR: SHA-256 `46A593BBEC73FE7BA8759ED822EF1734ED6704CAD1688A1BF61150906FDE2DD4` (31,601,861 bytes). Its Java 25.0.4 toolchain / Gradle 9.8.0 source/package gate passed all 68 tasks: 163 unit suites / 908 tests and 9 Sync integration suites / 39 tests (947 total), with zero failures, errors, or skips. Migration boundary regressions passed; architecture, classfile-major-69 packaging, API-consumer packaging, publisher isolation, and NMCP aggregation passed. MySQL/MariaDB storage-service integration remains NOT VERIFIED. The one isolated workspace was already used for an R52F r3 bounded M04 case with JAR SHA-256 `7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8`; that result does not verify r5. No r5 runtime was run, and the one-workspace authorization does not permit creating another profile. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED. Before any future authorized run, verify the exact source, server, dependency, and artifact pins.
+
+```powershell
+$runtimeRoot = 'C:\path\to\new\isolated\candidate-copy'
+function Assert-NoReparsePointInPath {
+    param([Parameter(Mandatory)][string]$Path)
+    $probe = [System.IO.Path]::GetFullPath($Path)
+    while ($probe) {
+        if (Test-Path -LiteralPath $probe) {
+            $item = Get-Item -LiteralPath $probe -Force
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Path contains a reparse point: $($item.FullName)"
+            }
+        }
+        $parent = Split-Path -Path $probe -Parent
+        if (-not $parent -or $parent -eq $probe) { break }
+        $probe = $parent
+    }
+}
+Assert-NoReparsePointInPath -Path $runtimeRoot
+Set-Location $runtimeRoot
+if (Test-Path -LiteralPath '.plugdev') { throw 'Use a fresh isolated copy with no .plugdev directory.' }
+$env:PLUGDEV_HOME = Join-Path $runtimeRoot 'plugdev-home'
+$env:GRADLE_USER_HOME = Join-Path $runtimeRoot 'gradle-home'
+if ((Test-Path -LiteralPath $env:PLUGDEV_HOME) -or (Test-Path -LiteralPath $env:GRADLE_USER_HOME)) { throw 'Use fresh workspace-local PlugDev and Gradle home directories.' }
+```
+## Exact-candidate minimum-Paper smoke procedure (not run for the current candidate)
 
 Use Java 25 and build the candidate and acceptance probe first. `PLUGDEV_ROOT` is needed when this repository is running in a worktree that is not beside the local PlugDev checkout.
+Pass the candidate version explicitly. The helper's retained default is `1.4.0-alpha.1` for historical fixtures and is not the current exact candidate.
+Every `PLUGDEV_ROOT` or `-PlugDevRoot` value below must identify a local PlugDev source checkout that satisfies that runner's clean-checkout and distribution checks. Do not point a runner at a dirty checkout or clean an existing checkout to satisfy a prerequisite; use a separate verified clean copy or defer the run. All PlugDev paths in examples are placeholders.
+The historical bounded subcase used Paper
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
-$env:PLUGDEV_ROOT = 'C:\path\to\plugdev-main'
+$env:PLUGDEV_ROOT = 'C:\path\to\clean\plugdev-source'
+$env:SYNCMONEY_TEST_SERVER_JAR = 'C:\path\to\paper-1.21.6-48.jar'
+$expectedPaperSha256 = '35E2DFA66B3491B9D2F0BB033679FA5ACA1E1FDF097E7A06A80CE8AFEDA5C214'
+$actualPaperSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:SYNCMONEY_TEST_SERVER_JAR).Hash
+if ($actualPaperSha256 -ne $expectedPaperSha256) { throw "Paper 1.21.6#48 SHA-256 mismatch: $actualPaperSha256" }
 
-.\gradlew.bat -PreleaseVersion=1.4.0-alpha.1 test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+.\gradlew.bat -PreleaseVersion=1.4.0 test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+$expectedCandidateSha256 = '46A593BBEC73FE7BA8759ED822EF1734ED6704CAD1688A1BF61150906FDE2DD4'
+$candidateJar = 'build/libs/Syncmoney-1.4.0.jar'
+$actualCandidateSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidateJar).Hash
+if ($actualCandidateSha256 -ne $expectedCandidateSha256) { throw "Syncmoney-1.4.0 candidate SHA-256 mismatch: $actualCandidateSha256" }
+
 $acceptanceLog = '.plugdev/run/logs/latest.log'
 function Get-ServerLogLineCount {
     param([Parameter(Mandatory)][string]$Path)
@@ -41,7 +99,7 @@ function Wait-ServerLogMarker {
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Timed out waiting for server log marker '$Pattern' in $Path"
 }
-node tools/plugdev/prepare.mjs paper 1.21.6 local off 1.4.0-alpha.1
+node tools/plugdev/prepare.mjs paper 1.21.6 local off 1.4.0
 $beforeStart = Get-ServerLogLineCount -Path $acceptanceLog
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server start --config .plugdev/profile.yml
 Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'API CLASSLOADER PASS' -FailurePattern 'API CLASSLOADER FAIL' -AfterLine $beforeStart
@@ -58,17 +116,21 @@ $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server start --config .plugdev/profile.yml
 $beforeRead = Get-ServerLogLineCount -Path $acceptanceLog
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server command "smaccept read"
-Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'ACCEPTANCE READ a=' -FailurePattern 'ACCEPTANCE READ FAIL' -AfterLine $beforeRead
+Wait-ServerLogMarker -Path $acceptanceLog -Pattern 'ACCEPTANCE READ cold-vault-a=' -FailurePattern 'ACCEPTANCE READ FAIL' -AfterLine $beforeRead
 node "$env:PLUGDEV_ROOT\packages\cli\dist\cli.js" server stop
 ```
 
 The generated profile disables PlugDev's idle/orphan auto-stop so the detached server remains available for the RCON acceptance commands. `smaccept` runs asynchronously: its RCON response is not completion evidence. Capture the current log line count before server start and each asynchronous `smaccept` command, then wait for a new success marker (the sample above also fails immediately on its matching failure marker) before stopping the server. The first `smaccept` call seeds only the synthetic `AcceptanceA` and `AcceptanceB` accounts and checks Vault and VaultUnlocked service registration plus deposit, withdrawal, transfer, and insufficient-funds behavior. The probe waits up to 10 seconds for the existing asynchronous account loader before seeding; it never turns a cold mutation into a synchronous load. After graceful stop and restart, verify the `ACCEPTANCE READ` line reports `cold-vault-a=NaN`, `cold-vault-unlocked-b=null`, `a=1000`, `b=520`, and `vault-unlocked-b=520`; the command response alone is not the assertion. The cold getter checks use separate accounts so the first asynchronous load cannot warm the second check. Check the normal shutdown log for persistence completion. Unit tests separately verify that cold reads return while the cache/SQL loader is blocked. Record the exact Paper build, Java version, Syncmoney JAR SHA-256, VaultUnlocked JAR version/hash, startup/shutdown results, and restart balances. Do not copy server config, RCON credentials, logs, worlds, or `.plugdev/` data into Git.
+
+Historical R50 route review (2026-10-25): the pinned Paper `1.21.6#48` JAR was available, but the selected smoke case lacked a report-specific offline auditor binding that candidate and its dependencies to startup, acceptance, restart-read, and shutdown evidence. This is not current R52 acceptance evidence.
 
 ## Exact server artifact pin and migration cycle
 
 Set `SYNCMONEY_TEST_SERVER_JAR` to an already verified local server JAR when the matrix requires a beta build or an exact build rather than PlugDev's current stable resolver. The helper hashes the file, configures PlugDev's built-in `custom` provider to use that exact artifact, and continues to run Gradle `help` so the plugin JAR is not rebuilt or substituted. This does not change the project minimum or assert support; record the source build/channel and compare the artifact hash with the official manifest before starting.
 
 `run-upgrade-cycle.ps1` creates an atomically claimed, GUID-named disposable project under `build/reports/foundation/T21-upgrade-cycles`, rejects reparse-point ancestors, validates version/path inputs, requires exact server and baseline plugin SHA-256 pins, verifies the 1.3.2 source checkout commit, requires Java 25 and the local `sqlite3` CLI, and invokes only the local PlugDev checkout. It sets both `PLUGDEV_HOME` and `GRADLE_USER_HOME` below that run directory. Pass the verified T00/T19 baseline artifact; do not use a same-named JAR from the 1.4 worktree. Server, baseline, candidate, acceptance, and API-consumer JARs are copied into the isolated run; their staged byte counts and hashes are checked before and after each PlugDev CLI invocation and included in the result manifest. After `prepare.mjs` copies the acceptance and API-consumer JARs into `.plugdev/run/plugins`, the runner also pins those loaded copies against the staged build artifacts and includes both paths in the artifact manifest. Every later PlugDev invocation and report emission rechecks the loaded copies. The runtime uses the staged server JAR. The runner requires a clean local PlugDev checkout and hashes every file under `packages/cli/dist`; it rechecks that manifest before and after each CLI invocation. It imports `syncmoney-testkit/src/testFixtures/resources/sql/legacy-local-sqlite-v1.3.2.sql` into a custom configured SQLite path, verifies the historical `REAL` balance column and transaction row, then checks Syncmoney itself reads both fixture accounts under 1.3.2, 1.4, and rollback to 1.3.2. The candidate writes distinct balances through the existing acceptance-only admin probe; after each normal stop the helper checks SQLite values and the unchanged historical transaction. It also checks the actual config schema/path and a synthetic unknown operator config entry across versions. The cycle's version, read, and write probes validate the plugin descriptor version; the separate T15 lifecycle probe is not part of this migration cycle. The 1.4 candidate stage also requires the compileOnly API consumer to log `API CLASSLOADER PASS`. Normal stops use RCON only after the session PID is matched to the run-marked Java process. Failure cleanup force-stops only Java processes whose command line contains the unique run marker. The runner records its Java and isolated Gradle-daemon cleanup; a separate post-run process query must be described separately and is not represented by those runner checks. Logs, configs, worlds, caches, and database files stay under ignored build output; the result manifest records artifact/source pins, isolated cache homes, config values, SQLite rows, stop exit codes, and cleanup results.
+
+The runner retains `1.4.0-alpha.1` as its default for historical report reproduction. Always pass `-CandidateVersion '1.4.0'` for the current 1.4.0 candidate so the build and staged artifact paths select the intended JAR.
 
 `-GuardProfile guard-on` is an additional bounded M04 profile. It keeps `LOCAL`, disables Redis/shared SQL and optional modules, enables per-player protection, and disables both the global circuit breaker and global lock. The runner asserts those exact config values at all six preparation/baseline/candidate/rollback config observations and records them with source pins and a SHA-256/byte-count manifest for every retained runner log. The offline audit also enforces the exact baseline start/stop → candidate upgrade start/stop → rollback start/stop chronology using the report-pinned shared validation predicate. Run the reusable offline audit after each cycle to independently rehash the staged artifacts, complete PlugDev distribution, and retained logs, and to query the final SQLite fixture state:
 
@@ -83,7 +145,7 @@ The M04 profile loads VaultUnlocked `2.20.2`. After its first startup, the runne
 ```powershell
 pwsh -NoProfile -File tools/plugdev/t21-upgrade-cycle-audit.ps1 `
   -RunDirectory 'C:\absolute\path\to\the\run-directory' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main'
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source'
 ```
 
 For Folia or Canvas, pass the matching `-PlatformEndpoint` selector. Historical selectors `MaximumFolia` and `MaximumCanvas` still identify Folia `26.2#7` and Canvas `26.3#972`; current maximum selectors are `CurrentMaximumFolia` and `CurrentMaximumCanvas` for Folia `26.3#3` and Canvas `26.3#984`. Paper uses `CurrentMaximum` for `26.3#200`. The offline auditor checks the report's endpoint/hash and actual startup identity in baseline, candidate, and rollback logs. Omitting the selector retains the minimum-Paper default; the existing `-PaperEndpoint` alias remains supported.
@@ -104,7 +166,8 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
   -BaselinePluginJar 'C:\Users\margo\.codex\worktrees\syncmoney-132-baseline\Syncmoney\build\libs\Syncmoney-1.3.2.jar' `
   -ExpectedBaselinePluginSha256 '442a404276b538ce807b0f063fb37920be85e60961a52a475b3f3524d08f4f10' `
   -BaselineSourceCommit '71cc55dfeefe9a8f40a3835b051ddd324d353767' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -CandidateVersion '1.4.0' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME
 ```
 
@@ -119,12 +182,12 @@ The current T21 formal endpoint range, updated by the user on 2026-10-17, is Pap
 
 Paper `26.3#175` and `26.3#178` are historical supplemental stable-build observations. Paper `26.3#194` is the maintained `CurrentStable` supplemental selector with later bounded M04/M05/M06/V03 observations and SHA-256 `5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784`. These builds do not replace the current formal Paper maximum `26.3#200`. Verify each exact JAR against its own SHA-256 before a run; a numeric version passed to `prepare.mjs` does not pin a build.
 
-These are version-family preparation examples only; they do not select or pin the current maximum build. Use the current `26.3` family, then verify the exact server JAR and SHA-256 from the foundation validation plan before runtime acceptance:
+These are version-family preparation examples for the current `1.4.0` candidate only; they do not select or pin the current maximum build. Use the current `26.3` family, then verify the exact server JAR and SHA-256 from the foundation validation plan before runtime acceptance:
 
 ```powershell
-node tools/plugdev/prepare.mjs paper 26.3 local off 1.4.0-alpha.1
-node tools/plugdev/prepare.mjs folia 26.3 local off 1.4.0-alpha.1
-node tools/plugdev/prepare.mjs canvas 26.3 local off 1.4.0-alpha.1
+node tools/plugdev/prepare.mjs paper 26.3 local off 1.4.0
+node tools/plugdev/prepare.mjs folia 26.3 local off 1.4.0
+node tools/plugdev/prepare.mjs canvas 26.3 local off 1.4.0
 ```
 
 The current user-confirmed maximum endpoints are Paper `26.3#200`, Folia `26.3#3`, and Canvas `26.3#984`. Use `CurrentMaximum`, `CurrentMaximumFolia`, and `CurrentMaximumCanvas` for T21 SQL validation; use the `*-263-currentmax` selectors for the M10 and player-scheduler runners. The M10 and player-scheduler runners resolve these artifacts under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/` and verify each JAR against its endpoint pin. Existing `Maximum` and `*-max` selectors retain their previous exact-build mappings for report reproduction. Previously accepted T21 reports on Paper `26.3#166`, Folia `26.2#7`, and Canvas `26.3#972` remain historical bounded results for those exact builds. Supplemental Paper `26.3#194` reports remain outside the formal range. All nine current-maximum candidate-created-account M05 `SYNC` SQL cells and all three current-maximum M10 reconciliation cells have bounded report-specific audits. The 1.3.2-seeded M05 formal-maximum legacy-data matrix now has `PASS_BOUNDED_SUBCASE (E2)` evidence for all nine Paper/Folia/Canvas × MySQL/MariaDB/PostgreSQL cells; this matrix is complete and other T21 gates remain open. The current-maximum required-v11 DDL-denial row-preservation extension is also complete at 9/9 Paper/Folia/Canvas × MySQL/MariaDB/PostgreSQL cells, with one seeded row per report; it does not establish all-row preservation or whole-database atomic rollback. The three standard current-maximum player-scheduler cells have bounded runtime evidence; Folia current-maximum cross-owner and Canvas current-maximum paired-owner guard-plus-breaker profiles have each passed as separate bounded E2 scenarios. The current-maximum Canvas 26.3#984 breaker-only profile has passed as a separate PASS_BOUNDED_SUBCASE (E2); its report-specific offline audit passed 150 assertions. Four Redis persistence files were hashed but no AOF reload was performed. Other T21 scenarios remain open. Selector support alone does not count as runtime evidence.
@@ -147,7 +210,7 @@ As of 2026-10-20, all six formal endpoints have separate bounded accepted report
 
 `run-quiesced-network-upgrade.ps1` runs the bounded two-node M01–M03 SYNC baseline → candidate → normal rollback cycle and requires all synthetic nodes stopped with verified drain before backup. It records four candidate owner-drain reports and never restores pre-upgrade backups for normal rollback. The run is limited to the two synthetic Syncmoney nodes and its acceptance probe; it does not establish production third-party writer quiescence. Pass `-EnableAudit` to enable SQL audit and Redis hybrid-audit only, leaving cleanup/export and other optional modules disabled. That profile verifies each disposable account gained persisted audit rows after the candidate write and retained them through rollback; its result report records the audit profile and per-stage counts. Audit remains disabled by default.
 
-## T21 M10 supplemental CurrentStable Paper reconciliation
+## Historical T21 M10 supplemental CurrentStable Paper reconciliation
 
 The M10 two-node missed-Pub/Sub reconciliation runner has a separate `paper-263-currentstable` selector for Paper `26.3#194`. Its JAR is stored under `build/reports/foundation/T21-M10/artifacts/paper-26.3-194.jar` and pinned to SHA-256 `5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784`. That accepted report is a historical supplemental observation and does not satisfy the updated formal maximum Paper `26.3#200`.
 
@@ -170,7 +233,7 @@ This audit validates that supplemental run only and does not change the formal e
 
 ## T21 M10 current-maximum Paper, Folia, and Canvas reconciliation
 
-The current-maximum selectors are `paper-263-currentmax`, `folia-263-currentmax`, and `canvas-263-currentmax`. Each run uses the pinned server artifact under `build/reports/foundation/T21-sql-runtime/current-maximum-artifacts/`, the `1.4.0-alpha.1` candidate, isolated Redis DB 15, and the local PlugDev and Mineflayer checkouts. The runner sets `NODE_PATH` to the local Mineflayer checkout's `node_modules` directory for the client process and retains its stdout/stderr logs for failure diagnosis.
+The historical current-maximum selectors are `paper-263-currentmax`, `folia-263-currentmax`, and `canvas-263-currentmax`. The accepted reports for these selectors used the `1.4.0-alpha.1` candidate, isolated Redis DB 15, and the local PlugDev and Mineflayer checkouts. Their candidate pins and outcomes are bound to those historical artifacts; they do not establish exact-candidate runtime acceptance for 1.4.0.
 
 | Endpoint | Selector | Run ID | Runtime report SHA-256 | Offline audit |
 |---|---|---|---|---|
@@ -207,7 +270,7 @@ Build the pinned candidate and prepare the local PlugDev checkout and exact serv
 $env:JAVA_HOME = 'C:\Program Files\Java\jdk-25.0.4'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 $paperJar = (Resolve-Path 'build\reports\foundation\T21-inputs\paper-1.21.6-48.jar').Path
-$plugDevRoot = 'C:\Users\margo\IdeaProjects\plugdev-main'
+$plugDevRoot = 'C:\path\to\clean\plugdev-source'
 pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
@@ -237,7 +300,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Minimum `
   -DatabaseProduct MySQL `
@@ -254,7 +317,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -RuntimeReportsRoot $reportRoot `
   -MariaDbBin $mariaDbBin `
@@ -271,7 +334,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Maximum `
   -DatabaseProduct MySQL `
@@ -286,7 +349,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -RuntimeReportsRoot $reportRoot `
   -MariaDbBin $mariaDbBin `
@@ -305,7 +368,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -RuntimeReportsRoot $reportRoot `
   -PostgreSqlBin $postgreSqlBin `
@@ -322,7 +385,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -RuntimeReportsRoot $reportRoot `
   -PostgreSqlBin $postgreSqlBin `
@@ -341,7 +404,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MinimumFolia `
   -DatabaseProduct MySQL `
@@ -356,7 +419,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PlatformEndpoint MaximumFolia `
   -DatabaseProduct MySQL `
@@ -372,7 +435,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PlatformEndpoint MinimumCanvas `
   -DatabaseProduct MySQL `
@@ -387,7 +450,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
   -PlatformEndpoint MinimumCanvas `
@@ -405,7 +468,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PlatformEndpoint MaximumCanvas `
   -DatabaseProduct MySQL `
@@ -421,7 +484,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\12.3.3\bin' `
   -PlatformEndpoint MaximumCanvas `
@@ -437,7 +500,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome 'C:\Program Files\Java\jdk-25.0.4' `
   -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
   -PlatformEndpoint MaximumCanvas `
@@ -461,7 +524,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Maximum `
   -DatabaseProduct MySQL `
@@ -478,7 +541,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MinimumFolia `
   -DatabaseProduct MySQL `
@@ -495,7 +558,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
   -PlatformEndpoint MinimumFolia `
@@ -513,7 +576,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
   -PlatformEndpoint MinimumFolia `
@@ -531,7 +594,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MaximumFolia `
   -DatabaseProduct MySQL `
@@ -549,7 +612,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $foliaJar `
   -ExpectedServerSha256 '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -MariaDbBin $mariaDbBin `
   -PlatformEndpoint MaximumFolia `
@@ -568,7 +631,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MinimumCanvas `
   -DatabaseProduct MySQL `
@@ -585,7 +648,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
   -PlatformEndpoint MinimumCanvas `
@@ -603,7 +666,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
   -PlatformEndpoint MinimumCanvas `
@@ -622,7 +685,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint MaximumCanvas `
   -DatabaseProduct MySQL `
@@ -639,7 +702,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin' `
   -PlatformEndpoint MaximumCanvas `
@@ -657,7 +720,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $canvasJar `
   -ExpectedServerSha256 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PostgreSqlBin 'C:\Program Files\PostgreSQL\18\bin' `
   -PlatformEndpoint MaximumCanvas `
@@ -671,7 +734,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '57b717e7704e93d6086341c08d4a34e53a74efc0e9c44877a3e856e0db90c662' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Maximum `
   -DatabaseProduct PostgreSQL `
@@ -695,7 +758,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd' `
   -ExpectedCandidateSha256 '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -PlatformEndpoint Maximum `
   -LegacySqlDataUpgrade `
@@ -725,7 +788,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 $endpoints = @('paper-1216-min', 'paper-263-max', 'folia-1216-min', 'folia-262-max', 'canvas-1218-min', 'canvas-263-max')
 foreach ($endpoint in $endpoints) {
   .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint `
-    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
     -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
 }
 ```
@@ -739,7 +802,7 @@ For historical Canvas player-guard report reproduction, run the same harness wit
 ```powershell
 foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
   .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -Guard -GuardWithCircuitBreaker `
-    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
     -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
 }
 ```
@@ -751,7 +814,7 @@ For historical Folia player-guard report reproduction without the global breaker
 ```powershell
 foreach ($endpoint in @('folia-1216-min', 'folia-262-max')) {
   .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -Guard `
-    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
     -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
 }
 ```
@@ -763,7 +826,7 @@ For the historical inverse Canvas report reproduction, run the same isolated lif
 ```powershell
 foreach ($endpoint in @('canvas-1218-min', 'canvas-263-max')) {
   .\tools\plugdev\run-player-scheduler-lifecycle.ps1 -Endpoint $endpoint -BreakerOnly `
-    -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+    -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
     -MineflayerRoot 'C:\Users\margo\IdeaProjects\mineflayer-master'
 }
 ```
@@ -854,7 +917,7 @@ pwsh -NoProfile -File tools/plugdev/run-mysql-sync-runtime.ps1 `
   -ServerJar $paperJar `
   -ExpectedServerSha256 '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214' `
   -ExpectedCandidateSha256 '5fdc79aae7ae715f6fcdb3cddbb858ba001855420755c46458102979ca495dbd' `
-  -PlugDevRoot 'C:\Users\margo\IdeaProjects\plugdev-main' `
+  -PlugDevRoot 'C:\path\to\clean\plugdev-source' `
   -JavaHome $env:JAVA_HOME `
   -DatabaseProduct MariaDB `
   -MariaDbBin 'C:\Users\margo\scoop\apps\mariadb\current\bin'
@@ -906,3 +969,32 @@ Canvas `26.3#984` passed the guard-on LOCAL SQLite journal replay from the histo
 Report: `canvas-26.3-984-20261020-063032-6521b1623b224814a19d1ce496d40f61/result.json`, SHA-256 `39896fc3f29abc8a9c113a62bee596ac41457469a4644816c16132ebb5ee3991`. The report-specific audit SHA-256 is `5b7b5799ec48a62be05d3d308084221551abc8059689ad29c179aa0796ed899b`; direct-verifier output SHA-256 is `d110a801ffb21e980d9c338f5740780346a3224dc3c568d65a71deacba3bc46c`; universal-verifier record SHA-256 is `94d74e3a47e17f94aea4b38507afad4b094c7737fb1094fc9214c3b34c6d7b6f`. Full paths and pins are in `Proposal/1.4.0-Architecture-Foundation/06-validation-benchmark-migration.md`.
 
 This is one synthetic guarded LOCAL SQLite observation. It does not establish hard-crash or power-loss durability, general SQLite recovery, live-player guard behavior, fleet-wide quiescence, or the full T21 result. No SQL service, full Java/Gradle suite, or full PlugDev matrix was run. Minimum-Paper/MySQL remains `BLOCKED / NOT VERIFIED`, its provisioning contract is unchanged, and Paper M12 was not repeated. This checkpoint has since been followed by the Canvas `26.3#984` cross-owner completion-marker gate, which passed as `PASS_BOUNDED_SUBCASE (E2)`; see the validation plan for evidence and limits.
+
+
+## Syncmoney 1.4.0 exact-candidate R39 bounded runtime record
+
+On 2026-10-25, one bounded runtime case used the exact R39 Syncmoney JAR SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19 on Paper 1.21.6#48 / Java 25.0.4+7-LTS-189 / LOCAL with synthetic Acceptance accounts and VaultUnlocked 2.20.2. The first start recorded API CLASSLOADER PASS, T21_VERSION_PASS, and ACCEPTANCE PASS total=1520.00, then stopped. A second-start watcher was interrupted after API class loading and before any read command; that composite action remains failed. A separate read-only recovery action recorded API CLASSLOADER PASS, ACCEPTANCE READ cold-vault-a=NaN cold-vault-unlocked-b=null a=1000.00 b=520.00 vault-unlocked-b=520.00, then graceful stop; the process exited and dedicated ports 25675/35675 were closed. This is PASS_BOUNDED_SUBCASE only. Full T22 Beta, the broader Paper/Java range, Folia/Canvas, other economy modes, SQL-service behavior, full public API compatibility, and external release remain NOT VERIFIED. Logs and runtime data stay in the isolated local workspace; see the ignored R39 runtime report in the candidate build reports for retained log digests. Do not reuse or clean the runtime profile.
+
+
+## R52D exact-candidate runtime disposition (historical, 2026-10-25)
+
+No R52D runtime workspace was created or started: the available minimum-Paper smoke procedure is a manual log-marker recipe without a report-specific offline auditor for the current artifact, Vault/VaultUnlocked/Acceptance inputs, two startups, acceptance results, restart balances, and graceful shutdown. The current T21 network runner is pinned to its separate multi-server artifact set and existing PlugDev/Mineflayer toolchain, so it is not a selector for this LOCAL smoke. PlugDev main and both task worktrees still have local modifications. Do not use them as a clean source checkout or alter them. Exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`; no server was launched. This is a deliberate bounded deferral, not a runtime failure.
+
+## R52F r3 bounded M04 runtime record (historical, 2026-10-25)
+
+The one isolated workspace was used for a bounded M04 run with the R52F r3 JAR SHA-256 `7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8` on Paper `1.21.6#48` / Java `25.0.4` / `LOCAL` / `guard-on` / `normal-drain`, with synthetic SQLite data. Its report-specific offline auditor passed 398 assertions. This is `PASS_BOUNDED_SUBCASE` for the r3 artifact only; it does not verify the later r4 JAR.
+
+## R52F r5 exact-candidate runtime disposition (historical, 2026-10-25)
+
+The r5 candidate JAR was 31,601,861 bytes with SHA-256 `46A593BBEC73FE7BA8759ED822EF1734ED6704CAD1688A1BF61150906FDE2DD4`. It was not deployed in the isolated M04 run. That bounded run used the r3 JAR SHA-256 `7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8`; its report-specific auditor passed 398 assertions for that r3 artifact only.
+
+The single authorized isolated PlugDev workspace has already been used and remains retained. No additional profile was created or reused for r5, so exact-candidate runtime and full T22 Beta remain `NOT VERIFIED`. The earlier r3 observation does not verify r5 or establish full LOCAL support. No external release action occurred.
+
+## Historical R52F R14 exact-candidate runtime disposition (2026-10-26)
+
+The only authorized isolated Paper `1.21.6#48` / Java `25.0.4` profile was used with the current R11 code candidate JAR (31,605,493 bytes; SHA-256 `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09`). API classloader and loopback checks passed, but `smaccept` returned 0 without a PASS/FAIL marker within 90 seconds. A read-only fixture check counted exactly two synthetic rows; no balance values were printed and no restart-read ran. Paper exited naturally and both ports closed. The runtime actions remain failed and reconciled. Exact-candidate runtime acceptance and full T22 Beta remain `NOT VERIFIED`; do not reuse this profile.
+
+
+## Current R53 exact-candidate runtime disposition (2026-10-26)
+
+The current R53 r3b Java 25.0.4 / Gradle 9.8.0 source/package gate passed 68/68 actionable tasks with 166 unit suites / 926 tests and 10 Sync integration suites / 42 tests (968 total; zero failures, errors, or skips). The candidate core JAR is 31,609,927 bytes; SHA-256 `3C119D0CFDF3DAC29AEA670B2C86AD8EB0B3DD13F9AB46EC8AF9D2651367E041`; all five artifact pins are in Proposal 06 and the local R53 r3 evidence folder. Storage-service integration remains NOT VERIFIED. No R53 Paper runtime was created or launched. The one-profile authorization in the current task allowed a new isolated environment only after a reviewed safe route; no profile was created because the route remains DO NOT RUN YET: the runner lacks complete source/dependency pins, readiness-timeout cleanup is unproven, pre-start RCON loopback binding is unproven, and stop/session cleanup predicates disagree. The prepare helper refusing an existing `.plugdev` directory does not resolve those lifecycle gaps. Existing PlugDev data and worktrees were preserved and not reused. The earlier R14 attempt remains failed, is not acceptance, and was not replayed. Exact-candidate runtime and full T22 Beta remain NOT VERIFIED; source/package evidence does not imply runtime acceptance.

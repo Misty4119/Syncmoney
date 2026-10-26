@@ -17,25 +17,28 @@ class PlayerLookupUtilTest {
         Plugin plugin = mock(Plugin.class);
         Player player = mock(Player.class);
         EntityScheduler scheduler = mock(EntityScheduler.class);
-        when(player.isOnline()).thenReturn(true);
         when(player.getScheduler()).thenReturn(scheduler);
         Runnable action = mock(Runnable.class);
         PlayerLookupUtil.runOnPlayerScheduler(plugin, player, action);
         verifyNoInteractions(action);
         ArgumentCaptor<Consumer<ScheduledTask>> callback = ArgumentCaptor.forClass(Consumer.class);
         verify(scheduler).run(eq(plugin), callback.capture(), isNull());
+        verify(player, never()).isOnline();
         callback.getValue().accept(mock(ScheduledTask.class));
         verify(action).run();
     }
 
     @Test
-    void retiredOrMissingPlayersAreSkipped() {
+    void missingPlayersAreSkippedAndOtherPlayersAreRoutedToTheirOwner() {
         Plugin plugin = mock(Plugin.class);
         Runnable action = mock(Runnable.class);
         Player player = mock(Player.class);
+        EntityScheduler scheduler = mock(EntityScheduler.class);
+        when(player.getScheduler()).thenReturn(scheduler);
         PlayerLookupUtil.runOnPlayerScheduler(plugin, null, action);
         PlayerLookupUtil.runOnPlayerScheduler(plugin, player, action);
         verifyNoInteractions(action);
-        verify(player, never()).getScheduler();
+        verify(player, never()).isOnline();
+        verify(scheduler).run(eq(plugin), any(), isNull());
     }
 }

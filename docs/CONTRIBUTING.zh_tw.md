@@ -16,13 +16,15 @@
 - 只有測試需要 Redis/SQL 的 mode/feature 時才需要對應服務
 - 測試 CMI integration 時需自行提供合法授權的 CMI；repository 不散布 CMI
 
-1.4.0 target 的 runtime 最低為 Java 25、Paper 1.21.6。已發布的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。Runtime smoke 請依 `tools/plugdev/README.md` 執行。
+**目前 R63 狀態：BLOCKED / NOT VERIFIED。** 使用者授權 durable recovery 架構修訂，並將 ADR-16 限定為 live queued /pay recovery。Java 25.0.4／Gradle 9.8.0 source/package gate 通過 58 個 actionable tasks（9 executed、49 up-to-date）：170 個 unit suites／945 個 tests，加上 9 個 Sync integration suites／42 個 tests（合計 179 suites／987 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation，以及 frontend typecheck、4 個 unit files／22 個 tests 與 production build 均通過。Current core JAR：31,645,902 bytes / SHA-256 55486BE2DB3D7FA140BB2957F1585C53B720D380A66E281317DDA0A337A4C9CC；PAPI JAR：13,872 bytes / SHA-256 A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C；acceptance JAR：54,905 bytes / SHA-256 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824。Production queued /pay integration test 使用隔離 Redis。Direct Vault/plugin recovery 依 ADR-07 維持 DEFERRED / NOT VERIFIED。Exact-candidate Paper runtime／T22 Beta、storage-service integration、minimum-Paper SQL、licensed/live CMI（授權 UNKNOWN）、廣泛 V03、完整 public API 相容性與 T21 完成仍為 NOT VERIFIED 或 BLOCKED；Stable 與外部發布仍為 NOT VERIFIED / NOT PERFORMED。Stable metadata 維持 1.3.2；沒有執行外部發布。
+
+**歷史 R62 狀態（已由下方 R63 更新取代）：BLOCKED / NOT VERIFIED。** 指定候選分支 linco/t21-currentmax-guard 位於 66a25c4f8327932eae850bcfa52b1060942b1fd3（相對 main 為 350 commits ahead / 0 behind、沒有 upstream），工作樹仍有修改；target main 仍為 71cc55dfeefe9a8f40a3835b051ddd324d353767，工作樹乾淨且與 origin/main 相同，stable metadata 為 1.3.2。R62 的 :syncmoney-sync:integrationTest 執行 44 個 tests：41 通過、3 失敗、0 errors、0 skipped。兩個 raw Lua receipt-fixture 類別的 23 個 tests 全部通過；其餘 3 個 PayLuaScriptManagerNoscriptIT 失敗都在 ADR-07 暫緩的 /pay 路徑（INVALID_OPERATION_RECEIPT／SENT_UNKNOWN），因此整個 integration task 失敗，該行為仍為 BLOCKED / NOT VERIFIED。verifyArchitecture 通過；-PreleaseVersion=1.4.0 的 verifyPackaging 通過，classfile major 為 69；storage-service integration 未執行。四個候選 JAR 已重新計算磁碟 hash，但沒有目前 source manifest，因此這些 hash 只是觀察值，並非 source-bound release pins。使用者保留 ADR-07、不採納 ADR-15、延期 direct-transfer recovery 修復／整合，並決定不 merge main。R5 發現的 direct-transfer SENT_UNKNOWN quarantine restart persistence 與 operator-resolution 仍為 BLOCKED / NOT VERIFIED。R59 Bukkit 測試證據未重跑，720-entry R5 manifest 為歷史資料。T21 仍為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED（CMI 授權狀態 UNKNOWN）；exact-candidate runtime/Beta、storage-service integration 與完整 public API 相容性仍為 NOT VERIFIED。Stable／外部發布為 NOT VERIFIED / NOT PERFORMED。未啟動 runtime、未 merge，也未執行外部發布。
 
 ## 儲存庫配置
 
 | 路徑 | 用途 |
 |---|---|
-| `src/main/java/noietime/syncmoney` | Core plugin implementation |
+| `syncmoney-bukkit/src/main/java/noietime/syncmoney` | Core plugin implementation |
 | `src/main/resources` | 預設 config/message、plugin descriptor、Lua/assets、embedded web bundle |
 | `syncmoney-papi-expansion` | 獨立 PlaceholderAPI expansion |
 | `syncmoney-web` | Vue/Vite Web Admin frontend |

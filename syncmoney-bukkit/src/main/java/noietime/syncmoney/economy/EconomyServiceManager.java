@@ -51,6 +51,9 @@ public class EconomyServiceManager {
         EconomyMode mode = config.getEconomyMode();
 
         this.economyWriteQueue = new EconomyWriteQueue(config.getQueueCapacity(), plugin.getLogger());
+        if (mode != EconomyMode.LOCAL && mode != EconomyMode.CMI) {
+            this.economyWriteQueue.closeAdmission();
+        }
 
         this.fallbackWrapper = new FallbackEconomyWrapper(
                 plugin,

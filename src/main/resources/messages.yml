@@ -103,6 +103,7 @@ migration:
   error: '{prefix}<#F43F5E>Migration encountered an error and was aborted: <white>{error}'
   already-running: '{prefix}<#FBBF24>VERIFICATION REQUIRED ⦊ <#94A3B8>A migration task is already in progress.'
   not-running: '{prefix}<#94A3B8>No active migration task currently running.'
+  stop-requested: '{prefix}<#94A3B8>Migration stop request accepted; it will pause at the next safe boundary.'
   stopped: '{prefix}<#94A3B8>Migration task manually aborted by administrator.'
   resuming: '{prefix}<#94A3B8>Resuming migration from the last checkpoint...'
   no-checkpoint: '{prefix}<#94A3B8>No historical checkpoint found, starting fresh.'
@@ -263,6 +264,7 @@ test:
     invalid-threads: '{prefix}<#F43F5E>PARAMETER ERROR ⦊ <#94A3B8>Threads must be between 1 and 50.'
     invalid-iterations: '{prefix}<#F43F5E>PARAMETER ERROR ⦊ <#94A3B8>Iterations must be between 1 and 10000.'
     starting: '{prefix}<#A78BFA>Initiating stress test... <#94A3B8>(Config: {threads} threads, {iterations} iterations each)'
+    start-failed: '{prefix}<#F43F5E>STRESS TEST FAILED ⦊ <#94A3B8>Could not initialize or finish the virtual account test. Check the server log.'
     note: ' <#38BDF8>▪ <#94A3B8>Note: The system will execute <white>{total} <#94A3B8>transfers of 1 unit between virtual accounts A and B.'
     result:
       header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>STRESS TEST DIAGNOSTICS</bold></gradient> <#475569>▰▰▰▰'
@@ -405,6 +407,7 @@ baltop:
   hint-self: '<#475569>┗━ <#94A3B8>Type <#38BDF8>/baltop me <#94A3B8>to view your personal rank'
   self-header: '<#475569>▰▰▰▰ <gradient:#A78BFA:#38BDF8><bold>PERSONAL WEALTH INDEX</bold></gradient> <#475569>▰▰▰▰'
   self-rank: ' <#38BDF8>▪ <#94A3B8>Your Rank: <#A78BFA>#{rank} <#94A3B8>Current Assets: <#F8FAFC>{balance}'
+  self-balance-not-ready: '{prefix}<#94A3B8>Your balance is not ready yet. Try again shortly.'
   self-gap: ' <#38BDF8>▪ <#94A3B8>Gap to next tier: <#F43F5E>{amount} <#94A3B8>({player})'
   not-ranked: '{prefix}<#94A3B8>You are not currently ranked on the leaderboard.'
   me-console: '{prefix}<#94A3B8>Please execute this command in-game to view your personal rank.'

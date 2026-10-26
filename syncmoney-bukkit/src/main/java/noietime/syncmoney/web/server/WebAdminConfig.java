@@ -3,6 +3,8 @@ package noietime.syncmoney.web.server;
 import org.bukkit.configuration.file.FileConfiguration;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Web Admin Dashboard configuration holder.
@@ -22,7 +24,7 @@ public class WebAdminConfig {
     private boolean rateLimitEnabled;
     private int rateLimitPerMinute;
     private boolean trustProxy;
-    private String corsAllowedOrigins;
+    private List<String> corsAllowedOrigins = List.of();
     private String theme;
     private String language;
     private String timezone;
@@ -43,7 +45,7 @@ public class WebAdminConfig {
         this.rateLimitEnabled = fc.getBoolean("web-admin.security.rate-limit.enabled", true);
         this.rateLimitPerMinute = fc.getInt("web-admin.security.rate-limit.requests-per-minute", 60);
         this.trustProxy = fc.getBoolean("web-admin.security.trust-proxy", false);
-        this.corsAllowedOrigins = fc.getString("web-admin.security.cors-allowed-origins", "*");
+        this.corsAllowedOrigins = parseCorsAllowedOrigins(fc.get("web-admin.security.cors-allowed-origins"));
         this.theme = fc.getString("web-admin.ui.theme", "dark");
         this.language = fc.getString("web-admin.ui.language", "zh-TW");
         this.timezone = fc.getString("web-admin.ui.timezone", "UTC");
@@ -97,8 +99,29 @@ public class WebAdminConfig {
         return trustProxy;
     }
 
-    public String getCorsAllowedOrigins() {
+    public List<String> getCorsAllowedOrigins() {
         return corsAllowedOrigins;
+    }
+
+    private static List<String> parseCorsAllowedOrigins(Object configured) {
+        List<?> values;
+        if (configured instanceof List<?> list) {
+            values = list;
+        } else if (configured instanceof String scalar) {
+            values = List.of(scalar);
+        } else {
+            return List.of();
+        }
+
+        List<String> origins = new ArrayList<>();
+        for (Object value : values) {
+            if (!(value instanceof String entry)) continue;
+            for (String origin : entry.split(",")) {
+                String normalized = origin.trim();
+                if (!normalized.isEmpty()) origins.add(normalized);
+            }
+        }
+        return List.copyOf(origins);
     }
 
     public String getTheme() {

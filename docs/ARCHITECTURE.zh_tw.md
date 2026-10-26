@@ -10,7 +10,7 @@
 
 Syncmoney 是 Vault-compatible Minecraft economy，對 Vault 提供同步 API，並以非同步方式處理 persistence 與 synchronization。
 
-本儲存庫有三個 runtime deliverable：core plugin `src/main/java/noietime/syncmoney`、獨立 PlaceholderAPI expansion `syncmoney-papi-expansion`，以及 Vue/Vite Web Admin frontend `syncmoney-web`；frontend build 會嵌入 `src/main/resources/syncmoney-web/dist`。
+本儲存庫有三個 runtime deliverable：core plugin `syncmoney-bukkit/src/main/java/noietime/syncmoney`、獨立 PlaceholderAPI expansion `syncmoney-papi-expansion`，以及 Vue/Vite Web Admin frontend `syncmoney-web`；frontend build 會嵌入 `src/main/resources/syncmoney-web/dist`。
 
 `tools/plugdev` 是外部 acceptance tooling，不是 production dependency。
 
@@ -85,11 +85,17 @@ TransactionWriter / TransferOrchestrator
 
 Mode strategy/router 決定 authority 與 persistence，caller 不應自行繞過。
 
+CMI adapter 沒有原子式雙帳戶轉帳契約，因此 CMI mode 會停用 Syncmoney `/pay`，並在餘額 mutation 前 fail closed。
+
+所有 Syncmoney 雙帳戶轉帳入口也遵循此限制：Vault 指定目標玩家與 plugin transfer、VaultUnlocked 委派呼叫及公開的低階 Redis transfer API，都會在修改 Syncmoney memory、queue 或 Redis 前拒絕 CMI mode 請求。CMI 單帳戶操作仍由 CMI 維持 authority。這些 source-level 檢查不代表 licensed/live CMI acceptance 已通過；CMI 仍不在 1.4.0 已驗證支援範圍。
+
 ## 4. Economy state 與 transaction flow
 
 ### 4.1 金額表示
 
-Money 使用 `BigDecimal` 與既有 normalization。Shared SQL balance 使用 `DECIMAL(20,2)`。所有 mutation 必須維持 insufficient-funds 與資金守恆。
+Money 使用 `BigDecimal` 與既有 normalization。Syncmoney-owned `LOCAL_REDIS` 與 `SYNC` shared mode 的單一 balance 上限為 `999999999999999999.99`，符合 SQL `DECIMAL(20,2)` 與 Redis script 的 cents 範圍。Projected deposit 在 write admission 前與持有 account mutation lock 時都會檢查。此變更不縮小既有 `LOCAL` policy，也不會為 shared-mode guard clamp 或 migration local balance。明確執行 LOCAL-to-SYNC migration 時，會先在 normalization 前拒絕 SQLite 原始負餘額，包括原本會四捨五入成 0.00 的負 sub-cent 值；接著在準備 insert-only 或 force-replacement SQL 前，拒絕正規化後超過此上限的餘額。遭拒列的 LOCAL 原值保持不變，也不會複製到 Redis。所有 mutation 必須維持 insufficient-funds 與資金守恆。
+
+較舊、採用較寬 balance policy 寫入的 Redis 值不會自動掃描或 migration。Deposit、withdraw、transfer 會在記憶體 mutation 前拒絕超限的既有 account。Operator 在將這些 account 納入 1.4.0 shared mode 前，必須先備份並明確 reconciliation；admin set 是刻意修改餘額，不是 migration。Audit 開啟時，若 set 的 delta 超出 SQL `DECIMAL(20,2)`，系統會在 mutation 前拒絕。完成 reconciliation 前，這些 account 不屬於已驗證支援範圍。
 
 ### 4.2 Read path
 
@@ -111,11 +117,13 @@ Cache miss 或 reconcile 依既有 async 路徑處理。
 
 `TransferOrchestrator` 協調 multi-account transfer；不可把兩側獨立更新而破壞 atomic/ordered semantics。
 
+- live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。Exact-candidate Paper runtime acceptance 仍為 NOT VERIFIED。
+
 ## 5. 分散式同步
 
 ### 5.1 Versions
 
-Redis-backed economy balance update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived numeric version；wall-clock rollback、restart、counter wrap 或 server clock skew 可能令版本重複或倒退，因此不代表 global ordering。CMI entity callback 套用 balance 前會重新檢查 handler 的 current watermark。
+Redis-backed economy balance update 使用 per-account Redis version。CMI 維持 legacy timestamp-derived numeric version；wall-clock rollback、restart、counter wrap 或 server clock skew 可能令版本重複或倒退，因此不代表 global ordering。CMI entity callback 套用 balance 前會重新檢查 handler 的 current watermark。本機 inbound watermark 不再按年齡過期；最多保留 10,000 個 account，只有超出上限時才淘汰最舊項目。這是 source-level 行為，不是 licensed/live CMI runtime 證據。
 
 ### 5.2 Redis
 
@@ -210,9 +218,9 @@ SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEven
 
 ### 9.4 WebSocket limitation
 
-`/ws` 存在，但目前 `WebSocketManager` 尚未完成，不應視為 production WebSocket transport。
+`/ws` 路由目前固定回應 `503 WEBSOCKET_UNAVAILABLE`，不會執行 upgrade，因此不是 production WebSocket transport。
 
-所有 `/ws` request（包含帶非空 token 的 upgrade）都會收到 `503 WEBSOCKET_UNAVAILABLE`，server 不會執行 upgrade。完整 WebSocket transport 延後處理。
+所有 `/ws` request（包含帶非空 token 的 upgrade）都會收到 `503 WEBSOCKET_UNAVAILABLE`。完整 WebSocket transport 延後處理。
 
 這是已知 implementation limitation，也是未來修改時需要特別審查的 security-sensitive area。
 
@@ -262,7 +270,10 @@ pnpm test:unit --run
 pnpm build
 ```
 
-1.4.0 target 使用 Java 25 編譯，runtime 最低為 Java 25 與 Paper 1.21.6。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。
+歷史 R52F r8 source/package 證據（已由 r9 取代）：Java 25.0.4／Gradle 9.8.0 gate 通過 68/68 個 tasks、163 個 unit suites／909 個測試及 9 個 Sync integration suites／39 個測試；其 artifact pins 僅屬歷史資料，現況以下列 r9 為準。
+歷史 R52F r9 source/package 與 bounded M04 證據曾由 R11 取代；R11 亦為歷史紀錄，不代表目前整合候選。R11 在 Java 25.0.4／Gradle 9.8.0 通過 68/68 個 tasks、164 個 unit suites／913 個測試及 9 個 Sync integration suites／39 個測試（合計 952），失敗、錯誤與跳過皆為 0。R11 core JAR 為 31,605,493 bytes，SHA-256 `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09`；五項 artifact pins 與 gate log digest 記錄於 Proposal 06。R11 會拒絕 Java parser 可接受的縮寫 UUID。先前 exact-r9 M04 結果仍僅為 PASS_BOUNDED_SUBCASE，不能驗證 R11 JAR。Exact-R11 runtime、完整 LOCAL 支援與完整 T22 Beta 仍為 NOT VERIFIED；T21 仍為 PARTIAL / IN_PROGRESS。Storage-service integration 與完整 public API compatibility 仍為 NOT VERIFIED。Stable metadata 維持 1.3.2；未執行外部發布動作。
+
+歷史 R52F R14 source/package gate 以 Java 25.0.4／Gradle 9.8.0 重新驗證同一 R11 程式碼候選：68/68 個 tasks、164 個 unit suites／913 個測試及 9 個 Sync integration suites／39 個測試（合計 952），失敗、錯誤與跳過皆為 0。五項 R14 artifact pins 記錄於 Proposal 06。後續 exact-candidate runtime attempt 使用該 JAR，但 `smaccept` 回傳 0 後 90 秒內沒有 PASS/FAIL marker；只確認兩筆 synthetic fixture rows，未執行 restart-read，Paper 正常停止且兩個 ports 關閉。Exact-candidate runtime acceptance 與完整 T22 Beta 仍為 NOT VERIFIED。Storage-service integration 仍為 NOT VERIFIED；T21 為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL initial schema 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED（CMI 授權狀態 UNKNOWN）；完整 public API 相容性仍為 NOT VERIFIED。整體 release readiness 為 BLOCKED / NOT VERIFIED。Stable metadata 維持 1.3.2；未執行外部發布動作。
 
 Release automation 透過 Gradle property 建置 preview version，先發佈 Web archive 再發佈 core JAR，stable publication 則由 `production-release` environment gate。Web archive 排除 generated `dist`、dependency、coverage、Playwright 與 editor directory，因為 plugin 下載後會自行建置 frontend。
 
@@ -280,3 +291,14 @@ Architecture-affecting change 應能回答：
 6. Optional feature 停用時是否保持低成本？
 7. Config change 是否需要 restart？
 8. 英文/繁中 docs、REST contract、frontend client 與 tests 是否仍一致？
+
+
+## 2026-10-26 R63 source/package 證據與 recovery contract
+
+**截至 2026-10-26 R63 R9，1.4.0 整體狀態為 BLOCKED / NOT VERIFIED。** 使用本機 `-PreleaseVersion=1.4.0` override，Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，以及 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation，以及 frontend typecheck、4 個 unit files／22 個 tests 與 production build 均通過。Core JAR 為 31,646,522 bytes，SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`；PAPI JAR 為 13,872 bytes，SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`；acceptance JAR 為 54,905 bytes，SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`。R63 驗證 live queued `/pay` recovery；ADR-16 不涵蓋 direct Vault/plugin recovery，該項依 ADR-07 維持 `DEFERRED / NOT VERIFIED`。Exact-candidate Paper runtime／T22 Beta、storage-service integration、minimum-Paper SQL、licensed/live CMI（授權 UNKNOWN）、廣泛 V03、完整 public API 相容性與 T21 完成仍為 `NOT VERIFIED` 或 `BLOCKED`；Stable 與外部發布仍為 `NOT VERIFIED / NOT PERFORMED`。Stable metadata 維持 1.3.2；沒有執行外部發布。
+
+## 歷史 2026-10-26 R62 — raw Lua fixture 與 test-only gate 結果（已由 R63 取代）
+
+R62 只修改 RedisMutationSafetyIT 與 RedisMissingAccountMutationIT 的 raw Lua fixtures，提供 receipt keys／canonical fingerprints 並檢查目前 receipt envelope。23 個 raw-fixture tests 全部通過；完整 `:syncmoney-sync:integrationTest` 因 `PayLuaScriptManagerNoscriptIT` 的 3 個 tests 失敗（41/44 通過、0 errors、0 skipped）。該類別沒有 production caller，因此這些失敗沒有執行或證明 live `/pay` 故障。`verifyArchitecture` 與 `-PreleaseVersion=1.4.0` 的 `verifyPackaging` 通過；storage-service integration 未執行。磁碟上的 artifact hashes 沒有綁定 current source manifest。這些只屬 R62 歷史觀察。
+
+R62 verifyArchitecture 通過。帶 -PreleaseVersion=1.4.0 的 verifyPackaging 通過，classfile major 為 69。Storage-service integration 未執行。目前磁碟上的 JAR hashes 記錄於 Proposal/1.4.0-Architecture-Foundation/19-release-readiness-2026-10-26-r62.md；目前沒有 source manifest，因此這些觀察值不是 source-bound release pins。R5 的 720-entry manifest 為歷史資料。使用者保留 ADR-07、不採納 ADR-15、延期 direct-transfer recovery 修復／整合，並決定不 merge target main；stable metadata 仍為 1.3.2。Exact-candidate runtime/T22 Beta 仍為 NOT VERIFIED；其餘 T21、SQL、CMI、storage、API 與外部發布限制依 R62 readiness note 保留。未啟動 runtime 或執行外部發布。

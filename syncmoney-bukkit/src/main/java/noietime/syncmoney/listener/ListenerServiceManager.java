@@ -62,7 +62,6 @@ public class ListenerServiceManager {
         BaltopManager baltopManager = plugin.getBaltopManager();
 
         this.onlinePlayerRegistry = new OnlinePlayerRegistry(plugin, config, plugin.getRedisManager());
-        this.onlinePlayerRegistry.startHeartbeat();
 
         if (economyFacade != null && nameResolver != null) {
             this.playerJoinListener = new PlayerJoinListener(plugin, economyFacade, nameResolver, baltopManager,
@@ -73,6 +72,9 @@ public class ListenerServiceManager {
                     onlinePlayerRegistry);
             registerListener(playerQuitListener, "Player Quit Listener");
         }
+
+        onlinePlayerRegistry.seedOnlinePlayers();
+        onlinePlayerRegistry.startHeartbeat();
 
         plugin.getLogger().fine("Listener layer initialized");
     }

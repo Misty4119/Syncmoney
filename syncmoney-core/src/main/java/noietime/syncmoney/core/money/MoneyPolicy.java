@@ -7,8 +7,11 @@ import java.math.RoundingMode;
 public final class MoneyPolicy {
 
     public static final BigDecimal ZERO = BigDecimal.ZERO;
+    /** Existing LOCAL policy ceiling; local persisted data is not migrated by the shared-backend bound. */
     public static final BigDecimal MAX_BALANCE =
             new BigDecimal("999999999999999999999999999999999999.99");
+    /** Maximum balance representable by the shared SQL DECIMAL(20,2) and Redis balance scripts. */
+    public static final BigDecimal MAX_SHARED_BALANCE = new BigDecimal("999999999999999999.99");
 
     private MoneyPolicy() { }
 
@@ -37,5 +40,11 @@ public final class MoneyPolicy {
     public static boolean canAdd(BigDecimal balance, BigDecimal amount) {
         return balance != null && amount != null
                 && balance.add(amount).compareTo(MAX_BALANCE) <= 0;
+    }
+
+    /** Returns whether adding the amount keeps the result within the supplied backend bound. */
+    public static boolean canAddWithin(BigDecimal balance, BigDecimal amount, BigDecimal maximumBalance) {
+        return balance != null && amount != null && maximumBalance != null
+                && balance.add(amount).compareTo(maximumBalance) <= 0;
     }
 }

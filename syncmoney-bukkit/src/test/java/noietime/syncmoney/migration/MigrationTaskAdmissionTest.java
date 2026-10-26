@@ -19,6 +19,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -94,6 +95,57 @@ class MigrationTaskAdmissionTest {
         verify(facade, never()).setBalance(any(UUID.class), any(BigDecimal.class), any());
         verify(redisManager, never()).isConnected();
         verify(redisManager, never()).getResource();
+    }
+
+    @Test
+    void stopAfterCompletedExecutionDoesNotDowngradeTheCheckpoint() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        MigrationCheckpoint checkpoint = mock(MigrationCheckpoint.class);
+        when(checkpoint.getState()).thenReturn(MigrationCheckpoint.MigrationState.COMPLETED);
+        MigrationTask task = new MigrationTask(plugin, config, null, mock(EconomyFacade.class),
+                mock(DatabaseManager.class), mock(RedisManager.class), null, checkpoint, null, null);
+
+        java.lang.reflect.Field checkpointStarted = MigrationTask.class.getDeclaredField("checkpointStarted");
+        checkpointStarted.setAccessible(true);
+        checkpointStarted.setBoolean(task, true);
+
+        task.stop();
+
+        verify(checkpoint, never()).pause();
+        assertEquals(MigrationCheckpoint.MigrationState.COMPLETED, checkpoint.getState());
+    }
+
+    @Test
+    void stopRetainsStorageLeaseUntilTheActiveWorkerFinishes() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationTaskAdmissionTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.migration().getMigrationBatchSize()).thenReturn(10);
+        AtomicBoolean leaseReleased = new AtomicBoolean();
+        MigrationTask task = new MigrationTask(plugin, config, null, mock(EconomyFacade.class),
+                mock(DatabaseManager.class), mock(RedisManager.class), null,
+                mock(MigrationCheckpoint.class), null, null, () -> () -> leaseReleased.set(true));
+
+        java.lang.reflect.Method acquireLease = MigrationTask.class.getDeclaredMethod("acquireDatabaseUseLease");
+        acquireLease.setAccessible(true);
+        assertTrue((boolean) acquireLease.invoke(task));
+        java.lang.reflect.Field running = MigrationTask.class.getDeclaredField("running");
+        running.setAccessible(true);
+        running.setBoolean(task, true);
+        java.lang.reflect.Field executionInFlight = MigrationTask.class.getDeclaredField("executionInFlight");
+        executionInFlight.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicBoolean) executionInFlight.get(task)).set(true);
+
+        task.stop();
+
+        assertFalse(leaseReleased.get(), "the running worker still owns the storage dependencies");
+        java.lang.reflect.Method finishExecution = MigrationTask.class.getDeclaredMethod("finishExecution");
+        finishExecution.setAccessible(true);
+        finishExecution.invoke(task);
+        assertTrue(leaseReleased.get(), "storage can close after the migration worker relinquishes its lease");
     }
 
     @Test

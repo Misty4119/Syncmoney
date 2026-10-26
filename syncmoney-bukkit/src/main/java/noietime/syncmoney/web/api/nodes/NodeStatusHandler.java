@@ -33,12 +33,15 @@ public class NodeStatusHandler extends NodesApiContext {
         List<SyncmoneyConfig.NodeConfig> nodes = getNodes();
 
         
-        Map<String, Object> allStatuses = nodes.stream().collect(
-                java.util.stream.Collectors.toConcurrentMap(
-                        node -> node.url,
-                        node -> fetchNodeStatusWithTimeout(node)
-                )
-        );
+        Map<String, Object> allStatuses = new java.util.LinkedHashMap<>();
+        for (SyncmoneyConfig.NodeConfig node : nodes) {
+            String responseUrl = sanitizeUrlForResponse(node.url);
+            String key = responseUrl;
+            for (int duplicate = 2; allStatuses.containsKey(key); duplicate++) {
+                key = responseUrl + "#" + duplicate;
+            }
+            allStatuses.put(key, fetchNodeStatusWithTimeout(node));
+        }
 
         sendJson(exchange, ApiResponse.success(allStatuses));
     }
@@ -65,12 +68,14 @@ public class NodeStatusHandler extends NodesApiContext {
                 nodeStatus.put("serverName", node.name);
             }
         } catch (java.util.concurrent.TimeoutException e) {
-            plugin.getLogger().fine("Timeout fetching status from node " + node.name + ": " + e.getMessage());
+            plugin.getLogger().fine("Timeout fetching status from node " + node.name + ": "
+                    + e.getClass().getSimpleName());
             nodeStatus.put("status", "unknown");
             nodeStatus.put("serverName", node.name);
             nodeStatus.put("stale", true);
         } catch (Exception e) {
-            plugin.getLogger().fine("Failed to fetch status from node " + node.name + ": " + e.getMessage());
+            plugin.getLogger().fine("Failed to fetch status from node " + node.name + ": "
+                    + e.getClass().getSimpleName());
             nodeStatus.put("status", "offline");
             nodeStatus.put("serverName", node.name);
         }
@@ -106,7 +111,8 @@ public class NodeStatusHandler extends NodesApiContext {
                 return parseDetailedStatus(response.body());
             }
         } catch (Exception e) {
-            plugin.getLogger().fine("Failed to fetch detailed status from " + node.name + ": " + e.getMessage());
+            plugin.getLogger().fine("Failed to fetch detailed status from " + node.name + ": "
+                    + e.getClass().getSimpleName());
         }
         return null;
     }
@@ -143,7 +149,7 @@ public class NodeStatusHandler extends NodesApiContext {
             return new NodeDetailedStatus(serverName, serverId, economyMode, onlinePlayers,
                     maxPlayers, System.currentTimeMillis(), true);
         } catch (Exception e) {
-            plugin.getLogger().fine("Failed to parse detailed status: " + e.getMessage());
+            plugin.getLogger().fine("Failed to parse detailed status: " + e.getClass().getSimpleName());
             return null;
         }
     }

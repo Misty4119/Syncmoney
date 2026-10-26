@@ -35,11 +35,11 @@ public final class PlayerLookupUtil {
      * Paper implements the same entity scheduler API as Folia.
      */
     public static void runOnPlayerScheduler(Plugin plugin, Player player, Runnable task) {
-        if (player == null || !player.isOnline()) {
-            return;
-        }
+        if (player == null) return;
 
-        player.getScheduler().run(plugin, task2 -> task.run(), null);
+        // Scheduling is safe from any thread; the retired callback path deliberately drops stale work.
+        var scheduler = player.getScheduler();
+        if (scheduler != null) scheduler.run(plugin, task2 -> task.run(), null);
     }
 
     /**

@@ -196,7 +196,7 @@ public final class HighValueNotification {
      */
     private void sendMessage(String adminName, String message) {
         Player player = Bukkit.getServer().getPlayer(adminName);
-        if (player != null && player.isOnline()) {
+        if (player != null) {
             noietime.syncmoney.util.PlayerLookupUtil.runOnPlayerScheduler(plugin, player,
                     () -> MessageHelper.sendMessage(player, message));
         }

@@ -47,6 +47,48 @@ class CacheManagerColdSnapshotTest {
     }
 
     @Test
+    void delayedStrictColdSnapshotCannotReplaceANewerCachedVersion() throws Exception {
+        Plugin plugin = mock(Plugin.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CacheManagerColdSnapshotTest"));
+        when(plugin.getResource(anyString())).thenAnswer(invocation -> new ByteArrayInputStream(new byte[0]));
+        RedisManager redis = mock(RedisManager.class);
+        Jedis jedis = mock(Jedis.class);
+        when(redis.getResource()).thenReturn(jedis);
+        UUID uuid = UUID.randomUUID();
+        CountDownLatch readEntered = new CountDownLatch(1);
+        CountDownLatch finishRead = new CountDownLatch(1);
+        when(jedis.mget("syncmoney:balance:" + uuid, "syncmoney:version:" + uuid))
+                .thenAnswer(invocation -> {
+                    readEntered.countDown();
+                    if (!finishRead.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to finish the Redis read");
+                    }
+                    return List.of("90.00", "7");
+                });
+        CacheManager cache = new CacheManager(plugin, redis, false);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<java.util.Optional<CacheManager.CachedBalance>> read =
+                    executor.submit(() -> cache.getBalanceSnapshotStrict(uuid));
+            assertTrue(readEntered.await(5, TimeUnit.SECONDS), "the strict read should reach Redis");
+            assertTrue(cache.updateMemoryCache(uuid, new BigDecimal("95.00"), 8L));
+            finishRead.countDown();
+
+            CacheManager.CachedBalance returned = read.get(5, TimeUnit.SECONDS).orElseThrow();
+            assertEquals(new BigDecimal("95.00"), returned.balance(),
+                    "a delayed Redis response must not return an older snapshot after a newer receipt");
+            assertEquals(8L, returned.version());
+            CacheManager.CachedBalance cached = cache.getCachedBalanceSnapshot(uuid).orElseThrow();
+            assertEquals(new BigDecimal("95.00"), cached.balance());
+            assertEquals(8L, cached.version());
+        } finally {
+            finishRead.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void ordinaryBalanceReadFillsSharedCacheFromOneRedisPairRead() {
         Plugin plugin = mock(Plugin.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("CacheManagerColdSnapshotTest"));
@@ -65,6 +107,26 @@ class CacheManagerColdSnapshotTest {
         verify(jedis).mget("syncmoney:balance:" + uuid, "syncmoney:version:" + uuid);
         verify(jedis, never()).get("syncmoney:balance:" + uuid);
         verify(jedis, never()).get("syncmoney:version:" + uuid);
+    }
+
+    @Test
+    void missingOptionalRedisLuaShasAreClassifiedNotSentBeforeAcquiringRedis() {
+        Plugin plugin = mock(Plugin.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CacheManagerColdSnapshotTest"));
+        RedisManager redis = mock(RedisManager.class);
+        CacheManager cache = new CacheManager(plugin, redis, false, true);
+
+        RedisMutationException setFailure = assertThrows(RedisMutationException.class,
+                () -> cache.atomicSetBalanceReceipt(UUID.randomUUID(), BigDecimal.TEN));
+        RedisMutationException addFailure = assertThrows(RedisMutationException.class,
+                () -> cache.atomicAddBalanceReceipt(UUID.randomUUID(), BigDecimal.TEN));
+        RedisMutationException transferFailure = assertThrows(RedisMutationException.class,
+                () -> cache.atomicTransfer(UUID.randomUUID(), UUID.randomUUID(), BigDecimal.ONE));
+
+        assertEquals(RedisMutationException.ExecutionState.NOT_SENT, setFailure.executionState());
+        assertEquals(RedisMutationException.ExecutionState.NOT_SENT, addFailure.executionState());
+        assertEquals(RedisMutationException.ExecutionState.NOT_SENT, transferFailure.executionState());
+        verify(redis, never()).getResource();
     }
 
     @Test

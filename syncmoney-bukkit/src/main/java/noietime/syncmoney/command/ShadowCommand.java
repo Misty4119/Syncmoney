@@ -325,10 +325,7 @@ public final class ShadowCommand implements CommandExecutor, TabCompleter {
                 if (registry != null) {
                     return registry.suggestOnlinePlayerNames(args[1], true);
                 }
-                return plugin.getServer().getOnlinePlayers().stream()
-                        .map(Player::getName)
-                        .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
-                        .collect(Collectors.toList());
+                return Collections.emptyList();
             }
         }
 

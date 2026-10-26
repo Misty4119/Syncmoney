@@ -38,6 +38,7 @@ final class MemoryStateManager {
     private final ConcurrentMap<String, TransferContext> transferContexts = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, Long> confirmedSnapshotConflictVersions = new ConcurrentHashMap<>();
     private final Set<UUID> unavailableAccounts = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> unresolvedAccountQuarantines = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<UUID, Set<String>> unresolvedTransferIds = new ConcurrentHashMap<>();
 
     MemoryStateManager(Plugin plugin) {
@@ -84,6 +85,7 @@ final class MemoryStateManager {
                     }
                 });
                 queue.setUnavailableAccountHandler(MemoryStateManager.this::markUnavailable);
+                queue.setQuarantinedAccountHandler(MemoryStateManager.this::markAccountQuarantined);
                 queue.setTransferAvailabilityHandler(new EconomyWriteQueue.TransferAvailabilityHandler() {
                     @Override
                     public void markUnavailable(String operationId, UUID firstAccount, UUID secondAccount) {
@@ -322,7 +324,8 @@ final class MemoryStateManager {
 
     boolean isUnavailable(UUID uuid) {
         Set<String> unresolved = unresolvedTransferIds.get(uuid);
-        return unavailableAccounts.contains(uuid) || confirmedSnapshotConflictVersions.containsKey(uuid)
+        return unavailableAccounts.contains(uuid) || unresolvedAccountQuarantines.contains(uuid)
+                || confirmedSnapshotConflictVersions.containsKey(uuid)
                 || unresolved != null && !unresolved.isEmpty();
     }
 
@@ -332,6 +335,10 @@ final class MemoryStateManager {
 
     void markAvailable(UUID uuid) {
         if (uuid != null) unavailableAccounts.remove(uuid);
+    }
+
+    void markAccountQuarantined(UUID uuid) {
+        if (uuid != null) unresolvedAccountQuarantines.add(uuid);
     }
 
     void markTransferUnavailable(String operationId, UUID firstAccount, UUID secondAccount) {

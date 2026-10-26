@@ -78,6 +78,10 @@ public final class EconomyWriteQueue {
         void resolve(String operationId, UUID firstAccount, UUID secondAccount);
     }
 
+    interface TransferAdmissionHandler {
+        boolean checkpointBeforeCommit(EconomyEvent first, EconomyEvent second);
+    }
+
     private final BlockingQueue<EconomyEvent> queue;
     /** Serializes queue mutations with their identity-membership transitions. */
     private final ReentrantLock queueStateLock = new ReentrantLock();
@@ -111,7 +115,9 @@ public final class EconomyWriteQueue {
             new ConcurrentHashMap<>();
     private volatile WriteCompletionHandler writeCompletionHandler;
     private volatile TransferAvailabilityHandler transferAvailabilityHandler;
+    private volatile TransferAdmissionHandler transferAdmissionHandler;
     private volatile Consumer<UUID> unavailableAccountHandler;
+    private volatile Consumer<UUID> quarantinedAccountHandler;
     private volatile long lastHighUsageWarning = 0;
 
     private static final class AcceptedWrite {
@@ -501,6 +507,13 @@ public final class EconomyWriteQueue {
                     if (!firstReservation.canCommit(firstEvent) || !secondReservation.canCommit(secondEvent)) {
                         return false;
                     }
+                    TransferAdmissionHandler admissionHandler = transferAdmissionHandler;
+                    if (admissionHandler != null
+                            && (firstEvent.source() == EconomyEvent.EventSource.PLAYER_TRANSFER
+                                    || secondEvent.source() == EconomyEvent.EventSource.PLAYER_TRANSFER)
+                            && !admissionHandler.checkpointBeforeCommit(firstEvent, secondEvent)) {
+                        return false;
+                    }
                     // Both permits were reserved before either account is changed. With the
                     // queue private and all producers serialized here, these offers cannot
                     // run out of capacity between transfer legs.
@@ -539,6 +552,18 @@ public final class EconomyWriteQueue {
     void closeAdmission() {
         synchronized (admissionGate) {
             acceptingWrites = false;
+        }
+    }
+
+    void openAdmission() {
+        synchronized (admissionGate) {
+            acceptingWrites = true;
+        }
+    }
+
+    boolean isAdmissionOpen() {
+        synchronized (admissionGate) {
+            return acceptingWrites;
         }
     }
 
@@ -939,6 +964,16 @@ public final class EconomyWriteQueue {
         }
     }
 
+    void setQuarantinedAccountHandler(Consumer<UUID> handler) {
+        if (handler == null) throw new IllegalArgumentException("Quarantined-account handler cannot be null");
+        synchronized (this) {
+            if (quarantinedAccountHandler != null && quarantinedAccountHandler != handler) {
+                throw new IllegalStateException("EconomyWriteQueue already has a quarantined-account owner");
+            }
+            quarantinedAccountHandler = handler;
+        }
+    }
+
     void setTransferAvailabilityHandler(TransferAvailabilityHandler handler) {
         if (handler == null) throw new IllegalArgumentException("Transfer availability handler cannot be null");
         synchronized (this) {
@@ -949,9 +984,25 @@ public final class EconomyWriteQueue {
         }
     }
 
+    void setTransferAdmissionHandler(TransferAdmissionHandler handler) {
+        if (handler == null) throw new IllegalArgumentException("Transfer admission handler cannot be null");
+        synchronized (this) {
+            if (transferAdmissionHandler != null && transferAdmissionHandler != handler) {
+                throw new IllegalStateException("EconomyWriteQueue already has a transfer admission owner");
+            }
+            transferAdmissionHandler = handler;
+        }
+    }
+
     void markAccountUnavailable(UUID uuid) {
         Consumer<UUID> handler = unavailableAccountHandler;
         if (handler != null && uuid != null) handler.accept(uuid);
+    }
+
+    void markAccountQuarantined(UUID uuid) {
+        Consumer<UUID> handler = quarantinedAccountHandler;
+        if (handler != null && uuid != null) handler.accept(uuid);
+        else markAccountUnavailable(uuid);
     }
 
     void markTransferUnavailable(String operationId, UUID firstAccount, UUID secondAccount) {

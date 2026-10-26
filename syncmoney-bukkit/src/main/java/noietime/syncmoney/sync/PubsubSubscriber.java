@@ -381,12 +381,10 @@ public final class PubsubSubscriber {
      */
     private void notifyPlayerIfOnline(UUID uuid, BigDecimal newBalance, String eventType, double amount, String sourcePlayerName, String sourceServer) {
         Player player = Bukkit.getServer().getPlayer(uuid);
-        if (player == null || !player.isOnline()) {
-            return;
-        }
+        if (player == null) return;
 
         player.getScheduler().run(plugin, (task) -> {
-            if (stopped.get() || !running.get()) {
+            if (!player.isOnline() || stopped.get() || !running.get()) {
                 return;
             }
             if (plugin instanceof noietime.syncmoney.Syncmoney) {

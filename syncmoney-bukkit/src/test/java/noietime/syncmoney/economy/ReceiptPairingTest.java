@@ -6,6 +6,7 @@ import noietime.syncmoney.config.ShadowSyncConfig;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.EconomyEvent.EventSource;
 import noietime.syncmoney.economy.EconomyEvent.EventType;
+import noietime.syncmoney.protocol.RedisOperationFingerprint;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.db.DbWriteQueue;
@@ -166,7 +167,8 @@ class ReceiptPairingTest {
         assertTrue(reservation.commit(event));
 
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00")))
+        when(cacheManager.atomicAddBalanceReceipt(
+                eq(account), eq(new BigDecimal("10.00")), eq("receipt-v7")))
                 .thenReturn(new ConfirmedAccount(account, new BigDecimal("90.00"), 7L));
         when(cacheManager.getVersion(account)).thenReturn(8L);
         RedisManager redisManager = mock(RedisManager.class);
@@ -217,14 +219,15 @@ class ReceiptPairingTest {
         RedisManager redisManager = mock(RedisManager.class);
         Jedis jedis = mock(Jedis.class);
         when(redisManager.getResource()).thenReturn(jedis);
-        when(jedis.evalsha(anyString(), eq(2), anyString(), anyString(), anyString()))
-                .thenReturn(List.of("90.00", "7"));
+        UUID account = UUID.randomUUID();
+        String fingerprint = RedisOperationFingerprint.add(account, new BigDecimal("10.00"));
+        when(jedis.evalsha(anyString(), eq(3), any(String[].class)))
+                .thenReturn("v1|" + fingerprint + "|APPLIED|-|1|90.00|7");
 
         CacheManager cacheManager = new CacheManager(plugin, redisManager, false);
         Field addScript = CacheManager.class.getDeclaredField("atomicAddBalanceSha");
         addScript.setAccessible(true);
         addScript.set(cacheManager, "test-script-sha");
-        UUID account = UUID.randomUUID();
         cacheManager.updateMemoryCache(account, new BigDecimal("100.00"), 8L);
 
         ConfirmedAccount receipt = cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00"));
@@ -234,6 +237,6 @@ class ReceiptPairingTest {
         assertEquals(new BigDecimal("100.00"), cacheManager.getBalance(account),
                 "a delayed v7 response must not overwrite the locally observed v8 cache entry");
         assertEquals(8L, cacheManager.getVersion(account));
-        verify(jedis).evalsha(anyString(), eq(2), anyString(), anyString(), anyString());
+        verify(jedis).evalsha(anyString(), eq(3), any(String[].class));
     }
 }

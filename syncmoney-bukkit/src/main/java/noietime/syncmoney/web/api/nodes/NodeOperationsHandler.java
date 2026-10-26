@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -27,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class NodeOperationsHandler extends NodesApiContext {
 
-    private final Map<String, String> nodeStatusCache = new ConcurrentHashMap<>();
+    private volatile Map<String, String> nodeStatusCache = new ConcurrentHashMap<>();
 
     public NodeOperationsHandler(Syncmoney plugin, SyncmoneyConfig config,
                                PermissionChecker permissionChecker, NodeApiKeyStore apiKeyStore) {
@@ -35,7 +36,7 @@ public class NodeOperationsHandler extends NodesApiContext {
     }
 
     public void setNodeStatusCache(Map<String, String> cache) {
-        // Allow external cache injection from NodeHealthChecker
+        this.nodeStatusCache = Objects.requireNonNull(cache, "cache");
     }
 
     public void updateNodeStatus(String nodeUrl, String status) {
@@ -60,7 +61,7 @@ public class NodeOperationsHandler extends NodesApiContext {
             Map<String, Object> nodeData = new LinkedHashMap<>();
             nodeData.put("index", i);
             nodeData.put("name", node.name);
-            nodeData.put("url", node.url);
+            nodeData.put("url", sanitizeUrlForResponse(node.url));
             nodeData.put("apiKey", maskApiKey(node.apiKey));
             nodeData.put("enabled", node.enabled);
             nodeData.put("status", nodeStatusCache.getOrDefault(node.url, node.enabled ? "unknown" : "disabled"));
@@ -71,7 +72,8 @@ public class NodeOperationsHandler extends NodesApiContext {
         result.put("nodes", nodes);
         result.put("centralMode", config.isCentralMode());
         result.put("total", nodes.size());
-        result.put("selfUrl", config.getConfig().getString("web-admin.central-node.url", null));
+        result.put("selfUrl", sanitizeUrlForResponse(
+                config.getConfig().getString("web-admin.central-node.url", null)));
         sendJson(exchange, ApiResponse.success(result));
     }
 
@@ -215,7 +217,7 @@ public class NodeOperationsHandler extends NodesApiContext {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("index", index);
             result.put("name", node.name);
-            result.put("url", node.url);
+            result.put("url", sanitizeUrlForResponse(node.url));
             result.put("apiKey", maskApiKey(node.apiKey));
             result.put("enabled", node.enabled);
             result.put("status", nodeStatusCache.getOrDefault(node.url, "unknown"));
@@ -278,7 +280,7 @@ public class NodeOperationsHandler extends NodesApiContext {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("deleted", true);
             result.put("index", index);
-            result.put("deletedUrl", nodeUrl);
+            result.put("deletedUrl", sanitizeUrlForResponse(nodeUrl));
             sendJson(exchange, ApiResponse.success(result));
 
         } catch (Exception e) {
@@ -314,19 +316,38 @@ public class NodeOperationsHandler extends NodesApiContext {
             result.put("index", index);
             result.put("name", node.name);
             result.put("status", status);
-            result.put("url", node.url);
+            result.put("url", sanitizeUrlForResponse(node.url));
             sendJson(exchange, ApiResponse.success(result));
 
         } catch (Exception e) {
-            plugin.getLogger().warning("Failed to ping node: " + e.getMessage());
-            sendError(exchange, 500, "PING_FAILED", "Failed to ping node: " + e.getMessage());
+            plugin.getLogger().warning("Failed to ping node: " + e.getClass().getSimpleName());
+            sendError(exchange, 500, "PING_FAILED", "Failed to ping node");
         }
     }
 
     // ─── Private helpers ────────────────────────────────────────────────────────
 
     void updateNodeInConfig(int index, String field, Object value) {
-        setNodeConfigValue("web-admin.nodes." + index + "." + field, value);
+        List<?> rawNodeMaps = config.getConfig().getMapList("web-admin.nodes");
+        if (rawNodeMaps == null || index < 0 || index >= rawNodeMaps.size()) {
+            throw new IllegalArgumentException("Node index is outside the configured node list");
+        }
+
+        List<Object> nodeMaps = new ArrayList<>(rawNodeMaps);
+        Object rawNode = nodeMaps.get(index);
+        if (!(rawNode instanceof Map<?, ?> rawMap)) {
+            throw new IllegalArgumentException("Configured node at index " + index + " is not a map");
+        }
+
+        Map<String, Object> nodeMap = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                nodeMap.put(key, entry.getValue());
+            }
+        }
+        nodeMap.put(field, value);
+        nodeMaps.set(index, nodeMap);
+        setNodeConfigValue("web-admin.nodes", nodeMaps);
     }
 
     void setNodeConfigValue(String path, Object value) {
@@ -359,7 +380,8 @@ public class NodeOperationsHandler extends NodesApiContext {
 
             return response.statusCode() == 200 ? "online" : "offline";
         } catch (Exception e) {
-            plugin.getLogger().fine("Node ping failed for " + node.name + ": " + e.getMessage());
+            plugin.getLogger().fine("Node ping failed for " + node.name + ": "
+                    + e.getClass().getSimpleName());
             return "offline";
         }
     }

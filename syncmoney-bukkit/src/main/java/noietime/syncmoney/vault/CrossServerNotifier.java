@@ -37,17 +37,15 @@ final class CrossServerNotifier {
      */
     static void notifyBalanceChange(Plugin plugin, OfflinePlayer player, String messageKey,
                                     BigDecimal amount, BigDecimal balance) {
-        if (player == null || !player.isOnline()) {
+        if (!(player instanceof Player onlinePlayer)) {
             return;
         }
-        notifyBalanceChange(plugin, (Player) player, messageKey, amount, balance);
+        notifyBalanceChange(plugin, onlinePlayer, messageKey, amount, balance);
     }
 
     static void notifyBalanceChange(Plugin plugin, Player player, String messageKey,
                                     BigDecimal amount, BigDecimal balance) {
-        if (player == null || !player.isOnline()) {
-            return;
-        }
+        if (player == null) return;
         if (!(plugin instanceof noietime.syncmoney.Syncmoney syncMoneyPlugin)) {
             return;
         }
@@ -59,10 +57,11 @@ final class CrossServerNotifier {
         message = message.replace("{balance}", FormatUtil.formatCurrency(balance));
         String scheduledMessage = message;
         try {
-            player.getScheduler().run(plugin, task -> MessageHelper.sendMessage(player, scheduledMessage), null);
+            player.getScheduler().run(plugin, task -> {
+                if (player.isOnline()) MessageHelper.sendMessage(player, scheduledMessage);
+            }, null);
         } catch (RuntimeException e) {
-            plugin.getLogger().warning("Could not schedule Vault balance message for "
-                    + player.getUniqueId() + ": " + e.getMessage());
+            plugin.getLogger().warning("Could not schedule Vault balance message: " + e.getMessage());
         }
     }
 }

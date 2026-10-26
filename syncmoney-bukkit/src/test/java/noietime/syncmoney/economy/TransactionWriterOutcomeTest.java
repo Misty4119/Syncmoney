@@ -342,6 +342,524 @@ class TransactionWriterOutcomeTest {
     }
 
     @Test
+    void sharedDepositRejectsProjectedBalanceAboveDecimal20_2Limit() {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new AccountState(maximum, 7L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin,
+                mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS), null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.deposit(account, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST);
+        AccountState finalState = state.get(account);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO),
+                        "a shared deposit beyond DECIMAL(20,2) must be rejected"),
+                () -> assertEquals(0, finalState.balance().compareTo(maximum),
+                        "rejected shared deposit must not change the balance"),
+                () -> assertEquals(7L, finalState.version(),
+                        "rejected shared deposit must not advance the version"),
+                () -> assertEquals(0, queue.size(),
+                        "rejected shared deposit must not enqueue persistence")
+        );
+    }
+
+    @Test
+    void sharedWithdrawRejectsLegacyBalanceAboveDecimal20_2LimitBeforeMutation() {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal legacyBalance = maximum.add(new BigDecimal("0.01"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new AccountState(legacyBalance, 7L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin,
+                mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS), null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.withdraw(account, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO),
+                        "a legacy over-ceiling account must not accept a withdrawal that Redis will reject"),
+                () -> assertEquals(0, legacyBalance.compareTo(state.get(account).balance()),
+                        "the rejected withdrawal must preserve the legacy balance"),
+                () -> assertEquals(7L, state.get(account).version(),
+                        "the rejected withdrawal must not advance the version"),
+                () -> assertEquals(0, queue.size(), "the rejected withdrawal must not enqueue a write")
+        );
+    }
+
+    @Test
+    void sharedTransferRejectsLegacyOverCeilingSenderBeforeMutation() {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal legacyBalance = maximum.add(new BigDecimal("0.01"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(sender)).thenReturn("sender");
+        when(facade.resolvePlayerName(receiver)).thenReturn("receiver");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(sender, new AccountState(legacyBalance, 7L, System.currentTimeMillis()));
+        state.put(receiver, new AccountState(BigDecimal.ZERO, 3L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin,
+                mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS), null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.transfer(sender, receiver, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO),
+                        "a transfer from a legacy over-ceiling account must be rejected before Redis admission"),
+                () -> assertEquals(0, legacyBalance.compareTo(state.get(sender).balance()),
+                        "the rejected transfer must preserve the sender balance"),
+                () -> assertEquals(7L, state.get(sender).version(),
+                        "the rejected transfer must not advance the sender version"),
+                () -> assertEquals(0, state.get(receiver).balance().compareTo(BigDecimal.ZERO),
+                        "the rejected transfer must preserve the receiver balance"),
+                () -> assertEquals(3L, state.get(receiver).version(),
+                        "the rejected transfer must not advance the receiver version"),
+                () -> assertEquals(0, queue.size(), "the rejected transfer must not enqueue either leg")
+        );
+    }
+
+    @Test
+    void sharedAdminSetCanApplyAnExplicitInRangeReconciliation() throws InterruptedException {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal legacyBalance = maximum.add(new BigDecimal("0.01"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new AccountState(legacyBalance, 7L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin,
+                mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS), null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.setBalance(account, maximum, EconomyEvent.EventSource.ADMIN_SET);
+        EconomyEvent queued = queue.poll(0, TimeUnit.MILLISECONDS);
+
+        assertAll(
+                () -> assertEquals(0, result.compareTo(maximum),
+                        "an explicit admin-selected in-range value can reconcile the account"),
+                () -> assertEquals(0, state.get(account).balance().compareTo(maximum)),
+                () -> assertEquals(8L, state.get(account).version()),
+                () -> assertNotNull(queued, "the explicit reconciliation must be persisted through the write queue"),
+                () -> assertEquals(EconomyEvent.EventType.SET_BALANCE, queued.type())
+        );
+        queue.complete(queued);
+    }
+
+    @Test
+    void sharedAdminSetRejectsAuditDeltaAboveDecimal20_2BeforeMutation() {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal legacyBalance = maximum.multiply(new BigDecimal("3"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.audit().isAuditEnabled()).thenReturn(true);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new AccountState(legacyBalance, 7L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.setBalance(account, maximum, EconomyEvent.EventSource.ADMIN_SET);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO),
+                        "an audit amount outside DECIMAL(20,2) must be rejected before acceptance"),
+                () -> assertEquals(0, legacyBalance.compareTo(state.get(account).balance()),
+                        "rejected audit delta must preserve the over-ceiling balance for operator review"),
+                () -> assertEquals(7L, state.get(account).version(),
+                        "rejected audit delta must not advance the account version"),
+                () -> assertEquals(0, queue.size(),
+                        "rejected audit delta must not enqueue a persistence write")
+        );
+    }
+
+    @Test
+    void sharedAdminSetChecksAuditDeltaAgainstBalanceAtMutationTime() {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal legacyBalance = maximum.multiply(new BigDecimal("3"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.audit().isAuditEnabled()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = Mockito.spy(new MemoryStateManager(plugin, queue));
+        AccountState initialState = new AccountState(BigDecimal.ZERO, 1L, System.currentTimeMillis());
+        state.put(account, initialState);
+        doAnswer(invocation -> {
+            EconomyWriteQueue.Reservation reservation =
+                    (EconomyWriteQueue.Reservation) invocation.callRealMethod();
+            assertNotNull(reservation);
+            assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
+                    state.applyRemoteUpdateResult(account, legacyBalance, 2L),
+                    "a newer shared snapshot may arrive after the initial setBalance read");
+            return reservation;
+        }).when(state).tryReserveWrite(account, initialState);
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.setBalance(account, maximum, EconomyEvent.EventSource.ADMIN_SET);
+
+        assertAll(
+                () -> assertEquals(-1, result.compareTo(BigDecimal.ZERO),
+                        "the audit delta must be validated against the state observed under the mutation lock"),
+                () -> assertEquals(0, legacyBalance.compareTo(state.get(account).balance()),
+                        "the rejected set must preserve the newer remote balance"),
+                () -> assertEquals(2L, state.get(account).version(),
+                        "the rejected set must not advance the newer remote version"),
+                () -> assertEquals(0, queue.size(),
+                        "a rejected delta must not enqueue a persistence or audit write")
+        );
+    }
+
+    @Test
+    void sharedAdminSetUsesMutationTimeDeltaForAcceptedWrite() throws InterruptedException {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal remoteBalance = maximum.multiply(new BigDecimal("2"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.audit().isAuditEnabled()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = Mockito.spy(new MemoryStateManager(plugin, queue));
+        AccountState initialState = new AccountState(BigDecimal.ZERO, 1L, System.currentTimeMillis());
+        state.put(account, initialState);
+        doAnswer(invocation -> {
+            EconomyWriteQueue.Reservation reservation =
+                    (EconomyWriteQueue.Reservation) invocation.callRealMethod();
+            assertNotNull(reservation);
+            assertEquals(MemoryStateManager.RemoteUpdateResult.APPLIED,
+                    state.applyRemoteUpdateResult(account, remoteBalance, 2L),
+                    "a newer shared snapshot may arrive after the initial setBalance read");
+            return reservation;
+        }).when(state).tryReserveWrite(account, initialState);
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        BigDecimal result = writer.setBalance(account, maximum, EconomyEvent.EventSource.ADMIN_SET);
+        EconomyEvent accepted = queue.poll(0, TimeUnit.MILLISECONDS);
+
+        assertAll(
+                () -> assertEquals(0, result.compareTo(maximum)),
+                () -> assertEquals(0, state.get(account).balance().compareTo(maximum)),
+                () -> assertEquals(3L, state.get(account).version()),
+                () -> assertNotNull(accepted),
+                () -> assertEquals(0, accepted.delta().compareTo(maximum.negate()),
+                        "the queued audit delta must match the balance observed under the mutation lock"),
+                () -> assertEquals(0, accepted.balanceAfter().compareTo(maximum))
+        );
+        queue.complete(accepted);
+    }
+
+    @Test
+    void localAdminSetRetainsWideBalanceDeltaWhenAuditEnabled() throws Exception {
+        UUID account = UUID.randomUUID();
+        BigDecimal initialBalance = new BigDecimal("999999999999999999.99").multiply(new BigDecimal("3"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.audit().isAuditEnabled()).thenReturn(true);
+        LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(account, new AccountState(initialBalance, 7L, System.currentTimeMillis()));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true), null,
+                state, new AtomicLong(), true);
+
+        BigDecimal result = writer.setBalance(account, BigDecimal.ZERO, EconomyEvent.EventSource.ADMIN_SET);
+        EconomyEvent accepted = queue.poll(0, TimeUnit.MILLISECONDS);
+
+        assertAll(
+                () -> assertEquals(0, result.compareTo(BigDecimal.ZERO),
+                        "LOCAL keeps its wider balance policy when audit is enabled"),
+                () -> assertEquals(0, state.get(account).balance().compareTo(BigDecimal.ZERO)),
+                () -> assertEquals(8L, state.get(account).version()),
+                () -> assertNotNull(accepted, "the accepted LOCAL set retains its persistence event")
+        );
+        queue.complete(accepted);
+    }
+
+    @Test
+    void localDepositRetainsBalancesAboveSharedBackendLimit() throws Exception {
+        UUID account = UUID.randomUUID();
+        BigDecimal initialBalance = new BigDecimal("1000000000000000000.00");
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
+        LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(account, new AccountState(initialBalance, 7L, System.currentTimeMillis()));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true), null,
+                state, new AtomicLong(), true);
+
+        BigDecimal result = writer.deposit(account, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST);
+        EconomyEvent accepted = queue.poll(0, TimeUnit.MILLISECONDS);
+        AccountState finalState = state.get(account);
+        if (accepted != null) {
+            queue.complete(accepted);
+        }
+
+        assertAll(
+                () -> assertEquals(0, result.compareTo(new BigDecimal("1000000000000000000.01")),
+                        "the shared backend bound must not narrow LOCAL policy"),
+                () -> assertEquals(0, finalState.balance().compareTo(result)),
+                () -> assertEquals(8L, finalState.version()),
+                () -> assertNotNull(accepted, "the LOCAL mutation should retain its accepted write")
+        );
+    }
+
+    @Test
+    void concurrentSharedDepositsRecheckProjectedBalanceAtCommit() throws Exception {
+        UUID account = UUID.randomUUID();
+        BigDecimal maximum = new BigDecimal("999999999999999999.99");
+        BigDecimal initialBalance = maximum.subtract(new BigDecimal("0.01"));
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        MemoryStateManager state = new MemoryStateManager(plugin);
+        state.put(account, new AccountState(initialBalance, 7L, System.currentTimeMillis()));
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        TransactionWriter writer = new TransactionWriter(facade, plugin,
+                mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS), null, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class)), null,
+                state, new AtomicLong(), false);
+
+        if (!SyncmoneyEventBus.isInitialized()) {
+            Syncmoney busPlugin = mock(Syncmoney.class);
+            when(busPlugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+            SyncmoneyEventBus.init(busPlugin);
+        }
+        SyncmoneyEventBus bus = SyncmoneyEventBus.getInstance();
+        CountDownLatch firstPreflightReached = new CountDownLatch(1);
+        CountDownLatch allowFirstCommit = new CountDownLatch(1);
+        AtomicReference<Thread> firstThreadRef = new AtomicReference<>();
+        AtomicReference<BigDecimal> firstResult = new AtomicReference<>();
+        SyncmoneyListener<AsyncPreTransactionEvent> barrier = event -> {
+            if (account.equals(event.getPlayerUuid())
+                    && event.getType() == AsyncPreTransactionEvent.TransactionType.DEPOSIT
+                    && Thread.currentThread() == firstThreadRef.get()) {
+                firstPreflightReached.countDown();
+                try {
+                    if (!allowFirstCommit.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("shared deposit interleaving barrier timed out");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("shared deposit interleaving barrier interrupted", interrupted);
+                }
+            }
+        };
+        bus.register(AsyncPreTransactionEvent.class, barrier);
+
+        Thread firstDeposit = new Thread(() -> firstResult.set(
+                writer.deposit(account, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST)),
+                "first-shared-deposit");
+        firstThreadRef.set(firstDeposit);
+        firstDeposit.start();
+        try {
+            assertTrue(firstPreflightReached.await(5, TimeUnit.SECONDS),
+                    "first deposit should pause after capturing its preflight balance");
+            BigDecimal secondResult = writer.deposit(
+                    account, new BigDecimal("0.01"), EconomyEvent.EventSource.TEST);
+            allowFirstCommit.countDown();
+            firstDeposit.join(TimeUnit.SECONDS.toMillis(5));
+
+            assertTrue(!firstDeposit.isAlive(), "first deposit should finish after the barrier is released");
+            AccountState finalState = state.get(account);
+            List<EconomyEvent> queued = new ArrayList<>();
+            EconomyEvent event;
+            while ((event = queue.poll(0, TimeUnit.MILLISECONDS)) != null) {
+                queued.add(event);
+            }
+            assertAll(
+                    () -> assertEquals(0, secondResult.compareTo(maximum),
+                            "the first accepted deposit should reach but not exceed the storage limit"),
+                    () -> assertEquals(-1, firstResult.get().compareTo(BigDecimal.ZERO),
+                            "the stale preflight must be rejected by the commit-time balance check"),
+                    () -> assertEquals(0, finalState.balance().compareTo(maximum),
+                            "concurrent deposits must leave the shared balance within the storage limit"),
+                    () -> assertEquals(8L, finalState.version(),
+                            "only the accepted deposit may advance the version"),
+                    () -> assertEquals(1, queued.size(),
+                            "only the accepted deposit may be queued")
+            );
+        } finally {
+            allowFirstCommit.countDown();
+            firstDeposit.join(TimeUnit.SECONDS.toMillis(5));
+            bus.unregister(AsyncPreTransactionEvent.class, barrier);
+        }
+    }
+
+    @Test
+    void concurrentLocalDepositsRecheckVersionCeilingAtCommit() throws Exception {
+        assertConcurrentLocalVersionCeiling(true);
+    }
+
+    @Test
+    void concurrentLocalWithdrawalsRecheckVersionCeilingAtCommit() throws Exception {
+        assertConcurrentLocalVersionCeiling(false);
+    }
+
+    private void assertConcurrentLocalVersionCeiling(boolean deposit) throws Exception {
+        UUID account = UUID.randomUUID();
+        BigDecimal initialBalance = new BigDecimal("100.00");
+        BigDecimal amount = new BigDecimal("0.01");
+        BigDecimal expectedBalance = deposit
+                ? initialBalance.add(amount)
+                : initialBalance.subtract(amount);
+        AsyncPreTransactionEvent.TransactionType transactionType = deposit
+                ? AsyncPreTransactionEvent.TransactionType.DEPOSIT
+                : AsyncPreTransactionEvent.TransactionType.WITHDRAW;
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+        EconomyFacade facade = mock(EconomyFacade.class);
+        when(facade.resolvePlayerName(account)).thenReturn("account");
+        when(facade.getCircuitBreaker()).thenReturn(null);
+        when(facade.getPlayerTransactionGuard()).thenReturn(null);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, Mockito.RETURNS_DEEP_STUBS);
+        when(config.playerProtection().isPlayerProtectionEnabledInLocalMode()).thenReturn(false);
+        LocalEconomyHandler localHandler = mock(LocalEconomyHandler.class);
+        when(localHandler.isRecoveryReady()).thenReturn(true);
+        EconomyWriteQueue queue = new EconomyWriteQueue(10, Logger.getLogger("TransactionWriterOutcomeTest"));
+        MemoryStateManager state = new MemoryStateManager(plugin, queue);
+        state.put(account, new AccountState(initialBalance, Integer.MAX_VALUE - 2L, System.currentTimeMillis()));
+        TransactionWriter writer = new TransactionWriter(facade, plugin, config, localHandler, queue,
+                new FallbackEconomyWrapper(plugin, mock(RedisManager.class), true), null,
+                state, new AtomicLong(), true);
+
+        if (!SyncmoneyEventBus.isInitialized()) {
+            Syncmoney busPlugin = mock(Syncmoney.class);
+            when(busPlugin.getLogger()).thenReturn(Logger.getLogger("TransactionWriterOutcomeTest"));
+            SyncmoneyEventBus.init(busPlugin);
+        }
+        SyncmoneyEventBus bus = SyncmoneyEventBus.getInstance();
+        CountDownLatch firstPreflightReached = new CountDownLatch(1);
+        CountDownLatch allowFirstCommit = new CountDownLatch(1);
+        AtomicReference<Thread> firstThreadRef = new AtomicReference<>();
+        AtomicReference<BigDecimal> firstResult = new AtomicReference<>();
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        SyncmoneyListener<AsyncPreTransactionEvent> barrier = event -> {
+            if (account.equals(event.getPlayerUuid())
+                    && event.getType() == transactionType
+                    && Thread.currentThread() == firstThreadRef.get()) {
+                firstPreflightReached.countDown();
+                try {
+                    if (!allowFirstCommit.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("local version interleaving barrier timed out");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("local version interleaving barrier interrupted", interrupted);
+                }
+            }
+        };
+        bus.register(AsyncPreTransactionEvent.class, barrier);
+
+        Thread firstWrite = new Thread(() -> {
+            try {
+                firstResult.set(deposit
+                        ? writer.deposit(account, amount, EconomyEvent.EventSource.TEST)
+                        : writer.withdraw(account, amount, EconomyEvent.EventSource.TEST));
+            } catch (Throwable failure) {
+                firstFailure.set(failure);
+            }
+        }, deposit ? "first-local-deposit" : "first-local-withdrawal");
+        firstThreadRef.set(firstWrite);
+        firstWrite.start();
+
+        try {
+            assertTrue(firstPreflightReached.await(5, TimeUnit.SECONDS),
+                    "the first LOCAL write should pause after its preflight version check");
+            BigDecimal secondResult = deposit
+                    ? writer.deposit(account, amount, EconomyEvent.EventSource.TEST)
+                    : writer.withdraw(account, amount, EconomyEvent.EventSource.TEST);
+            allowFirstCommit.countDown();
+            firstWrite.join(TimeUnit.SECONDS.toMillis(5));
+
+            assertTrue(!firstWrite.isAlive(), "the first LOCAL write should finish after releasing the barrier");
+            assertNull(firstFailure.get());
+            AccountState finalState = state.get(account);
+            List<EconomyEvent> queued = new ArrayList<>();
+            EconomyEvent event;
+            while ((event = queue.poll(0, TimeUnit.MILLISECONDS)) != null) {
+                queued.add(event);
+                queue.complete(event);
+            }
+
+            assertAll(
+                    () -> assertEquals(0, secondResult.compareTo(expectedBalance),
+                            "the second LOCAL write should be accepted at version Integer.MAX_VALUE - 1"),
+                    () -> assertEquals(-1, firstResult.get().compareTo(BigDecimal.ZERO),
+                            "the first LOCAL write must be rejected using the locked current version"),
+                    () -> assertEquals(0, finalState.balance().compareTo(expectedBalance)),
+                    () -> assertEquals(Integer.MAX_VALUE - 1L, finalState.version()),
+                    () -> assertEquals(1, queued.size(), "only the within-range write should be queued")
+            );
+        } finally {
+            allowFirstCommit.countDown();
+            firstWrite.join(TimeUnit.SECONDS.toMillis(5));
+            bus.unregister(AsyncPreTransactionEvent.class, barrier);
+        }
+    }
+
+    @Test
     void withdrawConcurrentRejectionDoesNotEmitSuccess() throws Exception {
         UUID account = UUID.randomUUID();
         Plugin plugin = mock(Plugin.class);

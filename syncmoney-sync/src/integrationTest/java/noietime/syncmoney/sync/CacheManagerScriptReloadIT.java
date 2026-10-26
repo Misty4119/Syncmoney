@@ -3,7 +3,9 @@ import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.core.port.ConfirmedAccount;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.storage.CacheManagerIntegrationTestFactory;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.protocol.RedisOperationFingerprint;
 import noietime.syncmoney.testkit.redis.DisposableRedisServer;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterAll;
@@ -39,7 +41,7 @@ class CacheManagerScriptReloadIT {
             });
             RedisManager redisManager = mock(RedisManager.class);
             when(redisManager.getResource()).thenAnswer(invocation -> RedisTestSupport.connect(redis));
-            cacheManager = new CacheManager(plugin, redisManager, true);
+            cacheManager = CacheManagerIntegrationTestFactory.newSynchronizedModeCacheManager(plugin, redisManager, true);
         } catch (Exception e) {
             throw new RuntimeException("Could not start isolated Redis for CacheManager", e);
         }
@@ -92,6 +94,7 @@ class CacheManagerScriptReloadIT {
     void transferReloadsAfterNoscriptAndReturnsBothConfirmedAccounts() {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
+        String operationId = "cache-manager-noscript-transfer";
         try (Jedis jedis = RedisTestSupport.connect(redis)) {
             jedis.set("syncmoney:balance:" + sender, "100.00");
             jedis.set("syncmoney:version:" + sender, "7");
@@ -100,12 +103,19 @@ class CacheManagerScriptReloadIT {
         }
 
         CacheManager.TransferResult receipt = cacheManager.atomicTransfer(sender, receiver,
-                new BigDecimal("10.00"));
+                new BigDecimal("10.00"), operationId);
 
         assertNotNull(receipt, "NOSCRIPT must reload the canonical transfer script and retry once");
         assertEquals(new BigDecimal("90.00"), receipt.fromNewBalance);
         assertEquals(new BigDecimal("10.00"), receipt.toNewBalance);
         assertEquals(8L, receipt.fromNewVersion);
         assertEquals(3L, receipt.toNewVersion);
+        CacheManager.OperationReceipt durableReceipt = cacheManager.readOperationReceipt(operationId,
+                RedisOperationFingerprint.transfer(sender, receiver, new BigDecimal("10.00")),
+                java.util.List.of(sender, receiver)).orElseThrow();
+        assertEquals(operationId, durableReceipt.operationId());
+        assertEquals(CacheManager.OperationStatus.APPLIED, durableReceipt.status());
+        assertEquals(new BigDecimal("90.00"), durableReceipt.accounts().get(0).balance());
+        assertEquals(new BigDecimal("10.00"), durableReceipt.accounts().get(1).balance());
     }
 }

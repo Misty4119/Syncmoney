@@ -1,7 +1,11 @@
 -- atomic_add_balance.lua
 -- KEYS[1] = balance key (syncmoney:balance:{uuid})
 -- KEYS[2] = version key (syncmoney:version:{uuid})
+-- KEYS[3] = operation receipt key (syncmoney:operation:receipt:{sha256(operationId)})
 -- ARGV[1] = amount to add (positive = deposit, negative = withdraw)
+-- ARGV[2] = optional account policy: ALLOW_ABSENT, REQUIRE_EXISTING, REQUIRE_ABSENT
+-- ARGV[3] = canonical operation payload fingerprint
+-- ARGV[4] = optional operation receipt TTL seconds; defaults to 0 (no expiry)
 
 local MAX_CENTS = '99999999999999999999'
 local MAX_VERSION = '9223372036854775807'
@@ -102,6 +106,34 @@ local function keyHasSupportedType(key)
     return typeName == 'none' or typeName == 'string'
 end
 
+local function splitReceipt(raw)
+    local fields = {}
+    for field in string.gmatch(raw .. '|', '(.-)|') do
+        table.insert(fields, field)
+    end
+    return fields
+end
+
+local function encodeReceipt(status, reason, accountValues)
+    local fields = {'v1', ARGV[3], status, reason or '-', tostring(#accountValues / 2)}
+    for _, value in ipairs(accountValues) do table.insert(fields, value) end
+    return table.concat(fields, '|')
+end
+
+local function existingReceipt(receiptKey)
+    local raw = redis.call('GET', receiptKey)
+    if not raw then return nil end
+    local fields = splitReceipt(raw)
+    if #fields < 5 or fields[1] ~= 'v1' or not string.match(fields[2], '^[0-9a-f]+$')
+            or #fields[2] ~= 64 or (fields[3] ~= 'APPLIED' and fields[3] ~= 'REJECTED'
+            and fields[3] ~= 'IN_FLIGHT') then
+        return redis.error_reply('INVALID_OPERATION_RECEIPT')
+    end
+    if fields[2] ~= ARGV[3] then return redis.error_reply('OPERATION_ID_COLLISION') end
+    if fields[3] == 'IN_FLIGHT' then return redis.error_reply('OPERATION_IN_FLIGHT') end
+    return raw
+end
+
 local function canIncrementVersion(key)
     local rawVersion = redis.call('GET', key)
     if not rawVersion then
@@ -120,30 +152,85 @@ end
 
 local keyBalance = KEYS[1]
 local keyVersion = KEYS[2]
+local keyReceipt = KEYS[3]
+local accountPolicy = ARGV[2] or 'ALLOW_ABSENT'
+if not keyReceipt or not ARGV[3] or #ARGV[3] ~= 64 or not string.match(ARGV[3], '^[0-9a-f]+$') then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlRaw = ARGV[4] or '0'
+if not string.match(receiptTtlRaw, '^%d+$') or #receiptTtlRaw > 6 then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlSeconds = tonumber(receiptTtlRaw)
+if receiptTtlSeconds > 604800 then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+local function storeReceipt(raw)
+    if receiptTtlSeconds == 0 then
+        redis.call('SET', keyReceipt, raw)
+    else
+        redis.call('SET', keyReceipt, raw, 'EX', receiptTtlSeconds)
+    end
+end
+if not keyHasSupportedType(keyReceipt) then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+local priorReceipt = existingReceipt(keyReceipt)
+if priorReceipt then return priorReceipt end
+
+local function reject(reason, accountValues)
+    local raw = encodeReceipt('REJECTED', reason, accountValues or {})
+    storeReceipt(raw)
+    return raw
+end
+
+storeReceipt(encodeReceipt('IN_FLIGHT', '-', {}))
 
 if not keyHasSupportedType(keyBalance) or not keyHasSupportedType(keyVersion) then
-    return redis.error_reply('INVALID_KEY_TYPE')
+    return reject('INVALID_KEY_TYPE')
+end
+
+local currentBalanceRaw = redis.call('GET', keyBalance)
+local currentVersionRaw = redis.call('GET', keyVersion)
+if not currentBalanceRaw and currentVersionRaw then
+    return reject('INVALID_ACCOUNT_STATE')
+end
+if accountPolicy == 'REQUIRE_EXISTING' and not currentBalanceRaw then
+    return reject('ACCOUNT_MISSING')
+end
+if accountPolicy == 'REQUIRE_ABSENT' and (currentBalanceRaw or currentVersionRaw) then
+    local present = currentBalanceRaw ~= false and currentBalanceRaw ~= nil
+    if present then
+        return reject('ACCOUNT_APPEARED', {currentBalanceRaw, currentVersionRaw or '0'})
+    end
+    return reject('ACCOUNT_APPEARED')
+end
+if accountPolicy ~= 'ALLOW_ABSENT'
+        and accountPolicy ~= 'REQUIRE_EXISTING'
+        and accountPolicy ~= 'REQUIRE_ABSENT' then
+    return reject('INVALID_INITIALIZATION_MODE')
 end
 
 local currentCents, currentSign, balanceError = parseCents(
-        redis.call('GET', keyBalance) or '0', false, 'INVALID_BALANCE')
-if balanceError then return redis.error_reply(balanceError) end
+        currentBalanceRaw or '0', false, 'INVALID_BALANCE')
+if balanceError then return reject(balanceError) end
 
 local amountCents, amountSign, amountError = parseCents(ARGV[1], true, 'INVALID_AMOUNT')
-if amountError then return redis.error_reply(amountError) end
+if amountError then return reject(amountError) end
 
 local newCents, newSign = addSigned(currentCents, currentSign, amountCents, amountSign)
-if newSign < 0 then return redis.error_reply('INSUFFICIENT_FUNDS') end
+if newSign < 0 then
+    local accountValues = currentBalanceRaw and {currentBalanceRaw, currentVersionRaw or '0'} or {'~', '-1'}
+    return reject('INSUFFICIENT_FUNDS', accountValues)
+end
 if compareUnsigned(newCents, MAX_CENTS) > 0 then
-    return redis.error_reply('INVALID_AMOUNT')
+    return reject('INVALID_AMOUNT')
 end
 
 local versionCanAdvance, versionError = canIncrementVersion(keyVersion)
-if not versionCanAdvance then return redis.error_reply(versionError) end
+if not versionCanAdvance then return reject(versionError) end
 
 -- Exact decimal-string arithmetic keeps cents and the SQL DECIMAL(20,2) range intact.
 local resultBalance = formatCents(newCents)
 redis.call('SET', keyBalance, resultBalance)
 redis.call('INCR', keyVersion)
 local newVersion = redis.call('GET', keyVersion)
-return {resultBalance, newVersion}
+local applied = encodeReceipt('APPLIED', '-', {resultBalance, newVersion})
+storeReceipt(applied)
+return applied

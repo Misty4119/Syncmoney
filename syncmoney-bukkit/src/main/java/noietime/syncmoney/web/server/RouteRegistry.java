@@ -77,10 +77,12 @@ public final class RouteRegistry {
 
             if (path.startsWith("sse") || pathForRoute.startsWith("sse") ||
                 path.startsWith("api/sse") || pathForRoute.startsWith("api/sse")) {
+                corsHandler.applyRestCors(exchange, config.getCorsAllowedOrigins());
                 if (sseManager != null) {
                     sseManager.createHandler().handleRequest(exchange);
                 }
             } else if (path.startsWith("api/") || pathForRoute.startsWith("api/")) {
+                corsHandler.applyRestCors(exchange, config.getCorsAllowedOrigins());
                 if (authFilter != null && !authFilter.authenticate(exchange)) {
                     authFilter.sendUnauthorized(exchange);
                     return;

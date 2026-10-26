@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -291,6 +291,27 @@ async function sha256(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
 }
 
+async function assertFreshPlugdevRoot(root) {
+  try {
+    await lstat(join(root, ".plugdev"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error("Refusing to overwrite an existing .plugdev directory; use a fresh disposable source copy.");
+}
+
+async function reserveFreshPlugdevRoot(root) {
+  try {
+    await mkdir(join(root, ".plugdev"));
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error("Refusing to overwrite an existing .plugdev directory; use a fresh disposable source copy.");
+    }
+    throw error;
+  }
+}
+
 export async function prepareProfile(args, env = process.env) {
   const options = validateOptions(args, env.SYNCMONEY_CANDIDATE_VERSION ?? DEFAULT_CANDIDATE_VERSION);
   const candidateJar = join(ROOT, "build", "libs", `Syncmoney-${options.candidateVersion}.jar`);
@@ -302,6 +323,7 @@ export async function prepareProfile(args, env = process.env) {
   const run = join(ROOT, ".plugdev", "run");
   const plugins = join(run, "plugins");
   const pluginData = join(plugins, "Syncmoney");
+  await assertFreshPlugdevRoot(ROOT);
   await access(candidateJar);
   await access(acceptanceJar);
   await access(apiConsumerJar);
@@ -320,6 +342,7 @@ export async function prepareProfile(args, env = process.env) {
   const profile = createProfileConfig(optionsWithVault, env);
   const settings = createEconomySettings(defaultConfig, options, env);
 
+  await reserveFreshPlugdevRoot(ROOT);
   await mkdir(pluginData, { recursive: true });
   await writeFile(join(ROOT, ".plugdev", "profile.yml"), YAML.stringify(profile), "utf8");
   await writeFile(join(pluginData, "config.yml"), YAML.stringify(settings), "utf8");

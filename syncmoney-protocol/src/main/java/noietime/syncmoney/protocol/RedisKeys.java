@@ -9,6 +9,7 @@ public final class RedisKeys {
 
     public static final String BALANCE_PREFIX = "syncmoney:balance:";
     public static final String VERSION_PREFIX = "syncmoney:version:";
+    public static final String OPERATION_RECEIPT_PREFIX = "syncmoney:operation:receipt:";
     public static final String BALTOP = "syncmoney:baltop";
     public static final String BALTOP_TOTAL = "syncmoney:baltop:total";
     public static final String ONLINE_PLAYERS = "syncmoney:online:players";
@@ -32,6 +33,14 @@ public final class RedisKeys {
 
     public static String version(UUID uuid) {
         return VERSION_PREFIX + Objects.requireNonNull(uuid, "uuid");
+    }
+
+    /** Stable, bounded Redis key for an internal mutation receipt. */
+    public static String operationReceipt(String operationId) {
+        if (operationId == null || operationId.isBlank() || operationId.length() > 512) {
+            throw new IllegalArgumentException("operationId must be non-blank and at most 512 characters");
+        }
+        return OPERATION_RECEIPT_PREFIX + RedisOperationFingerprint.sha256(operationId);
     }
 
     public static String balancePattern() {

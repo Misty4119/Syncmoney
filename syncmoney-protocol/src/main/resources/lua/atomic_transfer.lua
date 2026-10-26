@@ -3,7 +3,10 @@
 -- KEYS[2] = sender version key
 -- KEYS[3] = receiver balance key
 -- KEYS[4] = receiver version key
+-- KEYS[5] = operation receipt key (syncmoney:operation:receipt:{sha256(operationId)})
 -- ARGV[1] = transfer amount
+-- ARGV[2] = canonical operation payload fingerprint
+-- ARGV[3] = optional receipt TTL seconds; 0 (default) keeps stable receipts durable
 
 local MAX_CENTS = '99999999999999999999'
 local MAX_VERSION = '9223372036854775807'
@@ -85,6 +88,20 @@ local function keyHasSupportedType(key)
     return typeName == 'none' or typeName == 'string'
 end
 
+local function splitReceipt(raw)
+    local fields = {}
+    for field in string.gmatch(raw .. '|', '(.-)|') do
+        table.insert(fields, field)
+    end
+    return fields
+end
+
+local function encodeReceipt(status, reason, accountValues)
+    local fields = {'v1', ARGV[2], status, reason or '-', tostring(#accountValues / 2)}
+    for _, value in ipairs(accountValues) do table.insert(fields, value) end
+    return table.concat(fields, '|')
+end
+
 local function canIncrementVersion(key)
     local rawVersion = redis.call('GET', key)
     if not rawVersion then
@@ -105,44 +122,99 @@ local senderBalanceKey = KEYS[1]
 local senderVersionKey = KEYS[2]
 local receiverBalanceKey = KEYS[3]
 local receiverVersionKey = KEYS[4]
+local receiptKey = KEYS[5]
+if not receiptKey or not ARGV[2] or #ARGV[2] ~= 64 or not string.match(ARGV[2], '^[0-9a-f]+$') then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlRaw = ARGV[3] or '0'
+if not string.match(receiptTtlRaw, '^%d+$') or #receiptTtlRaw > 6 then
+    return redis.error_reply('INVALID_OPERATION_RECEIPT')
+end
+local receiptTtlSeconds = tonumber(receiptTtlRaw)
+if receiptTtlSeconds > 604800 then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+if not keyHasSupportedType(receiptKey) then return redis.error_reply('INVALID_OPERATION_RECEIPT') end
+
+local function storeReceipt(raw)
+    if receiptTtlSeconds == 0 then
+        redis.call('SET', receiptKey, raw)
+    else
+        redis.call('SET', receiptKey, raw, 'EX', receiptTtlSeconds)
+    end
+    return raw
+end
+
+local priorRaw = redis.call('GET', receiptKey)
+if priorRaw then
+    local fields = splitReceipt(priorRaw)
+    if #fields < 5 or fields[1] ~= 'v1' or not string.match(fields[2], '^[0-9a-f]+$')
+            or #fields[2] ~= 64 or (fields[3] ~= 'APPLIED' and fields[3] ~= 'REJECTED'
+            and fields[3] ~= 'IN_FLIGHT') then
+        return redis.error_reply('INVALID_OPERATION_RECEIPT')
+    end
+    if fields[2] ~= ARGV[2] then return redis.error_reply('OPERATION_ID_COLLISION') end
+    if fields[3] == 'IN_FLIGHT' then return redis.error_reply('OPERATION_IN_FLIGHT') end
+    return priorRaw
+end
+
+local function reject(reason, accountValues)
+    local raw = encodeReceipt('REJECTED', reason, accountValues or {})
+    storeReceipt(raw)
+    return raw
+end
 
 if senderBalanceKey == receiverBalanceKey or senderVersionKey == receiverVersionKey then
-    return redis.error_reply('SELF_TRANSFER')
+    return reject('SELF_TRANSFER')
 end
 if not keyHasSupportedType(senderBalanceKey)
         or not keyHasSupportedType(senderVersionKey)
         or not keyHasSupportedType(receiverBalanceKey)
         or not keyHasSupportedType(receiverVersionKey) then
-    return redis.error_reply('INVALID_KEY_TYPE')
+    return reject('INVALID_KEY_TYPE')
 end
 
 local amountCents = parseCents(ARGV[1])
 if not amountCents or amountCents == '0' then
-    return redis.error_reply('INVALID_AMOUNT')
+    return reject('INVALID_AMOUNT')
 end
-local senderCents = parseCents(redis.call('GET', senderBalanceKey) or '0')
-local receiverCents = parseCents(redis.call('GET', receiverBalanceKey) or '0')
+local senderBalanceRaw = redis.call('GET', senderBalanceKey)
+local senderVersionRaw = redis.call('GET', senderVersionKey)
+local receiverBalanceRaw = redis.call('GET', receiverBalanceKey)
+local receiverVersionRaw = redis.call('GET', receiverVersionKey)
+if (not senderBalanceRaw and senderVersionRaw) or (not receiverBalanceRaw and receiverVersionRaw) then
+    return reject('INVALID_ACCOUNT_STATE')
+end
+local senderCents = parseCents(senderBalanceRaw or '0')
+local receiverCents = parseCents(receiverBalanceRaw or '0')
 if not senderCents or not receiverCents then
-    return redis.error_reply('INVALID_BALANCE')
+    return reject('INVALID_BALANCE')
 end
 if compareUnsigned(senderCents, amountCents) < 0 then
-    return redis.error_reply('INSUFFICIENT_FUNDS')
+    local accounts = senderBalanceRaw and {senderBalanceRaw, senderVersionRaw or '0'} or {'~', '-1'}
+    if receiverBalanceRaw then
+        table.insert(accounts, receiverBalanceRaw)
+        table.insert(accounts, receiverVersionRaw or '0')
+    else
+        table.insert(accounts, '~')
+        table.insert(accounts, '-1')
+    end
+    return reject('INSUFFICIENT_FUNDS', accounts)
 end
 
 local senderNewCents = subtractUnsigned(senderCents, amountCents)
 local receiverNewCents = addUnsigned(receiverCents, amountCents)
 if compareUnsigned(receiverNewCents, MAX_CENTS) > 0 then
-    return redis.error_reply('INVALID_AMOUNT')
+    return reject('INVALID_AMOUNT')
 end
 
 local senderCanAdvance, senderVersionError = canIncrementVersion(senderVersionKey)
-if not senderCanAdvance then return redis.error_reply(senderVersionError) end
+if not senderCanAdvance then return reject(senderVersionError) end
 local receiverCanAdvance, receiverVersionError = canIncrementVersion(receiverVersionKey)
-if not receiverCanAdvance then return redis.error_reply(receiverVersionError) end
+if not receiverCanAdvance then return reject(receiverVersionError) end
 
 -- Exact decimal-string arithmetic validates both account ranges before either balance changes.
 local senderResult = formatCents(senderNewCents)
 local receiverResult = formatCents(receiverNewCents)
+storeReceipt(encodeReceipt('IN_FLIGHT', '-', {}))
 redis.call('SET', senderBalanceKey, senderResult)
 redis.call('SET', receiverBalanceKey, receiverResult)
 redis.call('INCR', senderVersionKey)
@@ -150,4 +222,8 @@ redis.call('INCR', receiverVersionKey)
 local senderNewVersion = redis.call('GET', senderVersionKey)
 local receiverNewVersion = redis.call('GET', receiverVersionKey)
 
-return {senderResult, receiverResult, senderNewVersion, receiverNewVersion}
+local applied = encodeReceipt('APPLIED', '-', {
+    senderResult, senderNewVersion, receiverResult, receiverNewVersion
+})
+storeReceipt(applied)
+return applied

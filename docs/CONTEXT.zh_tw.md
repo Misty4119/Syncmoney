@@ -14,7 +14,7 @@
 - 選用整合：VaultUnlocked、CMI、PlaceholderAPI
 - 授權：Apache License 2.0
 
-1.4.0 target 的 build 與 runtime 最低為 Java 25，Paper 最低為 1.21.6。保留的 1.3.2 release baseline 使用 Java 21／Gradle 9.1.0；本次 target 不修改該歷史 baseline。
+**截至 2026-10-26 R63 R9，1.4.0 整體狀態為 BLOCKED / NOT VERIFIED。** 使用本機 `-PreleaseVersion=1.4.0`，Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，以及 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation、frontend typecheck（4 個 files／22 個 tests）與 production build 均通過。Preview artifact pins：core 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`；PAPI 13,872 bytes / SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`；acceptance 54,905 bytes / SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`；API consumer fixture 2,760 bytes / SHA-256 `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E`。ADR-16 僅涵蓋 live queued `/pay` durable recovery；direct Vault/plugin recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`。Storage-service integration 與 exact-candidate Paper runtime／T22 Beta 維持 `NOT VERIFIED`；minimum-Paper SQL 與 licensed/live CMI（授權 UNKNOWN）維持 `BLOCKED / NOT VERIFIED`；廣泛 V03 為 `SKIPPED / NOT VERIFIED`；完整 public API 相容性為 `NOT VERIFIED`；T21 為 `PARTIAL / IN PROGRESS`。Stable metadata 維持 1.3.2；Stable 與外部發布維持 `NOT VERIFIED / NOT PERFORMED`。
 
 ## 產品邊界
 
@@ -26,7 +26,7 @@ Syncmoney 負責經濟餘額、轉帳/管理命令、同步、監控、稽核與
 
 ### Core plugin
 
-`src/main/java/noietime/syncmoney` 包含 lifecycle、economy、persistence、synchronization、commands、configuration、audit、breaker/guard、web、migration 與選用整合。
+`syncmoney-bukkit/src/main/java/noietime/syncmoney` 包含 lifecycle、economy、persistence、synchronization、commands、configuration、audit、breaker/guard、web、migration 與選用整合。
 
 `src/main/resources` 包含 plugin descriptor、預設設定/訊息，以及嵌入式 web distribution。
 
@@ -93,7 +93,9 @@ Balance 與 version 成對存在。遠端 handler 套用狀態前先比對 versi
 
 ## 持久化
 
-Shared `players` table 包含 UUID、player name、`DECIMAL(20,2)` balance、單調 `BIGINT` version、last server 與 updated timestamp。
+Shared `players` table 包含 UUID、player name、`DECIMAL(20,2)` balance、單調 `BIGINT` version、last server 與 updated timestamp。Syncmoney-owned `LOCAL_REDIS` 與 `SYNC` balance 上限為 `999999999999999999.99`；既有 `LOCAL` policy 不變，也不會 migration local data。
+
+live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。Exact-candidate Paper runtime acceptance 仍為 NOT VERIFIED。
 
 其他 storage 分別處理 baltop、audit log 與 audit schema 演進、schema-version tracking、本機 SQLite player balance/transaction，以及 Shadow Sync history。
 
@@ -152,7 +154,7 @@ Storage 必須等已接受 event/write consumer 排空後才關閉。
 - `/pay <player> <amount>`，包含確認流程
 - `/baltop [page|me]`
 
-管理入口為 `/syncmoney`。註冊的 subcommand 包含 `migrate`、`audit`、條件式 `breaker`、`admin`、`web`、條件式 `shadow`、`monitor`、`debug`、`sync-balance`、`test`、條件式 `econstats`、`reload`、`version`。
+管理入口為 `/syncmoney`。註冊的 subcommand 包含 `migrate`、`audit`、管理員專用 queued recovery `recovery list|inspect|reconcile`、條件式 `breaker`、`admin`、`web`、條件式 `shadow`、`monitor`、`debug`、`sync-balance`、`test`、條件式 `econstats`、`reload`、`version`。
 
 Permission 宣告在 `src/main/resources/plugin.yml`，部分 subcommand 另有更細的 specialized/tier 檢查。
 

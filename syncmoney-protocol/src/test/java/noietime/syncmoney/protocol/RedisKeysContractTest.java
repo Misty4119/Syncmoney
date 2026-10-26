@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RedisKeysContractTest {
 
@@ -39,5 +40,17 @@ class RedisKeysContractTest {
                 RedisKeys.cmiBalance(RedisKeys.CMI_DEFAULT_PREFIX, PLAYER));
         assertEquals("custom:cmi:00000000-0000-0000-0000-000000000001:version",
                 RedisKeys.cmiVersion("custom:cmi", PLAYER));
+    }
+
+    @Test
+    void operationReceiptKeyIsStableBoundedAndDoesNotExposeCallerId() {
+        String id = "transfer:00000000-0000-0000-0000-000000000001";
+        String key = RedisKeys.operationReceipt(id);
+
+        assertEquals("syncmoney:operation:receipt:" + RedisOperationFingerprint.sha256(id), key);
+        assertEquals(key, RedisKeys.operationReceipt(id));
+        org.junit.jupiter.api.Assertions.assertFalse(key.contains("transfer:"));
+        assertThrows(IllegalArgumentException.class, () -> RedisKeys.operationReceipt(" "));
+        assertThrows(IllegalArgumentException.class, () -> RedisKeys.operationReceipt("x".repeat(513)));
     }
 }

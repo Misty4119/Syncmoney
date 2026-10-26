@@ -109,6 +109,9 @@ public class EventConsumerManager {
                 overflowLog,
                 databaseManager,
                 recoverySpool);
+        if (recoverySpool != null) {
+            economyWriteQueue.setTransferAdmissionHandler(economyEventConsumer::checkpointPayTransferAdmission);
+        }
 
         plugin.getLogger().fine("EconomyEventConsumer initialized");
     }

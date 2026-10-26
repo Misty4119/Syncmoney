@@ -126,7 +126,7 @@ class MemoryPendingStateTest {
                 "the accepted local projection remains visible until its worker finishes");
 
         CacheManager cache = mock(CacheManager.class);
-        when(cache.atomicAddBalanceReceipt(account, new BigDecimal("10.00")))
+        when(cache.atomicAddBalanceReceipt(eq(account), eq(new BigDecimal("10.00")), anyString()))
                 .thenReturn(new ConfirmedAccount(account, new BigDecimal("130.00"), 10L));
         SyncmoneyConfig consumerConfig = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(consumerConfig.isPubsubEnabled()).thenReturn(false);

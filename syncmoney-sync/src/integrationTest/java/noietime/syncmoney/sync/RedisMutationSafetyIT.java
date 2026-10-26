@@ -1,4 +1,7 @@
 package noietime.syncmoney.sync;
+
+import noietime.syncmoney.protocol.RedisKeys;
+import noietime.syncmoney.protocol.RedisOperationFingerprint;
 import noietime.syncmoney.testkit.RedisTestSupport;
 
 import noietime.syncmoney.testkit.redis.DisposableRedisServer;
@@ -7,16 +10,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.Jedis;
-import redis.clients.jedis.exceptions.JedisDataException;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisMutationSafetyIT {
     private static DisposableRedisServer redis;
@@ -50,8 +53,9 @@ class RedisMutationSafetyIT {
             jedis.rpush(receiverBalance, "wrong-type");
             jedis.set(receiverVersion, "3");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")),
+                    "INVALID_KEY_TYPE");
 
             assertEquals("100.00", jedis.get(senderBalance));
             assertEquals("7", jedis.get(senderVersion));
@@ -72,8 +76,9 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "0.00");
             jedis.rpush(receiverVersion, "wrong-type");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")),
+                    "INVALID_KEY_TYPE");
 
             assertEquals("100.00", jedis.get(senderBalance));
             assertEquals("0.00", jedis.get(receiverBalance));
@@ -90,8 +95,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "9223372036854775807");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_add_balance.lua",
-                    List.of(balance, version), List.of("-10.00")));
+            assertRejected(eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("-10.00")),
+                    "VERSION_OVERFLOW");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("9223372036854775807", jedis.get(version));
@@ -106,9 +111,9 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "9007199254740992");
 
-            Object result = eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("1.00"));
+            ScriptReceipt result = eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("1.00"));
 
-            assertEquals(List.of("101.00", "9007199254740993"), result);
+            assertApplied(result, List.of("101.00", "9007199254740993"));
             assertEquals("9007199254740993", jedis.get(version));
         }
     }
@@ -121,9 +126,9 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "9007199254740992");
 
-            Object result = eval(jedis, "atomic_set_balance.lua", List.of(version, balance), List.of("50.00"));
+            ScriptReceipt result = eval(jedis, "atomic_set_balance.lua", List.of(version, balance), List.of("50.00"));
 
-            assertEquals("9007199254740993", result);
+            assertApplied(result, List.of("50.00", "9007199254740993"));
             assertEquals("9007199254740993", jedis.get(version));
         }
     }
@@ -140,10 +145,10 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "0.00");
             jedis.set(receiverVersion, "9007199254740993");
 
-            Object result = eval(jedis, "atomic_transfer.lua",
+            ScriptReceipt result = eval(jedis, "atomic_transfer.lua",
                     List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00"));
 
-            assertEquals(List.of("90.00", "10.00", "9007199254740993", "9007199254740994"), result);
+            assertApplied(result, List.of("90.00", "9007199254740993", "10.00", "9007199254740994"));
             assertEquals("9007199254740993", jedis.get(senderVersion));
             assertEquals("9007199254740994", jedis.get(receiverVersion));
         }
@@ -157,10 +162,10 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
-            JedisDataException rejection = assertThrows(JedisDataException.class,
-                    () -> eval(jedis, "atomic_set_balance.lua", List.of(version, balance), List.of("-1.00")));
+            ScriptReceipt rejection = eval(jedis, "atomic_set_balance.lua",
+                    List.of(version, balance), List.of("-1.00"));
 
-            assertTrue(rejection.getMessage().contains("NEGATIVE_BALANCE"));
+            assertRejected(rejection, "NEGATIVE_BALANCE");
             assertEquals("100.00", jedis.get(balance));
             assertEquals("7", jedis.get(version));
         }
@@ -174,8 +179,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "000000000000000000000000");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_add_balance.lua",
-                    List.of(balance, version), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("10.00")),
+                    "INVALID_VERSION");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("000000000000000000000000", jedis.get(version));
@@ -194,8 +199,9 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "0.00");
             jedis.set(receiverVersion, "0007");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")),
+                    "INVALID_VERSION");
 
             assertEquals("100.00", jedis.get(senderBalance));
             assertEquals("0.00", jedis.get(receiverBalance));
@@ -212,8 +218,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_set_balance.lua",
-                    List.of(version, balance), List.of("1000000000000000000.00")));
+            assertRejected(eval(jedis, "atomic_set_balance.lua", List.of(version, balance),
+                    List.of("1000000000000000000.00")), "INVALID_AMOUNT");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("7", jedis.get(version));
@@ -228,11 +234,11 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
-            Object result = eval(jedis, "atomic_set_balance.lua",
+            ScriptReceipt result = eval(jedis, "atomic_set_balance.lua",
                     List.of(version, balance), List.of("999999999999999999.99"));
 
+            assertApplied(result, List.of("999999999999999999.99", "8"));
             assertEquals("999999999999999999.99", jedis.get(balance));
-            assertEquals("8", result);
             assertEquals("8", jedis.get(version));
         }
     }
@@ -245,8 +251,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "999999999999999999.99");
             jedis.set(version, "7");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_add_balance.lua",
-                    List.of(balance, version), List.of("0.01")));
+            assertRejected(eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("0.01")),
+                    "INVALID_AMOUNT");
 
             assertEquals("999999999999999999.99", jedis.get(balance));
             assertEquals("7", jedis.get(version));
@@ -265,8 +271,9 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "999999999999999999.99");
             jedis.set(receiverVersion, "3");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("0.01")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("0.01")),
+                    "INVALID_AMOUNT");
 
             assertEquals("10.00", jedis.get(senderBalance));
             assertEquals("999999999999999999.99", jedis.get(receiverBalance));
@@ -283,10 +290,10 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "9007199254740992.00");
             jedis.set(version, "7");
 
-            Object result = eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("0.01"));
+            ScriptReceipt result = eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("0.01"));
 
+            assertApplied(result, List.of("9007199254740992.01", "8"));
             assertEquals("9007199254740992.01", jedis.get(balance));
-            assertEquals(List.of("9007199254740992.01", "8"), result);
         }
     }
 
@@ -298,8 +305,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.rpush(version, "wrong-type");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_add_balance.lua",
-                    List.of(balance, version), List.of("-10.00")));
+            assertRejected(eval(jedis, "atomic_add_balance.lua", List.of(balance, version), List.of("-10.00")),
+                    "INVALID_KEY_TYPE");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("list", jedis.type(version));
@@ -314,8 +321,8 @@ class RedisMutationSafetyIT {
             jedis.rpush(balance, "wrong-type");
             jedis.set(version, "7");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_set_balance.lua",
-                    List.of(version, balance), List.of("20.00")));
+            assertRejected(eval(jedis, "atomic_set_balance.lua", List.of(version, balance), List.of("20.00")),
+                    "INVALID_KEY_TYPE");
 
             assertEquals("7", jedis.get(version));
             assertEquals("list", jedis.type(balance));
@@ -334,8 +341,9 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "0.00");
             jedis.set(receiverVersion, "3");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")),
+                    "INVALID_KEY_TYPE");
 
             assertEquals("100.00", jedis.get(senderBalance));
             assertEquals("0.00", jedis.get(receiverBalance));
@@ -356,8 +364,9 @@ class RedisMutationSafetyIT {
             jedis.set(receiverBalance, "0.00");
             jedis.set(receiverVersion, "9223372036854775807");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua",
+                    List.of(senderBalance, senderVersion, receiverBalance, receiverVersion), List.of("10.00")),
+                    "VERSION_OVERFLOW");
 
             assertEquals("100.00", jedis.get(senderBalance));
             assertEquals("0.00", jedis.get(receiverBalance));
@@ -374,8 +383,8 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_set_balance.lua",
-                    List.of(version, balance), List.of("1e309")));
+            assertRejected(eval(jedis, "atomic_set_balance.lua", List.of(version, balance), List.of("1e309")),
+                    "INVALID_AMOUNT");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("7", jedis.get(version));
@@ -390,19 +399,82 @@ class RedisMutationSafetyIT {
             jedis.set(balance, "100.00");
             jedis.set(version, "7");
 
-            assertThrows(JedisDataException.class, () -> eval(jedis, "atomic_transfer.lua",
-                    List.of(balance, version, balance, version), List.of("10.00")));
+            assertRejected(eval(jedis, "atomic_transfer.lua", List.of(balance, version, balance, version),
+                    List.of("10.00")), "SELF_TRANSFER");
 
             assertEquals("100.00", jedis.get(balance));
             assertEquals("7", jedis.get(version));
         }
     }
 
-    private static Object eval(Jedis jedis, String resourceName, List<String> keys, List<String> args)
+    private static ScriptReceipt eval(Jedis jedis, String resourceName, List<String> keys, List<String> args)
             throws IOException {
+        if (args.size() != 1) throw new IllegalArgumentException("Expected one payload argument for " + resourceName);
+        List<String> scriptKeys = new ArrayList<>(keys);
+        List<String> scriptArgs = new ArrayList<>(args);
+        String fingerprint;
+        switch (resourceName) {
+            case "atomic_add_balance.lua" -> {
+                UUID account = testAccount(keys.get(0));
+                fingerprint = RedisOperationFingerprint.add(account, new BigDecimal(args.get(0)));
+                scriptArgs.add(1, "ALLOW_ABSENT");
+            }
+            case "atomic_set_balance.lua" -> {
+                UUID account = testAccount(keys.get(1));
+                fingerprint = RedisOperationFingerprint.set(account, new BigDecimal(args.get(0)));
+            }
+            case "atomic_transfer.lua" -> {
+                UUID sender = testAccount(keys.get(0));
+                UUID receiver = testAccount(keys.get(2));
+                fingerprint = RedisOperationFingerprint.transfer(sender, receiver, new BigDecimal(args.get(0)));
+            }
+            default -> throw new IllegalArgumentException("Unsupported Lua resource: " + resourceName);
+        }
+        scriptKeys.add(RedisKeys.operationReceipt(testOperationId(resourceName, keys, args)));
+        scriptArgs.add(fingerprint);
         try (InputStream input = RedisMutationSafetyIT.class.getResourceAsStream("/" + resourceName)) {
             if (input == null) throw new IOException("Missing canonical Lua resource: " + resourceName);
-            return jedis.eval(new String(input.readAllBytes(), StandardCharsets.UTF_8), keys, args);
+            Object raw = jedis.eval(new String(input.readAllBytes(), StandardCharsets.UTF_8), scriptKeys, scriptArgs);
+            if (!(raw instanceof String receipt)) throw new IOException("Expected a serialized Lua operation receipt");
+            return parseReceipt(receipt, fingerprint);
         }
     }
+
+    private static UUID testAccount(String balanceKey) {
+        return UUID.nameUUIDFromBytes(("RedisMutationSafetyIT|" + balanceKey).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String testOperationId(String resourceName, List<String> keys, List<String> args) {
+        return "RedisMutationSafetyIT|" + RedisOperationFingerprint.sha256(resourceName + "|"
+                + String.join("|", keys) + "|" + String.join("|", args));
+    }
+
+    private static ScriptReceipt parseReceipt(String raw, String expectedFingerprint) throws IOException {
+        String[] fields = raw.split("\\|", -1);
+        if (fields.length < 5 || !"v1".equals(fields[0])) throw new IOException("Invalid Lua receipt envelope");
+        if (!expectedFingerprint.equals(fields[1])) throw new IOException("Lua receipt fingerprint mismatch");
+        int accountCount;
+        try {
+            accountCount = Integer.parseInt(fields[4]);
+        } catch (NumberFormatException exception) {
+            throw new IOException("Invalid Lua receipt account count", exception);
+        }
+        if (accountCount < 0 || fields.length != 5 + accountCount * 2) {
+            throw new IOException("Invalid Lua receipt account fields");
+        }
+        return new ScriptReceipt(fields[2], fields[3], List.of(fields).subList(5, fields.length));
+    }
+
+    private static void assertApplied(ScriptReceipt receipt, List<String> accountValues) {
+        assertEquals("APPLIED", receipt.status());
+        assertEquals("-", receipt.reason());
+        assertEquals(accountValues, receipt.accountValues());
+    }
+
+    private static void assertRejected(ScriptReceipt receipt, String reason) {
+        assertEquals("REJECTED", receipt.status());
+        assertEquals(reason, receipt.reason());
+    }
+
+    private record ScriptReceipt(String status, String reason, List<String> accountValues) { }
 }

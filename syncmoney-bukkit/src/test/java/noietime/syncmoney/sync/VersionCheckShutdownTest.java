@@ -10,8 +10,8 @@ import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.EconomyMode;
 import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import org.bukkit.Server;
-import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.Jedis;
 
@@ -148,9 +148,9 @@ class VersionCheckShutdownTest {
         when(plugin.getServer()).thenReturn(server);
         when(server.getGlobalRegionScheduler()).thenReturn(scheduler);
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
-        Player player = mock(Player.class);
-        when(player.getUniqueId()).thenReturn(account.uuid);
-        org.mockito.Mockito.doReturn(Set.of(player)).when(server).getOnlinePlayers();
+        OnlinePlayerRegistry onlinePlayerRegistry = mock(OnlinePlayerRegistry.class);
+        when(plugin.getOnlinePlayerRegistry()).thenReturn(onlinePlayerRegistry);
+        when(onlinePlayerRegistry.getLocalOnlinePlayerIds()).thenReturn(Set.of(account.uuid));
         AtomicReference<Consumer<ScheduledTask>> scheduledWork = new AtomicReference<>();
         when(scheduler.runAtFixedRate(eq(plugin), any(Consumer.class), anyLong(), anyLong()))
                 .thenAnswer(invocation -> {
@@ -224,9 +224,9 @@ class VersionCheckShutdownTest {
         when(plugin.getServer()).thenReturn(server);
         when(server.getGlobalRegionScheduler()).thenReturn(scheduler);
         when(server.getAsyncScheduler()).thenReturn(asyncScheduler);
-        Player player = mock(Player.class);
-        when(player.getUniqueId()).thenReturn(account.uuid);
-        org.mockito.Mockito.doReturn(Set.of(player)).when(server).getOnlinePlayers();
+        OnlinePlayerRegistry onlinePlayerRegistry = mock(OnlinePlayerRegistry.class);
+        when(plugin.getOnlinePlayerRegistry()).thenReturn(onlinePlayerRegistry);
+        when(onlinePlayerRegistry.getLocalOnlinePlayerIds()).thenReturn(Set.of(account.uuid));
         AtomicReference<Consumer<ScheduledTask>> scheduledWork = new AtomicReference<>();
         AtomicReference<Consumer<ScheduledTask>> asyncWork = new AtomicReference<>();
         ScheduledTask ownedTask = mock(ScheduledTask.class);

@@ -6,6 +6,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -82,5 +88,48 @@ class MigrationCheckpointFailureTest {
         assertNull(legacy.getSourceIdentity(), "legacy checkpoints must not claim a verified source");
         assertNull(legacy.getSourceFingerprint(), "legacy checkpoints must not claim verified source contents");
         assertFalse(legacy.getForceOverwrite(), "legacy checkpoints without force policy must resume conservatively");
+    }
+
+    @Test
+    void concurrentCheckpointUpdatesRemainConsistentAndReadable() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getDataFolder()).thenReturn(temporaryDirectory.toFile());
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("MigrationCheckpointFailureTest"));
+        MigrationCheckpoint checkpoint = new MigrationCheckpoint(plugin);
+        checkpoint.init(400);
+
+        int workers = 8;
+        int failuresPerWorker = 50;
+        CountDownLatch ready = new CountDownLatch(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        try (ExecutorService executor = Executors.newFixedThreadPool(workers)) {
+            for (int worker = 0; worker < workers; worker++) {
+                int workerId = worker;
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    for (int failure = 0; failure < failuresPerWorker; failure++) {
+                        checkpoint.recordFailure("player-" + workerId + "-" + failure, "injected failure");
+                    }
+                    return null;
+                }));
+            }
+
+            ready.await();
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get();
+            }
+        }
+
+        int expectedFailures = workers * failuresPerWorker;
+        assertEquals(expectedFailures, checkpoint.getFailedCount());
+        assertEquals(expectedFailures, checkpoint.getFailures().size());
+
+        MigrationCheckpoint resumed = new MigrationCheckpoint(plugin);
+        assertTrue(resumed.resume(), "concurrent saves must leave a readable checkpoint");
+        assertEquals(expectedFailures, resumed.getFailedCount());
+        assertEquals(expectedFailures, resumed.getFailures().size());
     }
 }

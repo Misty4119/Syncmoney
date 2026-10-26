@@ -141,12 +141,18 @@ public class PermissionChecker {
      * @return Required permission string, or null if no permission required
      */
     public String getRequiredPermission(String endpoint) {
+        if (endpoint == null || endpoint.isBlank()) {
+            return null;
+        }
+
+        Map.Entry<String, String> bestMatch = null;
         for (Map.Entry<String, String> entry : endpointPermissions.entrySet()) {
-            if (endpoint.startsWith(entry.getKey())) {
-                return entry.getValue();
+            if (endpoint.startsWith(entry.getKey())
+                    && (bestMatch == null || entry.getKey().length() > bestMatch.getKey().length())) {
+                bestMatch = entry;
             }
         }
-        return null;
+        return bestMatch == null ? null : bestMatch.getValue();
     }
 
     /**

@@ -3,8 +3,17 @@ package noietime.syncmoney.storage.db;
 import noietime.syncmoney.core.port.ConfirmedAccount;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -20,11 +29,14 @@ import java.util.concurrent.Semaphore;
 public final class DbWriteQueue {
 
     private static final double HIGH_USAGE_THRESHOLD = 0.8;
+    private static final int MAX_RETAINED_OPERATION_IDS = 10_000;
 
     private final BlockingQueue<DbWriteTask> queue;
     private final int capacity;
     private final Semaphore admissionPermits;
     private final Object admissionGate = new Object();
+    private final LinkedHashMap<String, OperationAdmission> operationAdmissions =
+            new LinkedHashMap<>(16, 0.75f, true);
 
     private final java.util.concurrent.atomic.AtomicLong writtenCount = new java.util.concurrent.atomic.AtomicLong(0);
 
@@ -84,11 +96,7 @@ public final class DbWriteQueue {
      * @return true if successfully inserted
      */
     public boolean offer(DbWriteTask task) {
-        Reservation reservation = tryReserve();
-        if (reservation == null) return false;
-        try (reservation) {
-            return reservation.commit(task);
-        }
+        return enqueueOrReuse(task).accepted();
     }
 
     /**
@@ -97,11 +105,107 @@ public final class DbWriteQueue {
      * the task was not admitted.
      */
     public CompletableFuture<Boolean> offerAndTrack(DbWriteTask task) {
-        if (task == null) return null;
-        CompletableFuture<Boolean> completion = new CompletableFuture<>();
-        if (!offer(task.withCompletion(completion))) return null;
-        return completion;
+        return enqueueOrReuse(task).completion();
     }
+
+    /**
+     * Admit at most one outstanding or recently completed absolute snapshot per operation ID.
+     * A retry while the writer is still working shares its completion future; a retry after a
+     * confirmed write returns that receipt. A failed write may be admitted again with the same
+     * operation ID and economic payload. Reuse of an ID for different account snapshots fails
+     * closed and never falls through to the queue.
+     */
+    private Admission enqueueOrReuse(DbWriteTask task) {
+        if (task == null) return new Admission(false, null);
+        String fingerprint = fingerprint(task);
+        synchronized (admissionGate) {
+            OperationAdmission existing = operationAdmissions.get(task.operationId());
+            if (existing != null) {
+                if (!existing.fingerprint().equals(fingerprint)) {
+                    CompletableFuture<Boolean> collision = new CompletableFuture<>();
+                    collision.completeExceptionally(new IllegalStateException(
+                            "Database write operation ID was reused with a different account snapshot"));
+                    relayCompletion(collision, task.completion());
+                    return new Admission(false, collision);
+                }
+                CompletableFuture<Boolean> current = existing.completion();
+                if (!current.isDone()) {
+                    relayCompletion(current, task.completion());
+                    return new Admission(true, current);
+                }
+                boolean persisted;
+                try {
+                    persisted = Boolean.TRUE.equals(current.getNow(false));
+                } catch (java.util.concurrent.CompletionException failed) {
+                    persisted = false;
+                }
+                if (persisted) {
+                    relayCompletion(current, task.completion());
+                    return new Admission(true, current);
+                }
+                operationAdmissions.remove(task.operationId());
+            }
+
+            Reservation reservation = tryReserve();
+            if (reservation == null) return new Admission(false, null);
+
+            CompletableFuture<Boolean> completion = new CompletableFuture<>();
+            relayCompletion(completion, task.completion());
+            try (reservation) {
+                if (!reservation.commit(task.withCompletion(completion))) {
+                    return new Admission(false, null);
+                }
+            }
+            operationAdmissions.put(task.operationId(), new OperationAdmission(fingerprint, completion));
+            trimCompletedOperationAdmissions();
+            return new Admission(true, completion);
+        }
+    }
+
+    private void trimCompletedOperationAdmissions() {
+        if (operationAdmissions.size() <= MAX_RETAINED_OPERATION_IDS) return;
+        Iterator<Map.Entry<String, OperationAdmission>> entries = operationAdmissions.entrySet().iterator();
+        while (operationAdmissions.size() > MAX_RETAINED_OPERATION_IDS && entries.hasNext()) {
+            Map.Entry<String, OperationAdmission> entry = entries.next();
+            if (entry.getValue().completion().isDone()) entries.remove();
+        }
+    }
+
+    private static String fingerprint(DbWriteTask task) {
+        List<AccountWrite> accounts = new ArrayList<>(task.accounts());
+        accounts.sort(Comparator.comparing(write -> write.account().playerUuid().toString()));
+        StringBuilder canonical = new StringBuilder();
+        for (AccountWrite write : accounts) {
+            ConfirmedAccount account = write.account();
+            appendField(canonical, account.playerUuid().toString());
+            appendField(canonical, account.balance().stripTrailingZeros().toPlainString());
+            appendField(canonical, Long.toString(account.version()));
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("JVM does not provide SHA-256", impossible);
+        }
+    }
+
+    private static void appendField(StringBuilder canonical, String value) {
+        canonical.append(value.length()).append(':').append(value);
+    }
+
+    private static void relayCompletion(CompletableFuture<Boolean> source,
+            CompletableFuture<Boolean> target) {
+        if (target == null || target == source) return;
+        source.whenComplete((persisted, failure) -> {
+            if (failure == null) target.complete(persisted);
+            else target.completeExceptionally(failure);
+        });
+    }
+
+    private record OperationAdmission(String fingerprint, CompletableFuture<Boolean> completion) { }
+
+    private record Admission(boolean accepted, CompletableFuture<Boolean> completion) { }
 
     public boolean requeue(DbWriteTask task) {
         if (task == null) return false;

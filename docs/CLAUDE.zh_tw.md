@@ -12,7 +12,7 @@ Syncmoney 是相容 Vault 的 Minecraft 經濟插件，支援選用 VaultUnlocke
 
 文字說明若與程式或可執行設定衝突，以後者為準：
 
-- `src/main/java/noietime/syncmoney`
+- `syncmoney-bukkit/src/main/java/noietime/syncmoney`
 - `src/main/resources/config.yml`
 - `src/main/resources/plugin.yml`
 - `build.gradle`

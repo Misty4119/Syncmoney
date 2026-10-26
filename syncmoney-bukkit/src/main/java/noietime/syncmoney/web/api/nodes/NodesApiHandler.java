@@ -44,6 +44,7 @@ public class NodesApiHandler {
 
         
         this.operationsHandler = new NodeOperationsHandler(plugin, config, permissionChecker, apiKeyStore);
+        this.operationsHandler.setNodeStatusCache(nodeStatusCache);
         this.statusHandler = new NodeStatusHandler(plugin, config, permissionChecker, apiKeyStore);
         this.proxyHandler = new NodeProxyHandler(plugin, config, permissionChecker, apiKeyStore);
         this.configSyncHandler = new ConfigSyncHandler(plugin, config, permissionChecker, apiKeyStore);

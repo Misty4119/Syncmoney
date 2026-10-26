@@ -198,7 +198,7 @@ public class NodeHealthChecker implements Runnable {
 
         } catch (Exception e) {
             plugin.getLogger().fine("NodeHealthChecker: Failed to check node " + node.name +
-                    " at " + node.url + ": " + e.getMessage());
+                    " (" + e.getClass().getSimpleName() + ")");
             return NodeStatus.OFFLINE;
         }
     }
@@ -216,7 +216,7 @@ public class NodeHealthChecker implements Runnable {
                                 "\"status\":\"%s\"," +
                                 "\"timestamp\":%d}}",
                         escapeJson(nodeName),
-                        escapeJson(nodeUrl),
+                        escapeJson(NodeUrlSanitizer.sanitizeForDisplay(nodeUrl)),
                         status.name().toLowerCase(),
                         System.currentTimeMillis()
                 );

@@ -82,10 +82,7 @@ public final class MoneyCommand implements CommandExecutor, TabCompleter {
             if (registry != null) {
                 return registry.suggestOnlinePlayerNames(args[0], true);
             }
-            return plugin.getServer().getOnlinePlayers().stream()
-                    .map(Player::getName)
-                    .filter(name -> name.toLowerCase().startsWith(args[0].toLowerCase()))
-                    .toList();
+            return Collections.emptyList();
         }
         return Collections.emptyList();
     }

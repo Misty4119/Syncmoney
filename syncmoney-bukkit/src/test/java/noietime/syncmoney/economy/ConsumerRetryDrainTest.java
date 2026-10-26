@@ -20,6 +20,7 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class ConsumerRetryDrainTest {
@@ -44,7 +45,7 @@ class ConsumerRetryDrainTest {
         when(config.isDbEnabled()).thenReturn(true);
         when(config.getServerName()).thenReturn("test-server");
         when(nameResolver.getNameCachedOnly(account)).thenReturn("account");
-        when(cache.atomicAddBalanceReceipt(eq(account), any(BigDecimal.class))).thenAnswer(invocation -> {
+        when(cache.atomicAddBalanceReceipt(eq(account), any(BigDecimal.class), anyString())).thenAnswer(invocation -> {
             redisMutations.incrementAndGet();
             return new ConfirmedAccount(account, new BigDecimal("110.00"), 9L);
         });

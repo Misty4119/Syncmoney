@@ -202,12 +202,18 @@ public final class BaltopCommand implements CommandExecutor, TabCompleter {
     private boolean showPlayerRank(Player player) {
         UUID uuid = player.getUniqueId();
         int rank = baltopManager.getPlayerRank(uuid);
-        double balance = economyFacade.getBalance(player.getUniqueId()).doubleValue();
 
         if (rank <= 0) {
             MessageHelper.sendMessage(player, plugin.getMessage("baltop.not-ranked"));
             return true;
         }
+
+        java.math.BigDecimal cachedBalance = economyFacade.getBalanceForPlaceholder(uuid);
+        if (cachedBalance == null) {
+            MessageHelper.sendMessage(player, plugin.getMessage("baltop.self-balance-not-ready"));
+            return true;
+        }
+        double balance = cachedBalance.doubleValue();
 
         MessageHelper.sendMessage(player, plugin.getMessage("baltop.self-header"));
         MessageHelper.sendMessage(player, plugin.getMessage("baltop.self-rank")

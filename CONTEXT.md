@@ -14,7 +14,7 @@ This document is a factual project snapshot for maintainers, contributors, and c
 - Optional integrations: VaultUnlocked, CMI, PlaceholderAPI
 - License: Apache License 2.0
 
-The 1.4.0 target requires Java 25 or newer at build and runtime and Paper 1.21.6 or newer. The preserved 1.3.2 release baseline used Java 21 / Gradle 9.1.0 and is not changed by that target.
+**Current 1.4.0 status (2026-10-26 R63 R9): BLOCKED / NOT VERIFIED.** With local `-PreleaseVersion=1.4.0`, the Java 25.0.4 / Gradle 9.8.0 source/package gate passed 59 actionable tasks (59 executed): 170 unit suites / 945 tests and 9 Sync integration suites / 44 tests (179 suites / 989 tests), with zero failures, errors, or skips. Architecture, classfile-major-69 packaging, API-consumer/acceptance packaging, Central publisher isolation, frontend typecheck (4 files / 22 tests), and production build passed. Preview artifact pins: core 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`; PAPI 13,872 bytes / SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`; acceptance 54,905 bytes / SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`; API consumer fixture 2,760 bytes / SHA-256 `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E`. ADR-16 covers durable live queued `/pay` recovery only; direct Vault/plugin recovery is `DEFERRED / NOT VERIFIED` under ADR-07. Storage-service integration and exact-candidate Paper runtime/T22 Beta remain NOT VERIFIED; minimum-Paper SQL and licensed/live CMI (authorization UNKNOWN) remain BLOCKED / NOT VERIFIED; broad V03 remains SKIPPED / NOT VERIFIED; full public API compatibility is NOT VERIFIED; T21 remains PARTIAL / IN PROGRESS. Stable metadata is 1.3.2; Stable and external release remain NOT VERIFIED / NOT PERFORMED.
 
 ## Product boundary
 
@@ -26,7 +26,7 @@ The main design goal is a synchronous Vault-compatible API backed by memory, whi
 
 ### Core plugin
 
-`src/main/java/noietime/syncmoney` contains lifecycle, economy, persistence, synchronization, commands, configuration, audit, breaker/guard, web, migration, and optional integrations.
+`syncmoney-bukkit/src/main/java/noietime/syncmoney` contains lifecycle, economy, persistence, synchronization, commands, configuration, audit, breaker/guard, web, migration, and optional integrations.
 
 `src/main/resources` contains the plugin descriptor, default configuration/messages, and embedded web distribution.
 
@@ -93,7 +93,9 @@ Delayed messages are expected in distributed systems; version checks must not be
 
 ## Persistence
 
-The shared `players` table includes UUID, player name, `DECIMAL(20,2)` balance, monotonic `BIGINT` version, last server, and update timestamp.
+The shared `players` table includes UUID, player name, `DECIMAL(20,2)` balance, monotonic `BIGINT` version, last server, and update timestamp. Syncmoney-owned `LOCAL_REDIS` and `SYNC` balances are capped at `999999999999999999.99`; this does not change the existing `LOCAL` policy or migrate local data.
+
+Queued `/pay` transfers use the existing `recovery-v1.jsonl` spool. Startup validates the queued spool and legacy overflow log before opening shared-mode write admission; unreadable or malformed recovery evidence keeps admission closed, while affected accounts remain unavailable until their pending recovery is resolved. A forced `RETRYABLE` paired-admission checkpoint precedes queue commit. After Redis dispatch, `ATTEMPTING`/`AMBIGUOUS` outcomes remain quarantined across restart and are visible through admin-only `/syncmoney recovery list|inspect|reconcile <id>` (permission `syncmoney.admin.recovery` or `syncmoney.admin`). Reconciliation runs asynchronously and accepts only an exact Redis receipt matching the stable operation ID, canonical fingerprint, account pair, and versions. Missing, malformed, colliding, in-flight, mismatched, or unreadable receipts retain quarantine; balances alone do not resolve an ambiguous operation, and there is no automatic replay or force-clear path. FileChannel force supports local process-restart recovery; power-loss and storage-device durability beyond that behavior are not claimed. Direct Vault/plugin atomic-transfer recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; no direct-transfer journal, capability, provider wiring, or command recovery path is included. Exact-candidate Paper runtime acceptance remains NOT VERIFIED.
 
 Additional storage covers baltop, audit logs and audit schema evolution, schema-version tracking, local SQLite player balances/transactions, and Shadow Sync history.
 

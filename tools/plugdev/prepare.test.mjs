@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { assertStopped, createEconomySettings, createProfileConfig, validateOptions } from "./prepare.mjs";
+
+const syncmoneyRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 async function getClosedPort() {
   const server = createServer();
@@ -105,12 +107,36 @@ test("prepareProfile writes the injected game port into the generated PlugDev pr
   }
 });
 
+test("prepareProfile refuses an existing PlugDev directory without changing it", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "syncmoney-prepare-existing-plugdev-"));
+  const root = join(fixture, "workspace");
+  const plugdevRoot = join(root, ".plugdev");
+  const preparePath = join(root, "tools", "plugdev", "prepare.mjs");
+  try {
+    await mkdir(join(root, "tools", "plugdev"), { recursive: true });
+    await mkdir(plugdevRoot);
+    await writeFile(join(plugdevRoot, "profile.yml"), "retained profile\n", "utf8");
+    await copyFile(fileURLToPath(new URL("./prepare.mjs", import.meta.url)), preparePath);
+
+    const { prepareProfile } = await import(pathToFileURL(preparePath).href);
+    await assert.rejects(
+      prepareProfile(["paper", "1.21.6", "local", "off", "1.4.0-alpha.1"], {}),
+      /Refusing to overwrite an existing \.plugdev directory/,
+    );
+
+    assert.equal(await readFile(join(plugdevRoot, "profile.yml"), "utf8"), "retained profile\n");
+    assert.deepEqual(await readdir(plugdevRoot), ["profile.yml"]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test("an explicitly supplied server JAR is pinned through PlugDev's custom provider", () => {
   const options = validateOptions(["paper", "26.3", "local", "off", "1.4.0-alpha.1"]);
   const profile = createProfileConfig({ ...options, serverJar: "build/reports/foundation/paper-26.3-175.jar" });
 
   assert.equal(profile.server, "custom");
-  assert.equal(profile.serverJar, resolve("build/reports/foundation/paper-26.3-175.jar"));
+  assert.equal(profile.serverJar, resolve(syncmoneyRoot, "build/reports/foundation/paper-26.3-175.jar"));
   assert.equal(profile.version, "26.3");
   assert.equal(profile.build.jarTask, "help");
 });

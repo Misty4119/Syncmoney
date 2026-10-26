@@ -69,6 +69,9 @@ permissions:
   syncmoney.admin.observe:
     description: Read-only admin access (view only, no economy operations)
     default: false
+  syncmoney.admin.recovery:
+    description: Inspect and reconcile quarantined economy operations from exact Redis receipts
+    default: op
   syncmoney.admin.reward:
     description: Can give up to 100,000 currency per day
     default: false

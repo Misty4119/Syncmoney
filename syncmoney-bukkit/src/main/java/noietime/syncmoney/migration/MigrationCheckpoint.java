@@ -74,7 +74,7 @@ public final class MigrationCheckpoint {
     }
 
     /** Initializes a CMI checkpoint with proof of the source contents used for migration. */
-    void init(int totalPlayers, String sourceIdentity, boolean forceOverwrite, String sourceFingerprint) {
+    synchronized void init(int totalPlayers, String sourceIdentity, boolean forceOverwrite, String sourceFingerprint) {
         this.totalPlayers = totalPlayers;
         this.currentOffset = 0;
         this.migratedCount = 0;
@@ -93,7 +93,7 @@ public final class MigrationCheckpoint {
      * Resumes previous migration task.
      * @return true if loaded successfully
      */
-    public boolean resume() {
+    public synchronized boolean resume() {
         if (!checkpointFile.exists()) {
             return false;
         }
@@ -127,7 +127,7 @@ public final class MigrationCheckpoint {
      * @param newOffset new offset
      * @param migratedCount number of migrated players
      */
-    public void updateProgress(int newOffset, int migratedCount) {
+    public synchronized void updateProgress(int newOffset, int migratedCount) {
         this.currentOffset = newOffset;
         this.migratedCount = migratedCount;
         this.lastUpdateTime = Instant.now();
@@ -139,7 +139,7 @@ public final class MigrationCheckpoint {
      * @param playerName player name
      * @param reason failure reason
      */
-    public void recordFailure(String playerName, String reason) {
+    public synchronized void recordFailure(String playerName, String reason) {
         if (this.failures.put(playerName, reason) == null) {
             this.failedCount++;
         }
@@ -148,7 +148,7 @@ public final class MigrationCheckpoint {
     }
 
     /** Clears a previously recorded row failure after its retry completes successfully. */
-    public void clearFailure(String playerName) {
+    public synchronized void clearFailure(String playerName) {
         if (playerName != null && failures.remove(playerName) != null) {
             failedCount = Math.max(0, failedCount - 1);
             lastUpdateTime = Instant.now();
@@ -163,7 +163,7 @@ public final class MigrationCheckpoint {
     /**
      * Completes migration.
      */
-    public void complete() {
+    public synchronized void complete() {
         if (failedCount != 0 || !failures.isEmpty()) {
             throw new IllegalStateException("Cannot complete migration while player failures remain");
         }
@@ -175,7 +175,7 @@ public final class MigrationCheckpoint {
     /**
      * Marks migration as failed.
      */
-    public void fail() {
+    public synchronized void fail() {
         this.state = MigrationState.FAILED;
         this.lastUpdateTime = Instant.now();
         save();
@@ -184,7 +184,7 @@ public final class MigrationCheckpoint {
     /**
      * Pauses migration.
      */
-    public void pause() {
+    public synchronized void pause() {
         this.state = MigrationState.PAUSED;
         this.lastUpdateTime = Instant.now();
         save();
@@ -193,7 +193,7 @@ public final class MigrationCheckpoint {
     /**
      * Clears checkpoint.
      */
-    public void clear() {
+    public synchronized void clear() {
         this.state = MigrationState.IDLE;
         this.currentOffset = 0;
         this.totalPlayers = 0;
@@ -213,7 +213,7 @@ public final class MigrationCheckpoint {
     /**
      * Saves checkpoint to file.
      */
-    private void save() {
+    private synchronized void save() {
         try {
             CheckpointData data = new CheckpointData(
                     state.name(),
@@ -259,7 +259,7 @@ public final class MigrationCheckpoint {
      * Adds backup amount.
      * @param amount amount to add
      */
-    public void addBackupAmount(BigDecimal amount) {
+    public synchronized void addBackupAmount(BigDecimal amount) {
         if (amount != null && amount.compareTo(BigDecimal.ZERO) > 0) {
             this.totalBackupAmount = this.totalBackupAmount.add(amount);
             this.lastUpdateTime = Instant.now();
@@ -294,8 +294,8 @@ public final class MigrationCheckpoint {
         return lastUpdateTime;
     }
 
-    public ConcurrentMap<String, String> getFailures() {
-        return failures;
+    public synchronized ConcurrentMap<String, String> getFailures() {
+        return new ConcurrentHashMap<>(failures);
     }
 
     /**

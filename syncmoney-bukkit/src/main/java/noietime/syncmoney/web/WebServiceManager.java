@@ -122,12 +122,11 @@ public class WebServiceManager {
         }
 
 
-        String corsOrigins = webAdminConfig.getCorsAllowedOrigins();
-        if (corsOrigins == null || corsOrigins.isEmpty() || corsOrigins.equals("*")) {
+        var corsOrigins = webAdminConfig.getCorsAllowedOrigins();
+        if (corsOrigins.contains("*")) {
             plugin.getLogger().warning("╔══════════════════════════════════════════════════════════╗");
-            plugin.getLogger().warning("║ WEB ADMIN: CORS settings are insecure                              ║");
-            plugin.getLogger().warning("║ cors-allowed-origins is empty or \"*\" allows all cross-origin requests       ║");
-            plugin.getLogger().warning("║ It is recommended to set specific domains for security                            ║");
+            plugin.getLogger().warning("║ WEB ADMIN: wildcard CORS allows every cross-origin request ║");
+            plugin.getLogger().warning("║ Configure explicit origins for the Web Admin dashboard.    ║");
             plugin.getLogger().warning("║ For example: cors-allowed-origins: [\"https://your-domain.com\"] ║");
             plugin.getLogger().warning("╚══════════════════════════════════════════════════════════╝");
         }

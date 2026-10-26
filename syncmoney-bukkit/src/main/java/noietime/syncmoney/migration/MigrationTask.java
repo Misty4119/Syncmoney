@@ -16,9 +16,11 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * [SYNC-MIGRATE-001] Migration task executor for migrating data from external economy plugins.
@@ -38,12 +40,17 @@ public final class MigrationTask {
     private final MigrationCheckpoint checkpoint;
     private final MigrationBackup backup;
     private final CMIEconomyDisabler economyDisabler;
+    private final Supplier<? extends AutoCloseable> databaseUseLeaseSupplier;
 
     private final int batchSize;
 
     private volatile boolean running = false;
+    private final AtomicBoolean executionInFlight = new AtomicBoolean();
+    private final AtomicBoolean shutdownRequested = new AtomicBoolean();
+    private final Object shutdownStateLock = new Object();
     private volatile MigrationLock.MigrationLease migrationLockLease;
     private volatile boolean checkpointStarted;
+    private volatile AutoCloseable databaseUseLease;
 
     private MigrationProgressCallback progressCallback;
 
@@ -81,6 +88,18 @@ public final class MigrationTask {
                          NameResolver nameResolver,
                          MigrationCheckpoint checkpoint, MigrationBackup backup,
                          CMIEconomyDisabler economyDisabler) {
+        this(plugin, config, cmiReader, economyFacade, databaseManager, redisManager, nameResolver,
+                checkpoint, backup, economyDisabler, null);
+    }
+
+    public MigrationTask(Plugin plugin, SyncmoneyConfig config,
+                         CMIDatabaseReader cmiReader, EconomyFacade economyFacade,
+                         DatabaseManager databaseManager,
+                         RedisManager redisManager,
+                         NameResolver nameResolver,
+                         MigrationCheckpoint checkpoint, MigrationBackup backup,
+                         CMIEconomyDisabler economyDisabler,
+                         Supplier<? extends AutoCloseable> databaseUseLeaseSupplier) {
         this.plugin = plugin;
         this.config = config;
         this.cmiReader = cmiReader;
@@ -91,6 +110,7 @@ public final class MigrationTask {
         this.checkpoint = checkpoint;
         this.backup = backup;
         this.economyDisabler = economyDisabler;
+        this.databaseUseLeaseSupplier = databaseUseLeaseSupplier;
         this.batchSize = config.migration().getMigrationBatchSize();
     }
 
@@ -125,112 +145,195 @@ public final class MigrationTask {
      * @param createBackup whether to create backup
      * @param multiServerReader multi-server reader (optional)
      */
-    public void start(boolean force, boolean createBackup, CMIMultiServerReader multiServerReader) {
-        if (running) {
+    public synchronized void start(boolean force, boolean createBackup, CMIMultiServerReader multiServerReader) {
+        if (shutdownRequested.get()) {
+            return;
+        }
+        if (running || executionInFlight.get()) {
             plugin.getLogger().warning("Migration is already running!");
             return;
         }
 
-        if (!validateSharedSqlTarget()) {
+        if (!acquireDatabaseUseLease()) {
+            reportMigrationError("Storage is shutting down or unavailable; CMI migration was not started");
             return;
         }
 
-        checkpointStarted = false;
+        boolean leaseTransferredToExecution = false;
+        try {
+            if (shutdownRequested.get()) {
+                return;
+            }
+            if (!validateSharedSqlTarget()) {
+                return;
+            }
+            if (shutdownRequested.get()) {
+                return;
+            }
 
-        this.multiServerReader = multiServerReader;
+            checkpointStarted = false;
 
-        if (multiServerReader != null) {
-            if (!multiServerReader.testConnections()) {
-                plugin.getLogger().severe("CMI Multi-Server database connection failed! Cannot start migration.");
+            this.multiServerReader = multiServerReader;
+
+            if (multiServerReader != null) {
+                if (!multiServerReader.testConnections()) {
+                    plugin.getLogger().severe("CMI Multi-Server database connection failed! Cannot start migration.");
+                    if (progressCallback != null) {
+                        progressCallback.onError("CMI multi-server database connection failed");
+                    }
+                    return;
+                }
+            } else {
+                if (!cmiReader.testConnection()) {
+                    plugin.getLogger().severe("CMI database connection failed! Cannot start migration.");
+                    if (progressCallback != null) {
+                        progressCallback.onError("CMI database connection failed");
+                    }
+                    return;
+                }
+            }
+            if (shutdownRequested.get()) {
+                return;
+            }
+
+            if (!validatePrerequisites()) {
                 if (progressCallback != null) {
-                    progressCallback.onError("CMI multi-server database connection failed");
+                    progressCallback.onError("Redis is not available. Cannot start migration to SYNC mode.");
                 }
                 return;
             }
-        } else {
-            if (!cmiReader.testConnection()) {
-                plugin.getLogger().severe("CMI database connection failed! Cannot start migration.");
+            if (shutdownRequested.get()) {
+                return;
+            }
+
+            if (!config.migration().isMigrationLockEconomy()) {
+                plugin.getLogger().warning("CMI migration always locks Syncmoney writes for snapshot safety; migration.lock-economy=false is ignored");
+            }
+            if (!acquireMigrationLockForExecution()) {
+                plugin.getLogger().warning("CMI migration not started because an economy write is still active or another migration holds the lock");
                 if (progressCallback != null) {
-                    progressCallback.onError("CMI database connection failed");
+                    progressCallback.onError("CMI migration could not acquire the economy lock; no migration snapshot was started");
                 }
                 return;
             }
-        }
 
-        if (!validatePrerequisites()) {
-            if (progressCallback != null) {
-                progressCallback.onError("Redis is not available. Cannot start migration to SYNC mode.");
+            boolean started;
+            synchronized (shutdownStateLock) {
+                started = !shutdownRequested.get();
+                if (started) {
+                    executionInFlight.set(true);
+                    running = true;
+                    leaseTransferredToExecution = true;
+                }
             }
-            return;
-        }
-
-        if (!config.migration().isMigrationLockEconomy()) {
-            plugin.getLogger().warning("CMI migration always locks Syncmoney writes for snapshot safety; migration.lock-economy=false is ignored");
-        }
-        if (!acquireMigrationLockForExecution()) {
-            plugin.getLogger().warning("CMI migration not started because an economy write is still active or another migration holds the lock");
-            if (progressCallback != null) {
-                progressCallback.onError("CMI migration could not acquire the economy lock; no migration snapshot was started");
+            if (!started) {
+                releaseMigrationLock();
+                return;
             }
-            return;
+            plugin.getLogger().fine("Economy operations locked for CMI migration");
+            prepareCmiSourceForSnapshot(force, createBackup, multiServerReader, false);
+        } finally {
+            if (!leaseTransferredToExecution) {
+                releaseDatabaseUseLease();
+            }
         }
-        plugin.getLogger().fine("Economy operations locked for CMI migration");
-        running = true;
-        prepareCmiSourceForSnapshot(force, createBackup, multiServerReader, false);
     }
 
     /**
      * Resumes previous migration.
      * @return true if resumed successfully
      */
-    public boolean resume() {
-        if (MigrationLock.isLocked() && !ownsActiveMigrationLock()) {
-            plugin.getLogger().warning("CMI migration resume not started because another migration holds the economy lock");
+    public synchronized boolean resume() {
+        if (shutdownRequested.get()) {
+            return false;
+        }
+        if (running || executionInFlight.get()) {
+            plugin.getLogger().warning("CMI migration resume not started because the previous execution is still active");
             return false;
         }
 
-        if (!validateSharedSqlTarget()) {
+        if (!acquireDatabaseUseLease()) {
+            plugin.getLogger().warning("CMI migration resume not started because storage is shutting down or unavailable");
             return false;
         }
 
-        if (!checkpoint.resume()) {
-            plugin.getLogger().warning("No checkpoint to resume!");
-            return false;
+        boolean leaseTransferredToExecution = false;
+        try {
+            if (shutdownRequested.get()) {
+                return false;
+            }
+            if (MigrationLock.isLocked() && !ownsActiveMigrationLock()) {
+                plugin.getLogger().warning("CMI migration resume not started because another migration holds the economy lock");
+                return false;
+            }
+
+            if (!validateSharedSqlTarget()) {
+                return false;
+            }
+            if (shutdownRequested.get()) {
+                return false;
+            }
+
+            if (!checkpoint.resume()) {
+                plugin.getLogger().warning("No checkpoint to resume!");
+                return false;
+            }
+            if (shutdownRequested.get()) {
+                checkpoint.pause();
+                return false;
+            }
+
+            if (checkpoint.getState() != MigrationCheckpoint.MigrationState.RUNNING &&
+                    checkpoint.getState() != MigrationCheckpoint.MigrationState.PAUSED) {
+                plugin.getLogger().warning("Cannot resume: migration state is " + checkpoint.getState());
+                return false;
+            }
+
+            String sourceIdentity = checkpoint.getSourceIdentity();
+            if (sourceIdentity == null || (!sourceIdentity.startsWith("cmi-single|")
+                    && !sourceIdentity.startsWith("cmi-multi|"))) {
+                plugin.getLogger().warning("Cannot safely resume CMI migration: checkpoint has no recognized source identity");
+                return false;
+            }
+
+            String sourceFingerprint = checkpoint.getSourceFingerprint();
+            if (sourceFingerprint == null || sourceFingerprint.isBlank()) {
+                String message = "Cannot safely resume CMI migration: checkpoint has no source content fingerprint; start a fresh migration";
+                plugin.getLogger().warning(message);
+                checkpoint.fail();
+                reportMigrationError(message);
+                return false;
+            }
+
+            if (!acquireMigrationLockForExecution()) {
+                plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
+                checkpoint.pause();
+                return false;
+            }
+
+            boolean resumed;
+            synchronized (shutdownStateLock) {
+                resumed = !shutdownRequested.get();
+                if (resumed) {
+                    executionInFlight.set(true);
+                    checkpointStarted = true;
+                    running = true;
+                    leaseTransferredToExecution = true;
+                }
+            }
+            if (!resumed) {
+                checkpoint.pause();
+                releaseMigrationLock();
+                return false;
+            }
+            prepareCmiSourceForSnapshot(false, false, multiServerReader, true);
+
+            return true;
+        } finally {
+            if (!leaseTransferredToExecution) {
+                releaseDatabaseUseLease();
+            }
         }
-
-        if (checkpoint.getState() != MigrationCheckpoint.MigrationState.RUNNING &&
-            checkpoint.getState() != MigrationCheckpoint.MigrationState.PAUSED) {
-            plugin.getLogger().warning("Cannot resume: migration state is " + checkpoint.getState());
-            return false;
-        }
-
-        String sourceIdentity = checkpoint.getSourceIdentity();
-        if (sourceIdentity == null || (!sourceIdentity.startsWith("cmi-single|")
-                && !sourceIdentity.startsWith("cmi-multi|"))) {
-            plugin.getLogger().warning("Cannot safely resume CMI migration: checkpoint has no recognized source identity");
-            return false;
-        }
-
-        String sourceFingerprint = checkpoint.getSourceFingerprint();
-        if (sourceFingerprint == null || sourceFingerprint.isBlank()) {
-            String message = "Cannot safely resume CMI migration: checkpoint has no source content fingerprint; start a fresh migration";
-            plugin.getLogger().warning(message);
-            checkpoint.fail();
-            reportMigrationError(message);
-            return false;
-        }
-
-        if (!acquireMigrationLockForExecution()) {
-            plugin.getLogger().warning("CMI migration resume not started because an economy write is active or another migration holds the lock");
-            checkpoint.pause();
-            return false;
-        }
-
-        checkpointStarted = true;
-        running = true;
-        prepareCmiSourceForSnapshot(false, false, multiServerReader, true);
-
-        return true;
     }
 
     private void prepareCmiSourceForSnapshot(boolean force, boolean createBackup,
@@ -246,6 +349,7 @@ public final class MigrationTask {
             plugin.getServer().getGlobalRegionScheduler().execute(plugin, () -> {
                 if (!running) {
                     releaseMigrationLock();
+                    finishExecution();
                     return;
                 }
                 try {
@@ -280,6 +384,7 @@ public final class MigrationTask {
                     checkpoint.pause();
                 }
                 releaseMigrationLock();
+                finishExecution();
                 return;
             }
             try {
@@ -310,6 +415,7 @@ public final class MigrationTask {
                     plugin.getLogger().warning("No players found in CMI database!");
                     reportMigrationError("No player data found in CMI database");
                     releaseMigrationLock();
+                    finishExecution();
                     return;
                 }
 
@@ -351,6 +457,7 @@ public final class MigrationTask {
         releaseMigrationLock();
         plugin.getLogger().warning(message);
         reportMigrationError(message);
+        finishExecution();
     }
 
     private void initializeAndValidateResumeSource() {
@@ -461,6 +568,7 @@ public final class MigrationTask {
                         } else {
                             releaseMigrationLock();
                         }
+                        finishExecution();
                         return;
                     }
 
@@ -516,6 +624,7 @@ public final class MigrationTask {
                                 if (progressCallback != null) {
                                     progressCallback.onError("Migration paused: Redis connection issue");
                                 }
+                                finishExecution();
                                 return;
                             }
                         } catch (Exception ex) {
@@ -542,6 +651,7 @@ public final class MigrationTask {
                         }
                         if (!running) {
                             checkpoint.pause();
+                            finishExecution();
                             return;
                         }
                         completeMigration();
@@ -561,6 +671,7 @@ public final class MigrationTask {
 
                     if (!running) {
                         checkpoint.pause();
+                        finishExecution();
                     } else if (newOffset >= totalPlayers) {
                         completeMigration();
                     } else {
@@ -582,11 +693,39 @@ public final class MigrationTask {
     /**
      * Stops migration.
      */
-    public void stop() {
+    public synchronized void stop() {
+        if (!running && !executionInFlight.get()) {
+            return;
+        }
         running = false;
         if (checkpointStarted) {
-            checkpoint.pause();
+            if (!executionInFlight.get()) {
+                checkpoint.pause();
+            }
         } else {
+            releaseMigrationLock();
+        }
+    }
+
+    /** Requests shutdown without waiting for an in-flight synchronous prerequisite check. */
+    public void shutdown() {
+        boolean active;
+        boolean pauseCheckpoint;
+        boolean releaseLock;
+        synchronized (shutdownStateLock) {
+            shutdownRequested.set(true);
+            active = running || executionInFlight.get();
+            if (!active) {
+                return;
+            }
+            running = false;
+            pauseCheckpoint = checkpointStarted && !executionInFlight.get();
+            releaseLock = !executionInFlight.get();
+        }
+        if (pauseCheckpoint) {
+            checkpoint.pause();
+        }
+        if (releaseLock) {
             releaseMigrationLock();
         }
     }
@@ -975,6 +1114,7 @@ public final class MigrationTask {
         releaseMigrationLock();
 
         cancel();
+        finishExecution();
     }
 
     private void releaseMigrationLock() {
@@ -997,6 +1137,7 @@ public final class MigrationTask {
             running = false;
             cancel();
             releaseMigrationLock();
+            finishExecution();
         }
     }
 
@@ -1011,6 +1152,45 @@ public final class MigrationTask {
             running = false;
             cancel();
             releaseMigrationLock();
+            finishExecution();
+        }
+    }
+
+    private synchronized void finishExecution() {
+        running = false;
+        releaseDatabaseUseLease();
+        executionInFlight.set(false);
+    }
+
+    private boolean acquireDatabaseUseLease() {
+        if (databaseUseLeaseSupplier == null) {
+            return true;
+        }
+        try {
+            AutoCloseable lease = databaseUseLeaseSupplier.get();
+            if (lease == null) {
+                return false;
+            }
+            databaseUseLease = lease;
+            return true;
+        } catch (RuntimeException failure) {
+            plugin.getLogger().warning("Could not reserve storage for CMI migration: "
+                    + failure.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private void releaseDatabaseUseLease() {
+        AutoCloseable lease = databaseUseLease;
+        databaseUseLease = null;
+        if (lease == null) {
+            return;
+        }
+        try {
+            lease.close();
+        } catch (Exception failure) {
+            plugin.getLogger().severe("Failed to release CMI migration storage lease: "
+                    + failure.getClass().getSimpleName());
         }
     }
 
@@ -1026,7 +1206,7 @@ public final class MigrationTask {
      * @return true if running
      */
     public boolean isRunning() {
-        return running;
+        return running || executionInFlight.get();
     }
 
     /**

@@ -1,8 +1,13 @@
 package noietime.syncmoney.economy;
 import noietime.syncmoney.core.state.AccountState;
 
+import noietime.syncmoney.core.port.ConfirmedAccount;
+import noietime.syncmoney.core.port.ReplicationReceipt;
+import noietime.syncmoney.config.ShadowSyncConfig;
 import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.shadow.ShadowSyncTask;
 import noietime.syncmoney.storage.CacheManager;
+import noietime.syncmoney.protocol.RedisOperationFingerprint;
 import noietime.syncmoney.storage.RedisManager;
 import noietime.syncmoney.storage.RedisMutationException;
 import noietime.syncmoney.storage.db.DatabaseManager;
@@ -14,6 +19,8 @@ import redis.clients.jedis.Jedis;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -26,10 +33,102 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class EconomyEventConsumerTransferTest {
+
+    @Test
+    void retiringConfirmedTransferEnqueuesBothShadowReceipts() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        String operationId = TransferRequestIds.newOperationId();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-10.00"), new BigDecimal("90.00"), 8L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.COMMAND_PAY,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("10.00"), new BigDecimal("10.00"), 4L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.COMMAND_PAY,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        EconomyWriteQueue queue = new EconomyWriteQueue(8, Logger.getLogger("EconomyEventConsumerTransferTest"));
+        EconomyWriteQueue.Reservation outReservation = queue.tryReserve(sender);
+        EconomyWriteQueue.Reservation inReservation = queue.tryReserve(receiver);
+        assertNotNull(outReservation);
+        assertNotNull(inReservation);
+        assertTrue(queue.commitPair(outReservation, out, inReservation, in, null));
+
+        SyncmoneyConfig config = config(false);
+        ShadowSyncConfig shadowConfig = mock(ShadowSyncConfig.class);
+        when(config.shadowSync()).thenReturn(shadowConfig);
+        when(shadowConfig.isShadowSyncEnabled()).thenReturn(true);
+        NameResolver names = mock(NameResolver.class);
+        when(names.getNameCachedOnly(sender)).thenReturn("sender");
+        when(names.getNameCachedOnly(receiver)).thenReturn("receiver");
+        ShadowSyncTask shadowSyncTask = mock(ShadowSyncTask.class);
+        EconomyEventConsumer consumer = new EconomyEventConsumer(plugin(), config, queue,
+                mock(CacheManager.class), mock(RedisManager.class), null, null, null,
+                names, null, shadowSyncTask, null, null);
+        ReplicationReceipt receipt = new ReplicationReceipt(operationId, List.of(
+                new ConfirmedAccount(sender, new BigDecimal("90.00"), 8L),
+                new ConfirmedAccount(receiver, new BigDecimal("10.00"), 4L)));
+
+        Class<?> failedEventType = Class.forName(EconomyEventConsumer.class.getName() + "$FailedEvent");
+        Constructor<?> constructor = failedEventType.getDeclaredConstructor(EconomyEvent.class, EconomyEvent.class,
+                int.class, long.class, ReplicationReceipt.class, boolean.class, boolean.class, boolean.class);
+        constructor.setAccessible(true);
+        Object failed = constructor.newInstance(out, in, 3, now, receipt, false, false, false);
+        Method retire = EconomyEventConsumer.class.getDeclaredMethod("retireFailedEvent",
+                failedEventType, boolean.class);
+        retire.setAccessible(true);
+
+        retire.invoke(consumer, failed, false);
+
+        assertFalse(queue.hasOutstandingWrites(), "the confirmed transfer pair should be completed");
+        verify(shadowSyncTask).enqueueSyncEvent(sender, "sender", new BigDecimal("90.00"), 8L);
+        verify(shadowSyncTask).enqueueSyncEvent(receiver, "receiver", new BigDecimal("10.00"), 4L);
+    }
+
+    @Test
+    void immediateConfirmedTransferFallbackEnqueuesBothShadowReceipts() throws Exception {
+        UUID sender = UUID.randomUUID();
+        UUID receiver = UUID.randomUUID();
+        String operationId = TransferRequestIds.newOperationId();
+        long now = System.currentTimeMillis();
+        EconomyEvent out = new EconomyEvent(sender, new BigDecimal("-10.00"), new BigDecimal("90.00"), 8L,
+                EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.COMMAND_PAY,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
+        EconomyEvent in = new EconomyEvent(receiver, new BigDecimal("10.00"), new BigDecimal("10.00"), 4L,
+                EconomyEvent.EventType.TRANSFER_IN, EconomyEvent.EventSource.COMMAND_PAY,
+                TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_IN), now);
+        EconomyWriteQueue queue = mock(EconomyWriteQueue.class);
+        when(queue.poll(100, TimeUnit.MILLISECONDS)).thenReturn(in);
+        when(queue.completePair(any(), any(), anyLong(), any(), any(), anyLong())).thenReturn(false);
+
+        SyncmoneyConfig config = config(false);
+        ShadowSyncConfig shadowConfig = mock(ShadowSyncConfig.class);
+        when(config.shadowSync()).thenReturn(shadowConfig);
+        when(shadowConfig.isShadowSyncEnabled()).thenReturn(true);
+        CacheManager cacheManager = mock(CacheManager.class);
+        when(cacheManager.atomicTransfer(sender, receiver, new BigDecimal("10.00"), operationId)).thenReturn(
+                new CacheManager.TransferResult(new BigDecimal("90.00"), new BigDecimal("10.00"), 8L, 4L));
+        NameResolver names = mock(NameResolver.class);
+        when(names.getNameCachedOnly(sender)).thenReturn("sender");
+        when(names.getNameCachedOnly(receiver)).thenReturn("receiver");
+        ShadowSyncTask shadowSyncTask = mock(ShadowSyncTask.class);
+        EconomyEventConsumer consumer = new EconomyEventConsumer(plugin(), config, queue,
+                cacheManager, mock(RedisManager.class), null, null, null,
+                names, null, shadowSyncTask, null, null);
+        Method process = EconomyEventConsumer.class.getDeclaredMethod("processTransferEvent", EconomyEvent.class);
+        process.setAccessible(true);
+
+        process.invoke(consumer, out);
+
+        verify(queue).reconcileRecoveredPair(out, new BigDecimal("90.00"), 8L,
+                in, new BigDecimal("10.00"), 4L, false);
+        verify(shadowSyncTask).enqueueSyncEvent(sender, "sender", new BigDecimal("90.00"), 8L);
+        verify(shadowSyncTask).enqueueSyncEvent(receiver, "receiver", new BigDecimal("10.00"), 4L);
+    }
 
     @Test
     void sharedTransferUsesOneAtomicAuthorityMutationAndOneSqlReceiptPair() throws Exception {
@@ -41,11 +140,11 @@ class EconomyEventConsumerTransferTest {
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
+        String operationId = TransferRequestIds.newOperationId();
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("90.00"), new BigDecimal("10.00"), 8L, 4L));
         DbWriteQueue dbWriteQueue = new DbWriteQueue(10);
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
-        String operationId = TransferRequestIds.newOperationId();
         AtomicReference<EconomyWriteQueue.TransferCompletion> completion = new AtomicReference<>();
         assertTrue(queue.registerTransferCompletionListener(operationId, completion::set));
         long now = System.currentTimeMillis();
@@ -86,8 +185,8 @@ class EconomyEventConsumerTransferTest {
         }
 
         assertAll(
-                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount),
-                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any()),
+                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount, operationId),
+                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any(), anyString()),
                 () -> assertNotNull(persistedPair.get()),
                 () -> assertEquals(2, persistedPair.get().accountCount(),
                         "both confirmed accounts must cross the SQL admission boundary as one task"),
@@ -118,11 +217,12 @@ class EconomyEventConsumerTransferTest {
         Jedis jedis = mock(Jedis.class);
         when(redisManager.getResource()).thenReturn(jedis);
 
+        String operationId = TransferRequestIds.newOperationId();
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("95.00"), new BigDecimal("55.00"), 2L, 2L));
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount,
-                new BigDecimal("95.00"), new BigDecimal("55.00"), 2L, 2L, plugin);
+                new BigDecimal("95.00"), new BigDecimal("55.00"), 2L, 2L, plugin, operationId);
         NameResolver nameResolver = mock(NameResolver.class);
         when(nameResolver.getNameCachedOnly(sender)).thenReturn("AcceptanceA");
         EconomyEventConsumer consumer = consumer(plugin, config, queue, cacheManager, redisManager,
@@ -145,17 +245,19 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("70.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount))
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        stubRejectedTransferReceipt(cacheManager, operationId, sender, receiver, amount);
         when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("80.00"), 9L, 5L));
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount, new BigDecimal("30.00"),
-                new BigDecimal("70.00"), 9L, 5L, plugin);
+                new BigDecimal("70.00"), 9L, 5L, plugin, operationId);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
         memory.put(sender, state("30.00", 9L));
         memory.put(receiver, state("70.00", 5L));
@@ -166,9 +268,9 @@ class EconomyEventConsumerTransferTest {
         consumer.shutdown();
 
         assertAll(
-                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount),
+                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount, operationId),
                 () -> verify(cacheManager).readRejectedTransferSnapshotStrict(sender, receiver),
-                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any()),
+                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any(), anyString()),
                 () -> assertEquals(new BigDecimal("20.00"), memory.get(sender).balance(),
                         "a confirmed equal-version authority snapshot replaces the rejected provisional sender leg"),
                 () -> assertEquals(new BigDecimal("80.00"), memory.get(receiver).balance(),
@@ -183,13 +285,15 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("70.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount))
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        stubRejectedTransferReceipt(cacheManager, operationId, sender, receiver, amount);
         CountDownLatch authorityReadStarted = new CountDownLatch(1);
         CountDownLatch releaseAuthorityRead = new CountDownLatch(1);
         when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenAnswer(invocation -> {
@@ -200,7 +304,7 @@ class EconomyEventConsumerTransferTest {
             return new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("80.00"), 9L, 5L);
         });
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount, new BigDecimal("30.00"),
-                new BigDecimal("70.00"), 9L, 5L, plugin);
+                new BigDecimal("70.00"), 9L, 5L, plugin, operationId);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
         memory.put(sender, state("30.00", 9L));
         memory.put(receiver, state("70.00", 5L));
@@ -237,24 +341,22 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("70.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount))
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        stubRejectedTransferReceipt(cacheManager, operationId, sender, receiver, amount);
         when(cacheManager.readTransferSnapshotStrict(sender, receiver)).thenThrow(
                 new IllegalStateException("Redis transfer authority snapshot is missing an account balance"));
         when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), null, 8L, -1L, true, false));
-        when(cacheManager.atomicAddBalanceReceipt(receiver, new BigDecimal("5.00")))
-                .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
-                        receiver, new BigDecimal("5.00"), 1L));
 
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
         long now = System.currentTimeMillis();
-        String operationId = TransferRequestIds.newOperationId();
         EconomyEvent out = new EconomyEvent(sender, amount.negate(), BigDecimal.ZERO, 10L,
                 EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
                 TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
@@ -270,6 +372,9 @@ class EconomyEventConsumerTransferTest {
         EconomyEvent laterDeposit = new EconomyEvent(receiver, new BigDecimal("5.00"),
                 new BigDecimal("75.00"), 6L, EconomyEvent.EventType.DEPOSIT,
                 EconomyEvent.EventSource.TEST, "receiver-later-deposit", now + 1L);
+        when(cacheManager.atomicAddBalanceReceipt(receiver, new BigDecimal("5.00"), laterDeposit.requestId()))
+                .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
+                        receiver, new BigDecimal("5.00"), 1L));
         EconomyWriteQueue.Reservation laterReservation = queue.tryReserve(receiver);
         assertNotNull(laterReservation);
         assertTrue(laterReservation.commit(laterDeposit));
@@ -295,7 +400,8 @@ class EconomyEventConsumerTransferTest {
                 () -> assertFalse(memory.isUnavailable(receiver)),
                 () -> verify(cacheManager).readRejectedTransferSnapshotStrict(sender, receiver),
                 () -> verify(cacheManager, never()).readTransferSnapshotStrict(sender, receiver),
-                () -> verify(cacheManager).atomicAddBalanceReceipt(receiver, new BigDecimal("5.00"))
+                () -> verify(cacheManager).atomicAddBalanceReceipt(receiver, new BigDecimal("5.00"),
+                        laterDeposit.requestId())
         );
     }
 
@@ -304,13 +410,15 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("70.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount))
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        stubRejectedTransferReceipt(cacheManager, operationId, sender, receiver, amount);
         when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), null, 8L, -1L, true, false));
 
@@ -318,7 +426,6 @@ class EconomyEventConsumerTransferTest {
         EconomyWriteQueue.Reservation senderReservation = queue.tryReserve(sender);
         EconomyWriteQueue.Reservation receiverReservation = queue.tryReserve(receiver);
         long now = System.currentTimeMillis();
-        String operationId = TransferRequestIds.newOperationId();
         EconomyEvent out = new EconomyEvent(sender, amount.negate(), BigDecimal.ZERO, 10L,
                 EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
                 TransferRequestIds.requestId(operationId, EconomyEvent.EventType.TRANSFER_OUT), now);
@@ -365,21 +472,19 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("70.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount))
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId))
                 .thenReturn(CacheManager.TransferResult.insufficientFunds());
+        stubRejectedTransferReceipt(cacheManager, operationId, sender, receiver, amount);
         when(cacheManager.readRejectedTransferSnapshotStrict(sender, receiver)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("20.00"), new BigDecimal("80.00"), 9L, 5L));
-        when(cacheManager.atomicAddBalanceReceipt(sender, new BigDecimal("5.00")))
-                .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
-                        sender, new BigDecimal("25.00"), 10L));
 
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
-        String operationId = TransferRequestIds.newOperationId();
         AtomicReference<EconomyWriteQueue.TransferCompletion> completion = new AtomicReference<>();
         assertTrue(queue.registerTransferCompletionListener(operationId, completion::set));
         long now = System.currentTimeMillis();
@@ -398,6 +503,9 @@ class EconomyEventConsumerTransferTest {
         EconomyEvent laterDeposit = new EconomyEvent(sender, new BigDecimal("5.00"), new BigDecimal("35.00"), 10L,
                 EconomyEvent.EventType.DEPOSIT, EconomyEvent.EventSource.TEST,
                 UUID.randomUUID().toString(), now + 1);
+        when(cacheManager.atomicAddBalanceReceipt(sender, new BigDecimal("5.00"), laterDeposit.requestId()))
+                .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
+                        sender, new BigDecimal("25.00"), 10L));
         EconomyWriteQueue.Reservation laterReservation = queue.tryReserve(sender);
         assertNotNull(laterReservation);
         assertTrue(laterReservation.commit(laterDeposit));
@@ -419,8 +527,9 @@ class EconomyEventConsumerTransferTest {
                         "the later confirmed receipt must replace a same-version provisional balance"),
                 () -> assertEquals(new BigDecimal("80.00"), memory.get(receiver).balance()),
                 () -> assertFalse(memory.isUnavailable(sender)),
-                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount),
-                () -> verify(cacheManager).atomicAddBalanceReceipt(sender, new BigDecimal("5.00")),
+                () -> verify(cacheManager).atomicTransfer(sender, receiver, amount, operationId),
+                () -> verify(cacheManager).atomicAddBalanceReceipt(sender, new BigDecimal("5.00"),
+                        laterDeposit.requestId()),
                 () -> assertNotNull(completion.get()),
                 () -> assertEquals(EconomyWriteQueue.TransferOutcome.REJECTED, completion.get().outcome()),
                 () -> assertEquals(new BigDecimal("20.00"), completion.get().senderBalance()),
@@ -433,16 +542,16 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenThrow(
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenThrow(
                 new RedisMutationException(RedisMutationException.ExecutionState.SENT_UNKNOWN,
                         "response dropped after Redis may have applied the pair", null));
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
-        String operationId = TransferRequestIds.newOperationId();
         AtomicReference<EconomyWriteQueue.TransferCompletion> completion = new AtomicReference<>();
         assertTrue(queue.registerTransferCompletionListener(operationId, completion::set));
         long now = System.currentTimeMillis();
@@ -484,9 +593,9 @@ class EconomyEventConsumerTransferTest {
                 () -> assertEquals(EconomyWriteQueue.TransferOutcome.UNKNOWN, completion.get().outcome()),
                 () -> assertTrue(queue.hasAcceptedWrite(laterAccount),
                         "later accepted work must remain behind the quarantined transfer"),
-                () -> verify(cacheManager, times(1)).atomicTransfer(sender, receiver, amount),
+                () -> verify(cacheManager, times(1)).atomicTransfer(sender, receiver, amount, operationId),
                 () -> verify(cacheManager, never()).readTransferSnapshotStrict(any(), any()),
-                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any())
+                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any(), anyString())
         );
 
         // Release the intentionally quarantined fixture so the daemon consumer can shut down.
@@ -501,14 +610,14 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(null);
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenReturn(null);
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
-        String operationId = TransferRequestIds.newOperationId();
         long now = System.currentTimeMillis();
         EconomyEvent out = new EconomyEvent(sender, amount.negate(), new BigDecimal("90.00"), 8L,
                 EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
@@ -534,7 +643,7 @@ class EconomyEventConsumerTransferTest {
                 () -> assertFalse(memory.isUnavailable(sender), "a pre-send outage is retryable, not ambiguous"),
                 () -> assertFalse(memory.isUnavailable(receiver)),
                 () -> assertTrue(queue.hasAcceptedWrite(sender), "the same pair remains owned for retry"),
-                () -> verify(cacheManager, atLeastOnce()).atomicTransfer(sender, receiver, amount)
+                () -> verify(cacheManager, atLeastOnce()).atomicTransfer(sender, receiver, amount, operationId)
         );
 
         // Release the intentionally retryable pair so the daemon consumer can shut down.
@@ -548,15 +657,16 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(false);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("90.00"), new BigDecimal("10.00"), 8L, 4L));
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount, new BigDecimal("90.00"),
-                new BigDecimal("10.00"), 8L, 4L, plugin);
+                new BigDecimal("10.00"), 8L, 4L, plugin, operationId);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
         memory.put(sender, state("90.00", 8L));
         memory.put(receiver, state("10.00", 4L));
@@ -583,12 +693,13 @@ class EconomyEventConsumerTransferTest {
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("-80.00"))).thenThrow(
+        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("-80.00"), "rejected-withdrawal")).thenThrow(
                 new RedisMutationException(RedisMutationException.ExecutionState.REJECTED,
                         "authoritative balance rejected the stale-node withdrawal", null));
-        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("5.00")))
+        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("5.00"), "later-deposit"))
                 .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
                         account, new BigDecimal("25.00"), 9L));
+        stubRejectedMutationReceipt(cacheManager, account, new BigDecimal("-80.00"), "rejected-withdrawal");
         AtomicInteger snapshotReads = new AtomicInteger();
         CountDownLatch retrySnapshotStarted = new CountDownLatch(1);
         CountDownLatch releaseRetrySnapshot = new CountDownLatch(1);
@@ -630,7 +741,7 @@ class EconomyEventConsumerTransferTest {
                     () -> assertTrue(memory.isUnavailable(account),
                             "the account stays unavailable until its confirmed authority base is read"),
                     () -> verify(cacheManager, times(1))
-                            .atomicAddBalanceReceipt(account, new BigDecimal("-80.00"))
+                            .atomicAddBalanceReceipt(account, new BigDecimal("-80.00"), "rejected-withdrawal")
             );
         } finally {
             releaseRetrySnapshot.countDown();
@@ -647,9 +758,9 @@ class EconomyEventConsumerTransferTest {
                 () -> assertEquals(9L, memory.get(account).version()),
                 () -> assertFalse(memory.isUnavailable(account)),
                 () -> verify(cacheManager, times(1))
-                        .atomicAddBalanceReceipt(account, new BigDecimal("-80.00")),
+                        .atomicAddBalanceReceipt(account, new BigDecimal("-80.00"), "rejected-withdrawal"),
                 () -> verify(cacheManager, times(1))
-                        .atomicAddBalanceReceipt(account, new BigDecimal("5.00")),
+                        .atomicAddBalanceReceipt(account, new BigDecimal("5.00"), "later-deposit"),
                 () -> verify(cacheManager, times(2)).readAuthorityBalanceSnapshotStrict(account)
         );
     }
@@ -662,9 +773,12 @@ class EconomyEventConsumerTransferTest {
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00"))).thenThrow(
+        when(cacheManager.atomicAddBalanceReceipt(account, new BigDecimal("10.00"),
+                "rejected-deposit-lower-authority-version")).thenThrow(
                 new RedisMutationException(RedisMutationException.ExecutionState.REJECTED,
                         "authoritative validation rejected the locally accepted deposit", null));
+        stubRejectedMutationReceipt(cacheManager, account, new BigDecimal("10.00"),
+                "rejected-deposit-lower-authority-version");
         when(cacheManager.readAuthorityBalanceSnapshotStrict(account)).thenReturn(java.util.Optional.of(
                 new CacheManager.CachedBalance(new BigDecimal("100.00"), 7L, System.currentTimeMillis())));
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
@@ -688,7 +802,8 @@ class EconomyEventConsumerTransferTest {
                 () -> assertEquals(new BigDecimal("100.00"), memory.get(account).balance()),
                 () -> assertEquals(7L, memory.get(account).version()),
                 () -> assertFalse(memory.isUnavailable(account)),
-                () -> verify(cacheManager, times(1)).atomicAddBalanceReceipt(account, new BigDecimal("10.00")),
+                () -> verify(cacheManager, times(1)).atomicAddBalanceReceipt(account, new BigDecimal("10.00"),
+                        "rejected-deposit-lower-authority-version"),
                 () -> verify(cacheManager).readAuthorityBalanceSnapshotStrict(account)
         );
     }
@@ -703,7 +818,7 @@ class EconomyEventConsumerTransferTest {
         long now = System.currentTimeMillis();
 
         CacheManager firstCache = mock(CacheManager.class);
-        when(firstCache.atomicAddBalanceReceipt(account, withdrawal.negate()))
+        when(firstCache.atomicAddBalanceReceipt(account, withdrawal.negate(), "node-a-withdrawal"))
                 .thenReturn(new noietime.syncmoney.core.port.ConfirmedAccount(
                         account, new BigDecimal("20.00"), 8L));
         EconomyWriteQueue firstQueue = new EconomyWriteQueue(4, firstPlugin.getLogger());
@@ -724,9 +839,10 @@ class EconomyEventConsumerTransferTest {
         firstConsumer.shutdown();
 
         CacheManager secondCache = mock(CacheManager.class);
-        when(secondCache.atomicAddBalanceReceipt(account, withdrawal.negate())).thenThrow(
+        when(secondCache.atomicAddBalanceReceipt(account, withdrawal.negate(), "node-b-withdrawal")).thenThrow(
                 new RedisMutationException(RedisMutationException.ExecutionState.REJECTED,
                         "another node already consumed the stale cached balance", null));
+        stubRejectedMutationReceipt(secondCache, account, withdrawal.negate(), "node-b-withdrawal");
         when(secondCache.readAuthorityBalanceSnapshotStrict(account)).thenReturn(java.util.Optional.of(
                 new CacheManager.CachedBalance(new BigDecimal("20.00"), 8L, System.currentTimeMillis())));
         EconomyWriteQueue secondQueue = new EconomyWriteQueue(4, secondPlugin.getLogger());
@@ -754,8 +870,10 @@ class EconomyEventConsumerTransferTest {
                         "the rejected node must use the confirmed base instead of crediting its stale withdrawal"),
                 () -> assertFalse(firstMemory.isUnavailable(account)),
                 () -> assertFalse(secondMemory.isUnavailable(account)),
-                () -> verify(firstCache, times(1)).atomicAddBalanceReceipt(account, withdrawal.negate()),
-                () -> verify(secondCache, times(1)).atomicAddBalanceReceipt(account, withdrawal.negate()),
+                () -> verify(firstCache, times(1))
+                        .atomicAddBalanceReceipt(account, withdrawal.negate(), "node-a-withdrawal"),
+                () -> verify(secondCache, times(1))
+                        .atomicAddBalanceReceipt(account, withdrawal.negate(), "node-b-withdrawal"),
                 () -> verify(secondCache).readAuthorityBalanceSnapshotStrict(account)
         );
     }
@@ -765,12 +883,13 @@ class EconomyEventConsumerTransferTest {
         UUID sender = UUID.randomUUID();
         UUID receiver = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
+        String operationId = TransferRequestIds.newOperationId();
         Plugin plugin = plugin();
         SyncmoneyConfig config = config(true);
         RedisManager redisManager = mock(RedisManager.class);
         when(redisManager.isDegraded()).thenReturn(false);
         CacheManager cacheManager = mock(CacheManager.class);
-        when(cacheManager.atomicTransfer(sender, receiver, amount)).thenReturn(
+        when(cacheManager.atomicTransfer(sender, receiver, amount, operationId)).thenReturn(
                 new CacheManager.TransferResult(new BigDecimal("90.00"), new BigDecimal("10.00"), 8L, 4L));
         DbWriteQueue dbWriteQueue = mock(DbWriteQueue.class);
         when(dbWriteQueue.offerAndTrack(any())).thenReturn(null);
@@ -779,7 +898,7 @@ class EconomyEventConsumerTransferTest {
                 .thenThrow(new IllegalStateException("injected SQL failure"))
                 .thenReturn(List.of());
         EconomyWriteQueue queue = pairedQueue(sender, receiver, amount, new BigDecimal("90.00"),
-                new BigDecimal("10.00"), 8L, 4L, plugin);
+                new BigDecimal("10.00"), 8L, 4L, plugin, operationId);
         MemoryStateManager memory = new MemoryStateManager(plugin, queue);
         memory.put(sender, state("90.00", 8L));
         memory.put(receiver, state("10.00", 4L));
@@ -797,8 +916,8 @@ class EconomyEventConsumerTransferTest {
                 () -> assertFalse(queue.hasAcceptedWrite(sender),
                         "the confirmed pair releases only after downstream SQL succeeds"),
                 () -> assertFalse(queue.hasAcceptedWrite(receiver)),
-                () -> verify(cacheManager, times(1)).atomicTransfer(sender, receiver, amount),
-                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any()),
+                () -> verify(cacheManager, times(1)).atomicTransfer(sender, receiver, amount, operationId),
+                () -> verify(cacheManager, never()).atomicAddBalanceReceipt(any(), any(), anyString()),
                 () -> verify(databaseManager, times(2)).batchInsertOrUpdatePlayersWithStale(argThat(tasks ->
                         tasks.size() == 1 && tasks.get(0).accountCount() == 2))
         );
@@ -814,8 +933,14 @@ class EconomyEventConsumerTransferTest {
     private static EconomyWriteQueue pairedQueue(UUID sender, UUID receiver, BigDecimal amount,
             BigDecimal senderAfter, BigDecimal receiverAfter, long senderVersion, long receiverVersion,
             Plugin plugin) {
+        return pairedQueue(sender, receiver, amount, senderAfter, receiverAfter, senderVersion,
+                receiverVersion, plugin, TransferRequestIds.newOperationId());
+    }
+
+    private static EconomyWriteQueue pairedQueue(UUID sender, UUID receiver, BigDecimal amount,
+            BigDecimal senderAfter, BigDecimal receiverAfter, long senderVersion, long receiverVersion,
+            Plugin plugin, String operationId) {
         EconomyWriteQueue queue = new EconomyWriteQueue(8, plugin.getLogger());
-        String operationId = TransferRequestIds.newOperationId();
         long now = System.currentTimeMillis();
         EconomyEvent out = new EconomyEvent(sender, amount.negate(), senderAfter, senderVersion,
                 EconomyEvent.EventType.TRANSFER_OUT, EconomyEvent.EventSource.TEST,
@@ -829,6 +954,24 @@ class EconomyEventConsumerTransferTest {
         assertNotNull(inReservation);
         assertTrue(queue.commitPair(outReservation, out, inReservation, in, null));
         return queue;
+    }
+
+    private static void stubRejectedTransferReceipt(CacheManager cacheManager, String operationId,
+            UUID sender, UUID receiver, BigDecimal amount) {
+        String fingerprint = RedisOperationFingerprint.transfer(sender, receiver, amount);
+        CacheManager.OperationReceipt receipt = new CacheManager.OperationReceipt(operationId, fingerprint,
+                CacheManager.OperationStatus.REJECTED, "insufficient funds", List.of());
+        when(cacheManager.readOperationReceipt(operationId, fingerprint, List.of(sender, receiver)))
+                .thenReturn(java.util.Optional.of(receipt));
+    }
+
+    private static void stubRejectedMutationReceipt(CacheManager cacheManager, UUID account,
+            BigDecimal delta, String operationId) {
+        String fingerprint = RedisOperationFingerprint.add(account, delta);
+        CacheManager.OperationReceipt receipt = new CacheManager.OperationReceipt(operationId, fingerprint,
+                CacheManager.OperationStatus.REJECTED, "authority rejected mutation", List.of());
+        when(cacheManager.readOperationReceipt(operationId, fingerprint, List.of(account)))
+                .thenReturn(java.util.Optional.of(receipt));
     }
 
     private static AccountState state(String balance, long version) {

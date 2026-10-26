@@ -319,8 +319,6 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             }
         }
 
-        BigDecimal currentBalance = economyFacade.getBalance(uuid);
-
         BigDecimal newBalance = economyFacade.deposit(uuid, amount, EconomyEvent.EventSource.ADMIN_GIVE);
 
         if (circuitBreaker != null && config.circuitBreaker().isCircuitBreakerEnabled() && newBalance.compareTo(BigDecimal.ZERO) >= 0) {
@@ -414,10 +412,13 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         BigDecimal newBalance = economyFacade.withdraw(uuid, amount, EconomyEvent.EventSource.ADMIN_TAKE);
 
         if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            BigDecimal currentBalance = economyFacade.getBalance(uuid);
+            EconomyFacade.EconomyState currentState = economyFacade.getMemoryState(uuid);
+            String currentBalance = currentState == null
+                    ? "N/A"
+                    : FormatUtil.formatCurrency(currentState.balance());
             MessageHelper.sendMessage(sender, plugin.getMessage("admin.insufficient-funds")
                     .replace("{player}", playerName)
-                    .replace("{balance}", FormatUtil.formatCurrency(currentBalance)));
+                    .replace("{balance}", currentBalance));
             return;
         }
 
@@ -660,10 +661,7 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             if (registry != null) {
                 return registry.suggestOnlinePlayerNames(args[1], true);
             }
-            return plugin.getServer().getOnlinePlayers().stream()
-                    .map(Player::getName)
-                    .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
-                    .toList();
+            return Collections.emptyList();
         }
 
         if (args.length == 3 && (args[0].equalsIgnoreCase("set") ||

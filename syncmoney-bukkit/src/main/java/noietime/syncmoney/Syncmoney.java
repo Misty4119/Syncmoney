@@ -365,6 +365,7 @@ public final class Syncmoney extends JavaPlugin {
                 economyServiceManager.getEconomyFacade(),
                 storageManager,
                 economyServiceManager,
+                eventConsumerManager,
                 syncManager.getPubsubSubscriber(),
                 baltopManager,
                 auditServiceManager.getAuditLogger(),
@@ -580,6 +581,10 @@ public final class Syncmoney extends JavaPlugin {
 
     public AuditLogger getAuditLogger() {
         return auditServiceManager != null ? auditServiceManager.getAuditLogger() : null;
+    }
+
+    public noietime.syncmoney.audit.HybridAuditManager getHybridAuditManager() {
+        return auditServiceManager != null ? auditServiceManager.getHybridAuditManager() : null;
     }
 
     public BaltopManager getBaltopManager() {

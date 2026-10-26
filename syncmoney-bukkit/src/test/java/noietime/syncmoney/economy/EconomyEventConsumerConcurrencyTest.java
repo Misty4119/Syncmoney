@@ -68,7 +68,7 @@ class EconomyEventConsumerConcurrencyTest {
 
         // Record each processed event by its (unique) UUID. A positive return value keeps
         // processEvent on the success path. Duplicates would bump the per-UUID counter above 1.
-        when(mockCacheManager.atomicAddBalanceReceipt(any(UUID.class), any(BigDecimal.class)))
+        when(mockCacheManager.atomicAddBalanceReceipt(any(UUID.class), any(BigDecimal.class), anyString()))
                 .thenAnswer(invocation -> {
                     UUID uuid = invocation.getArgument(0);
                     processed.computeIfAbsent(uuid, k -> new AtomicInteger()).incrementAndGet();

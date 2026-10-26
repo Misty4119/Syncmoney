@@ -105,6 +105,7 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.shadow"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.reload"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.migrate"));
+        MessageHelper.sendMessage(sender, "§7/syncmoney recovery <list|inspect|reconcile> §8- inspect quarantined economy writes");
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.web"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.test"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.version"));
@@ -147,6 +148,8 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
         return switch (subcommand) {
             case "admin" -> sender.hasPermission("syncmoney.admin");
             case "breaker", "monitor", "econstats", "audit" -> sender.hasPermission("syncmoney.admin");
+            case "recovery" -> sender.hasPermission("syncmoney.admin")
+                    || sender.hasPermission("syncmoney.admin.recovery");
             case "migrate", "shadow", "web" -> sender.hasPermission("syncmoney.admin");
             case "test" -> sender.hasPermission("syncmoney.admin.test");
             case "reload" -> sender.hasPermission("syncmoney.admin");

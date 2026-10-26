@@ -43,11 +43,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -93,6 +95,61 @@ class CmiOwnerFreshnessTest {
         verify(fixture.cmiApi).setBalance(account, 20.0);
         verify(fixture.cmiHandler).suppressOutbound(account, 750L);
         verify(fixture.cmiHandler).notifyInboundApplied(eq(account), eq(new BigDecimal("20.00")), eq(20L));
+    }
+
+    @Test
+    void failedCmiWriteDoesNotMarkInboundVersionAppliedAndAllowsRedeliveryRetry() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        when(fixture.cmiApi.getBalance(account)).thenReturn(10.0);
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(false);
+
+        fixture.handler.process(message(account, "20.00", 20L));
+        fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
+
+        verify(fixture.cmiApi).setBalance(account, 20.0);
+        verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(20L));
+
+        fixture.handler.process(message(account, "19.00", 19L));
+        assertEquals(1, fixture.scheduledWork.size(),
+                "retry eligibility for the failed version must not admit an older inbound version");
+        fixture.handler.process(message(account, "20.00", 20L));
+
+        assertEquals(2, fixture.scheduledWork.size(),
+                "a failed owner write must leave the same inbound version eligible for retry");
+        fixture.scheduledWork.get(1).accept(mock(ScheduledTask.class));
+        verify(fixture.cmiApi, times(2)).setBalance(account, 20.0);
+        verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(20L));
+    }
+
+    @Test
+    void unknownCmiBalanceStillAttemptsWriteAndDoesNotAcknowledgeFailedWrite() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        when(fixture.cmiApi.getBalance(account)).thenReturn(null);
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(false);
+
+        fixture.handler.process(message(account, "20.00", 20L));
+        fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
+
+        verify(fixture.cmiApi).setBalance(account, 20.0);
+        verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(20L));
+    }
+
+    @Test
+    void setterNoOpIsAcknowledgedOnlyAfterFollowUpBalanceConfirmsTarget() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        when(fixture.cmiApi.getBalance(account)).thenReturn(10.0, 20.0);
+        when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(false);
+
+        fixture.handler.process(message(account, "20.00", 20L));
+        fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
+
+        verify(fixture.cmiApi, times(2)).getBalance(account);
+        verify(fixture.cmiHandler).notifyInboundApplied(eq(account), eq(new BigDecimal("20.00")), eq(20L));
+        fixture.handler.process(message(account, "20.00", 20L));
+        assertEquals(1, fixture.scheduledWork.size(), "a confirmed version must not be scheduled again");
     }
 
     @Test
@@ -229,31 +286,73 @@ class CmiOwnerFreshnessTest {
     void offlinePlayerIsNotMutatedByInboundCallback() {
         UUID account = UUID.randomUUID();
         Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, false);
+        MigrationLock.enable();
 
         fixture.handler.process(message(account, "20.00", 20L));
 
-        assertTrue(fixture.scheduledWork.isEmpty());
-        verify(fixture.player, never()).getScheduler();
+        assertEquals(1, fixture.scheduledWork.size(), "offline state is checked on the entity owner");
+        assertFalse(MigrationLock.lock(), "the queued owner callback retains the write lease");
+        fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
+
+        assertTrue(MigrationLock.lock(), "the offline callback releases its write lease");
+        MigrationLock.unlock();
+        verify(fixture.player).isOnline();
         verify(fixture.cmiApi, never()).getBalance(account);
         verify(fixture.cmiApi, never()).setBalance(eq(account), any(Double.class));
     }
 
     @Test
-    void expiredWatermarkAllowsAnOlderInboundVersionAgain() {
+    void cleanupDoesNotDiscardAnAccountFreshnessWatermark() throws ReflectiveOperationException {
         UUID account = UUID.randomUUID();
         MutableClock clock = new MutableClock(1_000_000L);
         Fixture fixture = fixture(clock, false, false);
+        when(fixture.jedis().eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(1L);
 
         fixture.handler.process(message(account, "200.00", 200L));
         clock.advanceMillis(10 * 60 * 1000L + 1);
         fixture.handler.process(message(UUID.randomUUID(), "1.00", 1L));
         fixture.handler.process(message(account, "100.00", 100L));
 
-        verify(fixture.cmiHandler).notifyInboundApplied(eq(account), eq(new BigDecimal("100.00")), eq(100L));
+        Method currentVersion = CMIPubsubHandler.class.getDeclaredMethod("currentVersion", UUID.class);
+        currentVersion.setAccessible(true);
+        verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(100L));
+        verify(fixture.jedis, times(2)).eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString());
+        verify(fixture.jedis, never()).mset(anyString(), anyString(), anyString(), anyString());
+        assertEquals(200L, currentVersion.invoke(fixture.handler, account),
+                "time-based cleanup must not reopen the stale-message window for an existing account");
     }
 
     @Test
-    void independentHandlersCanSubmitAnOlderLegacyMirrorValue() {
+    void staleRedisMirrorResultDoesNotScheduleCmiEntityMutation() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        when(fixture.jedis().eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(0L);
+
+        try {
+            fixture.handler.process(message(account, "100.00", 100L));
+
+            assertTrue(fixture.scheduledWork().isEmpty());
+            verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(100L));
+            verify(fixture.jedis, never()).mset(anyString(), anyString(), anyString(), anyString());
+        } finally {
+            fixture.handler.shutdown();
+        }
+    }
+
+    @Test
+    void unavailableCmiDoesNotMarkRedisMirrorAsAppliedToCmi() {
+        UUID account = UUID.randomUUID();
+        Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), false, false);
+
+        fixture.handler.process(message(account, "100.00", 10L));
+
+        verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(10L));
+    }
+
+    @Test
+    void independentHandlersCannotLowerTheSharedMirrorVersion() {
         UUID account = UUID.randomUUID();
         Syncmoney plugin = mock(Syncmoney.class);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
@@ -262,6 +361,8 @@ class CmiOwnerFreshnessTest {
         Jedis jedis = mock(Jedis.class);
         when(redis.isDegraded()).thenReturn(false);
         when(redis.getResource()).thenReturn(jedis);
+        when(jedis.eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(1L, 0L);
         CMIApi cmiApi = mock(CMIApi.class);
         when(cmiApi.isAvailable()).thenReturn(false);
         CMIEconomyHandler cmiHandler = mock(CMIEconomyHandler.class);
@@ -274,8 +375,9 @@ class CmiOwnerFreshnessTest {
         firstHandler.process(message(account, "200.00", 200L));
         secondHandler.process(message(account, "100.00", 100L));
 
-        verify(jedis).mset(balanceKey, "200.00", versionKey, "200");
-        verify(jedis).mset(balanceKey, "100.00", versionKey, "100");
+        verify(jedis).eval(anyString(), eq(2), eq(balanceKey), eq(versionKey), eq("200.00"), eq("200"));
+        verify(jedis).eval(anyString(), eq(2), eq(balanceKey), eq(versionKey), eq("100.00"), eq("100"));
+        verify(jedis, never()).mset(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -317,6 +419,8 @@ class CmiOwnerFreshnessTest {
         Jedis jedis = mock(Jedis.class);
         when(redis.isDegraded()).thenReturn(false);
         when(redis.getResource()).thenReturn(jedis);
+        when(jedis.eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(1L);
 
         CMIApi cmiApi = mock(CMIApi.class);
         when(cmiApi.isAvailable()).thenReturn(cmiAvailable);
@@ -336,7 +440,8 @@ class CmiOwnerFreshnessTest {
         }).when(entityScheduler).run(eq(plugin), any(), any());
 
         CMIPubsubHandler handler = new CMIPubsubHandler(plugin, config, redis, cmiApi, cmiHandler, clock);
-        return new Fixture(handler, cmiApi, cmiHandler, player, scheduledWork, retiredWork, plugin, config);
+        return new Fixture(handler, cmiApi, cmiHandler, player, scheduledWork, retiredWork,
+                plugin, config, redis, jedis);
     }
 
     private static SyncmoneyConfig config() {
@@ -383,7 +488,8 @@ class CmiOwnerFreshnessTest {
 
     private record Fixture(CMIPubsubHandler handler, CMIApi cmiApi, CMIEconomyHandler cmiHandler,
                            Player player, List<Consumer<ScheduledTask>> scheduledWork,
-                           AtomicReference<Runnable> retiredWork, Syncmoney plugin, SyncmoneyConfig config) {
+                           AtomicReference<Runnable> retiredWork, Syncmoney plugin, SyncmoneyConfig config,
+                           RedisManager redis, Jedis jedis) {
     }
 
     private static final class MutableClock extends Clock {

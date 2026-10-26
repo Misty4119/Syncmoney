@@ -50,12 +50,8 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
     private final PayConfirmationManager confirmationManager;
 
     public PayCommand(Syncmoney plugin, SyncmoneyConfig config, EconomyFacade economyFacade,
-            CacheManager cacheManager, RedisManager redisManager,
             NameResolver nameResolver, FallbackEconomyWrapper fallbackWrapper,
             TransferLockManager lockManager, CooldownManager cooldownManager,
-            DbWriteQueue dbWriteQueue, EconomyWriteQueue writeQueue,
-            PubsubSubscriber pubsubSubscriber,
-            BaltopManager baltopManager,
             double minAmount, double maxAmount, boolean allowInDegraded,
             boolean localMode) {
         this.plugin = plugin;
@@ -66,20 +62,29 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
         this.minAmount = NumericUtil.normalize(minAmount);
         this.maxAmount = NumericUtil.normalize(maxAmount);
 
-        PayLuaScriptManager luaScriptManager = null;
-        if (!localMode && config.isCMIMode()) {
-            luaScriptManager = new PayLuaScriptManager(plugin, redisManager);
-            luaScriptManager.load();
-        }
-
         this.transferExecutor = new PayTransferExecutor(
-                plugin, config, economyFacade, cacheManager, redisManager, nameResolver,
-                lockManager, dbWriteQueue, writeQueue, pubsubSubscriber, baltopManager,
-                luaScriptManager, localMode);
+                plugin, config, economyFacade, nameResolver, lockManager, localMode);
 
         BigDecimal confirmThreshold = NumericUtil.normalize(config.pay().getPayConfirmThreshold());
         this.confirmationManager = new PayConfirmationManager(
                 plugin, cooldownManager, transferExecutor, confirmThreshold);
+    }
+
+    /**
+     * Retains the 1.3.2 constructor descriptor for already-compiled callers.
+     * The transfer dependencies now belong to {@link EconomyFacade}.
+     */
+    @Deprecated(since = "1.4.0", forRemoval = false)
+    public PayCommand(Syncmoney plugin, SyncmoneyConfig config, EconomyFacade economyFacade,
+            CacheManager cacheManager, RedisManager redisManager,
+            NameResolver nameResolver, FallbackEconomyWrapper fallbackWrapper,
+            TransferLockManager lockManager, CooldownManager cooldownManager,
+            DbWriteQueue dbWriteQueue, EconomyWriteQueue writeQueue,
+            PubsubSubscriber pubsubSubscriber, BaltopManager baltopManager,
+            double minAmount, double maxAmount, boolean allowInDegraded,
+            boolean localMode) {
+        this(plugin, config, economyFacade, nameResolver, fallbackWrapper, lockManager,
+                cooldownManager, minAmount, maxAmount, allowInDegraded, localMode);
     }
 
     @Override
@@ -95,6 +100,8 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
             MessageHelper.sendMessage(player, plugin.getMessage("general.no-permission"));
             return true;
         }
+
+        if (transferExecutor.rejectCmiTransfer(player)) return true;
 
         if (args.length == 1 && args[0].equalsIgnoreCase("confirm")) {
             return confirmationManager.handleConfirmation(player);
@@ -140,13 +147,7 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
             if (registry != null) {
                 return registry.suggestOnlinePlayerNames(args[0], true);
             }
-            String input = args[0].toLowerCase();
-            return plugin.getServer().getOnlinePlayers().stream()
-                    .map(Player::getName)
-                    .filter(name -> name.toLowerCase().startsWith(input))
-                    .distinct()
-                    .sorted()
-                    .toList();
+            return Collections.emptyList();
         }
         if (args.length == 2) {
             java.util.List<String> suggestions = new java.util.ArrayList<>(
@@ -154,8 +155,8 @@ public final class PayCommand implements CommandExecutor, TabCompleter {
 
             if (sender instanceof Player player) {
                 try {
-                    BigDecimal balance = economyFacade.getBalance(player.getUniqueId());
-                    if (balance.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal balance = economyFacade.getBalanceForPlaceholder(player.getUniqueId());
+                    if (balance != null && balance.compareTo(BigDecimal.ZERO) > 0) {
                         BigDecimal quarter = balance.divide(BigDecimal.valueOf(4), 0, RoundingMode.DOWN);
                         BigDecimal half = balance.divide(BigDecimal.valueOf(2), 0, RoundingMode.DOWN);
                         BigDecimal threeQuarters = balance.multiply(BigDecimal.valueOf(3))

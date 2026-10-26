@@ -82,7 +82,7 @@ class EconomyEventConsumerTest {
         when(mockPlugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("Test"));
 
         // Keep processing on the success path and avoid NPEs in the downstream steps.
-        when(mockCacheManager.atomicAddBalanceReceipt(any(), any())).thenAnswer(invocation ->
+        when(mockCacheManager.atomicAddBalanceReceipt(any(), any(), anyString())).thenAnswer(invocation ->
                 new ConfirmedAccount(invocation.getArgument(0), BigDecimal.TEN, 1L));
         when(mockConfig.shadowSync()).thenReturn(mock(noietime.syncmoney.config.ShadowSyncConfig.class));
 
@@ -134,7 +134,7 @@ class EconomyEventConsumerTest {
         when(mockConfig.isDbEnabled()).thenReturn(false);
         when(mockConfig.shadowSync().isShadowSyncEnabled()).thenReturn(true);
         when(mockNameResolver.getNameCachedOnly(playerUuid)).thenReturn("SyntheticPlayer");
-        when(mockCacheManager.atomicAddBalanceReceipt(playerUuid, event.delta()))
+        when(mockCacheManager.atomicAddBalanceReceipt(playerUuid, event.delta(), event.requestId()))
                 .thenReturn(new ConfirmedAccount(playerUuid, receiptBalance, receiptVersion));
 
         EconomyWriteQueue acceptedQueue = new EconomyWriteQueue(4);
@@ -184,7 +184,7 @@ class EconomyEventConsumerTest {
         when(mockConfig.isPubsubEnabled()).thenReturn(false);
         when(mockConfig.isDbEnabled()).thenReturn(false);
         when(mockRedisManager.isDegraded()).thenReturn(false);
-        when(mockCacheManager.atomicAddBalanceReceipt(account, BigDecimal.ONE))
+        when(mockCacheManager.atomicAddBalanceReceipt(account, BigDecimal.ONE, event.requestId()))
                 .thenReturn(new ConfirmedAccount(account, new BigDecimal("101.00"), 8L));
         EconomyEventConsumer worker = new EconomyEventConsumer(
                 mockPlugin, mockConfig, queue, mockCacheManager, mockRedisManager,

@@ -12,11 +12,15 @@ Run from the repository root with JDK 25 and the Gradle 9.8.0 wrapper:
 ```powershell
 python -m unittest discover -s tools/central-publisher/tests -v
 python tools/central-publisher/verify_signing_fixture.py
-$releaseVersion = '1.4.0-alpha.1'
+$releaseVersion = '1.4.0'
 .\gradlew.bat "-PreleaseVersion=$releaseVersion" :syncmoney-api:check nmcpZipAggregation --no-daemon
 python tools/central-publisher/publish_central.py validate --bundle build/nmcp/zip/aggregation.zip
 python tools/central-publisher/publish_central.py verify-consumer --bundle build/nmcp/zip/aggregation.zip --gradle-wrapper .\gradlew.bat
 ```
+
+The `releaseVersion` property applies only to this local candidate build; the
+committed stable metadata remains `1.3.2`. These validation commands do not
+stage, sign, upload, or publish an artifact.
 
 The signing fixture creates a temporary PGP key, verifies every signature in
 the bundle, and deletes the key with its temporary directory. It does not use

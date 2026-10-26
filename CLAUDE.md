@@ -12,7 +12,7 @@ Correctness priorities are: no fund creation/loss, preserve Redis-backed per-acc
 
 Use code and executable configuration before prose:
 
-- `src/main/java/noietime/syncmoney`
+- `syncmoney-bukkit/src/main/java/noietime/syncmoney`
 - `src/main/resources/config.yml`
 - `src/main/resources/plugin.yml`
 - `build.gradle`

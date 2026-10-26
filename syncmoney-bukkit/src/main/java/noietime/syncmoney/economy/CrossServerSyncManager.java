@@ -12,6 +12,7 @@ import noietime.syncmoney.sync.MessageKeys;
 import noietime.syncmoney.util.MessageHelper;
 import noietime.syncmoney.util.FormatUtil;
 import noietime.syncmoney.breaker.DiscordWebhookNotifier;
+import noietime.syncmoney.uuid.OnlinePlayerRegistry;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
@@ -195,13 +196,12 @@ public class CrossServerSyncManager {
     private void notifyLocalPlayer(UUID uuid, String sourceServer,
                                 String eventType, double amount, String sourcePlugin) {
         Player player = Bukkit.getServer().getPlayer(uuid);
-        if (player == null || !player.isOnline()) {
-            return;
-        }
+        if (player == null) return;
 
         String notifyType = config.crossServer().getCrossServerNotifyType().toLowerCase();
 
         player.getScheduler().run(plugin, task -> {
+            if (!player.isOnline()) return;
             switch (notifyType) {
                 case "sse":
                     notifyPlayerViaSse(player, sourceServer, eventType, amount, sourcePlugin);
@@ -313,10 +313,9 @@ public class CrossServerSyncManager {
      * Get player name from UUID with fallback.
      */
     private String getPlayerNameFromUuid(UUID uuid) {
-        Player player = Bukkit.getServer().getPlayer(uuid);
-        if (player != null && player.isOnline()) {
-            return player.getName();
-        }
+        OnlinePlayerRegistry registry = plugin.getOnlinePlayerRegistry();
+        String localName = registry == null ? null : registry.getLocalOnlinePlayerName(uuid);
+        if (localName != null && !localName.isBlank()) return localName;
         return uuid.toString();
     }
 
@@ -354,9 +353,10 @@ public class CrossServerSyncManager {
             if (beginVersionCheck()) {
                 boolean handedOff = false;
                 try {
-                    Set<UUID> onlineUuids = Set.copyOf(plugin.getServer().getOnlinePlayers().stream()
-                            .map(Player::getUniqueId)
-                            .collect(java.util.stream.Collectors.toSet()));
+                    OnlinePlayerRegistry onlinePlayerRegistry = plugin.getOnlinePlayerRegistry();
+                    Set<UUID> onlineUuids = onlinePlayerRegistry == null
+                            ? Set.of()
+                            : onlinePlayerRegistry.getLocalOnlinePlayerIds();
                     if (stopped) {
                         return;
                     }
