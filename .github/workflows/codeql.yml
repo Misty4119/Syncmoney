@@ -47,9 +47,9 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'java-kotlin' && 'manual' || 'none' }}
 
-      - name: Build Java sources for CodeQL
+      - name: Compile Java sources for CodeQL
         if: matrix.language == 'java-kotlin'
-        run: ./gradlew --no-daemon test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar
+        run: ./gradlew --no-daemon classes
 
       - name: Analyze
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0

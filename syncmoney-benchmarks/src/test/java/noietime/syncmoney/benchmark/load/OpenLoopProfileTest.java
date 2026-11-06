@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -71,8 +72,12 @@ class OpenLoopProfileTest {
     void rejectsInvalidBoundsAndAbsoluteOutputPaths() {
         assertThrows(IllegalArgumentException.class,
                 () -> OpenLoopProfile.readJson(VALID_PROFILE.replace("\"maxInFlight\": 8", "\"maxInFlight\": 1")));
+        String absoluteOutputDirectory = Path.of(System.getProperty("java.io.tmpdir"), "syncmoney-outside")
+                .toAbsolutePath().normalize().toString().replace("\\", "\\\\").replace("\"", "\\\"");
         assertThrows(IllegalArgumentException.class,
-                () -> OpenLoopProfile.readJson(VALID_PROFILE.replace("build/reports/benchmarks", "C:/outside")));
+                () -> OpenLoopProfile.readJson(VALID_PROFILE.replace(
+                        "\"outputDirectory\": \"build/reports/benchmarks\"",
+                        "\"outputDirectory\": \"" + absoluteOutputDirectory + "\"")));
     }
 
     @Test
