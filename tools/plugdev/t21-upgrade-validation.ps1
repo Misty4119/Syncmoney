@@ -1,3 +1,108 @@
+function Get-T21StringSha256([string]$Value) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [Convert]::ToHexString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value))).ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-T21GitDiffSha256([string]$RepositoryRoot, [switch]$Cached) {
+    $diffPath = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney-t21-source-diff-' + [guid]::NewGuid().ToString('N') + '.bin')
+    try {
+        $arguments = @('-C', $RepositoryRoot, 'diff', '--binary', '--no-ext-diff', '--no-color')
+        if ($Cached.IsPresent) { $arguments += '--cached' }
+        $arguments += ('--output=' + $diffPath)
+        & git @arguments 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not fingerprint the Syncmoney Git diff.' }
+        if (-not (Test-Path -LiteralPath $diffPath -PathType Leaf)) {
+            [IO.File]::WriteAllBytes($diffPath, [byte[]]@())
+        }
+        return (Get-FileHash -LiteralPath $diffPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } finally {
+        if (Test-Path -LiteralPath $diffPath) { Remove-Item -LiteralPath $diffPath -Force }
+    }
+}
+
+function Get-T21SourceWorkingTreeSnapshot([string]$RepositoryRoot) {
+    $root = [IO.Path]::GetFullPath($RepositoryRoot)
+    $statusLines = @(& git -C $root -c core.quotepath=false status --porcelain=v1 --untracked-files=all --no-renames 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Syncmoney worktree status.' }
+    $untrackedPaths = @(& git -C $root -c core.quotepath=false ls-files --others --exclude-standard 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate untracked Syncmoney source files.' }
+
+    $statusText = [string]::Join("`n", @($statusLines | ForEach-Object { [string]$_ }))
+    $statusSha256 = Get-T21StringSha256 $statusText
+    $stagedDiffSha256 = Get-T21GitDiffSha256 $root -Cached
+    $unstagedDiffSha256 = Get-T21GitDiffSha256 $root
+    $untrackedEntries = [Collections.Generic.List[string]]::new()
+    foreach ($relativePath in @($untrackedPaths | Sort-Object -CaseSensitive)) {
+        $relative = [string]$relativePath
+        $fullPath = Join-Path $root $relative
+        if (-not (Test-Path -LiteralPath $fullPath)) {
+            $untrackedEntries.Add($relative + '|missing')
+            continue
+        }
+        $item = Get-Item -LiteralPath $fullPath -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            $target = [string]$item.Target
+            $untrackedEntries.Add($relative + '|reparse|' + [string]$item.LinkType + '|' + $target)
+        } elseif ($item.PSIsContainer) {
+            $untrackedEntries.Add($relative + '|directory')
+        } else {
+            $fileSha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $untrackedEntries.Add($relative + '|' + [string]$item.Length + '|' + $fileSha256)
+        }
+    }
+    $untrackedSha256 = Get-T21StringSha256 ([string]::Join("`n", $untrackedEntries.ToArray()))
+    $fingerprint = Get-T21StringSha256 ([string]::Join("`n", @(
+        $statusSha256,
+        $stagedDiffSha256,
+        $unstagedDiffSha256,
+        $untrackedSha256
+    )))
+    return [ordered]@{
+        dirty = ($statusLines.Count -gt 0)
+        statusEntryCount = $statusLines.Count
+        fingerprint = $fingerprint
+        statusSha256 = $statusSha256
+        stagedDiffSha256 = $stagedDiffSha256
+        unstagedDiffSha256 = $unstagedDiffSha256
+        untrackedFilesSha256 = $untrackedSha256
+    }
+}
+
+function Assert-T21PlatformExitBeforeDependencyCleanup {
+    param(
+        [Parameter(Mandatory)][scriptblock]$QueryPlatformProcesses,
+        [Parameter(Mandatory)][scriptblock]$RecordFailure
+    )
+
+    try {
+        $remainingProcesses = @(& $QueryPlatformProcesses)
+    } catch {
+        $queryError = $_.Exception.Message
+        $message = "Could not verify run-owned platform process exit before dependency cleanup: $queryError"
+        & $RecordFailure $message
+        throw $message
+    }
+
+    if ($remainingProcesses.Count -gt 0) {
+        $processIds = @($remainingProcesses | ForEach-Object {
+            $processIdProperty = $_.PSObject.Properties['ProcessId']
+            if ($null -ne $processIdProperty -and $null -ne $processIdProperty.Value) {
+                [string]$processIdProperty.Value
+            } else {
+                '<unknown>'
+            }
+        })
+        $processIdList = [string]::Join(', ', $processIds)
+        $message = "Refusing dependency cleanup while run-owned platform process(es) remain: $processIdList"
+        & $RecordFailure $message
+        throw $message
+    }
+}
+
 function Get-T21PlatformIdentity([string]$serverLogText) {
     $pattern = '(?im)^.*?Loading\s+(?<software>Paper|Folia|Canvas)\s+(?<version>\d+(?:\.\d+){1,2})-(?<build>\d+)\b.*?\bfor Minecraft\s+(?<minecraftVersion>\d+(?:\.\d+){1,2})\b.*$'
     $matches = @([regex]::Matches($serverLogText, $pattern))
@@ -45,14 +150,17 @@ function Get-T21PlatformEndpoint(
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'CurrentStable209', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum'
 ) {
+    # Refreshed 2026-11-07: Paper/Folia metadata and SHA-256 from PaperMC Fill v3;
+    # Canvas build identity from Jenkins and SHA-256 computed from the exact artifact.
+    # Folia channels are retained because the 26.2 and 26.3 builds are prereleases.
     switch -CaseSensitive ($PlatformEndpoint) {
         'Minimum' {
             return [ordered]@{
                 taskSuffix = 'minimum-Paper'
                 software = 'paper'
-                minecraftVersion = '1.21.6'
-                build = 48
-                sha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+                minecraftVersion = '26.2'
+                build = 135
+                sha256 = 'ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1'
             }
         }
         'Maximum' {
@@ -60,8 +168,8 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'maximum-Paper'
                 software = 'paper'
                 minecraftVersion = '26.3'
-                build = 166
-                sha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+                build = 244
+                sha256 = '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf'
             }
         }
         'CurrentMaximum' {
@@ -69,8 +177,8 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'current-maximum-Paper'
                 software = 'paper'
                 minecraftVersion = '26.3'
-                build = 200
-                sha256 = '0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d'
+                build = 244
+                sha256 = '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf'
             }
         }
         'CurrentStable' {
@@ -78,11 +186,13 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'current-stable-Paper'
                 software = 'paper'
                 minecraftVersion = '26.3'
-                build = 194
-                sha256 = '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784'
+                build = 244
+                sha256 = '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf'
             }
         }
         'CurrentStable209' {
+            # Compatibility selector for the historical Paper 26.3#209 evidence.
+            # It must not be described as the current stable build after the pin refresh.
             return [ordered]@{
                 taskSuffix = 'current-stable-Paper-209'
                 software = 'paper'
@@ -95,18 +205,20 @@ function Get-T21PlatformEndpoint(
             return [ordered]@{
                 taskSuffix = 'minimum-Folia'
                 software = 'folia'
-                minecraftVersion = '1.21.6'
-                build = 6
-                sha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234'
+                minecraftVersion = '26.2'
+                build = 7
+                channel = 'BETA'
+                sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
             }
         }
         'MaximumFolia' {
             return [ordered]@{
                 taskSuffix = 'maximum-Folia'
                 software = 'folia'
-                minecraftVersion = '26.2'
-                build = 7
-                sha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
+                minecraftVersion = '26.3'
+                build = 6
+                channel = 'ALPHA'
+                sha256 = '3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d'
             }
         }
         'CurrentMaximumFolia' {
@@ -114,17 +226,18 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'current-maximum-Folia'
                 software = 'folia'
                 minecraftVersion = '26.3'
-                build = 3
-                sha256 = '0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022'
+                build = 6
+                channel = 'ALPHA'
+                sha256 = '3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d'
             }
         }
         'MinimumCanvas' {
             return [ordered]@{
                 taskSuffix = 'minimum-Canvas'
                 software = 'canvas'
-                minecraftVersion = '1.21.8'
-                build = 603
-                sha256 = '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b'
+                minecraftVersion = '26.2'
+                build = 994
+                sha256 = '8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2'
             }
         }
         'MaximumCanvas' {
@@ -132,8 +245,8 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'maximum-Canvas'
                 software = 'canvas'
                 minecraftVersion = '26.3'
-                build = 972
-                sha256 = 'aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5'
+                build = 1010
+                sha256 = 'e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057'
             }
         }
         'CurrentMaximumCanvas' {
@@ -141,8 +254,8 @@ function Get-T21PlatformEndpoint(
                 taskSuffix = 'current-maximum-Canvas'
                 software = 'canvas'
                 minecraftVersion = '26.3'
-                build = 984
-                sha256 = '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa'
+                build = 1010
+                sha256 = 'e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057'
             }
         }
     }
@@ -838,7 +951,8 @@ function Test-T21SqlRuntimeReport(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [string]$ExpectedApiConsumerSha256
+    [string]$ExpectedApiConsumerSha256,
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
     try {
         if ($null -eq $report) { return $false }
@@ -848,10 +962,10 @@ function Test-T21SqlRuntimeReport(
         $sqlReportKey = if ($isPostgreSql) { 'postgresql' } else { 'mysql' }
         $expectedTask = "T21-M05-SYNC-$DatabaseProduct-$($expectedPlatform.taskSuffix)"
         $legacyMySqlReport = $schemaVersion -eq 1 -and $DatabaseProduct -ceq 'MySQL'
-        if ($schemaVersion -notin @(1, 2, 3, 4) -or
-            (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3, 4)) -or
-            ($isPostgreSql -and $schemaVersion -notin @(3, 4)) -or
-            ($expectedPlatform.software -cne 'paper' -and $schemaVersion -ne 4) -or
+        if ($schemaVersion -notin @(1, 2, 3, 4, 5) -or
+            (-not $legacyMySqlReport -and $schemaVersion -notin @(2, 3, 4, 5)) -or
+            ($isPostgreSql -and $schemaVersion -notin @(3, 4, 5)) -or
+            ($expectedPlatform.software -cne 'paper' -and $schemaVersion -notin @(4, 5)) -or
             ([string]$expectedServerSha256).ToLowerInvariant() -cne $expectedPlatform.sha256 -or
             (Get-T21ObservedValue $report 'task') -cne $expectedTask -or
             (Get-T21ObservedValue $report 'status') -cne 'PASS_BOUNDED_SUBCASE') { return $false }
@@ -879,6 +993,22 @@ function Test-T21SqlRuntimeReport(
             $cleanupFailures -isnot [Collections.IList] -or
             $cleanupFailures.Count -ne 0) { return $false }
 
+        if ($schemaVersion -ge 5) {
+            $sourceCommit = [string](Get-T21ObservedValue $report 'sourceCommit')
+            $sourceCommitAfter = [string](Get-T21ObservedValue $report 'sourceCommitAfter')
+            $sourceFingerprint = [string](Get-T21ObservedValue $report 'sourceWorkingTreeFingerprint')
+            $sourceFingerprintAfter = [string](Get-T21ObservedValue $report 'sourceWorkingTreeFingerprintAfter')
+            $sourceDirty = Get-T21ObservedValue $report 'sourceWorkingTreeDirty'
+            $sourceDirtyAfter = Get-T21ObservedValue $report 'sourceWorkingTreeDirtyAfter'
+            if ($sourceCommit -notmatch '^[0-9a-f]{40}$' -or
+                $sourceCommitAfter -cne $sourceCommit -or
+                $sourceFingerprint -notmatch '^[0-9a-f]{64}$' -or
+                $sourceFingerprintAfter -cne $sourceFingerprint -or
+                $sourceDirty -isnot [bool] -or
+                $sourceDirtyAfter -isnot [bool] -or
+                $sourceDirtyAfter -ne $sourceDirty) { return $false }
+        }
+
         $server = Get-T21ObservedValue $report 'server'
         $candidate = Get-T21ObservedValue $report 'candidate'
         $java = Get-T21ObservedValue $report 'java'
@@ -894,7 +1024,7 @@ function Test-T21SqlRuntimeReport(
             (Get-T21ObservedValue $server 'minecraftVersion') -cne $expectedPlatform.minecraftVersion -or
             (Get-T21ObservedValue $server 'build') -ne $expectedPlatform.build -or
             ([string](Get-T21ObservedValue $server 'sha256')).ToLowerInvariant() -cne $expectedServerSha256.ToLowerInvariant() -or
-            (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
+            (Get-T21ObservedValue $candidate 'version') -cne $ExpectedCandidateVersion -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
             (Get-T21ObservedValue $java 'feature') -ne 25) { return $false }
 
@@ -1028,7 +1158,7 @@ function Test-T21SqlRuntimeReport(
             $runtimeIdentity = Get-T21ObservedValue $startup 'runtimeIdentity'
             if ((Get-T21ObservedValue $startup 'stage') -cne $expectedStages[$index] -or
                 -not (Test-T21ObservedBoolean (Get-T21ObservedValue $startup 'enabled') $true) -or
-                (Get-T21ObservedValue $startup 'pluginVersion') -cne '1.4.0-alpha.1' -or
+                (Get-T21ObservedValue $startup 'pluginVersion') -cne $ExpectedCandidateVersion -or
                 ($schemaVersion -ge 4 -and (Get-T21ObservedValue $startup 'apiConsumerMarker') -cne 'PASS') -or
                 [int](Get-T21ObservedValue $startup 'processId') -le 0 -or
                 ([string](Get-T21ObservedValue $startup 'artifactSha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant() -or
@@ -1247,9 +1377,10 @@ function Test-T21MySqlRuntimeReport(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [string]$ExpectedApiConsumerSha256
+    [string]$ExpectedApiConsumerSha256,
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct $DatabaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256 -ExpectedCandidateVersion $ExpectedCandidateVersion
 }
 
 function Test-T21PostgresRuntimeReport(
@@ -1259,7 +1390,8 @@ function Test-T21PostgresRuntimeReport(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [string]$ExpectedApiConsumerSha256
+    [string]$ExpectedApiConsumerSha256,
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
-    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256
+    return Test-T21SqlRuntimeReport $report $expectedServerSha256 $expectedCandidateSha256 -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $ExpectedApiConsumerSha256 -ExpectedCandidateVersion $ExpectedCandidateVersion
 }

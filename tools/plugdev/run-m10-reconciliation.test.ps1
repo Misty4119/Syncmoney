@@ -260,14 +260,18 @@ try {
     $mineflayerRoot = Join-Path $provenanceTempRoot 'mineflayer'
     $null = New-Item -ItemType Directory -Path $mineflayerRoot -Force
     [IO.File]::WriteAllText((Join-Path $mineflayerRoot 'package.json'), '{"name":"mineflayer","version":"4.39.0","main":"index.js"}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $mineflayerRoot 'index.js'), 'module.exports = {};', [Text.UTF8Encoding]::new($false))
     $mineflayerPackage = Assert-M10ExpectedLocalMineflayerRoot $mineflayerRoot $mineflayerRoot
     if ($mineflayerPackage.name -ne 'mineflayer' -or $mineflayerPackage.version -ne '4.39.0') {
         throw 'M10 Mineflayer local-project metadata validation returned unexpected metadata.'
     }
     Assert-Throws { Assert-M10ExpectedLocalMineflayerRoot $mineflayerRoot (Join-Path $provenanceTempRoot 'substituted-mineflayer') } 'M10 Mineflayer provenance accepted a substituted checkout root.'
-    $localMineflayerRoot = 'C:\Users\margo\IdeaProjects\mineflayer-master'
+    $localMineflayerRoot = $mineflayerRoot
     $localMineflayerPackage = Join-Path $localMineflayerRoot 'package.json'
     $localMineflayerMain = (Get-Content -LiteralPath $localMineflayerPackage -Raw | ConvertFrom-Json).main
+    $resolvedMineflayerPackageRoot = Join-Path $localMineflayerRoot 'node_modules/mineflayer'
+    $null = New-Item -ItemType Directory -Path $resolvedMineflayerPackageRoot -Force
+    [IO.File]::WriteAllText((Join-Path $resolvedMineflayerPackageRoot 'package.json'), '{"name":"mineflayer","version":"4.39.0","main":"../../index.js"}', [Text.UTF8Encoding]::new($false))
     $resolvedMineflayer = Get-M10ResolvedMineflayerEntry (Get-Command node -ErrorAction Stop).Source $localMineflayerPackage
     $expectedMineflayerEntry = Join-Path $localMineflayerRoot $localMineflayerMain
     if ((Assert-M10ExpectedLocalMineflayerEntry $resolvedMineflayer $expectedMineflayerEntry) -ne [IO.Path]::GetFullPath($expectedMineflayerEntry)) {

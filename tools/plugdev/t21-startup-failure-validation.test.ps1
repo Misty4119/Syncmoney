@@ -5,6 +5,11 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or newer is required for T21 startup-failure validator tests.' }
 . (Join-Path $PSScriptRoot 't21-startup-failure-validation.ps1')
 
+$endpoint = Get-T21PlatformEndpoint -PlatformEndpoint Minimum
+$endpointSoftwareDisplayName = [string]$endpoint.software
+$endpointSoftwareDisplayName = $endpointSoftwareDisplayName.Substring(0, 1).ToUpperInvariant() + $endpointSoftwareDisplayName.Substring(1)
+$minimumEndpointStartupIdentity = "[07:43:59] [Server thread/INFO]: [Bootstrap] Loading $endpointSoftwareDisplayName $($endpoint.minecraftVersion)-$($endpoint.build)-main@4d854e6 for Minecraft $($endpoint.minecraftVersion)"
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('t21-startup-failure-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path (Join-Path $testRoot 'logs') | Out-Null
 try {
@@ -34,7 +39,7 @@ try {
 
     $platformLogPath = Join-Path $testRoot 'logs\platform-candidate-startup-failure.txt'
     $platformLog = @(
-        '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
+        $minimumEndpointStartupIdentity
         '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
         '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 12, target 11'
         '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
@@ -54,7 +59,6 @@ try {
     [IO.File]::WriteAllText($gradleStopLogPath, "No Gradle daemons are running.`n", [Text.UTF8Encoding]::new($false))
     $gradleStopLogInfo = Get-Item -LiteralPath $gradleStopLogPath
     $gradleStopLogHash = (Get-FileHash -LiteralPath $gradleStopLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint Minimum
     $runnerPath = Join-Path $PSScriptRoot 'run-mysql-sync-runtime.ps1'
     $sharedValidatorPath = Join-Path $PSScriptRoot 't21-upgrade-validation.ps1'
     $sharedTestPath = Join-Path $PSScriptRoot 't21-upgrade-validation.test.ps1'
@@ -125,7 +129,7 @@ try {
         status = 'PASS_BOUNDED_SUBCASE'
         runId = [guid]::NewGuid().ToString('N')
         runDirectory = $testRoot
-        server = [ordered]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48; sha256 = $endpoint.sha256 }
+        server = [ordered]@{ software = $endpoint.software; minecraftVersion = $endpoint.minecraftVersion; build = $endpoint.build; sha256 = $endpoint.sha256 }
         candidate = [ordered]@{ version = '1.4.0-alpha.1'; sha256 = ('a' * 64) }
         artifacts = [ordered]@{ acceptanceSha256 = ('b' * 64); apiConsumerSha256 = ('c' * 64) }
         java = [ordered]@{ feature = 25; banner = 'openjdk version "25.0.4" 2026-07-21 LTS' }
@@ -154,7 +158,7 @@ try {
         }
         startupObservation = [ordered]@{
             stage = 'candidate-startup-failure'; pluginVersion = '1.4.0-alpha.1'; artifactSha256 = ('a' * 64)
-            enabled = $false; processId = 4001; runtimeIdentity = [ordered]@{ software = 'paper'; runtimeVersion = '1.21.6'; minecraftVersion = '1.21.6'; build = 48 }
+            enabled = $false; processId = 4001; runtimeIdentity = [ordered]@{ software = $endpoint.software; runtimeVersion = $endpoint.minecraftVersion; minecraftVersion = $endpoint.minecraftVersion; build = $endpoint.build }
             expectedFailure = 'newer-audit-schema'; failureObserved = $true; failureMessage = 'Audit schema version 12 is newer than this plugin supports (11); no audit schema changes were made.'
             rollbackComplete = $true; sqlPoolShutdownObserved = $true; disabledMarker = $true; successMarkerObserved = $false
         }
@@ -270,7 +274,7 @@ try {
     $incompleteReport.startupObservation.failureMessage = 'Failed audit schema migration to version 10; version metadata was not advanced past 9'
     $incompleteReport.startupObservation.failureDetailMarker = 'Required v10 audit columns are missing:'
     $incompleteLog = @(
-        '[07:43:59] [Server thread/INFO]: [Bootstrap] Loading Paper 1.21.6-48-main@4d854e6 for Minecraft 1.21.6'
+        $minimumEndpointStartupIdentity
         '[07:44:00] [Server thread/INFO]: Loading server plugin Syncmoney v1.4.0-alpha.1'
         '[07:44:00] [Server thread/INFO]: [Syncmoney] Syncmoney audit schema version: current 9, target 11'
         '[07:44:00] [Server thread/SEVERE]: [Syncmoney] Syncmoney initialization failed; rolling back initialized owners'
@@ -2412,7 +2416,7 @@ try {
         throw 'The complete maximum-Folia MySQL incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept maximum-Folia MySQL incomplete-v10 failure with the exact pinned runtime identity'
-    $maximumFoliaIncompleteReport.startupObservation.runtimeIdentity.build = 6
+    $maximumFoliaIncompleteReport.startupObservation.runtimeIdentity.build = [int]$maximumFoliaEndpoint.build + 1
     if (Test-T21StartupFailureReportFixture $maximumFoliaIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct MySQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable) {
         throw 'The maximum-Folia MySQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
@@ -2430,7 +2434,7 @@ try {
         throw 'The complete maximum-Folia PostgreSQL incomplete-v10 audit-table failure report was rejected.'
     }
     Write-Output 'PASS: accept maximum-Folia PostgreSQL incomplete-v10 failure with the exact pinned runtime identity'
-    $maximumFoliaPostgreSqlIncompleteReport.startupObservation.runtimeIdentity.build = 6
+    $maximumFoliaPostgreSqlIncompleteReport.startupObservation.runtimeIdentity.build = [int]$maximumFoliaEndpoint.build + 1
     if (Test-T21StartupFailureReportFixture $maximumFoliaPostgreSqlIncompleteReport $maximumFoliaEndpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) `
             -DatabaseProduct PostgreSQL -PlatformEndpoint MaximumFolia -FailureScenario IncompleteV10AuditTable) {
         throw 'The maximum-Folia PostgreSQL incomplete-v10 report accepted a runtime build that differs from the pinned endpoint.'
@@ -2689,11 +2693,11 @@ try {
     }
     Write-Output 'PASS: reject changes to the audit version row, columns, indexes, or sentinel data'
 
-    $report.server.build = 49
+    $report.server.build = [int]$endpoint.build + 1
     if (Test-T21StartupFailureReportFixture $report $endpoint.sha256 ('a' * 64) ('b' * 64) ('c' * 64) -DatabaseProduct PostgreSQL -PlatformEndpoint Minimum) {
         throw 'The report accepted a server build outside the pinned endpoint.'
     }
-    $report.server.build = 48
+    $report.server.build = $endpoint.build
     Write-Output 'PASS: reject a mismatched server build'
 
     $report.schemaStateAfter.auditVersion = 11

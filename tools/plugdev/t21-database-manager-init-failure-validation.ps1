@@ -350,14 +350,7 @@ function Test-T21DatabaseManagerInitFailureReport(
     [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas', 'CurrentMaximumCanvas')][string]$ExpectedPlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$ExpectedDatabaseProduct = 'PostgreSQL'
 ) {
-    $expectedServer = switch ($ExpectedPlatformEndpoint) {
-        'Minimum' { [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48 } }
-        'MinimumFolia' { [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6 } }
-        'CurrentMaximum' { [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200 } }
-        'CurrentMaximumFolia' { [pscustomobject]@{ software = 'folia'; minecraftVersion = '26.3'; build = 3 } }
-        'MinimumCanvas' { [pscustomobject]@{ software = 'canvas'; minecraftVersion = '1.21.8'; build = 603 } }
-        'CurrentMaximumCanvas' { [pscustomobject]@{ software = 'canvas'; minecraftVersion = '26.3'; build = 984 } }
-    }
+    $expectedServer = Get-T21PlatformEndpoint -PlatformEndpoint $ExpectedPlatformEndpoint
     $failure = Get-T21DatabaseManagerInitFailureValue $Report 'failure'
     if ($null -eq $Report -or
         -not (Test-T21DatabaseManagerInitFailureTarget $ExpectedDatabaseProduct $ExpectedPlatformEndpoint) -or

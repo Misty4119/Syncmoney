@@ -24,6 +24,7 @@ configurations {
 }
 
 dependencies {
+    def paperApiVersion = rootProject.ext.paperApiVersion
     implementation project(':syncmoney-core')
     implementation project(':syncmoney-protocol')
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
@@ -38,7 +39,7 @@ dependencies {
     integrationTestImplementation project(':syncmoney-storage')
     integrationTestImplementation project(':syncmoney-bukkit')
     integrationTestImplementation 'com.zaxxer:HikariCP:6.2.1'
-    integrationTestImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    integrationTestImplementation "io.papermc.paper:paper-api:${paperApiVersion}"
     integrationTestImplementation 'org.mockito:mockito-core:5.8.0'
     integrationTestImplementation 'net.bytebuddy:byte-buddy:1.17.5'
     integrationTestImplementation 'net.bytebuddy:byte-buddy-agent:1.17.5'

@@ -18,6 +18,7 @@ import {
 } from "./t21-paper-network-runner.mjs";
 import {
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
+  T21_PAPER_NETWORK_ARTIFACTS,
   T21_NETWORK_ENDPOINTS,
   T21_PAPER_NETWORK_TOOLCHAIN_PINS,
   resolvePinnedArtifactSources,
@@ -25,6 +26,7 @@ import {
 import * as paperNetworkRunner from "./t21-paper-network-runner.mjs";
 
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const PLUGDEV_SERVER_ROOT = path.join(process.env.USERPROFILE ?? "C:/Users/margo", ".plugdev", "servers");
 
 test("accepts exact outage pay completion after the recovery barrier when a chat receipt arrived earlier", () => {
   const predicate = paperNetworkRunner.isOutagePayCompletionAfterRecoveryBarrier;
@@ -353,7 +355,7 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
     rconB: 28001,
     bridge: 28100,
   };
-  const config = buildPlugdevConfig(runRoot, { endpoint: { product: "Paper", version: "1.21.6" } }, ports, "test-only-rcon-password");
+  const config = buildPlugdevConfig(runRoot, { endpoint: { product: "Paper", version: "26.2" } }, ports, "test-only-rcon-password");
 
   const deployedArtifacts = T21_PAPER_NETWORK_ARTIFACT_PATHS.filter(artifact => !artifact.path.startsWith("inputs/"));
   assert.equal(deployedArtifacts.length, 9);
@@ -364,7 +366,7 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
   for (const backend of config.backends) {
     assert.equal(backend.software, "custom",
       "each backend must use PlugDev's exact local-JAR path instead of resolving the latest Paper build for the MC version");
-    assert.equal(backend.version, "1.21.6");
+    assert.equal(backend.version, "26.2");
     assert.equal(backend.jar, path.join(runRoot, "inputs", "paper.jar"));
     for (const plugin of backend.plugins) {
       assert.equal(path.isAbsolute(plugin.jar), true);
@@ -391,89 +393,103 @@ test("PlugDev network artifact paths stay pinned while plugin configs stay insid
   }
 });
 
+test("runner pins the minimum Paper endpoint and exact Beta.3 candidate artifacts", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  assert.deepEqual(parse(["--endpoint", "paper-262-135"]), {
+    endpointId: "paper-262-135",
+    preflightOnly: false,
+  });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["paper-262-135"], {
+    product: "Paper",
+    version: "26.2",
+    build: 135,
+    serverJarSha256: "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1",
+  });
+  assert.equal(T21_PAPER_NETWORK_ARTIFACTS.candidateVersion, "1.4.0-Beta.3");
+  assert.equal(T21_PAPER_NETWORK_ARTIFACTS.candidateSha256,
+    "de9ed76305b1f900d40f5fec238f86731d410ea9d046eb831715114a1c4392a3");
+  assert.equal(T21_PAPER_NETWORK_ARTIFACTS.acceptanceSha256,
+    "fdc0e11e44b8905fef6fa08cce5b2c11662f59992e2cbcf94da7e76f2b507ead");
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "paper-262-135");
+  assert.equal(sources.paper, path.join(PLUGDEV_SERVER_ROOT, "paper-26.2", "paper-26.2-135.jar"));
+  assert.equal(sources.candidate, path.join(WORKSPACE_ROOT, "build", "libs", "Syncmoney-1.4.0-Beta.3.jar"));
+});
+
+test("runner pins the current-maximum Paper endpoint", () => {
+  const parse = paperNetworkRunner.parseArguments;
+  assert.deepEqual(parse(["--endpoint", "paper-263-243"]), {
+    endpointId: "paper-263-243",
+    preflightOnly: false,
+  });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["paper-263-243"], {
+    product: "Paper",
+    version: "26.3",
+    build: 243,
+    serverJarSha256: "650805b63174770b557d83bbfcdd16ec39531124b7b850589bad59bc4b6a0af8",
+  });
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "paper-263-243");
+  assert.equal(sources.paper, path.join(PLUGDEV_SERVER_ROOT, "paper-26.3", "paper-26.3-243.jar"));
+});
+
 test("runner selects the exact minimum Folia endpoint and its retained C: artifact", () => {
   const parse = paperNetworkRunner.parseArguments;
   let parsed;
   let parseError;
-  try { parsed = parse(["--endpoint", "folia-1216-6"]); }
+  try { parsed = parse(["--endpoint", "folia-262-7"]); }
   catch (error) { parseError = error; }
   assert.equal(parseError, undefined, parseError?.message);
-  assert.deepEqual(parsed, { endpointId: "folia-1216-6", preflightOnly: false });
-  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-1216-6"], {
+  assert.deepEqual(parsed, { endpointId: "folia-262-7", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-262-7"], {
     product: "Folia",
-    version: "1.21.6",
-    build: 6,
-    serverJarSha256: "917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234",
+    version: "26.2",
+    build: 7,
+    serverJarSha256: "128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3",
   });
-  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-1216-6");
-  assert.equal(sources.server, path.join(
-    WORKSPACE_ROOT,
-    "build",
-    "reports",
-    "foundation",
-    "T21-sql-runtime",
-    "minimum-artifacts",
-    "folia-1.21.6-6.jar",
-  ));
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-262-7");
+  assert.equal(sources.server, path.join(PLUGDEV_SERVER_ROOT, "folia-26.2", "folia-26.2-7.jar"));
 });
 
 test("runner selects the exact current-maximum Folia endpoint and its retained C: artifact", () => {
   const parse = paperNetworkRunner.parseArguments;
   let parsed;
   let parseError;
-  try { parsed = parse(["--endpoint", "folia-263-3"]); }
+  try { parsed = parse(["--endpoint", "folia-263-6"]); }
   catch (error) { parseError = error; }
   assert.equal(parseError, undefined, parseError?.message);
-  assert.deepEqual(parsed, { endpointId: "folia-263-3", preflightOnly: false });
-  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-263-3"], {
+  assert.deepEqual(parsed, { endpointId: "folia-263-6", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["folia-263-6"], {
     product: "Folia",
     version: "26.3",
-    build: 3,
-    serverJarSha256: "0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022",
+    build: 6,
+    serverJarSha256: "3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d",
   });
-  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-263-3");
-  assert.equal(sources.server, path.join(
-    WORKSPACE_ROOT,
-    "build",
-    "reports",
-    "foundation",
-    "T21-sql-runtime",
-    "current-maximum-artifacts",
-    "folia-26.3-3.jar",
-  ));
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "folia-263-6");
+  assert.equal(sources.server, path.join(PLUGDEV_SERVER_ROOT, "folia-26.3", "folia-26.3-6.jar"));
 });
 
 test("runner selects the exact minimum Canvas endpoint and its retained C: artifact", () => {
   const parse = paperNetworkRunner.parseArguments;
   let parsed;
   let parseError;
-  try { parsed = parse(["--endpoint", "canvas-1218-603"]); }
+  try { parsed = parse(["--endpoint", "canvas-262-994"]); }
   catch (error) { parseError = error; }
   assert.equal(parseError, undefined, parseError?.message);
-  assert.deepEqual(parsed, { endpointId: "canvas-1218-603", preflightOnly: false });
-  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-1218-603"], {
+  assert.deepEqual(parsed, { endpointId: "canvas-262-994", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-262-994"], {
     product: "Canvas",
-    version: "1.21.8",
-    build: 603,
-    serverJarSha256: "6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b",
+    version: "26.2",
+    build: 994,
+    serverJarSha256: "8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2",
   });
-  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-1218-603");
-  assert.equal(sources.server, path.join(
-    WORKSPACE_ROOT,
-    "build",
-    "reports",
-    "foundation",
-    "T21-sql-runtime",
-    "minimum-artifacts",
-    "canvas-1.21.8-603.jar",
-  ));
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-262-994");
+  assert.equal(sources.server, path.join(PLUGDEV_SERVER_ROOT, "canvas-26.2", "canvas-26.2-994.jar"));
 });
 
 
 test("runner argument usage includes the current-maximum Canvas endpoint", () => {
   assert.throws(
     () => paperNetworkRunner.parseArguments([]),
-    /canvas-263-984/,
+    /canvas-263-1010/,
   );
 });
 
@@ -481,26 +497,18 @@ test("runner selects the exact current-maximum Canvas endpoint and its retained 
   const parse = paperNetworkRunner.parseArguments;
   let parsed;
   let parseError;
-  try { parsed = parse(["--endpoint", "canvas-263-984"]); }
+  try { parsed = parse(["--endpoint", "canvas-263-1010"]); }
   catch (error) { parseError = error; }
   assert.equal(parseError, undefined, parseError?.message);
-  assert.deepEqual(parsed, { endpointId: "canvas-263-984", preflightOnly: false });
-  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-263-984"], {
+  assert.deepEqual(parsed, { endpointId: "canvas-263-1010", preflightOnly: false });
+  assert.deepEqual(T21_NETWORK_ENDPOINTS["canvas-263-1010"], {
     product: "Canvas",
     version: "26.3",
-    build: 984,
-    serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
+    build: 1010,
+    serverJarSha256: "e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057",
   });
-  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-263-984");
-  assert.equal(sources.server, path.join(
-    WORKSPACE_ROOT,
-    "build",
-    "reports",
-    "foundation",
-    "T21-sql-runtime",
-    "current-maximum-artifacts",
-    "canvas-26.3-984.jar",
-  ));
+  const sources = resolvePinnedArtifactSources(WORKSPACE_ROOT, "canvas-263-1010");
+  assert.equal(sources.server, path.join(PLUGDEV_SERVER_ROOT, "canvas-26.3", "canvas-26.3-1010.jar"));
 });
 
 test("PlugDev launches both current-maximum Canvas backends from the exact run-owned Canvas JAR", () => {
@@ -515,7 +523,7 @@ test("PlugDev launches both current-maximum Canvas backends from the exact run-o
     rconB: 28001,
     bridge: 28100,
   };
-  const endpoint = T21_NETWORK_ENDPOINTS["canvas-263-984"];
+  const endpoint = T21_NETWORK_ENDPOINTS["canvas-263-1010"];
   const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
   assert.equal(config.backends.length, 2);
   for (const backend of config.backends) {
@@ -537,12 +545,12 @@ test("PlugDev launches both minimum Canvas backends from the exact run-owned Can
     rconB: 28001,
     bridge: 28100,
   };
-  const endpoint = T21_NETWORK_ENDPOINTS["canvas-1218-603"];
+  const endpoint = T21_NETWORK_ENDPOINTS["canvas-262-994"];
   const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
   assert.equal(config.backends.length, 2);
   for (const backend of config.backends) {
     assert.equal(backend.software, "custom");
-    assert.equal(backend.version, "1.21.8");
+    assert.equal(backend.version, "26.2");
     assert.equal(backend.jar, path.join(runRoot, "inputs", "canvas.jar"));
   }
 });
@@ -561,7 +569,7 @@ test("stages the pinned Canvas server JAR under the input filename consumed by P
     await mkdir(path.join(runRoot, "inputs"));
     await writeFile(artifactPath, artifactBytes);
     await copyInputs(runRoot, {
-      endpoint: T21_NETWORK_ENDPOINTS["canvas-1218-603"],
+      endpoint: T21_NETWORK_ENDPOINTS["canvas-262-994"],
       artifactSources: { server: artifactPath },
       expectedHashes: {
         server: crypto.createHash("sha256").update(artifactBytes).digest("hex"),
@@ -586,12 +594,12 @@ test("PlugDev launches both Folia backends from the exact run-owned Folia JAR", 
     rconB: 28001,
     bridge: 28100,
   };
-  const endpoint = T21_NETWORK_ENDPOINTS["folia-1216-6"];
+  const endpoint = T21_NETWORK_ENDPOINTS["folia-262-7"];
   const config = buildPlugdevConfig(runRoot, { endpoint }, ports, "test-only-rcon-password");
   assert.equal(config.backends.length, 2);
   for (const backend of config.backends) {
     assert.equal(backend.software, "custom");
-    assert.equal(backend.version, "1.21.6");
+    assert.equal(backend.version, "26.2");
     assert.equal(backend.jar, path.join(runRoot, "inputs", "folia.jar"));
   }
 });

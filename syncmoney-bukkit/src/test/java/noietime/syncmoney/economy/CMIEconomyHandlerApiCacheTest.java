@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -17,9 +19,33 @@ import java.util.logging.Logger;
 import noietime.syncmoney.Syncmoney;
 import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.sync.CMIApi;
+import noietime.syncmoney.storage.RedisManager;
 import org.junit.jupiter.api.Test;
 
 class CMIEconomyHandlerApiCacheTest {
+
+    @Test
+    void cmiAuthorityHandlerRejectsGenericWritesWithoutTouchingRedis() {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CMIEconomyHandlerApiCacheTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.isCMIMode()).thenReturn(true);
+        RedisManager redisManager = mock(RedisManager.class);
+        CrossServerSyncManager syncManager = mock(CrossServerSyncManager.class);
+        CMIEconomyHandler handler = new CMIEconomyHandler(
+                plugin, config, redisManager, syncManager, mock(CMIApi.class));
+        UUID uuid = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("25.00");
+
+        assertEquals(new BigDecimal("-1"), handler.deposit(uuid, amount));
+        assertEquals(new BigDecimal("-1"), handler.withdraw(uuid, amount));
+        assertEquals(new BigDecimal("-1"), handler.setBalance(uuid, amount));
+        verify(redisManager, never()).getResource();
+        verify(syncManager, never()).publishCMIUpdate(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyString());
+    }
 
     @Test
     void inboundSynchronizationBookkeepingDoesNotClaimAConfirmedAuthoritySnapshot() {
@@ -32,6 +58,25 @@ class CMIEconomyHandlerApiCacheTest {
 
         assertTrue(handler.getCachedBalanceForApi(uuid).isEmpty(),
                 "synchronization bookkeeping may reflect a mirror value not applied to local CMI");
+    }
+
+    @Test
+    void timestampDerivedVersionRollbackDoesNotLowerTheLocalFreshnessWatermark() throws Exception {
+        CMIEconomyHandler handler = newHandler(mock(CMIApi.class));
+        UUID uuid = UUID.randomUUID();
+
+        handler.notifyInboundApplied(uuid, new BigDecimal("20.00"), 2_000L);
+        // CMI versions include the wall-clock timestamp. If this server clock moves backward,
+        // a lower new version cannot safely supersede a higher locally observed version.
+        handler.notifyInboundApplied(uuid, new BigDecimal("10.00"), 1_000L);
+
+        Field field = CMIEconomyHandler.class.getDeclaredField("lastAppliedVersion");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<UUID, Long> watermark = (Map<UUID, Long>) field.get(handler);
+        synchronized (watermark) {
+            assertEquals(2_000L, watermark.get(uuid));
+        }
     }
 
     @Test

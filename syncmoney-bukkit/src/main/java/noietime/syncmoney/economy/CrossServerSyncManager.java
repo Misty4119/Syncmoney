@@ -344,6 +344,10 @@ public class CrossServerSyncManager {
      * so the interval is supplied in ticks (not milliseconds) to actually run every 5 minutes.
      */
     public void startPeriodicVersionCheck() {
+        if (config.isCMIMode()) {
+            plugin.getLogger().fine("Cross-server version repair skipped: CMI mode uses its dedicated Redis mirror.");
+            return;
+        }
         synchronized (versionCheckLifecycleGate) {
             if (stopped || versionCheckTask != null) {
                 return;

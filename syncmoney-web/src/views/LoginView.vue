@@ -70,7 +70,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNodesStore } from '@/stores/nodes'
-import { Zap, KeyRound, AlertCircle } from 'lucide-vue-next'
+import { Zap, KeyRound, AlertCircle } from '@lucide/vue'
 import Button from '@/components/common/Button.vue'
 
 declare const __APP_VERSION__: string

@@ -92,7 +92,7 @@ class StorageManagerDisabledBackendTest {
     }
 
     @Test
-    void cmiModeWithDatabaseDisabledKeepsRedisRequiredButSkipsSqlResources() {
+    void cmiModeKeepsRedisForCmiSyncButSkipsGenericBalanceCacheAndSql() {
         Syncmoney plugin = plugin();
         SyncmoneyConfig config = config(EconomyMode.CMI);
         AtomicReference<RedisManager> redisManager = new AtomicReference<>();
@@ -103,11 +103,7 @@ class StorageManagerDisabledBackendTest {
                  assertSame(config, context.arguments().get(1));
                  assertEquals(Boolean.TRUE, context.arguments().get(2));
              });
-             MockedConstruction<CacheManager> cacheManagers = mockConstruction(CacheManager.class, (mock, context) -> {
-                 assertSame(plugin, context.arguments().get(0));
-                 assertSame(redisManager.get(), context.arguments().get(1));
-                 assertEquals(Boolean.TRUE, context.arguments().get(2));
-             });
+             MockedConstruction<CacheManager> cacheManagers = mockConstruction(CacheManager.class);
              MockedConstruction<DatabaseManager> databaseManagers = mockConstruction(DatabaseManager.class);
              MockedConstruction<DbWriterConsumer> writerConsumers = mockConstruction(DbWriterConsumer.class)) {
             StorageManager manager = new StorageManager(plugin, config);
@@ -115,7 +111,8 @@ class StorageManagerDisabledBackendTest {
                 manager.initialize();
 
                 assertEquals(1, redisManagers.constructed().size());
-                assertEquals(1, cacheManagers.constructed().size());
+                assertTrue(cacheManagers.constructed().isEmpty());
+                assertNull(manager.getCacheManager());
                 assertNull(manager.getDatabaseManager());
                 assertNotNull(manager.getDbWriteQueue(), "the lightweight compatibility queue remains available");
                 assertTrue(databaseManagers.constructed().isEmpty());
@@ -127,13 +124,10 @@ class StorageManagerDisabledBackendTest {
     }
 
     @Test
-    void cmiModeWithDatabaseEnabledKeepsAuxiliarySqlResources() {
+    void cmiModeSkipsSqlEvenWhenDatabaseIsConfigured() {
         Syncmoney plugin = plugin();
         SyncmoneyConfig config = config(EconomyMode.CMI, true);
         AtomicReference<RedisManager> redisManager = new AtomicReference<>();
-        AtomicReference<CacheManager> cacheManager = new AtomicReference<>();
-        AtomicReference<DatabaseManager> databaseManager = new AtomicReference<>();
-        AtomicReference<DbWriteQueue> writerQueue = new AtomicReference<>();
 
         try (MockedConstruction<RedisManager> redisManagers = mockConstruction(RedisManager.class, (mock, context) -> {
                  redisManager.set(mock);
@@ -141,37 +135,20 @@ class StorageManagerDisabledBackendTest {
                  assertSame(config, context.arguments().get(1));
                  assertEquals(Boolean.TRUE, context.arguments().get(2));
              });
-             MockedConstruction<CacheManager> cacheManagers = mockConstruction(CacheManager.class, (mock, context) -> {
-                 cacheManager.set(mock);
-                 assertSame(plugin, context.arguments().get(0));
-                 assertSame(redisManager.get(), context.arguments().get(1));
-                 assertEquals(Boolean.TRUE, context.arguments().get(2));
-             });
-             MockedConstruction<DatabaseManager> databaseManagers = mockConstruction(DatabaseManager.class,
-                     (mock, context) -> {
-                         databaseManager.set(mock);
-                         assertSame(plugin, context.arguments().get(0));
-                         assertSame(config, context.arguments().get(1));
-                     });
-             MockedConstruction<DbWriterConsumer> writerConsumers = mockConstruction(DbWriterConsumer.class,
-                     (mock, context) -> {
-                         assertSame(plugin, context.arguments().get(0));
-                         writerQueue.set((DbWriteQueue) context.arguments().get(1));
-                         assertSame(databaseManager.get(), context.arguments().get(2));
-                         assertSame(cacheManager.get(), context.arguments().get(3));
-                         assertSame(redisManager.get(), context.arguments().get(4));
-                     })) {
+             MockedConstruction<CacheManager> cacheManagers = mockConstruction(CacheManager.class);
+             MockedConstruction<DatabaseManager> databaseManagers = mockConstruction(DatabaseManager.class);
+             MockedConstruction<DbWriterConsumer> writerConsumers = mockConstruction(DbWriterConsumer.class)) {
             StorageManager manager = new StorageManager(plugin, config);
             try {
                 manager.initialize();
 
                 assertEquals(1, redisManagers.constructed().size());
-                assertEquals(1, cacheManagers.constructed().size());
-                assertEquals(1, databaseManagers.constructed().size());
-                assertSame(databaseManagers.constructed().get(0), manager.getDatabaseManager());
+                assertTrue(cacheManagers.constructed().isEmpty());
+                assertNull(manager.getCacheManager());
+                assertNull(manager.getDatabaseManager());
                 assertNotNull(manager.getDbWriteQueue());
-                assertEquals(1, writerConsumers.constructed().size());
-                assertSame(manager.getDbWriteQueue(), writerQueue.get());
+                assertTrue(databaseManagers.constructed().isEmpty());
+                assertTrue(writerConsumers.constructed().isEmpty());
             } finally {
                 manager.shutdown();
             }
@@ -277,6 +254,7 @@ class StorageManagerDisabledBackendTest {
     private static SyncmoneyConfig config(EconomyMode mode, boolean databaseEnabled) {
         SyncmoneyConfig config = mock(SyncmoneyConfig.class, RETURNS_DEEP_STUBS);
         when(config.getEconomyMode()).thenReturn(mode);
+        when(config.isCMIMode()).thenReturn(mode == EconomyMode.CMI);
         when(config.isDatabaseEnabled()).thenReturn(databaseEnabled);
         when(config.getQueueCapacity()).thenReturn(32);
         when(config.isDebug()).thenReturn(false);

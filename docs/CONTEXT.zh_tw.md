@@ -9,12 +9,13 @@
 - 目前 build 版本：`1.3.2`
 - 設定 schema：`12`
 - 編譯 toolchain：Java 25（1.4.0 target）；Gradle 9.8.0
-- Plugin API descriptor：`api-version: 1.21.6`（1.4.0 target）
+- Plugin API descriptor：`api-version: 26.2`（目前的 descriptor metadata）
+- 1.4.0 執行環境目標：Minecraft 26.2–26.3 的 Paper、Folia 與 Canvas；候選版實際驗收狀態記錄於發布準備快照。
 - 主要伺服器目標：Paper、Folia、Canvas
 - 選用整合：VaultUnlocked、CMI、PlaceholderAPI
 - 授權：Apache License 2.0
 
-**截至 2026-10-26 R63 R9，1.4.0 整體狀態為 BLOCKED / NOT VERIFIED。** 使用本機 `-PreleaseVersion=1.4.0`，Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，以及 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation、frontend typecheck（4 個 files／22 個 tests）與 production build 均通過。Preview artifact pins：core 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`；PAPI 13,872 bytes / SHA-256 `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`；acceptance 54,905 bytes / SHA-256 `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`；API consumer fixture 2,760 bytes / SHA-256 `49325F358195BE3F0F1D4F99B2BABBB6DB3C26C212E2E5DA7DC9F4209A2A396E`。ADR-16 僅涵蓋 live queued `/pay` durable recovery；direct Vault/plugin recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`。Storage-service integration 與 exact-candidate Paper runtime／T22 Beta 維持 `NOT VERIFIED`；minimum-Paper SQL 與 licensed/live CMI（授權 UNKNOWN）維持 `BLOCKED / NOT VERIFIED`；廣泛 V03 為 `SKIPPED / NOT VERIFIED`；完整 public API 相容性為 `NOT VERIFIED`；T21 為 `PARTIAL / IN PROGRESS`。Stable metadata 維持 1.3.2；Stable 與外部發布維持 `NOT VERIFIED / NOT PERFORMED`。
+目前候選版狀態、artifact pins、測試證據與未完成 gate，集中記錄於[版本化發布準備快照](release/1.4.0-readiness.zh_tw.md)，讓本架構背景文件不需每次測試都改動。
 
 ## 產品邊界
 
@@ -95,7 +96,7 @@ Balance 與 version 成對存在。遠端 handler 套用狀態前先比對 versi
 
 Shared `players` table 包含 UUID、player name、`DECIMAL(20,2)` balance、單調 `BIGINT` version、last server 與 updated timestamp。Syncmoney-owned `LOCAL_REDIS` 與 `SYNC` balance 上限為 `999999999999999999.99`；既有 `LOCAL` policy 不變，也不會 migration local data。
 
-live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。Exact-candidate Paper runtime acceptance 仍為 NOT VERIFIED。
+live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。
 
 其他 storage 分別處理 baltop、audit log 與 audit schema 演進、schema-version tracking、本機 SQLite player balance/transaction，以及 Shadow Sync history。
 

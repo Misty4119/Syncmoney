@@ -43,13 +43,14 @@ sourceSets {
 }
 
 dependencies {
+    def paperApiVersion = rootProject.ext.paperApiVersion
     implementation project(':syncmoney-api')
     implementation project(':syncmoney-core')
     implementation project(':syncmoney-protocol')
     implementation project(':syncmoney-storage')
     implementation project(':syncmoney-sync')
 
-    compileOnly 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    compileOnly "io.papermc.paper:paper-api:${paperApiVersion}"
     compileOnly 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     compileOnly 'me.clip:placeholderapi:2.12.2'
     compileOnly 'net.kyori:adventure-text-minimessage:4.16.0'
@@ -68,7 +69,7 @@ dependencies {
     implementation 'io.undertow:undertow-servlet:2.3.18.Final'
     implementation 'org.yaml:snakeyaml:2.4'
 
-    testImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    testImplementation "io.papermc.paper:paper-api:${paperApiVersion}"
     testImplementation 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testImplementation 'org.mockito:mockito-core:5.8.0'

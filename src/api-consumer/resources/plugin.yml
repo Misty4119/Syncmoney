@@ -1,6 +1,6 @@
 name: SyncmoneyApiConsumerFixture
 version: '1'
 main: noietime.syncmoney.apiconsumer.ApiClassLoaderIT
-api-version: '1.21.6'
+api-version: '26.2'
 folia-supported: true
 depend: [Syncmoney]

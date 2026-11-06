@@ -1,111 +1,34 @@
-# 更新日誌 (Changelog)
+# 更新日誌（Changelog）
 
-本專案的所有重大變更都將記錄於此檔案中。
+本文件記錄使用者可見的變更，格式遵循 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 與 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-本變更日誌格式基於 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，且本專案遵循 [語意化版本](https://semver.org/spec/v2.0.0.html)。
+## [1.4.0-Beta.1] - 2026-11-07
 
-## [Unreleased]
+### 相容性與驗證
 
-### 已修復 (Fixed)
-- /syncmoney migrate stop 現在也會要求 LOCAL-to-SYNC 遷移在安全邊界暫停。若 transaction-history 匯入正在進行，該原子 SQL transaction 不會被中斷；停止要求會在它返回後檢查。回覆只代表已接受要求，不代表工作已停止。任一遷移仍執行或等待收尾時，`/syncmoney migrate clear` 會拒絕刪除 checkpoint。
-- Admin give/take 不再同步載入 cold balance 以執行 mutation 或產生失敗回覆；take 失敗且餘額不在記憶體時會顯示 N/A。
-- 非 force 的 LOCAL-to-SYNC 遷移現在使用 insert-only shared-row 檢查處理 MySQL／MariaDB。既有 shared row 會保留且不會複製至 Redis；只有明確使用 force 才會取代。
-- LOCAL-to-SYNC migration 會先在 normalization 前拒絕 SQLite 原始負餘額，包括原本會四捨五入成 0.00 的負 sub-cent 值，並在準備 insert-only 或 force SQL 前拒絕正規化後超出 shared `DECIMAL(20,2)` 上限的餘額。MySQL `INSERT IGNORE` 不會再靜默將高餘額降至欄位上限；遭拒列在 LOCAL 的原值保持不變，也不會複製到 Redis。
-- LOCAL-to-SYNC migration 現在要求來源 UUID 使用標準 36 字元格式；Java parser 接受的縮寫 UUID 會在任何 shared write 前使來源 snapshot 失敗。
-- CMI Redis mirror 現在以 atomic version compare-and-write 更新；過期、衝突或不完整狀態會被拒絕。遭拒的 outbound update 不會發布，遭拒的 inbound update 不會排程 CMI mutation。
+- 1.4.0 的執行環境驗收矩陣為 Minecraft 26.2–26.3 的 Paper、Folia 與 Canvas。精確測試 build、有界情境的覆蓋範圍與明確豁免情境記錄於[發布準備紀錄](release/1.4.0-readiness.zh_tw.md)。
+- T21 live acceptance、候選綁定的 CMI runtime 重測，以及 PAPI 新舊版本 cross-pair runtime 情境均為 `WAIVED / NOT VERIFIED`，不會報成通過。CMI 人工能力測試依負責人回報為完成，但沒有候選 JAR hash 證據。
 
-- Redis Lua script SHA 缺失時，mutation 會在任何 balance command 傳送前標記為 `NOT_SENT`；recovery 會保留 retry 能力，不會把 account 誤判為 ambiguous 並 quarantine。
-- Node proxy 現在接受已設定 node origin 上安全的 `/api` path-only target，並拒絕 absolute URL、authority、fragment 與多層編碼 traversal path。
-- Scoped node-view key 不能再透過 remote node 設定的 API key 呼叫會改變狀態的 proxy method；寫入需要 node-manage 或 central permission。
-- Proxy 呼叫現在會在使用 remote node key 前檢查 caller 對 target API path 的 permission；未映射 path 只允許 central scope。Structured request body 會以 JSON 傳送；超過 1 MiB 的 request body 會在解析或使用 node key 前回 HTTP 413；上游 response 上限為 8 MiB，超限時回 HTTP 502。
-- Public `CacheManager` 建構預設停用 paired transfer；CMI mode 下 VaultUnlocked transfer 會在讀取 balance 前 fail closed，包含零額轉帳。
-- queued `/pay` 轉帳會在 queue commit 前先持久化並 force 成對 admission checkpoint。ambiguous transfer 在 restart 後仍維持 quarantine，管理員可透過 `/syncmoney recovery list|inspect|reconcile <id>` 查閱；reconciliation 必須使用 stable ID 相符的 exact Redis receipt。Direct Vault/plugin recovery 依 ADR-07 維持 deferred。
-- `GET /api/nodes` 現在讀取 periodic node health check 更新的同一份 status cache。
-- Node health check 失敗時不再記錄設定 URL 或例外訊息；node-status SSE URL 會在 broadcast 前移除 URI user-info。
-- Node list、status、管理 response 與 node-status SSE 會移除 URI user-info、query 與 fragment；建立或更新節點時會拒絕含有這些元件的 URL。
+### 安全稽核說明
 
-### 安全性 (Security)
+- 完整前端依賴稽核回報一項低嚴重度 build-time `deepmerge@4.3.1` advisory（GHSA-gcqx-w48m-w2h4／CVE-2026-93753），目前沒有上游修補版。Production-only audit 通過；本預覽版接受並保留此殘餘風險。
+- GitHub 的 Malware-alert inventory 無法取得，狀態維持 `UNKNOWN`；這不代表零個 malware alerts。
 
-- Web Admin CORS 現在能解析 list 與逗號分隔 scalar，並僅對 exact allowed origin 或明確設定的 wildcard 回傳 header。Node URL 驗證會拒絕 local/reserved address class，包含 IPv6 ULA。DNS rebinding 防護及 WebDownloader 傳輸／解壓資源上限仍為 `DEFERRED / NOT VERIFIED`。
-- Node proxy method 與 target-path permission 現在都會在使用 remote node key 前檢查；超限 body 會在解析或使用憑證前被拒絕。
+### 已新增（Added）
+- 管理員可檢視結果不明的佇列 `/pay` 轉帳；僅接受完全相符的操作收據進行對帳。
 
-### 候選驗證紀錄（未發布）
+### 已變更（Changed）
+- LOCAL-to-SYNC 遷移會在寫入前驗證來源 UUID 與共享餘額限制；除非管理員明確要求取代，否則保留既有共享餘額。
+- Web Admin 節點管理會依請求操作與目標路徑檢查權限、限制代理請求與回應大小，並從狀態資訊移除敏感 URL 組件。
+- CMI 僅同步模式由 CMI 維持經濟權威，透過 Redis 傳遞餘額更新；Syncmoney 在此模式不註冊自己的經濟提供者/API 或管理模組，PAPI 經濟佔位符也不會提供 Syncmoney 餘額資料。
 
-### 歷史 R53 R5 候選驗證（未發布；不代表目前 readiness）
-
-R53 R5 Java 25.0.4／Gradle 9.8.0 source/package gate：68/68 個 actionable tasks；167 個 unit suites／932 個 tests，以及 10 個 Sync integration suites／42 個 tests（合計 177 suites／974 tests），failures、errors、skips 皆為 0。Architecture 與 classfile-major-69 packaging、API-consumer 與 acceptance packaging、Central publisher isolation、NMCP aggregation 均通過。六個 targeted regression classes 共 39 tests 通過。Core JAR 為 31,614,140 bytes；SHA-256 `D2DD4DC274946DDA0B4D3E475241E67C9726674E17A7F52E13E282E8720D7FC3`。Build log 為 10,406 bytes；SHA-256 `1DC9AC0B42BDCB3055CE7CF493B7BAE4F82005BB4A6C614CA6B96A69F3706B5C`。其餘 artifact pins 見 Proposal 06。Frontend checks 仍適用，因其 source inputs 未變。Storage-service integration 未執行。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；整體 readiness 仍為 BLOCKED / NOT VERIFIED。Stable metadata 維持 1.3.2；未執行外部發布動作。
-
-### 目前 2026-10-26 R63 source/package 狀態（未發布）
-
-使用者授權 durable recovery 架構修訂，並將 ADR-16 限定為 live queued /pay recovery。R9 Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，加上 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation，以及 frontend typecheck、4 個 unit files／22 個 tests 與 production build 均通過。Current core JAR：31,646,522 bytes / SHA-256 BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916；PAPI JAR：13,872 bytes / SHA-256 A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C；acceptance JAR：54,905 bytes / SHA-256 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824。Production queued /pay integration test 使用隔離 Redis。Direct Vault/plugin recovery 依 ADR-07 維持 DEFERRED / NOT VERIFIED。Exact-candidate Paper runtime／T22 Beta、storage-service integration、minimum-Paper SQL、licensed/live CMI（授權 UNKNOWN）、廣泛 V03、完整 public API 相容性與 T21 完成仍為 NOT VERIFIED 或 BLOCKED；Stable 與外部發布仍為 NOT VERIFIED / NOT PERFORMED。Stable metadata 維持 1.3.2；沒有執行外部發布。
-
-### 歷史 2026-10-26 R62 test 與 gate 紀錄（已由 R63 取代）
-
-R62 `:syncmoney-sync:integrationTest` 執行 44 個 tests：41 通過、3 失敗、0 errors、0 skipped。兩個 raw Lua receipt-fixture 類別的 23 個 tests 全數通過。三個失敗都在沒有 production caller 的 `PayLuaScriptManagerNoscriptIT`；該 task 沒有執行或證明 live `/pay` 失敗。`verifyArchitecture` 與 `-PreleaseVersion=1.4.0` 的 `verifyPackaging` 通過；storage-service integration 未執行。四個磁碟 artifact hashes 已重算，但沒有 current source manifest 綁定 dirty candidate。這些只屬 R62 歷史，不能驗收 R63 candidate。
-### 歷史 2026-10-26 R59 readiness 決定（由 R62 取代）
-
-使用者決定保留 ADR-07、延期 direct-transfer recovery 修復／整合，並讓 target main 維持未 merge、stable metadata 為 1.3.2。R58 的四個 Bukkit 測試類別 focused run 共 33 個 tests 通過；完整 syncmoney-bukkit:test task 為 134 個 JUnit suites／771 個 tests，失敗、錯誤與跳過皆為 0。兩位獨立唯讀 R59 reviewer 批准了四類測試完整現有 diff。這些結果不代表完整 source/package gate、目前 exact-candidate artifact pins 或 runtime／Beta 驗收。整體 readiness 仍為 BLOCKED / NOT VERIFIED。未啟動 runtime、未 merge、未執行外部發布。
-### 歷史 2026-10-26 R57 readiness 決定（由 R59 取代）
-
-使用者重申保留 ADR-07、延期 direct-transfer recovery 修復／整合，並讓本機 `main` 維持未 merge、stable metadata 為 `1.3.2`。目前 R56 `:syncmoney-bukkit:test` 完成 771 個 tests，其中 6 個失敗。唯讀 audit 認為測試可能仍使用舊的 operation-ID／receipt mock；因尚未修正 fixture 或重跑，這只是初步判斷，六項失敗仍未解決。目前沒有完整的 source/package gate 或 current artifact pin。Exact-candidate runtime 與 T22 Beta 仍為 `NOT VERIFIED`；整體 readiness 維持 `BLOCKED / NOT VERIFIED`。未啟動 runtime、未 merge、未執行外部發布。
-
-### 歷史 2026-10-26 R54 readiness snapshot（已由 R56／R57／R59 取代）
-
-使用者選擇保留 ADR-07、不採納 ADR-15、延期 direct Vault/plugin-transfer recovery 修復／整合，並讓 local `main` 保持未 merge、版本仍為 1.3.2。R5 review 指出 direct-transfer `SENT_UNKNOWN` quarantine 可能在 restart 後遺失，且 operator-resolution path 尚未驗證。較早的 05:33 UTC run 擷取到 9 個測試失敗標記，但沒有終端 build summary。05:52 UTC Java 25／Gradle 9.8.0 attempt 記錄 3 個測試失敗。最新 run 完成 201 個 tests（10 個失敗、1 個 skipped）後，Gradle Test Executor 4 在 `:syncmoney-bukkit:test` 因 Java heap space 失敗。log 顯示 `:apiConsumerJar`、`:acceptanceJar` 和 `:shadowJar` 在測試失敗前已執行；整體 gate 仍失敗，Sync integration、architecture 和後續驗證 tasks 未建立。最新 log SHA-256：`44C49CDB9176D739E30479A00ED10E933E020FCB3D0EF026FF6B426BC72519E1`。磁碟上的候選 JAR 為 31,661,116 bytes／SHA-256 `5699B42B709751430F349F338130FE0A88BF76B041D7D566C940086C8400DD53`；未產生 current manifest 或 exact-candidate artifact pin，因此這不是已驗證的發布 artifact pin。沒有 exact-candidate runtime 或 Beta acceptance。R53 R5 pins 僅屬歷史證據。整體 readiness 維持 BLOCKED / NOT VERIFIED；stable metadata 維持 1.3.2，未執行外部發布。
-
-### 歷史 R53 R4 候選驗證（已由 R5 取代；未發布）
-
-R53 R4 Java 25.0.4／Gradle 9.8.0 source/package gate：68/68 個 actionable tasks；167 個 unit suites／931 個 tests，以及 10 個 Sync integration suites／42 個 tests（合計 177 suites／973 tests），failures／errors／skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer 與 acceptance packaging、Central publisher isolation、NMCP aggregation 均通過。Core JAR 為 31,613,386 bytes；SHA-256 AAE5B297D9553109C9619ECF02CF373EE0444B5C056447817A9DD7A66138C660。五項 targeted regressions 共 36 tests 通過。Frontend typecheck、4 個 unit files／22 個 tests、production build、39 個 embedded files synchronization 均通過，且其 source inputs 與前次已驗證建置相同。Storage-service integration 未執行。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；整體 readiness 仍為 BLOCKED / NOT VERIFIED。Stable metadata 維持 1.3.2；未執行外部發布動作。五項 artifact pins 與 evidence log digests 請見 Proposal 06。
-
-### 歷史 R52R 候選驗證 (historical; superseded by R53)
-
-R52R Java 25.0.4／Gradle 9.8.0 source/package gate：68 個 actionable tasks、164 個 unit suites／920 個測試及 10 個 Sync integration suites／42 個測試（合計 174 suites／962 tests），失敗、錯誤與跳過皆為 0。Architecture、classfile-major-69 packaging、API-consumer 與 acceptance packaging、Central publisher isolation，以及 NMCP aggregation 通過。Core JAR 為 31,608,675 bytes；SHA-256 4629284db89ea05336c49fb224208d8ccf0f4a8f9bc32c7cd23d201478c2a10a。Frontend typecheck 與 production build 通過；4 個 unit files／22 個測試通過；39 個 embedded files 同步通過。Storage-service integration 未執行。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；整體 readiness 仍為 BLOCKED / NOT VERIFIED。Stable metadata 維持 1.3.2。五項 artifact pins 與 exact source/package log digest 記錄於 Proposal 06。
-
-歷史 R52F R14 候選 source/package 證據（已由 R52R 取代）（2026-10-26；未發布；僅 source/package）：Java 25 toolchain／Gradle 9.8.0，68/68 個 tasks；164 個 unit suites／913 個測試及 9 個 Sync integration suites／39 個測試（合計 952），失敗、錯誤與跳過皆為 0。Architecture verification、classfile-major-69 packaging、API-consumer 與 acceptance packaging、Central publisher isolation，以及 NMCP aggregation 均通過。Core JAR 為 31,605,493 bytes，SHA-256 `6c76a79a6b0119609ada212fd732d846bc224e4a5f7e7b5d23aed534f0cefd09`；五項 artifact pins 與 gate digest 記錄於 R14 evidence 及 Proposal 06。R11 加入的 canonical UUID source-text guard 仍在目前候選程式碼中。R14 exact-candidate runtime attempt 在 90 秒內沒有 PASS/FAIL marker；僅確認兩筆 synthetic fixture rows，且未執行 restart-read。Exact-candidate runtime acceptance 與完整 T22 Beta 仍為 NOT VERIFIED；歷史 R9 M04 使用不同 JAR。Storage-service integration 仍為 NOT VERIFIED；T21 為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL initial schema 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED（CMI 授權狀態 UNKNOWN）；完整 public API 相容性仍為 NOT VERIFIED。Stable metadata 維持 1.3.2；未執行外部發布動作。
-
-歷史 R52F r6 1.4.0 候選 source/package 證據（2026-10-25；未發布；僅 source/package）：Java 25.0.4 toolchain／Gradle 9.8.0（launcher JVM 21.0.6），68/68 個 tasks；163 個 unit suites／909 個測試及 9 個 Sync integration suites／39 個測試（合計 948），失敗、錯誤與跳過皆為 0。Migration reader 會在 rounding 前拒絕 SQLite 原始負餘額；正值 sub-cent 正規化規則維持不變。五項 artifact pins 與最終 gate log digest 記錄於 Proposal 06。Storage-service integration、exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED。Stable metadata 維持 1.3.2，未執行外部發布動作。
-歷史 R52F r5 source/package snapshot（已由負 sub-cent 修正與 r6 取代；2026-10-25；未發布）：68/68 tasks、163 個 unit suites／908 個測試、9 個 Sync integration suites／39 個測試，失敗／錯誤／跳過皆為 0。r5 未涵蓋 -0.004 migration case，其 artifact pins 已非目前版本。
-歷史 R52F r4 source/package snapshot（已由 r5 取代；2026-10-25；未發布）：r4 gate 同樣通過 68/68 tasks，包含 163 個 unit suites／908 個測試及 9 個 Sync integration suites／39 個測試（合計 947），皆無失敗。Core JAR 與 r5 相同，為 31,601,861 bytes／SHA-256 `46A593BBEC73FE7BA8759ED822EF1734ED6704CAD1688A1BF61150906FDE2DD4`；r4 gate log SHA-256 為 `7A2A506DC4CD0FFF24F47FD81B320F1429E2B379BFCBF4F96CBE469385E25466`。
-歷史 R52F r3 snapshot（已由 r4 取代；2026-10-25；未發布）：r3 source/package gate 的正確統計為 163 個 unit suites／906 個測試及 9 個新鮮 Sync integration suites／39 個測試（合計 945），失敗、錯誤與跳過皆為 0。較早的 r3 summary JSON 誤將舊的 `syncmoney-storage` integration XML 計入，該中間 inventory 保留為歷史但不採用。Core JAR 為 31,601,746 bytes，SHA-256 `7417CAF6071DDB3033EA8603FB314EB9E0F789A0DCF6784ABCB6B6A554759CC8`。其 bounded M04 runtime 只屬歷史證據，不能驗證 r4。
-
-歷史 R52C 本機候選紀錄（已由 R52D 取代）（2026-10-25；未發布；僅為 source/package 證據）：JDK 25.0.4／Gradle 9.8.0 完整 gate 完成 58 個 actionable tasks（11 個 executed、47 個 up-to-date），包含 162 個 unit suites／899 個測試及 8 個 Sync integration suites／38 個測試；失敗、錯誤與跳過皆為 0。Architecture verification 與 classfile-major-69 packaging 通過。另有 15 個 tasks 的 packaging 檢查通過，涵蓋 API-consumer packaging、Central publisher isolation 與 NMCP aggregation。較早的 R52B full gate 有 7 個測試失敗並予以保留；修正 regression 並調整測試 fixture／assertion 後，R52C gate 通過。完整測試清單包含 RedisMissingAccountMutationIT 3/3 與 LocalToSyncTransactionHistoryAtomicityTest 1/1。Core JAR：31,601,520 bytes，SHA-256 FD06656233434508FE967B7373C74F1298EFAE8445AFCACA4A46A1E7CB154D60。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；storage-service integration 為 DEFERRED / NOT VERIFIED。Stable metadata 維持 1.3.2。未啟動 runtime，亦未執行外部 release action。前一版 R52 pin 僅為歷史資料且已被取代；五項目前 artifact pins 請見 Proposal 06。
-R52D 本機候選紀錄（2026-10-25；未發布；僅為 source/package 證據）：Java 25.0.4 toolchain／Gradle 9.8.0 完整 source/package gate 完成 68 個 actionable tasks（全部執行）；163 個 unit suites／901 個測試及 9 個 Sync integration suites／39 個測試通過，失敗、錯誤與跳過皆為 0。MySQL 遷移重複列 regression 與使用合成 strict SQL fixture（900.00／version 41）的真實隔離 Redis Consumer-to-CacheManager authority-recovery regression 通過。Architecture verification、classfile-major-69 packaging、API-consumer packaging、Central publisher isolation 與 NMCP aggregation 通過。Core JAR 為 31,601,526 bytes，SHA-256 FD06DE8DF79B5D16714A10603DB04525F25171761618C74733B8CCE17E8DAF9E。可選 MySQL／MariaDB storage-service integration 未執行，仍為 NOT VERIFIED；exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；T21 為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED；完整 public API compatibility 為 NOT VERIFIED；Stable 與外部發布為 NOT VERIFIED / NOT PERFORMED。Stable metadata 維持 1.3.2，未啟動 runtime 或執行外部發布。
-
-歷史 R51 本機候選紀錄（2026-10-25；已由 R52 取代；未發布；此 pins 僅綁定 R51 source）：JDK 25.0.4／Gradle 9.8.0 完整 source/package gate 通過 68/68 tasks（全部執行），包含 159 個 unit suites／887 個測試及 7 個 Sync integration suites／35 個測試；失敗、錯誤與跳過皆為 0。Architecture、classfile major 69 packaging、Central publisher isolation、acceptance/API consumer packaging 與本機 NMCP aggregation 均通過。Node health check 失敗時不再記錄設定 URL 或例外訊息；node-status SSE URL 會在 broadcast 前移除 URI user-info。Core JAR：31,597,492 bytes，SHA-256 BEDDD3F2F62961E98B3F21A600544FD2F3FF140725518062A15DD9300FCDAC46。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；storage-service integration 為 DEFERRED / NOT VERIFIED。Stable metadata 仍為 1.3.2。未啟動 runtime，亦未執行外部 release action。
-歷史 R52（R52C 之前）本機候選紀錄（2026-10-25；已由 R52C 取代；未發布；僅綁定較早的 source/package snapshot）：JDK 25.0.4／Gradle 9.8.0 gate 通過 68 個 actionable tasks（14 個 executed、54 個 up-to-date），包含 159 個 unit suites／892 個測試及 7 個 Sync integration suites／35 個測試；失敗、錯誤與跳過皆為 0。較早 Core JAR 為 31,597,376 bytes，SHA-256 8295A8B9D0CB0E17D5CCBAED07B4163949AF4AD48947EE1D00A0C75EB137F8E4。這些 pins 不適用於 R52C 或 R52D。Exact-candidate runtime／T22 Beta 仍為 NOT VERIFIED，storage-service integration 為 DEFERRED / NOT VERIFIED。
-
-歷史 R50 本機候選紀錄（已由 R51 取代；2026-10-25；未發布）：JDK 25.0.4／Gradle 9.8.0 完整 source/package gate 通過 68/68 tasks（全部執行），包含 157 個 unit suites／884 個測試及 7 個 Sync integration suites／35 個測試；失敗、錯誤與跳過皆為 0。Architecture、packaging、Central publisher isolation、acceptance/API consumer packaging 與本機 NMCP aggregation 均通過。Core JAR：31,596,440 bytes，SHA-256 F493F561429D7AA84B6D32F28D3D722108366F4F83D8A05EC939A1E701818ACC。Node 管理 response 會從舊設定 URL 移除 URI user-info；無效 URL 會以 `[invalid URL]` 標示，設定驗證也會拒絕新加入的 user-info URL。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；storage-service integration 為 DEFERRED / NOT VERIFIED。Stable metadata 仍為 1.3.2。未執行外部 staging、signing、upload 或 publication。
-歷史 R49 本機候選紀錄（由 R50 取代；2026-10-25；未發布）：JDK 25.0.4／Gradle 9.8.0 source/package gate 通過 68 個 actionable tasks（10 個 executed、58 個 up-to-date），包含 157 個 unit suites／864 個測試及 7 個 Sync integration suites／35 個測試；失敗、錯誤與跳過皆為 0。Architecture、packaging、Central publisher isolation、acceptance/API consumer packaging 與 NMCP aggregation 均通過。Core JAR：31,593,700 bytes，SHA-256 E1564BADC993B9792D963806BC5D878CE8FDAAADBC7227765F3A7970CF4C3CA7。Exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；storage-service integration 為 DEFERRED / NOT VERIFIED。Stable metadata 仍為 1.3.2，未執行發布。
-
-歷史 R46 source/package snapshot（2026-10-25；已由下列後續修正取代）：Java 25.0.4／Gradle 9.8.0 gate 通過 68/68 個 tasks（14 個 executed、54 個 up-to-date），包含 157 個 unit suites／854 個測試及 7 個 Sync integration suites／35 個測試。其 core JAR 為 31,591,955 bytes，SHA-256 FE754399BCB0F625AEA005D5CF1511AD7CB8B7618AF6F4816D2839A4A8547094。後續 candidate source 變更使舊 pins 與 review 失效。R39 runtime 證據不適用於後續候選；exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED。Storage-service integration 為 DEFERRED / NOT VERIFIED；minimum-Paper SQL 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED。Stable metadata 保持 1.3.2。
-歷史 R45 source/package snapshot（2026-10-25）：Java 25／Gradle 9.8.0 gate 通過 68/68 個 tasks，包含 157 個 unit suites／851 個測試及 7 個 Sync integration suites／35 個測試，失敗、錯誤與跳過均為 0。R45 core JAR SHA-256 為 C12F52AAA5EE3F03E8582CB706703495B11D34564485FF4EED95BF880E83129A。R45 未執行 exact-candidate runtime acceptance；R39 有界 runtime 結果不適用於 R46。Storage-service integration 仍為 DEFERRED / NOT VERIFIED，完整 T22 Beta 仍為 NOT VERIFIED。
-
-## [1.4.0-alpha.3] - 未發佈預覽
-
-此為 Java 25+ 與 Paper 1.21.6+ 的實驗性、未發佈工程候選版；並非穩定版本。ADR-03 僅凍結 T11 唯讀查詢 SDK；public Maven 解析與第三方採用仍未驗證。1.4.0 已驗證的支援範圍依據現有證據界定：完整 CMI mode、minimum-Paper MySQL/MariaDB initial-schema 案例及若干 mode/resource/failure 組合均未驗證。請勿將此候選版視為正式環境相容性承諾。
-
-R39 source/package gate 通過 68/68 個 tasks、155 個 unit suites／834 個測試，以及 7 個 Sync integration suites／35 個測試，失敗、錯誤與跳過均為 0。R39 core JAR 為 31,587,551 bytes，SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19。一項 exact-candidate Paper 1.21.6#48／Java 25.0.4+7-LTS-189／LOCAL 合成帳戶 runtime subcase 記錄到 API classloader 通過、acceptance total 1520.00、重啟後 A=1000.00／B=520.00／VaultUnlocked B=520.00，以及 graceful final stop。此結果僅為 PASS_BOUNDED_SUBCASE；完整 T22 Beta 仍為 NOT VERIFIED。先前 r24 JAR 390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E 與 R29 JAR 4BE022B1760209D610A390144D5B3328A094E290C2AB53A9E557BDF27FAA92F6 的結果屬於歷史版本，不適用於 R39。Storage-service integration 為 DEFERRED / NOT VERIFIED；更廣的平台／mode 與 licensed/live CMI 覆蓋仍為 NOT VERIFIED。
-
-matched synthetic facade/receipt-adapter benchmark 未達全部原始 B00 thresholds（throughput 27/48、allocation 12/48、SampleTime p99 18/48 案例達標）。依 ADR-11，僅在該有界 synthetic profile 範圍內接受已量測的 regression；thresholds 與 correctness hard gates 均未改變。此例外不是 production、SQL、Redis 或 real-server capacity 的性能承諾。
-
-### 安全性 (Security)
-
-- Web Admin 會因兩種 shipped API-key placeholder（含空白值）自動停用，但不影響 economy plugin 啟動。
-- Web archive extraction 會拒絕以句點或空格結尾的 TAR path component，避免 Windows 將路徑正規化成不同位置。
-- 延後的 `/ws` endpoint 固定回傳 `503 WEBSOCKET_UNAVAILABLE`，不再產生假的 WebSocket upgrade response。
-- SSE session token 改為原子消費；缺少或無效認證時回傳 `401`，不建立未認證 stream。
-
-### 已變更 (Changed)
-
-- Undertow route 會先從 I/O thread dispatch 到 worker thread，再執行 handler。
-
-### 已修復 (Fixed)
-
-- CMI mode 現在會在讀取或修改 Syncmoney balance 前拒絕 `/syncmoney admin` 與 `/syncmoney sync-balance`，因為這些命令路徑不會更新 CMI authority。
-- CMI adapter 沒有原子式雙帳戶轉帳契約，因此 CMI mode 會停用 Syncmoney `/pay`，並在餘額 mutation 前拒絕。
-- CMI mode 會在 Syncmoney mutation 前拒絕 Vault 明確的雙帳戶轉帳入口、VaultUnlocked transfer 委派及公開的低階 Redis 雙帳戶轉帳 API；這不代表 licensed/live CMI acceptance 已通過。
-- `LOCAL_REDIS` 與 `SYNC` shared write 現在會在接受前拒絕超過 `999999999999999999.99` 的 projected balance，並在 account lock 內再次檢查。既有 `LOCAL` policy 不變。
-- 升級注意事項：1.4.0 不會 migration 以舊版較寬 policy 寫入的 Redis balance。升級前請檢查既有 shared-mode data；超過新上限的既有 account 會在記憶體 mutation 前被 deposit、withdraw、transfer 拒絕。Admin set 是 operator 明確修改餘額，不是自動 migration。
+### 已修復（Fixed）
+- 佇列付款復原會在 queue commit 前強制寫入 checkpoint，並在重新啟動後繼續隔離結果不明的操作。
+- 節點健康檢查與代理診斷不會記錄已設定的節點 URL 或可能暴露連線資訊的例外訊息。
+- Inbound CMI echo suppression 現在只比對預期 from/to event，避免寬鬆的時間窗吞掉緊接著的本地 CMI 交易。
+- 修正 Paper dependency 順序，讓 optional server integrations 先於 Syncmoney 載入；只有選擇 CMI mode 時才要求 CMI。
+- CMI balance event 現在不要求收款玩家在線於來源伺服器也能同步，涵蓋離線 Vault／QuickShop 收款對象。
+- CMI balance event 現在會用原子版本比較將事件差額套用至 Redis 最新鏡像，並以重試收據避免重複入帳，防止離線帳戶的陳舊副本覆寫較新的跨服餘額。
 
 ## [1.3.2] - 2026-09-20
 
@@ -378,8 +301,3 @@ Paper 1.20.4、Paper 26.2、Folia 26.2 BETA、Canvas 26.2 — 多後端（Postgr
 - **審計日誌系統**：具搜尋功能的完整交易歷史紀錄
 - **斷路器防護**：在服務中斷期間防止經濟刷錢漏洞
 - **影子同步機制**：背景資料一致性驗證
-
-歷史 R52F r9 的 1.4.0 候選 source/package 證據（已由 r10 取代；2026-10-25；未發布）：Java 25.0.4 toolchain／Gradle 9.8.0，68/68 個 tasks、164 個 unit suites／911 個測試及 9 個 Sync integration suites／39 個測試（共 950 個），失敗、錯誤與跳過皆為 0。Architecture、classfile-major-69 packaging、API-consumer packaging、Central publisher isolation 與 NMCP aggregation 通過。r9 core JAR 為 31,604,354 bytes，SHA-256 93c20c49fc40f2fa9c7cc9c716c1882c88451efe64c12b31617573d3292d84fd；該版本的 artifact pins 與 gate/test evidence hash 記錄於 Proposal 06。相同 r9 JAR 另通過一項有界 T21 M04 runtime subcase：Paper 1.21.6#48、Java 25.0.4、LOCAL、guard-on、normal-drain、synthetic SQLite。Result JSON SHA-256 8bab087aca408487f4e60ec75b6e7b8219a105e368f7c1ccf0774dfbee19db30；report-specific offline auditor 通過 398 項 assertions。此結果僅為 PASS_BOUNDED_SUBCASE，不代表完整 LOCAL 支援或完整 T22 Beta，也不能驗證 r10。Storage-service integration 仍為 NOT VERIFIED；整體 release readiness 為 BLOCKED / NOT VERIFIED；stable metadata 維持 1.3.2；未執行外部發布動作。
-
-歷史 R52F R10 1.4.0 候選 source/package 證據（2026-10-25；未發布）：Java 25.0.4 toolchain／Gradle 9.8.0，68/68 個 tasks、164 個 unit suites／912 個測試及 9 個 Sync integration suites／39 個測試（共 951 個），失敗、錯誤與跳過皆為 0。Architecture、classfile-major-69 packaging、API-consumer packaging、Central publisher isolation 與 NMCP aggregation 通過。R10 core JAR 為 31,605,447 bytes，SHA-256 5c4e70294cdc39fa1f21adc312adb99e699e6fd814550bdafc48b6735fefe771；其五項 pins 與 gate/test evidence hash 記錄於 Proposal 06。LOCAL migration 遇到缺失或格式錯誤的玩家 UUID 時會在 shared 寫入前拒絕 snapshot 並記錄來源列失敗；其 regression 已納入 R10 完整 gate。R10 沒有 runtime 驗收，exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED。Storage-service integration 仍為 NOT VERIFIED；T21 為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL initial-schema 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED（CMI 授權狀態 UNKNOWN）；完整 public API 相容性為 NOT VERIFIED。整體 release readiness 為 BLOCKED / NOT VERIFIED；stable metadata 維持 1.3.2；未執行外部發布動作。
-歷史 R52F r8 1.4.0 候選 source/package 證據（已由 r9 取代）（2026-10-25；未發布）：Java 25.0.4 toolchain／Gradle 9.8.0（launcher JVM 21.0.6），68/68 個 tasks；163 個 unit suites／909 個測試及 9 個 Sync integration suites／39 個測試（合計 948），失敗、錯誤與跳過皆為 0。Negative sub-cent migration regression 會在 rounding 前拒絕原始 -0.004；正值 1.234 仍會正規化為 1.23。Frontend typecheck、production build 與 22 個 unit tests 通過；embedded build 使用 Corepack pnpm 10.22.0 完成。五項 artifact pins 與 gate log digest 記錄於 Proposal 06。Storage-service integration、exact-candidate runtime 與完整 T22 Beta 仍為 NOT VERIFIED；Stable metadata 維持 1.3.2，未執行外部發布動作。

@@ -37,6 +37,12 @@ public final class VersionCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         String mode = args.length == 0 ? "basic" : args[0].toLowerCase(Locale.ROOT);
+        if (plugin.getSyncmoneyConfig() != null && plugin.getSyncmoneyConfig().isCMIMode()
+                && !mode.equals("basic")) {
+            sender.sendMessage("CMI sync-only mode provides basic version information only.");
+            sendUsage(sender, label);
+            return true;
+        }
         switch (mode) {
             case "basic" -> sendReport(sender, VersionDiagnostics.basic(plugin));
             case "full", "save" -> {

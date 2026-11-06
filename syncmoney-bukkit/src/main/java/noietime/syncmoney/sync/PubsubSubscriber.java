@@ -117,7 +117,12 @@ public final class PubsubSubscriber {
             subscriberThread.start();
         }
 
-        plugin.getLogger().fine("Pub/Sub subscription started on channel: " + CHANNEL);
+        plugin.getLogger().fine("Pub/Sub subscription started on channel: "
+                + String.join(", ", subscriptionChannels()));
+    }
+
+    String[] subscriptionChannels() {
+        return config.isCMIMode() ? new String[] { CMI_CHANNEL } : new String[] { CHANNEL };
     }
 
     /**
@@ -171,7 +176,7 @@ public final class PubsubSubscriber {
                     }
                 };
 
-                jedis.subscribe(pubSub, CHANNEL, CMI_CHANNEL);
+                jedis.subscribe(pubSub, subscriptionChannels());
 
                 retryDelayMs = INITIAL_RETRY_DELAY_MS;
 

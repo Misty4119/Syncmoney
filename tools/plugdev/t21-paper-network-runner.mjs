@@ -141,7 +141,7 @@ function parseArguments(argv) {
     throw new Error("Unsupported runner argument: " + value);
   }
   if (!endpointId || !Object.hasOwn(T21_NETWORK_ENDPOINTS, endpointId)) {
-    throw new Error("Use --endpoint paper-1216-48, --endpoint paper-263-200, --endpoint folia-1216-6, --endpoint folia-263-3, --endpoint canvas-1218-603, or --endpoint canvas-263-984.");
+    throw new Error("Use --endpoint paper-262-135, --endpoint paper-263-243, --endpoint folia-262-7, --endpoint folia-263-6, --endpoint canvas-262-994, or --endpoint canvas-263-1010.");
   }
   return { endpointId, preflightOnly };
 }
@@ -1971,6 +1971,7 @@ async function runCell(endpointId) {
       },
       artifacts: {
         serverJarSha256: preflight.endpoint.serverJarSha256,
+        candidateVersion: T21_PAPER_NETWORK_ARTIFACTS.candidateVersion,
         candidateSha256: T21_PAPER_NETWORK_ARTIFACTS.candidateSha256,
         acceptanceSha256: T21_PAPER_NETWORK_ARTIFACTS.acceptanceSha256,
         vaultUnlockedSha256: T21_PAPER_NETWORK_ARTIFACTS.vaultUnlockedSha256,

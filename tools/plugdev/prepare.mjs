@@ -6,8 +6,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const DEFAULT_CANDIDATE_VERSION = "1.4.0-alpha.1";
-const MINIMUM_PAPER = [1, 21, 6];
+const DEFAULT_CANDIDATE_VERSION = "1.4.0-Beta.3";
+const MINIMUM_MINECRAFT = [26, 2];
 const ACCEPTANCE_PORT = 25675;
 
 function resolveAcceptancePort(env = process.env) {
@@ -38,7 +38,7 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
     throw new Error("Usage: node tools/plugdev/prepare.mjs <paper|folia|canvas> <minecraft-version> <local|local_redis|sync> <on|off> [candidate-version] [guard-on|guard-breaker-on|breaker-only]");
   }
 
-  const [software = "paper", minecraftVersion = "1.21.6", mode = "local", features = "off",
+  const [software = "paper", minecraftVersion = "26.2", mode = "local", features = "off",
     candidateVersion = fallbackCandidateVersion, guardProfile = "off"] = args;
   if (!["paper", "folia", "canvas"].includes(software)) {
     throw new Error("Software must be paper, folia, or canvas.");
@@ -46,8 +46,8 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
   if (!/^\d+\.\d+(?:\.\d+)?$/.test(minecraftVersion)) {
     throw new Error("Minecraft version must use numeric major.minor[.patch] form.");
   }
-  if (minecraftVersion.startsWith("1.") && compareVersionParts(minecraftVersion.split(".").map(Number), MINIMUM_PAPER) < 0) {
-    throw new Error("Paper 1.21.6 or newer is required for the 1.4 runtime profile.");
+  if (compareVersionParts(minecraftVersion.split(".").map(Number), MINIMUM_MINECRAFT) < 0) {
+    throw new Error("Minecraft 26.2 or newer is required for the 1.4 runtime profile.");
   }
   if (!["local", "local_redis", "sync"].includes(mode)) {
     throw new Error("Mode must be local, local_redis, or sync.");
@@ -61,7 +61,7 @@ export function validateOptions(args, fallbackCandidateVersion = DEFAULT_CANDIDA
   if (["guard-breaker-on", "breaker-only"].includes(guardProfile) && software !== "canvas") {
     throw new Error(`The ${guardProfile} profile is only supported for Canvas.`);
   }
-  if (!/^\d+\.\d+\.\d+(?:-(?:alpha|beta)\.\d+)?$/.test(candidateVersion)) {
+  if (!/^\d+\.\d+\.\d+(?:-(?:alpha|beta|Beta)\.\d+)?$/.test(candidateVersion)) {
     throw new Error("Candidate version must be a stable or alpha/beta semantic version.");
   }
 

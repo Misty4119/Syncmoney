@@ -12,6 +12,7 @@ import noietime.syncmoney.storage.CacheManager;
 import noietime.syncmoney.storage.RedisManager;
 import org.bukkit.Server;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
 
 import java.util.function.Consumer;
 import java.util.Optional;
@@ -30,11 +31,47 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SyncManagerLifecycleTest {
+
+    @Test
+    void cmiPubsubSubscriptionIsDeferredUntilTheCmiHandlerIsAttached() {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.getEconomyMode()).thenReturn(EconomyMode.CMI);
+        when(config.isCMIMode()).thenReturn(true);
+        RedisManager redisManager = mock(RedisManager.class);
+
+        try (MockedConstruction<DebounceManager> debounceManagers = mockConstruction(DebounceManager.class);
+             MockedConstruction<PubsubSubscriber> subscribers = mockConstruction(
+                     PubsubSubscriber.class, (mock, context) -> {
+                         assertNull(context.arguments().get(2));
+                         assertNull(context.arguments().get(3));
+                         assertNull(context.arguments().get(4));
+                     })) {
+            SyncManager syncManager = new SyncManager(plugin, config,
+                    null, null, redisManager);
+            CrossServerSyncManager crossServerSyncManager = new CrossServerSyncManager(plugin, config,
+                    redisManager, null, null);
+
+            syncManager.initialize();
+            syncManager.startPeriodicVersionCheck();
+            crossServerSyncManager.startPeriodicVersionCheck();
+
+            assertEquals(1, subscribers.constructed().size());
+            assertTrue(debounceManagers.constructed().isEmpty());
+            verify(subscribers.constructed().get(0), never()).startSubscription();
+            verify(plugin, never()).getServer();
+            syncManager.shutdown();
+            crossServerSyncManager.shutdown();
+        }
+    }
 
     @Test
     @SuppressWarnings("unchecked")

@@ -202,7 +202,16 @@ public final class Syncmoney extends JavaPlugin {
             return;
         }
 
-        if (syncmoneyConfig.shadowSync().isShadowSyncEnabled()) {
+        boolean cmiSyncOnly = syncmoneyConfig.isCMIMode();
+        if (cmiSyncOnly) {
+            if (!getServer().getPluginManager().isPluginEnabled("CMI")) {
+                getLogger().severe("CMI mode requires the CMI plugin to be installed and enabled.");
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+        }
+
+        if (!cmiSyncOnly && syncmoneyConfig.shadowSync().isShadowSyncEnabled()) {
             String target = syncmoneyConfig.shadowSync().getShadowSyncTarget();
             if (target.equals("cmi") || target.equals("all")) {
                 String cmiHost = syncmoneyConfig.migration().getCMIDatabaseHost();
@@ -246,27 +255,31 @@ public final class Syncmoney extends JavaPlugin {
                 economyServiceManager.getEconomyFacade(),
                 storageManager.getRedisManager());
         syncManager.initialize();
-        syncManager.startPeriodicVersionCheck();
+        if (!cmiSyncOnly) {
+            syncManager.startPeriodicVersionCheck();
+        }
 
-        if (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL) {
+        if (!cmiSyncOnly && syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL) {
             getServer().getAsyncScheduler().runNow(this, (task) -> {
                 syncManager.getPubsubSubscriber().startSubscription();
             });
         }
 
-        this.breakerManager = new BreakerManager(
-                this,
-                syncmoneyConfig,
-                economyServiceManager.getEconomyFacade(),
-                storageManager.getRedisManager());
-        breakerManager.initialize();
+        if (!cmiSyncOnly) {
+            this.breakerManager = new BreakerManager(
+                    this,
+                    syncmoneyConfig,
+                    economyServiceManager.getEconomyFacade(),
+                    storageManager.getRedisManager());
+            breakerManager.initialize();
 
-        if (breakerManager.getDiscordWebhookNotifier() != null) {
-            economyServiceManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
-        }
+            if (breakerManager.getDiscordWebhookNotifier() != null) {
+                economyServiceManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
+            }
 
-        if (economyServiceManager.getNameResolver() != null) {
-            breakerManager.setNameResolver(economyServiceManager.getNameResolver());
+            if (economyServiceManager.getNameResolver() != null) {
+                breakerManager.setNameResolver(economyServiceManager.getNameResolver());
+            }
         }
 
         var economyFacade = economyServiceManager.getEconomyFacade();
@@ -274,7 +287,7 @@ public final class Syncmoney extends JavaPlugin {
             economyFacade.setNameResolver(economyServiceManager.getNameResolver());
         }
 
-        if (breakerManager.getCircuitBreaker() != null &&
+        if (breakerManager != null && breakerManager.getCircuitBreaker() != null &&
                 breakerManager.getCircuitBreaker().getConnectionStateManager() != null) {
             breakerManager.getCircuitBreaker().getConnectionStateManager()
                     .setCallback(new noietime.syncmoney.breaker.ConnectionStateManager.ConnectionStateCallback() {
@@ -292,7 +305,8 @@ public final class Syncmoney extends JavaPlugin {
                     });
         }
 
-        if (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL_REDIS || storageManager.getRedisManager() != null) {
+        if (!cmiSyncOnly && (syncmoneyConfig.getEconomyMode() != EconomyMode.LOCAL_REDIS
+                || storageManager.getRedisManager() != null)) {
             this.baltopManager = new BaltopManager(
                     this,
                     syncmoneyConfig,
@@ -325,6 +339,8 @@ public final class Syncmoney extends JavaPlugin {
             if (syncManager != null && syncManager.getPubsubSubscriber() != null) {
                 syncManager.getPubsubSubscriber().setCmiPubsubHandler(cmiPubsubHandler);
                 getLogger().fine("CMI inbound Pub/Sub handler registered");
+                getServer().getAsyncScheduler().runNow(this,
+                        task -> syncManager.getPubsubSubscriber().startSubscription());
             }
         }
 
@@ -332,32 +348,34 @@ public final class Syncmoney extends JavaPlugin {
         listenerServiceManager.initialize();
         getLogger().log(Level.FINE, "Player lifecycle listeners registered.");
 
-        this.auditServiceManager = new AuditServiceManager(
-                this, syncmoneyConfig,
-                storageManager.getRedisManager(),
-                storageManager.getDatabaseManager() != null ? storageManager.getDatabaseManager().getDataSource()
-                        : null);
-        auditServiceManager.initialize();
+        if (!cmiSyncOnly) {
+            this.auditServiceManager = new AuditServiceManager(
+                    this, syncmoneyConfig,
+                    storageManager.getRedisManager(),
+                    storageManager.getDatabaseManager() != null ? storageManager.getDatabaseManager().getDataSource()
+                            : null);
+            auditServiceManager.initialize();
 
-        this.eventConsumerManager = new EventConsumerManager(
-                this,
-                syncmoneyConfig,
-                economyServiceManager.getEconomyWriteQueue(),
-                storageManager.getCacheManager(),
-                storageManager.getRedisManager(),
-                storageManager.getDbWriteQueue(),
-                auditServiceManager.getAuditLogger(),
-                auditServiceManager.getHybridAuditManager(),
-                economyServiceManager.getNameResolver(),
-                baltopManager,
-                economyServiceManager.getShadowSyncTask(),
-                economyServiceManager.getOverflowLog(),
-                storageManager.getDatabaseManager(),
-                economyServiceManager.getEconomyFacade(),
-                economyServiceManager.getLocalEconomyHandler());
-        eventConsumerManager.initialize();
-        eventConsumerManager.start();
-        getLogger().info("EconomyEventConsumer started");
+            this.eventConsumerManager = new EventConsumerManager(
+                    this,
+                    syncmoneyConfig,
+                    economyServiceManager.getEconomyWriteQueue(),
+                    storageManager.getCacheManager(),
+                    storageManager.getRedisManager(),
+                    storageManager.getDbWriteQueue(),
+                    auditServiceManager.getAuditLogger(),
+                    auditServiceManager.getHybridAuditManager(),
+                    economyServiceManager.getNameResolver(),
+                    baltopManager,
+                    economyServiceManager.getShadowSyncTask(),
+                    economyServiceManager.getOverflowLog(),
+                    storageManager.getDatabaseManager(),
+                    economyServiceManager.getEconomyFacade(),
+                    economyServiceManager.getLocalEconomyHandler());
+            eventConsumerManager.initialize();
+            eventConsumerManager.start();
+            getLogger().info("EconomyEventConsumer started");
+        }
 
         this.commandServiceManager = new CommandServiceManager(
                 this,
@@ -368,71 +386,85 @@ public final class Syncmoney extends JavaPlugin {
                 eventConsumerManager,
                 syncManager.getPubsubSubscriber(),
                 baltopManager,
-                auditServiceManager.getAuditLogger(),
-                auditServiceManager.getHybridAuditManager(),
+                auditServiceManager != null ? auditServiceManager.getAuditLogger() : null,
+                auditServiceManager != null ? auditServiceManager.getHybridAuditManager() : null,
                 economyServiceManager.getShadowSyncTask(),
-                breakerManager.getCircuitBreaker(),
+                breakerManager != null ? breakerManager.getCircuitBreaker() : null,
                 economyServiceManager.getNameResolver());
         commandServiceManager.initialize();
-        getLogger().log(Level.FINE, "Commands registered: /money, /pay, /syncmoney migrate");
+        getLogger().log(Level.FINE, cmiSyncOnly
+                ? "CMI sync-only command registered: /syncmoney version"
+                : "Commands registered: /money, /pay, /syncmoney migrate");
 
-        this.permissionManager = new PermissionManager(this, syncmoneyConfig);
-        permissionManager.initialize();
-        getLogger().log(Level.FINE, "Permission service initialized.");
+        if (!cmiSyncOnly) {
+            this.permissionManager = new PermissionManager(this, syncmoneyConfig);
+            permissionManager.initialize();
+            getLogger().log(Level.FINE, "Permission service initialized.");
+        }
 
         registerCommand("syncmoney", commandServiceManager.getSyncmoneyRouter(),
                 commandServiceManager.getSyncmoneyRouter());
         getLogger().log(Level.FINE, "Syncmoney command router initialized.");
 
-        SyncmoneyEventBus.init(this);
-        getLogger().fine("Event Bus initialized.");
+        if (!cmiSyncOnly) {
+            SyncmoneyEventBus.init(this);
+            getLogger().fine("Event Bus initialized.");
 
-        this.webServiceManager = new WebServiceManager(this, syncmoneyConfig,
-                economyServiceManager.getEconomyFacade(), baltopManager,
-                auditServiceManager.getAuditLogger(), auditServiceManager.getHybridAuditManager());
-        webServiceManager.setDependencies(
-                storageManager.getRedisManager(),
-                storageManager.getDatabaseManager(),
-                breakerManager.getCircuitBreaker(),
-                this.schemaManager);
-        webServiceManager.setNameResolver(economyServiceManager.getNameResolver());
-        webServiceManager.setLocalEconomyHandler(economyServiceManager.getLocalEconomyHandler());
-        webServiceManager.initialize();
+            this.webServiceManager = new WebServiceManager(this, syncmoneyConfig,
+                    economyServiceManager.getEconomyFacade(), baltopManager,
+                    auditServiceManager.getAuditLogger(), auditServiceManager.getHybridAuditManager());
+            webServiceManager.setDependencies(
+                    storageManager.getRedisManager(),
+                    storageManager.getDatabaseManager(),
+                    breakerManager.getCircuitBreaker(),
+                    this.schemaManager);
+            webServiceManager.setNameResolver(economyServiceManager.getNameResolver());
+            webServiceManager.setLocalEconomyHandler(economyServiceManager.getLocalEconomyHandler());
+            webServiceManager.initialize();
 
-        var hybridAuditManager = auditServiceManager.getHybridAuditManager();
-        var webAdminServer = getWebAdminServer();
-        if (hybridAuditManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
-            hybridAuditManager.setSseManager(webAdminServer.getSseManager());
-            getLogger().fine("SseManager injected into HybridAuditManager (real-time audit SSE enabled).");
-        }
+            var hybridAuditManager = auditServiceManager.getHybridAuditManager();
+            var webAdminServer = getWebAdminServer();
+            if (hybridAuditManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+                hybridAuditManager.setSseManager(webAdminServer.getSseManager());
+                getLogger().fine("SseManager injected into HybridAuditManager (real-time audit SSE enabled).");
+            }
 
-        var localEconomyHandler = economyServiceManager.getLocalEconomyHandler();
-        if (localEconomyHandler != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
-            localEconomyHandler.setSseManager(webAdminServer.getSseManager());
-            getLogger().fine("SseManager injected into LocalEconomyHandler (LOCAL mode real-time audit SSE enabled).");
-        }
+            var localEconomyHandler = economyServiceManager.getLocalEconomyHandler();
+            if (localEconomyHandler != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+                localEconomyHandler.setSseManager(webAdminServer.getSseManager());
+                getLogger().fine("SseManager injected into LocalEconomyHandler (LOCAL mode real-time audit SSE enabled).");
+            }
 
-        if (breakerManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
-            breakerManager.setSseManager(webAdminServer.getSseManager());
-            getLogger().fine("SseManager injected into BreakerManager (circuit breaker & security alerts enabled).");
-        }
+            if (breakerManager != null && webAdminServer != null && webAdminServer.getSseManager() != null) {
+                breakerManager.setSseManager(webAdminServer.getSseManager());
+                getLogger().fine("SseManager injected into BreakerManager (circuit breaker & security alerts enabled).");
+            }
 
-        if (breakerManager != null) {
-            breakerManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
-            getLogger().fine("DiscordWebhookNotifier injected into BreakerManager (resource alerts enabled).");
+            if (breakerManager != null) {
+                breakerManager.setDiscordWebhookNotifier(breakerManager.getDiscordWebhookNotifier());
+                getLogger().fine("DiscordWebhookNotifier injected into BreakerManager (resource alerts enabled).");
+            }
         }
 
         initializePluginContext();
 
-        initBstats();
+        if (!cmiSyncOnly) {
+            initBstats();
+        }
 
-        this.apiProvider = new BukkitApiProvider(
-                this,
-                economyServiceManager.getEconomyFacade(),
-                economyServiceManager.getCmiHandler());
-        apiProvider.register();
+        if (!cmiSyncOnly) {
+            this.apiProvider = new BukkitApiProvider(
+                    this,
+                    economyServiceManager.getEconomyFacade(),
+                    economyServiceManager.getCmiHandler());
+            apiProvider.register();
+        } else {
+            getLogger().fine("CMI sync-only mode: Syncmoney economy query API is not registered.");
+        }
 
-        getLogger().log(Level.FINE, "Syncmoney Economy system enabled.");
+        getLogger().log(Level.FINE, cmiSyncOnly
+                ? "CMI currency synchronization enabled."
+                : "Syncmoney Economy system enabled.");
         getLogger().info("Syncmoney enabled successfully.");
     }
 
@@ -540,11 +572,15 @@ public final class Syncmoney extends JavaPlugin {
     }
 
     public CrossServerSyncManager getCrossServerSyncManager() {
-        return economyServiceManager != null ? economyServiceManager.getCrossServerSyncManager() : null;
+        CrossServerSyncManager manager = economyServiceManager != null
+                ? economyServiceManager.getCrossServerSyncManager() : null;
+        return PluginContext.publicCrossServerSyncManager(syncmoneyConfig, manager);
     }
 
     public EconomyModeRouter getEconomyModeRouter() {
-        return economyServiceManager != null ? economyServiceManager.getEconomyModeRouter() : null;
+        EconomyModeRouter router = economyServiceManager != null
+                ? economyServiceManager.getEconomyModeRouter() : null;
+        return PluginContext.publicEconomyModeRouter(syncmoneyConfig, router);
     }
 
     public SyncManager getSyncManager() {
@@ -971,8 +1007,8 @@ public final class Syncmoney extends JavaPlugin {
                 .setNameResolver(economyServiceManager != null ? economyServiceManager.getNameResolver() : null)
                 .setFallbackWrapper(economyServiceManager != null ? economyServiceManager.getFallbackWrapper() : null)
                 .setVaultProvider(economyServiceManager != null ? economyServiceManager.getVaultProvider() : null)
-                .setCrossServerSyncManager(economyServiceManager != null ? economyServiceManager.getCrossServerSyncManager() : null)
-                .setEconomyModeRouter(economyServiceManager != null ? economyServiceManager.getEconomyModeRouter() : null)
+                .setCrossServerSyncManager(getCrossServerSyncManager())
+                .setEconomyModeRouter(getEconomyModeRouter())
                 .setSyncManager(syncManager)
                 .setBreakerManager(breakerManager)
                 .setPermissionManager(permissionManager)

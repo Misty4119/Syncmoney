@@ -87,7 +87,7 @@ class CMIEconomyListenerShutdownTest {
                 throw new IllegalStateException("test join apply release timed out");
             }
             return null;
-        }).when(handler).suppressOutbound(account, 750L);
+        }).when(handler).expectInboundBalanceWrite(account, 100.0, 150.0);
         CMIEconomyListener listener = new CMIEconomyListener(plugin, handler, config);
         handler.setCmiListener(listener);
         try (MockedStatic<Bukkit> bukkit = org.mockito.Mockito.mockStatic(Bukkit.class)) {

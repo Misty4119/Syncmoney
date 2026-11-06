@@ -54,7 +54,7 @@ class CMIEconomyListenerMigrationFenceTest {
         UUID account = UUID.randomUUID();
         CMIEconomyListener listener = createListener(mock(CMIEconomyHandler.class));
         installEventMethods();
-        listener.suppressOutbound(account, 60_000L);
+        listener.expectInboundBalanceWrite(account, 100.0, 125.0);
         MigrationLock.MigrationLease lease = beginSnapshot();
 
         invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 100.0, 125.0));

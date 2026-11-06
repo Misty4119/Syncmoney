@@ -2,26 +2,15 @@ name: Syncmoney
 version: '${version}'
 main: noietime.syncmoney.Syncmoney
 description: Cross-server economy synchronization plugin for Minecraft
-api-version: '1.21.6'
+api-version: '26.2'
 folia-supported: true
 
-depend:
-  - Vault
-
 softdepend:
+  - Vault
   - CMI
   - PlaceholderAPI
 
 commands:
-  money:
-    description: View balance
-    usage: /<command> [player]
-  pay:
-    description: Transfer money to other players
-    usage: /<command> <player> <amount>
-  baltop:
-    description: Ranking
-    usage: /<command> [page]
   syncmoney:
     description: Plugin main command
     usage: /<command> <subcommand> [args]

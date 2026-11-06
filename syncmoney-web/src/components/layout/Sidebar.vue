@@ -102,7 +102,7 @@ import { useBreakpoints, breakpointsTailwind } from '@vueuse/core'
 import {
   LayoutDashboard, Activity, FileText, Settings, Wrench,
   LogOut, ChevronLeft, ChevronRight, Zap, X, LayoutGrid, Server
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 
 interface Props {
   collapsed: boolean

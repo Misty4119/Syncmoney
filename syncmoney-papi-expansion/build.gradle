@@ -23,15 +23,16 @@ repositories {
 }
 
 dependencies {
-    // Paper API
-    compileOnly("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
+    def paperApiVersion = rootProject.ext.paperApiVersion
+    // Compile against the declared minimum server API.
+    compileOnly("io.papermc.paper:paper-api:${paperApiVersion}")
 
     compileOnly("me.clip:placeholderapi:2.12.2")
     compileOnly("com.zaxxer:HikariCP:6.2.1")
     compileOnly("com.mysql:mysql-connector-j:9.2.0")
     compileOnly("org.postgresql:postgresql:42.7.5")
 
-    testImplementation("io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT")
+    testImplementation("io.papermc.paper:paper-api:${paperApiVersion}")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

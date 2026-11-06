@@ -51,7 +51,7 @@ public class SyncManager {
      * Initialize sync layer components.
      */
     public void initialize() {
-        this.debounceManager = new DebounceManager(plugin, config);
+        this.debounceManager = config.isCMIMode() ? null : new DebounceManager(plugin, config);
 
         boolean redisRequired = config.getEconomyMode() != noietime.syncmoney.economy.EconomyMode.LOCAL;
         this.pubsubSubscriber = new PubsubSubscriber(
@@ -63,11 +63,15 @@ public class SyncManager {
                 redisManager,
                 redisRequired);
 
-        if (redisManager != null && redisRequired) {
+        if (redisManager != null && redisRequired && !config.isCMIMode()) {
             pubsubSubscriber.startSubscription();
             plugin.getLogger().fine("PubSub subscription started");
         } else {
+            if (config.isCMIMode()) {
+                plugin.getLogger().fine("CMI Pub/Sub subscription deferred until the CMI handler is attached");
+            } else {
             plugin.getLogger().fine("PubSub subscription skipped (no Redis or not required)");
+            }
         }
 
         plugin.getLogger().fine("Sync layer initialized");
@@ -109,8 +113,9 @@ public class SyncManager {
      * If local version is behind Redis, sync the balance from Redis.
      */
     public void startPeriodicVersionCheck() {
-        if (config.getEconomyMode() == noietime.syncmoney.economy.EconomyMode.LOCAL) {
-            logger.info("Version check skipped: LOCAL mode does not require cross-server sync");
+        if (config.getEconomyMode() == noietime.syncmoney.economy.EconomyMode.LOCAL
+                || config.isCMIMode()) {
+            logger.info("Version check skipped: this mode does not use the generic Syncmoney balance channel");
             return;
         }
 

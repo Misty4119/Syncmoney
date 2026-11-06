@@ -13,7 +13,7 @@ param(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [string]$CandidateVersion = '1.4.0-alpha.1',
+    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')][string]$CandidateVersion = '1.4.0-alpha.1',
     [switch]$LegacySqlDataUpgrade,
     [switch]$NewerAuditSchemaStartupFailure,
     [switch]$DatabaseManagerInitFailureStartupFailure,
@@ -85,9 +85,8 @@ $script:databaseBin = switch ($script:databaseProduct) { 'MariaDB' { $MariaDbBin
 $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $script:sourceCommit = (& git -C $script:root rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
 if ($LASTEXITCODE -ne 0 -or $script:sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not pin the Syncmoney source commit.' }
-$script:sourceDirtyEntries = @(& git -C $script:root status --porcelain --untracked-files=all 2>$null)
-if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Syncmoney source worktree state.' }
-$script:sourceWorkingTreeDirty = $script:sourceDirtyEntries.Count -gt 0
+$script:sourceWorkingTreeSnapshot = Get-T21SourceWorkingTreeSnapshot $script:root
+$script:sourceWorkingTreeDirty = [bool]$script:sourceWorkingTreeSnapshot.dirty
 if ($DatabaseManagerInitFailureStartupFailure.IsPresent -and $script:sourceWorkingTreeDirty) {
     throw 'Refusing the DatabaseManager initial-schema failure cell while the Syncmoney source worktree has tracked or untracked changes.'
 }
@@ -138,6 +137,7 @@ $script:apiConsumerPath = Join-Path $script:root 'build\acceptance\SyncmoneyApiC
 $script:plugDevRoot = (Resolve-Path -LiteralPath $PlugDevRoot).Path
 $script:plugDevSourceCommit = (& git -C $script:plugDevRoot rev-parse HEAD 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $script:plugDevSourceCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'Could not pin the local PlugDev source commit.' }
+$script:plugDevSourceWorkingTreeSnapshot = Get-T21SourceWorkingTreeSnapshot $script:plugDevRoot
 $script:plugDevCliPath = Join-Path $script:plugDevRoot 'packages\cli\dist\cli.js'
 if (-not (Test-Path -LiteralPath $script:plugDevCliPath -PathType Leaf)) { throw 'The local PlugDev CLI artifact is unavailable.' }
 $script:plugDevCliSha256 = (Get-FileHash -LiteralPath $script:plugDevCliPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -150,6 +150,8 @@ $script:javaHomePath = (Resolve-Path -LiteralPath $JavaHome).Path
 $script:mysqlBinPath = (Resolve-Path -LiteralPath $script:databaseBin).Path
 $script:node = (Get-Command node.exe, node -ErrorAction Stop | Select-Object -First 1).Source
 $script:reportsRoot = Resolve-T21RuntimeReportsRoot $script:root $RuntimeReportsRoot
+$script:nodeVersion = (& $script:node --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $script:nodeVersion -notmatch '^v\d+\.\d+\.\d+$') { throw 'Could not pin the Node.js runtime used by the local PlugDev CLI.' }
 $script:runId = [guid]::NewGuid().ToString('N')
 $script:runMarker = $script:databaseProduct.ToLowerInvariant() + '-sync-' + $script:runId
 $script:databaseName = 'syncmoney_t21_' + $script:runId.Substring(0, 8)
@@ -196,7 +198,6 @@ $script:startedAtUtc = [DateTime]::UtcNow.ToString('o')
 if ($ExpectedServerSha256.ToLowerInvariant() -cne $script:platformTarget.sha256) {
     throw "The $($script:platformTarget.taskSuffix) runtime requires its exact pinned server SHA-256."
 }
-if ($CandidateVersion -cne '1.4.0-alpha.1') { throw 'This T21 runtime cell is pinned to candidate 1.4.0-alpha.1.' }
 if ($script:legacySqlDataUpgrade) {
     if ([string]::IsNullOrWhiteSpace($BaselinePluginJar) -or [string]::IsNullOrWhiteSpace($ExpectedBaselinePluginSha256)) {
         throw 'The legacy SQL data upgrade requires an explicit pinned 1.3.2 plugin artifact and SHA-256.'
@@ -821,6 +822,43 @@ console.log(JSON.stringify({schema:c["config-version"],mode:c.economy.mode,datab
         $result = Invoke-LoggedCommand $script:node @($scriptPath, (Join-Path $script:workspace '.plugdev\run\plugins\Syncmoney\config.yml')) 'config-audit' (Join-Path $script:logsRoot 'config-audit.json')
     } finally { Pop-Location }
     if ($result.exitCode -ne 0) { throw 'Isolated Syncmoney config did not match the SQL and Redis runtime pins.' }
+    return ($result.output | ConvertFrom-Json)
+}
+
+function Assert-IsolatedPlugDevProfile {
+    $scriptPath = Join-Path $script:runRoot 'audit-profile.cjs'
+    $content = @'
+const fs=require("node:fs"); const path=require("node:path"); const crypto=require("node:crypto"); const {createRequire}=require("node:module");
+const yaml=createRequire(path.join(process.env.PLUGDEV_ROOT,"package.json"))("yaml");
+const profilePath=process.argv[2], expectedSoftware=process.argv[3], expectedVersion=process.argv[4];
+const p=yaml.parse(fs.readFileSync(profilePath,"utf8"));
+const args=Array.isArray(p.jvm?.args)?p.jvm.args:[];
+const expectedJar=path.resolve(process.env.SYNCMONEY_TEST_SERVER_JAR);
+const expectedPlugin=`build/libs/Syncmoney-${process.env.SYNCMONEY_CANDIDATE_VERSION}.jar`;
+const expectedRunMarker=`-Dsyncmoney.t21.database.run=${process.env.T21_RUN_MARKER}`;
+const expectedVersionMarker=`-Dsyncmoney.acceptance.version=${process.env.T21_PLUGIN_VERSION}`;
+const valid=p.type==="plugin"&&p.server==="custom"&&p.version===expectedVersion&&
+  p.serverJar&&path.resolve(p.serverJar)===expectedJar&&p.bind==="127.0.0.1"&&
+  Number(p.port)===Number(process.env.SYNCMONEY_TEST_GAME_PORT)&&Number(p.port)+10000<=65535&&
+  p.rcon?.enabled===true&&p.build?.jarPattern===expectedPlugin&&
+  p.dev?.onlineMode===false&&p.client?.launcher==="none"&&p.client?.joinOnReady===false&&
+  args.includes(expectedRunMarker)&&args.includes(expectedVersionMarker);
+if(!valid) throw new Error("The pre-JVM PlugDev profile does not match the pinned server, candidate, run marker, loopback bind, port, RCON, and offline acceptance settings.");
+const profileSha256=crypto.createHash("sha256").update(fs.readFileSync(profilePath)).digest("hex");
+console.log(JSON.stringify({software:expectedSoftware,minecraftVersion:expectedVersion,bind:p.bind,gamePort:Number(p.port),rconEnabled:p.rcon.enabled,serverJarSha256:crypto.createHash("sha256").update(fs.readFileSync(expectedJar)).digest("hex"),candidateJarPattern:p.build.jarPattern,candidateVersion:process.env.T21_PLUGIN_VERSION,profileSha256}));
+'@
+    Set-Content -LiteralPath $scriptPath -Value $content -Encoding utf8
+    $profilePath = Join-Path $script:workspace '.plugdev\profile.yml'
+    foreach ($port in @($script:gamePort, ($script:gamePort + 10000))) {
+        if (-not (Test-FreeLoopbackPort $port)) { throw "Pre-JVM route preflight found loopback port $port already in use." }
+    }
+    $result = Invoke-LoggedCommand $script:node @(
+        $scriptPath,
+        $profilePath,
+        $script:platformTarget.software,
+        $script:platformTarget.minecraftVersion
+    ) 'pre-jvm-profile-audit' (Join-Path $script:logsRoot 'pre-jvm-profile-audit.json')
+    if ($result.exitCode -ne 0) { throw 'The pre-JVM PlugDev profile did not pass its isolated loopback and artifact audit.' }
     return ($result.output | ConvertFrom-Json)
 }
 
@@ -1923,7 +1961,7 @@ function Start-T21ServerExpectingAuditSchemaFailure([ValidateSet('NewerAuditSche
         default { @('Syncmoney audit schema version: current 10, target 11', $failureDetailMarker) }
     }
     foreach ($marker in @(
-            'Loading server plugin Syncmoney v1.4.0-alpha.1',
+            ('Loading server plugin Syncmoney v' + $CandidateVersion),
             'Syncmoney initialization failed; rolling back initialized owners',
             $expectedFailureMessage) + $scenarioMarkers + @(
             '[noietime.libs.hikari.HikariDataSource] Syncmoney-HikariCP - Shutdown completed.',
@@ -2034,6 +2072,7 @@ function Stop-RunOwnedServerAfterFailure {
 }
 
 function Stop-MySqlBackend {
+    Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { Get-T21ServerProcesses } -RecordFailure { param([string]$message) $script:cleanupFailures.Add($message) }
     if ($script:databaseProduct -ceq 'PostgreSQL') { return Stop-PostgresBackend }
     if ($null -eq $script:mysqlLauncherProcess) { return }
     $process = $script:mysqlProcess
@@ -2102,6 +2141,7 @@ function Stop-MySqlBackend {
 }
 
 function Stop-PostgresBackend {
+    Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { Get-T21ServerProcesses } -RecordFailure { param([string]$message) $script:cleanupFailures.Add($message) }
     $process = $script:mysqlProcess
     $commandExitCode = $null
     $forced = $false
@@ -2185,6 +2225,7 @@ function Stop-PostgresBackend {
 }
 
 function Stop-RedisBackend {
+    Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { Get-T21ServerProcesses } -RecordFailure { param([string]$message) $script:cleanupFailures.Add($message) }
     if ($null -eq $script:redisProcess) { return }
     $process = $script:redisProcess
     $commandExitCode = $null
@@ -2341,9 +2382,11 @@ $script:redisPort = Get-FreeLoopbackPort 15000 25000 @($script:gamePort, ($scrip
 $script:accounts = [ordered]@{ AcceptanceA = Get-OfflineUuid 'AcceptanceA'; AcceptanceB = Get-OfflineUuid 'AcceptanceB' }
 
 $script:report = [ordered]@{
-    schemaVersion = 4
+    schemaVersion = 5
     sourceCommit = $script:sourceCommit
     sourceWorkingTreeDirty = $script:sourceWorkingTreeDirty
+    sourceWorkingTreeFingerprint = $script:sourceWorkingTreeSnapshot.fingerprint
+    sourceWorkingTreeFingerprintAfter = $null
     task = if ($script:databaseManagerInitFailureStartupFailure) {
         "T21-SQL-POOL-INITIAL-SCHEMA-FAILURE-$script:databaseProduct-$PlatformEndpoint"
     } elseif ($script:newerAuditSchemaStartupFailure) {
@@ -2373,6 +2416,13 @@ $script:report = [ordered]@{
     plugDev = [ordered]@{
         root=$script:plugDevRoot
         sourceCommit=$script:plugDevSourceCommit
+        sourceWorkingTreeDirty=[bool]$script:plugDevSourceWorkingTreeSnapshot.dirty
+        sourceWorkingTreeFingerprint=$script:plugDevSourceWorkingTreeSnapshot.fingerprint
+        sourceWorkingTreeStatusSha256=$script:plugDevSourceWorkingTreeSnapshot.statusSha256
+        sourceWorkingTreeStagedDiffSha256=$script:plugDevSourceWorkingTreeSnapshot.stagedDiffSha256
+        sourceWorkingTreeUnstagedDiffSha256=$script:plugDevSourceWorkingTreeSnapshot.unstagedDiffSha256
+        sourceWorkingTreeUntrackedFilesSha256=$script:plugDevSourceWorkingTreeSnapshot.untrackedFilesSha256
+        nodeVersion=$script:nodeVersion
         cliSha256=$script:plugDevCliSha256
         cliDistManifest=$script:plugDevCliDistManifest
         cliDistManifestSha256Before=$script:plugDevCliDistManifest.sha256
@@ -2429,6 +2479,32 @@ try {
 
     Initialize-T21ProjectWorkspace $script:workspace
     New-Item -ItemType Directory -Force -Path (Join-Path $script:runRoot '.plugdev-home'), (Join-Path $script:runRoot '.gradle-user-home') | Out-Null
+
+    # Build and inspect the exact PlugDev profile before starting Paper or either backend service.
+    Push-Location $script:workspace
+    try {
+        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') $script:platformTarget.software $script:platformTarget.minecraftVersion 'sync' 'off' $CandidateVersion 2>&1)
+        $prepareExit = $LASTEXITCODE
+        $prepareOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $script:logsRoot 'prepare-profile.txt') -Encoding utf8
+        if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:platformTarget.taskSuffix) $script:databaseProduct SYNC profile." }
+    } finally { Pop-Location }
+    Set-T21PluginInProfile $CandidateVersion
+    $preflightProfile = Assert-IsolatedPlugDevProfile
+    $configObservation = Assert-IsolatedSyncConfig
+    $script:report.configuration.preJvmProfile = [ordered]@{
+        software=[string]$preflightProfile.software
+        minecraftVersion=[string]$preflightProfile.minecraftVersion
+        bind=[string]$preflightProfile.bind
+        gamePort=[int]$preflightProfile.gamePort
+        rconEnabled=[bool]$preflightProfile.rconEnabled
+        serverJarSha256=[string]$preflightProfile.serverJarSha256
+        candidateJarPattern=[string]$preflightProfile.candidateJarPattern
+        candidateVersion=[string]$preflightProfile.candidateVersion
+        profileSha256=[string]$preflightProfile.profileSha256
+        configurationSchema=[int]$configObservation.schema
+        economyMode=[string]$configObservation.mode
+        credentialsConfigured=[bool]$configObservation.credentialsConfigured
+    }
 
     if ($script:databaseProduct -ceq 'PostgreSQL') {
         $postgresInitLog = Join-Path $script:logsRoot 'postgresql-initialize.stdout.txt'
@@ -2573,14 +2649,6 @@ try {
     }
     $script:report.backendProcesses.redis = [ordered]@{ version='8.10.1'; processId=[int]$script:redisProcess.Id; runOwned=$true; listenerOwnerVerified=(Assert-BackendListenerOwner 'Redis' $script:redisPort $script:redisProcess.Id) }
 
-    Push-Location $script:workspace
-    try {
-        $prepareOutput = @(& $script:node (Join-Path $script:workspace 'tools\plugdev\prepare.mjs') $script:platformTarget.software $script:platformTarget.minecraftVersion 'sync' 'off' $CandidateVersion 2>&1)
-        $prepareExit = $LASTEXITCODE
-        $prepareOutput | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath (Join-Path $script:logsRoot 'prepare-profile.txt') -Encoding utf8
-        if ($prepareExit -ne 0) { throw "Could not prepare the isolated $($script:platformTarget.taskSuffix) $script:databaseProduct SYNC profile." }
-    } finally { Pop-Location }
-    Set-T21PluginInProfile $CandidateVersion
     $configObservation = Assert-IsolatedSyncConfig
     $script:report.configuration += [ordered]@{
         configSchema=[int]$configObservation.schema
@@ -2701,7 +2769,8 @@ try {
         Start-T21Server 'candidate-write'
         $versionLineStart = Get-ServerLogLineCount
         $null = Invoke-PlugDev @('server', 'command', 'smaccept version') 'candidate-version-command'
-        $null = Wait-ServerLogMarker 'T21_VERSION_PASS expected=1\.4\.0-alpha\.1 actual=1\.4\.0-alpha\.1' 'T21_VERSION_FAIL|ACCEPTANCE VERSION FAIL' $versionLineStart
+        $expectedCandidateVersion = [regex]::Escape($CandidateVersion)
+        $null = Wait-ServerLogMarker ("T21_VERSION_PASS expected=" + $expectedCandidateVersion + " actual=" + $expectedCandidateVersion) 'T21_VERSION_FAIL|ACCEPTANCE VERSION FAIL' $versionLineStart
 
         $writeLineStart = Get-ServerLogLineCount
         $null = Invoke-PlugDev @('server', 'command', 'smaccept write 1337.25 765.50') 'candidate-vault-write-command'
@@ -2767,6 +2836,16 @@ try {
             $script:cleanupFailures.Add('The local PlugDev source commit changed during runtime acceptance.')
         }
         $script:report.plugDev.sourceCommit = $plugDevSourceCommitAfter
+        $plugDevSourceWorkingTreeSnapshotAfter = Get-T21SourceWorkingTreeSnapshot $script:plugDevRoot
+        $script:report.plugDev.sourceWorkingTreeDirtyAfter = [bool]$plugDevSourceWorkingTreeSnapshotAfter.dirty
+        $script:report.plugDev.sourceWorkingTreeFingerprintAfter = $plugDevSourceWorkingTreeSnapshotAfter.fingerprint
+        $script:report.plugDev.sourceWorkingTreeStatusSha256After = $plugDevSourceWorkingTreeSnapshotAfter.statusSha256
+        $script:report.plugDev.sourceWorkingTreeStagedDiffSha256After = $plugDevSourceWorkingTreeSnapshotAfter.stagedDiffSha256
+        $script:report.plugDev.sourceWorkingTreeUnstagedDiffSha256After = $plugDevSourceWorkingTreeSnapshotAfter.unstagedDiffSha256
+        $script:report.plugDev.sourceWorkingTreeUntrackedFilesSha256After = $plugDevSourceWorkingTreeSnapshotAfter.untrackedFilesSha256
+        if ($plugDevSourceWorkingTreeSnapshotAfter.fingerprint -cne $script:plugDevSourceWorkingTreeSnapshot.fingerprint) {
+            $script:cleanupFailures.Add('The local PlugDev dirty/clean worktree fingerprint changed during runtime acceptance.')
+        }
         $plugDevCliDistManifestAfter = Get-T21PlugDevCliDistManifest $script:plugDevRoot
         $script:report.plugDev.cliDistManifestSha256After = $plugDevCliDistManifestAfter.sha256
         $script:report.plugDev.cliDistInvocationObservations = @($script:plugDevCliInvocationObservations.ToArray())
@@ -2774,12 +2853,19 @@ try {
             $script:cleanupFailures.Add('The local PlugDev CLI bundle changed during runtime acceptance.')
         }
         $sourceCommitAfter = (& git -C $script:root rev-parse HEAD 2>$null | Out-String).Trim().ToLowerInvariant()
-        $sourceDirtyAfter = @(& git -C $script:root status --porcelain --untracked-files=all 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $sourceCommitAfter -cne $script:sourceCommit -or $sourceDirtyAfter.Count -ne 0) {
-            $script:cleanupFailures.Add('The Syncmoney source commit or clean worktree state changed during runtime acceptance.')
+        if ($LASTEXITCODE -ne 0) { throw 'Could not recheck the Syncmoney source commit after runtime acceptance.' }
+        $sourceWorkingTreeSnapshotAfter = Get-T21SourceWorkingTreeSnapshot $script:root
+        if ($sourceCommitAfter -cne $script:sourceCommit -or
+            $sourceWorkingTreeSnapshotAfter.fingerprint -cne $script:sourceWorkingTreeSnapshot.fingerprint) {
+            $script:cleanupFailures.Add('The Syncmoney source commit or dirty/clean worktree fingerprint changed during runtime acceptance.')
         }
         $script:report.sourceCommitAfter = $sourceCommitAfter
-        $script:report.sourceWorkingTreeDirtyAfter = [bool]($sourceDirtyAfter.Count -gt 0)
+        $script:report.sourceWorkingTreeDirtyAfter = [bool]$sourceWorkingTreeSnapshotAfter.dirty
+        $script:report.sourceWorkingTreeFingerprintAfter = $sourceWorkingTreeSnapshotAfter.fingerprint
+        $script:report.sourceWorkingTreeStatusSha256After = $sourceWorkingTreeSnapshotAfter.statusSha256
+        $script:report.sourceWorkingTreeStagedDiffSha256After = $sourceWorkingTreeSnapshotAfter.stagedDiffSha256
+        $script:report.sourceWorkingTreeUnstagedDiffSha256After = $sourceWorkingTreeSnapshotAfter.unstagedDiffSha256
+        $script:report.sourceWorkingTreeUntrackedFilesSha256After = $sourceWorkingTreeSnapshotAfter.untrackedFilesSha256
         $script:report.runner = [ordered]@{
             path='tools/plugdev/run-mysql-sync-runtime.ps1'
             sha256=(Get-FileHash -LiteralPath (Join-Path $script:root 'tools\plugdev\run-mysql-sync-runtime.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -3007,15 +3093,15 @@ try {
             }
             $script:finalReport[$script:sqlReportKey] = $databaseEvidence
             $reportAccepted = switch ($script:databaseProduct) {
-                'PostgreSQL' { Test-T21PostgresLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
-                'MariaDB' { Test-T21MariaDbLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
-                default { Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint }
+                'PostgreSQL' { Test-T21PostgresLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $CandidateVersion }
+                'MariaDB' { Test-T21MariaDbLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $CandidateVersion }
+                default { Test-T21MySqlLegacyDataUpgradeReport $script:finalReport $ExpectedServerSha256 $ExpectedBaselinePluginSha256 $ExpectedCandidateSha256 $acceptanceSha256 $apiConsumerSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $CandidateVersion }
             }
         } else {
             $reportAccepted = if ($script:databaseProduct -ceq 'PostgreSQL') {
-                Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256
+                Test-T21PostgresRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256 -ExpectedCandidateVersion $CandidateVersion
             } else {
-                Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256
+                Test-T21MySqlRuntimeReport $script:report $ExpectedServerSha256 $ExpectedCandidateSha256 -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint -ExpectedApiConsumerSha256 $apiConsumerSha256 -ExpectedCandidateVersion $CandidateVersion
             }
             $script:finalReport = $script:report
         }

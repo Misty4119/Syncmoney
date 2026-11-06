@@ -97,6 +97,12 @@ public final class SyncmoneyCommandRouter implements CommandExecutor, TabComplet
      */
     private void sendCommandHelp(CommandSender sender, String label) {
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.header"));
+        if (plugin.getSyncmoneyConfig() != null && plugin.getSyncmoneyConfig().isCMIMode()) {
+            MessageHelper.sendMessage(sender,
+                    "CMI mode: Syncmoney only synchronizes CMI currency. Use CMI for economy commands.");
+            MessageHelper.sendMessage(sender, plugin.getMessage("router.help.version"));
+            return;
+        }
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.admin"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.breaker"));
         MessageHelper.sendMessage(sender, plugin.getMessage("router.help.audit"));

@@ -4,6 +4,10 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or newer is required for these T21 runner validation tests.' }
 . (Join-Path $PSScriptRoot 't21-upgrade-validation.ps1')
 
+# Backend shutdown helpers are extracted from the runner AST below; keep their
+# run-owned server query offline and deterministic in this test process.
+function Get-T21ServerProcesses { @() }
+
 function Assert-ThrowsContaining([string]$name, [scriptblock]$action, [string]$message) {
     try {
         $null = & $action
@@ -15,6 +19,29 @@ function Assert-ThrowsContaining([string]$name, [scriptblock]$action, [string]$m
         return
     }
     throw ($name + ' was accepted')
+}
+
+$cleanupGuardFailures = [Collections.Generic.List[string]]::new()
+$cleanupGuardRecorder = { param([string]$message) $cleanupGuardFailures.Add($message) }
+$null = Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { @() } -RecordFailure $cleanupGuardRecorder
+if ($cleanupGuardFailures.Count -ne 0) { throw 'The cleanup guard recorded a failure for an empty process list.' }
+Write-Output 'PASS: allow dependency cleanup after confirming no run-owned platform process remains'
+
+$cleanupGuardFailures.Clear()
+$remainingCleanupProcess = [pscustomobject]@{ ProcessId = 8675 }
+Assert-ThrowsContaining 'refuse dependency cleanup while a run-owned platform process remains' {
+    Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { $remainingCleanupProcess } -RecordFailure $cleanupGuardRecorder
+} '8675'
+if ($cleanupGuardFailures.Count -ne 1 -or $cleanupGuardFailures[0] -notlike '*8675*') {
+    throw 'The cleanup guard did not report the remaining run-owned platform process.'
+}
+
+$cleanupGuardFailures.Clear()
+Assert-ThrowsContaining 'refuse dependency cleanup when process status cannot be queried' {
+    Assert-T21PlatformExitBeforeDependencyCleanup -QueryPlatformProcesses { throw 'synthetic process-query failure' } -RecordFailure $cleanupGuardRecorder
+} 'synthetic process-query failure'
+if ($cleanupGuardFailures.Count -ne 1 -or $cleanupGuardFailures[0] -notlike '*synthetic process-query failure*') {
+    throw 'The cleanup guard did not report the process-query failure.'
 }
 
 function Test-T21CommandLineRunsScript {
@@ -140,11 +167,11 @@ $currentStablePaper = Get-T21PaperEndpoint -PaperEndpoint CurrentStable
 if ($currentStablePaper.taskSuffix -cne 'current-stable-Paper' -or
     $currentStablePaper.software -cne 'paper' -or
     $currentStablePaper.minecraftVersion -cne '26.3' -or
-    $currentStablePaper.build -ne 194 -or
-    $currentStablePaper.sha256 -cne '5fac0b6937b7aecea1b5b40e6a992f7b0802e4271413be35a6913d30df960784') {
-    throw 'The T21 current-stable Paper endpoint must remain pinned independently from the user-supplied maximum endpoint.'
+    $currentStablePaper.build -ne 244 -or
+    $currentStablePaper.sha256 -cne '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf') {
+    throw 'The T21 current-stable Paper endpoint must remain pinned to the latest official stable build.'
 }
-Write-Output 'PASS: pin current-stable Paper independently from user maximum'
+Write-Output 'PASS: pin the latest current-stable Paper build'
 
 $currentStable209Paper = Get-T21PaperEndpoint -PaperEndpoint CurrentStable209
 if ($currentStable209Paper.taskSuffix -cne 'current-stable-Paper-209' -or
@@ -152,14 +179,14 @@ if ($currentStable209Paper.taskSuffix -cne 'current-stable-Paper-209' -or
     $currentStable209Paper.minecraftVersion -cne '26.3' -or
     $currentStable209Paper.build -ne 209 -or
     $currentStable209Paper.sha256 -cne '0a056c7648cfa0ca8d9b8c833a2bd2e1313ed4f1393a5125dd3444a4ee257e22') {
-    throw 'The T21 current-stable Paper 26.3#209 endpoint must be pinned independently from both the historical CurrentStable and formal maximum endpoints.'
+    throw 'The retained Paper 26.3#209 historical endpoint must remain pinned separately from the current Paper endpoint.'
 }
-Write-Output 'PASS: pin Paper 26.3#209 current stable independently from historical CurrentStable and formal maximum'
+Write-Output 'PASS: retain the historical Paper 26.3#209 endpoint pin'
 
 $currentMaximumEndpoints = @(
-    [ordered]@{ endpoint='CurrentMaximum'; taskSuffix='current-maximum-Paper'; software='paper'; minecraftVersion='26.3'; build=200; sha256='0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d' },
-    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=3; sha256='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
-    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=984; sha256='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
+    [ordered]@{ endpoint='CurrentMaximum'; taskSuffix='current-maximum-Paper'; software='paper'; minecraftVersion='26.3'; build=244; sha256='9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf' },
+    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=6; channel='ALPHA'; sha256='3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d' },
+    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=1010; sha256='e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057' }
 )
 foreach ($endpointCase in $currentMaximumEndpoints) {
     $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointCase.endpoint
@@ -167,6 +194,7 @@ foreach ($endpointCase in $currentMaximumEndpoints) {
         $endpoint.software -cne $endpointCase.software -or
         $endpoint.minecraftVersion -cne $endpointCase.minecraftVersion -or
         $endpoint.build -ne $endpointCase.build -or
+        ($endpointCase.Contains('channel') -and $endpoint.channel -cne $endpointCase.channel) -or
         $endpoint.sha256 -cne $endpointCase.sha256) {
         throw "The current T21 maximum endpoint is not pinned exactly: $($endpointCase.endpoint)."
     }
@@ -192,10 +220,11 @@ if (-not (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEnd
     throw 'The M04 auditor must accept the exact pinned current-stable Paper endpoint.'
 }
 Write-Output 'PASS: accept exact current-stable Paper identity for M04'
-if (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint Maximum) {
-    throw 'The M04 auditor must not accept current-stable Paper evidence as the formal maximum endpoint.'
+if (-not (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint Maximum) -or
+    -not (Test-T21M04PlatformEndpointReport $currentStableM04Report -PlatformEndpoint CurrentMaximum)) {
+    throw 'Paper 26.3#244 is both the latest stable build and the configured maximum endpoint.'
 }
-Write-Output 'PASS: keep current-stable Paper separate from the formal maximum in M04'
+Write-Output 'PASS: latest stable Paper 26.3#244 matches the configured maximum endpoint'
 $currentStable209M04Report = [ordered]@{
     platform = $currentStable209Paper.software
     minecraftVersion = $currentStable209Paper.minecraftVersion
@@ -203,13 +232,13 @@ $currentStable209M04Report = [ordered]@{
     expectedServerSha256 = $currentStable209Paper.sha256
 }
 if (-not (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentStable209)) {
-    throw 'The M04 auditor must accept the exact pinned current-stable Paper 26.3#209 endpoint.'
+    throw 'The M04 auditor must accept the exact retained historical Paper 26.3#209 endpoint.'
 }
 if (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentStable) {
-    throw 'The M04 auditor must not accept Paper 26.3#209 evidence under the historical CurrentStable 26.3#194 selector.'
+    throw 'The M04 auditor must not accept historical Paper 26.3#209 evidence under the current stable selector.'
 }
 if (Test-T21M04PlatformEndpointReport $currentStable209M04Report -PlatformEndpoint CurrentMaximum) {
-    throw 'The M04 auditor must not accept Paper 26.3#209 evidence as the formal maximum endpoint.'
+    throw 'The M04 auditor must not accept historical Paper 26.3#209 evidence as the formal maximum endpoint.'
 }
 $currentStable209WrongHash = [ordered]@{
     platform = $currentStable209Paper.software
@@ -220,22 +249,22 @@ $currentStable209WrongHash = [ordered]@{
 if (Test-T21M04PlatformEndpointReport $currentStable209WrongHash -PlatformEndpoint CurrentStable209) {
     throw 'The M04 auditor must reject Paper 26.3#209 when its reported expected server hash is wrong.'
 }
-Write-Output 'PASS: require exact Paper 26.3#209 build, hash, and supplemental endpoint identity for M04'
+Write-Output 'PASS: keep historical Paper 26.3#209 M04 evidence pinned to its named legacy selector'
 $currentStable209M04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-209-main@fixture (2026-10-20T21:49:44Z) for Minecraft 26.3'
 if (-not (Test-T21M04PlatformStartupIdentity $currentStable209M04Startup -PlatformEndpoint CurrentStable209) -or
     (Test-T21M04PlatformStartupIdentity $currentStable209M04Startup.Replace('26.3-209', '26.3-208') -PlatformEndpoint CurrentStable209)) {
-    throw 'The M04 auditor must accept only the exact Paper 26.3#209 startup identity under CurrentStable209.'
+    throw 'The M04 auditor must accept only the exact historical Paper 26.3#209 startup identity under CurrentStable209.'
 }
-Write-Output 'PASS: accept Paper 26.3#209 startup identity and reject another build under CurrentStable209'
-$currentStableM04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-194-main@fixture (2026-10-16T00:00:00Z) for Minecraft 26.3'
+Write-Output 'PASS: accept the historical Paper 26.3#209 startup identity only under CurrentStable209'
+$currentStableM04Startup = '[ServerMain/INFO]: [bootstrap] Loading Paper 26.3-244-main@fixture (2026-11-06T11:34:02Z) for Minecraft 26.3'
 if (-not (Test-T21M04PlatformStartupIdentity $currentStableM04Startup -PlatformEndpoint CurrentStable)) {
     throw 'The M04 auditor must accept the exact current-stable Paper startup identity.'
 }
 Write-Output 'PASS: accept exact current-stable Paper startup identity for M04'
-if (Test-T21M04PlatformStartupIdentity ($currentStableM04Startup.Replace('26.3-194', '26.3-166')) -PlatformEndpoint CurrentStable) {
-    throw 'The M04 auditor must reject current-stable startup evidence with the formal maximum build.'
+if (Test-T21M04PlatformStartupIdentity ($currentStableM04Startup.Replace('26.3-244', '26.3-243')) -PlatformEndpoint CurrentStable) {
+    throw 'The M04 auditor must reject a different Paper build under the current-stable selector.'
 }
-Write-Output 'PASS: reject a non-current-stable Paper build under the current-stable M04 selector'
+Write-Output 'PASS: reject a different Paper build under the current-stable M04 selector'
 
 $defaultRuntimeReportsRoot = Resolve-T21RuntimeReportsRoot 'C:\syncmoney' ''
 if ($defaultRuntimeReportsRoot -cne [IO.Path]::GetFullPath('C:\syncmoney\build\reports\foundation\T21-sql-runtime')) {
@@ -261,12 +290,12 @@ Assert-ThrowsContaining 'reject a filesystem root as the T21 reports root' {
 } 'cannot be a filesystem root'
 
 $runtimePlatformEndpoints = @(
-    [ordered]@{ endpoint='MinimumFolia'; taskSuffix='minimum-Folia'; software='folia'; minecraftVersion='1.21.6'; build=6; sha256='917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234' },
-    [ordered]@{ endpoint='MaximumFolia'; taskSuffix='maximum-Folia'; software='folia'; minecraftVersion='26.2'; build=7; sha256='128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' },
-    [ordered]@{ endpoint='MinimumCanvas'; taskSuffix='minimum-Canvas'; software='canvas'; minecraftVersion='1.21.8'; build=603; sha256='6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b' },
-    [ordered]@{ endpoint='MaximumCanvas'; taskSuffix='maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=972; sha256='aac025fe36a61f84fecb04de74e94bbf933c7081c4c88f13a9d4b96de42243f5' },
-    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=3; sha256='0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022' },
-    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=984; sha256='0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa' }
+    [ordered]@{ endpoint='MinimumFolia'; taskSuffix='minimum-Folia'; software='folia'; minecraftVersion='26.2'; build=7; channel='BETA'; sha256='128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3' },
+    [ordered]@{ endpoint='MaximumFolia'; taskSuffix='maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=6; channel='ALPHA'; sha256='3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d' },
+    [ordered]@{ endpoint='MinimumCanvas'; taskSuffix='minimum-Canvas'; software='canvas'; minecraftVersion='26.2'; build=994; sha256='8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2' },
+    [ordered]@{ endpoint='MaximumCanvas'; taskSuffix='maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=1010; sha256='e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057' },
+    [ordered]@{ endpoint='CurrentMaximumFolia'; taskSuffix='current-maximum-Folia'; software='folia'; minecraftVersion='26.3'; build=6; channel='ALPHA'; sha256='3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d' },
+    [ordered]@{ endpoint='CurrentMaximumCanvas'; taskSuffix='current-maximum-Canvas'; software='canvas'; minecraftVersion='26.3'; build=1010; sha256='e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057' }
 )
 foreach ($endpointCase in $runtimePlatformEndpoints) {
     $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $endpointCase.endpoint
@@ -274,6 +303,7 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
         $endpoint.software -cne $endpointCase.software -or
         $endpoint.minecraftVersion -cne $endpointCase.minecraftVersion -or
         $endpoint.build -ne $endpointCase.build -or
+        ($endpointCase.Contains('channel') -and $endpoint.channel -cne $endpointCase.channel) -or
         $endpoint.sha256 -cne $endpointCase.sha256) {
         throw "The T21 SQL platform endpoint is not pinned exactly: $($endpointCase.endpoint)."
     }
@@ -282,9 +312,9 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
 
 $m04MinimumPaperReport = [ordered]@{
     platform = 'paper'
-    minecraftVersion = '1.21.6'
-    buildNumber = 48
-    expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+    minecraftVersion = '26.2'
+    buildNumber = 135
+    expectedServerSha256 = 'ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1'
 }
 if (-not (Test-T21M04PaperEndpointReport $m04MinimumPaperReport -PaperEndpoint Minimum)) {
     throw 'The M04 offline auditor must continue accepting the exact user-pinned minimum-Paper endpoint.'
@@ -294,8 +324,8 @@ Write-Output 'PASS: accept the exact M04 minimum-Paper endpoint pin'
 $m04MaximumPaperReport = [ordered]@{
     platform = 'paper'
     minecraftVersion = '26.3'
-    buildNumber = 166
-    expectedServerSha256 = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+    buildNumber = 244
+    expectedServerSha256 = '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf'
 }
 if (-not (Test-T21M04PaperEndpointReport $m04MaximumPaperReport -PaperEndpoint Maximum)) {
     throw 'The M04 offline auditor must accept the exact user-pinned maximum-Paper endpoint.'
@@ -313,7 +343,7 @@ $m04WrongPaperHashReport = [ordered]@{
     buildNumber = $m04MaximumPaperReport.buildNumber
     expectedServerSha256 = $m04MaximumPaperReport.expectedServerSha256
 }
-$m04WrongPaperHashReport.expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+$m04WrongPaperHashReport.expectedServerSha256 = 'ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1'
 if (Test-T21M04PaperEndpointReport $m04WrongPaperHashReport -PaperEndpoint Maximum) {
     throw 'The M04 offline auditor must reject a maximum-Paper report with the minimum-Paper artifact hash.'
 }
@@ -354,31 +384,31 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
 
 $m04MinimumFoliaReport = [ordered]@{
     platform = 'folia'
-    minecraftVersion = '1.21.6'
-    buildNumber = 6
-    expectedServerSha256 = '917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234'
+    minecraftVersion = '26.2'
+    buildNumber = 7
+    expectedServerSha256 = '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
 }
 if (Test-T21M04PlatformEndpointReport $m04MinimumFoliaReport -PlatformEndpoint Minimum) {
     throw 'The M04 auditor must not accept minimum-Folia evidence under the minimum-Paper endpoint.'
 }
 Write-Output 'PASS: reject minimum Folia evidence under the minimum-Paper endpoint'
 
-$m04MinimumFoliaStartup = '[ServerMain/INFO]: [bootstrap] Loading Folia 1.21.6-6-main@fixture (2026-10-16T00:00:00Z) for Minecraft 1.21.6'
+$m04MinimumFoliaStartup = '[ServerMain/INFO]: [bootstrap] Loading Folia 26.2-7-main@fixture (2026-08-25T13:29:28Z) for Minecraft 26.2'
 if (Test-T21M04PlatformStartupIdentity $m04MinimumFoliaStartup -PlatformEndpoint Minimum) {
     throw 'The M04 auditor must not accept minimum-Folia startup identity under the minimum-Paper endpoint.'
 }
 Write-Output 'PASS: reject minimum Folia startup identity under the minimum-Paper endpoint'
 
-if (Test-T21M04PlatformStartupIdentity ($m04MinimumFoliaStartup.Replace('1.21.6-6', '1.21.6-7')) -PlatformEndpoint MinimumFolia) {
-    throw 'The M04 auditor must reject a Folia startup log with the wrong server build.'
+if (Test-T21M04PlatformStartupIdentity ($m04MinimumFoliaStartup.Replace('26.2-7', '26.2-6')) -PlatformEndpoint MinimumFolia) {
+    throw 'The M04 auditor must reject Folia 26.2 startup identity with the wrong server build.'
 }
-Write-Output 'PASS: reject Folia startup identity with an unpinned build number'
+Write-Output 'PASS: reject another Folia 26.2 build under the minimum-Folia endpoint'
 
 $m04WrongFoliaHashReport = [ordered]@{
     platform = $m04MinimumFoliaReport.platform
     minecraftVersion = $m04MinimumFoliaReport.minecraftVersion
     buildNumber = $m04MinimumFoliaReport.buildNumber
-    expectedServerSha256 = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+    expectedServerSha256 = 'ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1'
 }
 if (Test-T21M04PlatformEndpointReport $m04WrongFoliaHashReport -PlatformEndpoint MinimumFolia) {
     throw 'The M04 auditor must reject minimum-Folia identity with a different platform artifact hash.'
@@ -1141,7 +1171,7 @@ if (Test-T21PostgresProcessIdentity -ProcessId 4242 `
 }
 Write-Output 'PASS: require PostgreSQL process command line to bind the verified data directory through -D'
 
-$paperMinimumSha = '35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214'
+$paperMinimumSha = 'ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1'
 $candidateSha = 'b' * 64
 $apiConsumerSha = 'c' * 64
 $accountA = '35c93f74-c540-3b38-8093-b5cb3c2263be'
@@ -1170,7 +1200,7 @@ $mysqlRuntimeReport = [ordered]@{
     schemaVersion = 1
     task = 'T21-M05-SYNC-MySQL-minimum-Paper'
     status = 'PASS_BOUNDED_SUBCASE'
-    server = [ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$paperMinimumSha }
+    server = [ordered]@{ software='paper'; minecraftVersion='26.2'; build=135; sha256=$paperMinimumSha }
     candidate = [ordered]@{ version='1.4.0-alpha.1'; sha256=$candidateSha }
     java = [ordered]@{ feature=25 }
     mysql = [ordered]@{ version='8.0.42'; serverVersion='8.0.42' }
@@ -1190,8 +1220,8 @@ $mysqlRuntimeReport = [ordered]@{
         [ordered]@{ backend='redis'; command='SHUTDOWN SAVE'; commandExitCode=1; processExitCode=0; processExitCodeObserved=$true; processExited=$true; forced=$false }
     )
     startupObservations = @(
-        [ordered]@{ stage='candidate-write'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=3333; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48} },
-        [ordered]@{ stage='candidate-restart-read'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=4444; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48} }
+        [ordered]@{ stage='candidate-write'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=3333; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='26.2'; minecraftVersion='26.2'; build=135} },
+        [ordered]@{ stage='candidate-restart-read'; enabled=$true; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; processId=4444; runtimeIdentity=[ordered]@{software='paper'; runtimeVersion='26.2'; minecraftVersion='26.2'; build=135} }
     )
     writeReceipts = @(
         'SUCCESS:DEPOSIT:1337.25:1337.25',
@@ -1272,6 +1302,87 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
     Remove-T21PlatformRuntimeReportFixtureLogs
 }
 
+$beta2Endpoint = Get-T21PlatformEndpoint -PlatformEndpoint Minimum
+$beta2RuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$beta2RuntimeReport = New-T21PlatformRuntimeReportFixture $beta2RuntimeReport $beta2Endpoint 'MySQL'
+$beta2RuntimeReport.schemaVersion = 5
+$beta2RuntimeReport.candidate.version = '1.4.0-Beta.2'
+$beta2RuntimeReport.sourceCommit = 'd' * 40
+$beta2RuntimeReport.sourceCommitAfter = $beta2RuntimeReport.sourceCommit
+$beta2RuntimeReport.sourceWorkingTreeDirty = $true
+$beta2RuntimeReport.sourceWorkingTreeDirtyAfter = $true
+$beta2RuntimeReport.sourceWorkingTreeFingerprint = 'e' * 64
+$beta2RuntimeReport.sourceWorkingTreeFingerprintAfter = $beta2RuntimeReport.sourceWorkingTreeFingerprint
+foreach ($startup in $beta2RuntimeReport.startupObservations) { $startup.pluginVersion = '1.4.0-Beta.2' }
+if (-not (Test-T21MySqlRuntimeReport $beta2RuntimeReport $beta2Endpoint.sha256 $candidateSha -PlatformEndpoint Minimum -ExpectedApiConsumerSha256 $apiConsumerSha -ExpectedCandidateVersion '1.4.0-Beta.2')) {
+    throw 'A pinned Beta.2 runtime report with an unchanged dirty source fingerprint was rejected.'
+}
+Write-Output 'PASS: accept Beta.2 runtime evidence with a stable dirty-source fingerprint'
+$beta2RuntimeReportWrongFingerprint = $beta2RuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$beta2RuntimeReportWrongFingerprint.sourceWorkingTreeFingerprintAfter = 'f' * 64
+if (Test-T21MySqlRuntimeReport $beta2RuntimeReportWrongFingerprint $beta2Endpoint.sha256 $candidateSha -PlatformEndpoint Minimum -ExpectedApiConsumerSha256 $apiConsumerSha -ExpectedCandidateVersion '1.4.0-Beta.2') {
+    throw 'A Beta.2 runtime report with a changed source fingerprint was accepted.'
+}
+Write-Output 'PASS: reject Beta.2 runtime evidence when the source fingerprint changes'
+$beta2RuntimeReportWrongVersion = $beta2RuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
+$beta2RuntimeReportWrongVersion.candidate.version = '1.4.0-Beta.1'
+if (Test-T21MySqlRuntimeReport $beta2RuntimeReportWrongVersion $beta2Endpoint.sha256 $candidateSha -PlatformEndpoint Minimum -ExpectedApiConsumerSha256 $apiConsumerSha -ExpectedCandidateVersion '1.4.0-Beta.2') {
+    throw 'A Beta.1 report was accepted for the pinned Beta.2 candidate.'
+}
+Write-Output 'PASS: reject a runtime report for a different candidate version'
+Remove-T21PlatformRuntimeReportFixtureLogs
+
+$sourceSnapshotTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('syncmoney-t21-source-snapshot-' + [guid]::NewGuid().ToString('N'))
+try {
+    New-Item -ItemType Directory -Path $sourceSnapshotTestRoot -Force | Out-Null
+    & git -C $sourceSnapshotTestRoot init --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the isolated Git snapshot fixture.' }
+    & git -C $sourceSnapshotTestRoot config user.name 'T21 snapshot test'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not configure the isolated Git snapshot fixture.' }
+    & git -C $sourceSnapshotTestRoot config user.email 't21-snapshot@example.invalid'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not configure the isolated Git snapshot fixture.' }
+    $snapshotTrackedPath = Join-Path $sourceSnapshotTestRoot 'tracked.txt'
+    [IO.File]::WriteAllText($snapshotTrackedPath, 'baseline', [Text.UTF8Encoding]::new($false))
+    & git -C $sourceSnapshotTestRoot add -- tracked.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stage the isolated Git snapshot fixture.' }
+    & git -C $sourceSnapshotTestRoot commit --quiet -m 'snapshot baseline'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not commit the isolated Git snapshot fixture.' }
+    $cleanSnapshot = Get-T21SourceWorkingTreeSnapshot $sourceSnapshotTestRoot
+    if ($cleanSnapshot.dirty) { throw 'A clean Git snapshot fixture was reported dirty.' }
+    [IO.File]::WriteAllText($snapshotTrackedPath, 'dirty-one', [Text.UTF8Encoding]::new($false))
+    $dirtySnapshot = Get-T21SourceWorkingTreeSnapshot $sourceSnapshotTestRoot
+    $sameDirtySnapshot = Get-T21SourceWorkingTreeSnapshot $sourceSnapshotTestRoot
+    if (-not $dirtySnapshot.dirty -or $dirtySnapshot.fingerprint -ceq $cleanSnapshot.fingerprint -or
+        $dirtySnapshot.fingerprint -cne $sameDirtySnapshot.fingerprint) {
+        throw 'An unchanged dirty source tree did not produce a stable, distinct fingerprint.'
+    }
+    [IO.File]::WriteAllText($snapshotTrackedPath, 'dirty-two', [Text.UTF8Encoding]::new($false))
+    $changedDirtySnapshot = Get-T21SourceWorkingTreeSnapshot $sourceSnapshotTestRoot
+    if ($changedDirtySnapshot.fingerprint -ceq $dirtySnapshot.fingerprint) {
+        throw 'A source content change with the same Git status shape was not detected.'
+    }
+    [IO.File]::WriteAllText((Join-Path $sourceSnapshotTestRoot 'untracked.txt'), 'new source', [Text.UTF8Encoding]::new($false))
+    $untrackedSnapshot = Get-T21SourceWorkingTreeSnapshot $sourceSnapshotTestRoot
+    if (-not $untrackedSnapshot.dirty -or $untrackedSnapshot.fingerprint -ceq $changedDirtySnapshot.fingerprint) {
+        throw 'An untracked source file was not included in the Git snapshot fingerprint.'
+    }
+    Write-Output 'PASS: fingerprint clean, stable-dirty, changed-tracked, and untracked source states'
+} finally {
+    if (Test-Path -LiteralPath $sourceSnapshotTestRoot -PathType Container) {
+        $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\', '/'))
+        $fixtureRoot = [IO.Path]::GetFullPath($sourceSnapshotTestRoot).TrimEnd([char[]]@('\', '/'))
+        $temporaryRootPrefix = $temporaryRoot + [IO.Path]::DirectorySeparatorChar
+        if (-not $fixtureRoot.StartsWith($temporaryRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Refusing to clean a source snapshot fixture outside the current temporary directory.'
+        }
+        $fixtureItem = Get-Item -LiteralPath $fixtureRoot -Force
+        if (($fixtureItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Refusing recursive cleanup of a reparse-point source snapshot fixture.'
+        }
+        Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+    }
+}
+
 foreach ($endpointCase in $runtimePlatformEndpoints) {
     $legacyNonPaperReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $legacyNonPaperReport.task = "T21-M05-SYNC-MySQL-$($endpointCase.taskSuffix)"
@@ -1293,9 +1404,10 @@ foreach ($endpointCase in $runtimePlatformEndpoints) {
 
 $wrongFoliaRuntimeReport = $mysqlRuntimeReportV3 | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $wrongFoliaRuntimeReport = New-T21PlatformRuntimeReportFixture $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0] 'MySQL'
-$wrongFoliaRuntimeReport.server.build = 7
+$wrongFoliaBuild = [int]$runtimePlatformEndpoints[0].build + 1
+$wrongFoliaRuntimeReport.server.build = $wrongFoliaBuild
 foreach ($startup in $wrongFoliaRuntimeReport.startupObservations) {
-    $startup.runtimeIdentity.build = 7
+    $startup.runtimeIdentity.build = $wrongFoliaBuild
 }
 if (Test-T21MySqlRuntimeReport $wrongFoliaRuntimeReport $runtimePlatformEndpoints[0].sha256 $candidateSha -PlatformEndpoint MinimumFolia -ExpectedApiConsumerSha256 $apiConsumerSha) {
     throw 'A runtime report whose Folia build disagrees with its pinned endpoint was accepted.'
@@ -1631,12 +1743,12 @@ if (Test-T21MySqlRuntimeReport $mariadbRuntimeReportWrongVersion $paperMinimumSh
 }
 Write-Output 'PASS: reject a MariaDB report with the wrong exact server version'
 
-$paperMaximumSha = 'dbaae37e10e30e44ad1ff65cf00992240c3e79d33e150f9c4e833ed0338e8ccd'
+$paperMaximumSha = '9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf'
 $maximumPaperRuntimeReport = $mariadbRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $maximumPaperRuntimeReport.schemaVersion = 3
 $maximumPaperRuntimeReport.task = 'T21-M05-SYNC-MariaDB-maximum-Paper'
 $maximumPaperRuntimeReport.server.minecraftVersion = '26.3'
-$maximumPaperRuntimeReport.server.build = 166
+$maximumPaperRuntimeReport.server.build = 244
 $maximumPaperRuntimeReport.server.sha256 = $paperMaximumSha
 $maximumPaperRuntimeReport.gradleDaemonCleanup = [ordered]@{
     isolatedUserHome = Join-Path $maximumPaperRuntimeReport.runDirectory '.gradle-user-home'
@@ -1649,12 +1761,12 @@ $maximumPaperRuntimeReport.gradleDaemonCleanup = [ordered]@{
 foreach ($startup in $maximumPaperRuntimeReport.startupObservations) {
     $startup.runtimeIdentity.runtimeVersion = '26.3'
     $startup.runtimeIdentity.minecraftVersion = '26.3'
-    $startup.runtimeIdentity.build = 166
+    $startup.runtimeIdentity.build = 244
 }
 if (-not (Test-T21MySqlRuntimeReport $maximumPaperRuntimeReport $paperMaximumSha $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum)) {
-    throw 'The complete MariaDB SYNC runtime report for user-pinned maximum Paper 26.3#166 was rejected.'
+    throw 'The complete MariaDB SYNC runtime report for maximum Paper 26.3#244 was rejected.'
 }
-Write-Output 'PASS: accept MariaDB runtime evidence for user-pinned maximum Paper 26.3#166'
+Write-Output 'PASS: accept MariaDB runtime evidence for maximum Paper 26.3#244'
 if (Test-T21MySqlRuntimeReport $maximumPaperRuntimeReport $paperMaximumSha $candidateSha -DatabaseProduct MariaDB) {
     throw 'A maximum-Paper runtime report was accepted under the default minimum-Paper expectation.'
 }
@@ -1672,13 +1784,9 @@ foreach ($startup in $currentMaximumPaperRuntimeReport.startupObservations) {
     $startup.runtimeIdentity.build = $currentMaximumPaper.build
 }
 if (-not (Test-T21MySqlRuntimeReport $currentMaximumPaperRuntimeReport $currentMaximumPaper.sha256 $candidateSha -DatabaseProduct MariaDB -PaperEndpoint CurrentMaximum)) {
-    throw 'The current Paper 26.3#200 MariaDB SYNC runtime report was rejected.'
+    throw 'The current Paper 26.3#244 MariaDB SYNC runtime report was rejected.'
 }
-Write-Output 'PASS: accept MariaDB runtime report for current maximum Paper 26.3#200'
-if (Test-T21MySqlRuntimeReport $currentMaximumPaperRuntimeReport $currentMaximumPaper.sha256 $candidateSha -DatabaseProduct MariaDB -PaperEndpoint Maximum) {
-    throw 'Current maximum Paper evidence was accepted under the historical maximum Paper selector.'
-}
-Write-Output 'PASS: reject current maximum Paper evidence under the historical maximum selector'
+Write-Output 'PASS: accept MariaDB runtime report for current maximum Paper 26.3#244'
 
 $maximumPaperWrongReportedProduct = $maximumPaperRuntimeReport | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
 $maximumPaperWrongReportedProduct.mysql.product = 'MySQL'
@@ -1947,7 +2055,7 @@ $mysqlReportWrongStartupIdentity = [ordered]@{}
 foreach ($key in $mysqlRuntimeReport.Keys) { $mysqlReportWrongStartupIdentity[$key] = $mysqlRuntimeReport[$key] }
 $wrongStartupWrite = [ordered]@{}
 foreach ($key in $mysqlRuntimeReport.startupObservations[0].Keys) { $wrongStartupWrite[$key] = $mysqlRuntimeReport.startupObservations[0][$key] }
-$wrongStartupWrite.runtimeIdentity = [ordered]@{ software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=47 }
+$wrongStartupWrite.runtimeIdentity = [ordered]@{ software='paper'; runtimeVersion='26.2'; minecraftVersion='26.2'; build=134 }
 $mysqlReportWrongStartupIdentity.startupObservations = @($wrongStartupWrite, $mysqlRuntimeReport.startupObservations[1])
 if (Test-T21MySqlRuntimeReport $mysqlReportWrongStartupIdentity $paperMinimumSha $candidateSha) {
     throw 'A Paper startup observation for the wrong build was accepted under the minimum-endpoint report label.'
@@ -2037,6 +2145,31 @@ if ($runnerSource -notmatch 'function Invoke-PostgresStart' -or
 Write-Output 'PASS: wait for the pg_ctl startup process directly with file-backed output redirection'
 
 $runnerAst = [System.Management.Automation.Language.Parser]::ParseFile($mysqlRunnerPath, [ref]$runnerTokens, [ref]$runnerParseErrors)
+$backendStopFunctions = @('Stop-MySqlBackend', 'Stop-PostgresBackend', 'Stop-RedisBackend')
+foreach ($functionName in $backendStopFunctions) {
+    $stopFunction = @($runnerAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $functionName }, $true))
+    if ($stopFunction.Count -ne 1 -or
+        $stopFunction[0].Body.Extent.Text -notmatch '(?s)^\{\s*Assert-T21PlatformExitBeforeDependencyCleanup\b') {
+        throw "$functionName must assert run-owned server exit before any isolated backend shutdown work."
+    }
+}
+Write-Output 'PASS: guard each SQL and Redis shutdown against an active or unverified platform process'
+
+$mainRuntimeStart = $runnerSource.IndexOf('$env:JAVA_HOME = $script:javaHomePath', [StringComparison]::Ordinal)
+if ($mainRuntimeStart -lt 0) { throw 'Could not locate the T21 SQL runtime entry point.' }
+$prepareProfileIndex = $runnerSource.IndexOf('$prepareOutput = @(& $script:node', $mainRuntimeStart, [StringComparison]::Ordinal)
+$profilePreflightIndex = $runnerSource.IndexOf('$preflightProfile = Assert-IsolatedPlugDevProfile', $mainRuntimeStart, [StringComparison]::Ordinal)
+$mysqlServiceStartIndex = $runnerSource.IndexOf('$script:mysqlLauncherProcess = Start-Process', $mainRuntimeStart, [StringComparison]::Ordinal)
+$postgresServiceStartIndex = $runnerSource.IndexOf('$postgresStart = Invoke-PostgresStart', $mainRuntimeStart, [StringComparison]::Ordinal)
+$redisServiceStartIndex = $runnerSource.IndexOf('$script:redisProcess = Start-Process', $mainRuntimeStart, [StringComparison]::Ordinal)
+$firstServerStartInvocation = $runnerSource.IndexOf('$null = Start-T21Server ', $mainRuntimeStart, [StringComparison]::Ordinal)
+$serviceStartsBeforePreflight = @(@($mysqlServiceStartIndex, $postgresServiceStartIndex, $redisServiceStartIndex, $firstServerStartInvocation) | Where-Object { $_ -ge 0 -and $_ -le $profilePreflightIndex })
+if ($prepareProfileIndex -le $mainRuntimeStart -or $profilePreflightIndex -le $prepareProfileIndex -or
+    $serviceStartsBeforePreflight.Count -gt 0) {
+    throw 'The exact server/profile route and candidate pins must pass the pre-JVM preflight before Paper, SQL, or Redis processes start.'
+}
+Write-Output 'PASS: complete the pinned loopback/profile preflight before Paper or backend services start'
+
 $postgresStartFunction = @($runnerAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-PostgresStart' }, $true))
 if ($postgresStartFunction.Count -ne 1) { throw 'Expected exactly one PostgreSQL startup helper to exercise.' }
 . ([scriptblock]::Create($postgresStartFunction[0].Extent.Text))
@@ -2373,10 +2506,19 @@ if ($runnerSource -notmatch 'Get-T21PlatformEndpoint -PlatformEndpoint \$Platfor
     $runnerSource -notmatch 'Resolve-T21RuntimeReportsRoot \$script:root \$RuntimeReportsRoot' -or
     $runnerSource -notmatch 'Copy-Item -LiteralPath \$script:serverLogPath -Destination \$platformLogPath' -or
     $runnerSource -notmatch '\$script:report\.platformLogs = @\(\$script:platformServerLogs\)' -or
-    $runnerSource -notmatch 'schemaVersion = 4') {
-    throw 'The runner must select an exact user-pinned platform endpoint and report schema-4 platform-owned stage logs.'
+    $runnerSource -notmatch 'schemaVersion = 5' -or
+    $runnerSource -notmatch 'Get-T21SourceWorkingTreeSnapshot \$script:root' -or
+    $runnerSource -notmatch 'sourceWorkingTreeFingerprintAfter' -or
+    $runnerSource -notmatch 'ExpectedCandidateVersion \$CandidateVersion') {
+    throw 'The runner must select an exact platform, pin a dynamic candidate version, and report schema-5 platform logs with a stable source fingerprint.'
 }
-Write-Output 'PASS: preserve and report stage-specific platform logs under schema 4'
+Write-Output 'PASS: preserve stage-specific platform logs and stable dirty-source fingerprints under schema 5'
+
+if (-not $runnerSource.Contains('$expectedCandidateVersion = [regex]::Escape($CandidateVersion)') -or
+    -not $runnerSource.Contains('Wait-ServerLogMarker ("T21_VERSION_PASS expected=" + $expectedCandidateVersion + " actual=" + $expectedCandidateVersion)')) {
+    throw 'The SQL runtime version acceptance must match the exact candidate version selected for the run.'
+}
+Write-Output 'PASS: bind the SQL runtime version marker to the selected candidate version'
 
 $upgradeCycleRunnerPath = Join-Path $PSScriptRoot 'run-upgrade-cycle.ps1'
 $upgradeCycleTokens = $null

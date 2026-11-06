@@ -52,7 +52,6 @@ public class SyncmoneyVaultProvider implements Economy {
         VaultPlayerHandler playerHandler = new VaultPlayerHandler(economyFacade, nameResolver, plugin);
         VaultTransferHandler transferHandler = new VaultTransferHandler(
                 plugin, economyFacade, null, pluginDetector, null, playerHandler, nameResolver);
-        transferHandler.setDbWriteQueue(dbWriteQueue);
         VaultBankHandler bankHandler = new VaultBankHandler(plugin, redisManager, luaScriptManager);
 
         this.core = new VaultProviderCore(

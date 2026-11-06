@@ -50,8 +50,20 @@ public class EconomyServiceManager {
     public void initialize() {
         EconomyMode mode = config.getEconomyMode();
 
+        if (mode == EconomyMode.CMI) {
+            // CMI owns all local economy operations. Keep only the lightweight publisher
+            // required by the dedicated CMI Redis synchronization path.
+            this.crossServerSyncManager = new CrossServerSyncManager(
+                    plugin, config, storageManager.getRedisManager(), null, null);
+            this.economyModeRouter = new EconomyModeRouter(plugin, config);
+            this.economyModeRouter.initialize(null, null, null, crossServerSyncManager);
+            plugin.getLogger().info(
+                    "CMI mode: CMI owns economy operations; Syncmoney only synchronizes CMI balances.");
+            return;
+        }
+
         this.economyWriteQueue = new EconomyWriteQueue(config.getQueueCapacity(), plugin.getLogger());
-        if (mode != EconomyMode.LOCAL && mode != EconomyMode.CMI) {
+        if (mode != EconomyMode.LOCAL) {
             this.economyWriteQueue.closeAdmission();
         }
 
@@ -92,12 +104,7 @@ public class EconomyServiceManager {
                 nameResolver,
                 storageManager.getDbWriteQueue()
         );
-        if (mode == EconomyMode.CMI) {
-            plugin.getLogger().info(
-                    "CMI mode: skipping Vault/VaultUnlocked Economy registration (CMI remains the provider).");
-        } else {
-            initializeVaultIntegrations();
-        }
+        initializeVaultIntegrations();
 
         this.crossServerSyncManager = new CrossServerSyncManager(
                 plugin, config,
@@ -108,8 +115,10 @@ public class EconomyServiceManager {
 
         crossServerSyncManager.startPeriodicVersionCheck();
 
-        vaultProvider.setSyncManager(crossServerSyncManager);
-        vaultProvider.setConfig(config);
+        if (vaultProvider != null) {
+            vaultProvider.setSyncManager(crossServerSyncManager);
+            vaultProvider.setConfig(config);
+        }
         plugin.getLogger().fine("CrossServerSyncManager initialized.");
 
         this.economyModeRouter = new EconomyModeRouter(plugin, config);
@@ -142,6 +151,10 @@ public class EconomyServiceManager {
     }
 
     void startShadowSyncIfEnabled() {
+        if (config.isCMIMode()) {
+            plugin.getLogger().fine("Shadow Sync skipped: CMI mode is limited to CMI currency synchronization.");
+            return;
+        }
         if (!config.shadowSync().isShadowSyncEnabled()) {
             return;
         }

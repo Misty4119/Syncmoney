@@ -57,10 +57,11 @@ configurations {
 }
 
 dependencies {
+    def paperApiVersion = rootProject.ext.paperApiVersion
     jmhImplementation project(':syncmoney-bukkit')
     jmhImplementation project(':syncmoney-protocol')
     jmhImplementation project(':syncmoney-storage')
-    jmhImplementation 'io.papermc.paper:paper-api:1.21.6-R0.1-SNAPSHOT'
+    jmhImplementation "io.papermc.paper:paper-api:${paperApiVersion}"
     // Syncmoney extends JavaPlugin and implements VaultUnlocked's economy interface; the isolated mock event bus loads that type.
     jmhImplementation 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     jmhImplementation 'org.openjdk.jmh:jmh-core:1.37'

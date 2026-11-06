@@ -12,13 +12,11 @@
 - JDK 25 或更新版本，供 1.4.0 Gradle toolchain/build 使用
 - repository Gradle wrapper（Windows 為 `gradlew.bat`）
 - Node.js 與 pnpm，供 `syncmoney-web` 使用
-- 相容的 Paper/Folia/Canvas 測試 server，供 runtime acceptance
+- Minecraft 26.2–26.3 範圍內的 Paper、Folia 或 Canvas 測試 server，供 runtime acceptance；需記錄實際測試的 build
 - 只有測試需要 Redis/SQL 的 mode/feature 時才需要對應服務
 - 測試 CMI integration 時需自行提供合法授權的 CMI；repository 不散布 CMI
 
-**目前 R63 狀態：BLOCKED / NOT VERIFIED。** 使用者授權只針對 live queued /pay 的 durable recovery 架構修訂；direct Vault/plugin recovery 依 ADR-07 維持 DEFERRED / NOT VERIFIED。Java 25.0.4／Gradle 9.8.0 source/package gate 通過 59 個 actionable tasks（59 executed）：170 個 unit suites／945 個 tests，加上 9 個 Sync integration suites／44 個 tests（合計 179 suites／989 tests），failures、errors、skips 皆為 0。Architecture、classfile-major-69 packaging、API-consumer／acceptance packaging、Central publisher isolation，以及 frontend typecheck、4 個 unit files／22 個 tests 與 production build 均通過。Current core JAR：31,646,522 bytes / SHA-256 BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916；PAPI JAR：13,872 bytes / SHA-256 A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C；acceptance JAR：54,905 bytes / SHA-256 29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824。Production paired /pay recovery path 已通過隔離 Redis integration coverage；這是 source-level evidence，不能證明 Paper runtime 或 Beta acceptance。Exact-candidate Paper runtime／T22 Beta、storage-service integration、minimum-Paper SQL、licensed/live CMI（授權 UNKNOWN）、廣泛 V03、完整 public API 相容性與 T21 完成仍為 NOT VERIFIED 或 BLOCKED；Stable 與外部發布仍為 NOT VERIFIED / NOT PERFORMED。Stable metadata 維持 1.3.2；沒有執行外部發布。
-
-**歷史 R62 狀態（已由下方 R63 更新取代）：BLOCKED / NOT VERIFIED。** 指定候選分支 linco/t21-currentmax-guard 位於 66a25c4f8327932eae850bcfa52b1060942b1fd3（相對 main 為 350 commits ahead / 0 behind、沒有 upstream），工作樹仍有修改；target main 仍為 71cc55dfeefe9a8f40a3835b051ddd324d353767，工作樹乾淨且與 origin/main 相同，stable metadata 為 1.3.2。R62 的 :syncmoney-sync:integrationTest 執行 44 個 tests：41 通過、3 失敗、0 errors、0 skipped。兩個 raw Lua receipt-fixture 類別的 23 個 tests 全部通過；其餘 3 個 PayLuaScriptManagerNoscriptIT 失敗都在 ADR-07 暫緩的 /pay 路徑（INVALID_OPERATION_RECEIPT／SENT_UNKNOWN），因此整個 integration task 失敗，該行為仍為 BLOCKED / NOT VERIFIED。verifyArchitecture 通過；-PreleaseVersion=1.4.0 的 verifyPackaging 通過，classfile major 為 69；storage-service integration 未執行。四個候選 JAR 已重新計算磁碟 hash，但沒有目前 source manifest，因此這些 hash 只是觀察值，並非 source-bound release pins。使用者保留 ADR-07、不採納 ADR-15、延期 direct-transfer recovery 修復／整合，並決定不 merge main。R5 發現的 direct-transfer SENT_UNKNOWN quarantine restart persistence 與 operator-resolution 仍為 BLOCKED / NOT VERIFIED。R59 Bukkit 測試證據未重跑，720-entry R5 manifest 為歷史資料。T21 仍為 PARTIAL / IN_PROGRESS；廣泛 V03 為 SKIPPED / NOT VERIFIED；minimum-Paper SQL 與 licensed/live CMI 為 BLOCKED / NOT VERIFIED（CMI 授權狀態 UNKNOWN）；exact-candidate runtime/Beta、storage-service integration 與完整 public API 相容性仍為 NOT VERIFIED。Stable／外部發布為 NOT VERIFIED / NOT PERFORMED。未啟動 runtime、未 merge，也未執行外部發布。
+目前候選版的 source、package 與 frontend 結果、artifact pins 及未完成 gate，請查看[版本化 1.4.0 發布準備紀錄](release/1.4.0-readiness.zh_tw.md)。狀態會隨證據更新，本貢獻指南不重複維護易變的驗證快照。
 
 ## 儲存庫配置
 

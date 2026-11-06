@@ -538,12 +538,12 @@ Syncmoney disabled.
         $backendProcessFixture[$sqlKey] = $sqlBackend
         $report = [ordered]@{
             schemaVersion=4
-            task="T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-minimum-Paper"
+            task="T21-V03-SYNC-v10-to-v11-audit-schema-upgrade-$databaseProduct-$($platform.taskSuffix)"
             status='PASS_BOUNDED_SUBCASE'
             runDirectory=$fixtureRoot
             failure=$null
             cleanupFailures=@()
-            server=[ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$platform.sha256 }
+            server=[ordered]@{ software=$platform.software; minecraftVersion=$platform.minecraftVersion; build=$platform.build; sha256=$platform.sha256 }
             candidate=[ordered]@{ version='1.4.0-alpha.1'; sha256=$candidateSha }
             java=[ordered]@{ feature=25 }
             configuration=[ordered]@{
@@ -555,7 +555,10 @@ Syncmoney disabled.
             redis=[ordered]@{ version='8.10.1' }
             startupObservations=@([ordered]@{
                 stage='candidate-audit-v10-upgrade'; pluginVersion='1.4.0-alpha.1'; artifactSha256=$candidateSha; enabled=$true
-                processId=$sqlPid; apiConsumerMarker='PASS'; runtimeIdentity=[ordered]@{ software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48 }
+                processId=$sqlPid; apiConsumerMarker='PASS'; runtimeIdentity=[ordered]@{
+                    software=$platform.software; runtimeVersion=$platform.minecraftVersion
+                    minecraftVersion=$platform.minecraftVersion; build=$platform.build
+                }
             })
             normalStops=@([ordered]@{
                 stage='after-audit-v10-upgrade'; commandExitCode=0; processId=$sqlPid; processExitCode=0

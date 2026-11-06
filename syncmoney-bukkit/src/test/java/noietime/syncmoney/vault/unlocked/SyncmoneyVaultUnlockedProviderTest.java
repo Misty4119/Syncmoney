@@ -31,6 +31,7 @@ class SyncmoneyVaultUnlockedProviderTest {
 
     private EconomyFacade economyFacade;
     private NameResolver nameResolver;
+    private SyncmoneyConfig config;
     private SyncmoneyVaultUnlockedProvider provider;
 
     @BeforeEach
@@ -38,7 +39,7 @@ class SyncmoneyVaultUnlockedProviderTest {
         Plugin plugin = mock(Plugin.class);
         economyFacade = mock(EconomyFacade.class);
         nameResolver = mock(NameResolver.class);
-        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        config = mock(SyncmoneyConfig.class);
         DisplayConfig display = mock(DisplayConfig.class);
 
         when(plugin.getLogger()).thenReturn(Logger.getLogger("VaultUnlockedProviderTest"));
@@ -94,6 +95,21 @@ class SyncmoneyVaultUnlockedProviderTest {
         assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type());
         assertEquals(new BigDecimal("7.00"), response.balance(from).orElseThrow());
         assertEquals(new BigDecimal("8.00"), response.balance(to).orElseThrow());
+    }
+
+    @Test
+    void transferRejectsCmiModeBeforeReadingOrMutatingAccounts() {
+        UUID from = UUID.randomUUID();
+        UUID to = UUID.randomUUID();
+        when(config.isCMIMode()).thenReturn(true);
+
+        MultiEconomyResponse response = provider.transfer("Auction", from, to, new BigDecimal("3"));
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type());
+        assertTrue(response.errorMessage().toLowerCase().contains("cmi"));
+        verify(economyFacade, never()).getBalanceForPlaceholder(any(UUID.class));
+        verify(economyFacade, never()).atomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class),
+                any(EconomyEvent.EventSource.class));
     }
 
     @Test

@@ -13,11 +13,17 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('t21-legacy-sql-upgrade-validation
 $logsRoot = Join-Path $root 'logs'
 New-Item -ItemType Directory -Path $logsRoot -Force | Out-Null
 
+function Format-T21FixtureStartupIdentity([object]$platform) {
+    $softwareDisplay = [string]$platform.software
+    $softwareDisplay = $softwareDisplay.Substring(0, 1).ToUpperInvariant() + $softwareDisplay.Substring(1)
+    return "[20:30:00] [ServerMain/INFO]: Loading $softwareDisplay $($platform.minecraftVersion)-$($platform.build) for Minecraft $($platform.minecraftVersion)"
+}
+
 function New-T21FixtureLog([string]$stage, [string]$pluginVersion, [string]$marker) {
     $path = "logs\platform-$stage.txt"
     $fullPath = Join-Path $root $path
     $text = @(
-        "[20:30:00] [ServerMain/INFO]: Loading Paper 1.21.6-48 for Minecraft 1.21.6",
+        (Format-T21FixtureStartupIdentity $endpoint),
         "[20:30:01] [Server thread/INFO]: [Syncmoney] Loading server plugin Syncmoney v$pluginVersion",
         '[20:30:02] [Server thread/INFO]: Syncmoney enabled successfully',
         $marker
@@ -117,9 +123,12 @@ function New-T21FixtureStage(
         artifactName = "Syncmoney-$pluginVersion.jar"
         artifactSha256 = $artifactSha
         enabled = $true
-        apiConsumerMarker = if ($pluginVersion -eq '1.4.0-alpha.1') { 'PASS' } else { 'NOT_REQUIRED_FOR_BASELINE' }
+        apiConsumerMarker = if ($stage -eq 'candidate-existing-read') { 'PASS' } else { 'NOT_REQUIRED_FOR_BASELINE' }
         processId = $processId
-        runtimeIdentity = [ordered]@{ software='paper'; runtimeVersion='1.21.6'; minecraftVersion='1.21.6'; build=48 }
+        runtimeIdentity = [ordered]@{
+            software=$endpoint.software; runtimeVersion=$endpoint.minecraftVersion
+            minecraftVersion=$endpoint.minecraftVersion; build=$endpoint.build
+        }
         acceptanceMarker = $marker
         normalStop = [ordered]@{
             stage = "after-$stage"
@@ -141,20 +150,20 @@ function New-T21FixtureStage(
     }
 }
 
-function New-T21ValidFixtureReport {
+function New-T21ValidFixtureReport([string]$CandidateVersion = '1.4.0-alpha.1') {
     $baselineMarker = '[20:30:03] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_WRITE_PASS expected-a=1000.00 expected-b=520.00 receipt-a=SUCCESS:DEPOSIT:1000.00:1000.00 receipt-b=SUCCESS:DEPOSIT:520.00:520.00'
     $candidateMarker = '[20:30:03] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_READ_PASS expected-a=1000.00 expected-b=520.00'
     $rollbackMarker = '[20:30:03] [Paper Async Scheduler Thread #1/INFO]: [SyncmoneyAcceptance] T21_ROLLBACK_READ_PASS expected-a=1000.00 expected-b=520.00 actual-a=1000.00 actual-b=520.00'
     $logEntries = @(
         (New-T21FixtureLog 'legacy-seed' '1.3.2' $baselineMarker),
-        (New-T21FixtureLog 'candidate-existing-read' '1.4.0-alpha.1' $candidateMarker),
+        (New-T21FixtureLog 'candidate-existing-read' $CandidateVersion $candidateMarker),
         (New-T21FixtureLog 'legacy-rollback-read' '1.3.2' $rollbackMarker)
     )
     $accounts = New-T21FixtureAccounts
     $schemaRows = @('1|1')
     $stages = @(
         (New-T21FixtureStage 'legacy-seed' '1.3.2' $expectedBaselineSha 3333 $baselineMarker $logEntries[0].path $accounts $schemaRows),
-        (New-T21FixtureStage 'candidate-existing-read' '1.4.0-alpha.1' $expectedCandidateSha 4444 $candidateMarker $logEntries[1].path $accounts $schemaRows),
+        (New-T21FixtureStage 'candidate-existing-read' $CandidateVersion $expectedCandidateSha 4444 $candidateMarker $logEntries[1].path $accounts $schemaRows),
         (New-T21FixtureStage 'legacy-rollback-read' '1.3.2' $expectedBaselineSha 5555 $rollbackMarker $logEntries[2].path $accounts $schemaRows)
     )
     $columnNames = @('id', 'timestamp', 'sequence', 'type', 'player_uuid', 'player_name', 'amount', 'balance_after', 'source', 'server', 'target_uuid', 'target_name', 'reason', 'merged_count', 'request_id')
@@ -201,9 +210,12 @@ function New-T21ValidFixtureReport {
         task = 'T21-M05-LEGACY-SQL-DATA-MySQL-minimum-Paper'
         status = 'PASS_BOUNDED_SUBCASE'
         runDirectory = $root
-        server = [ordered]@{ software='paper'; minecraftVersion='1.21.6'; build=48; sha256=$endpoint.sha256 }
+        server = [ordered]@{
+            software=$endpoint.software; minecraftVersion=$endpoint.minecraftVersion
+            build=$endpoint.build; sha256=$endpoint.sha256
+        }
         baseline = [ordered]@{ version='1.3.2'; sha256=$expectedBaselineSha }
-        candidate = [ordered]@{ version='1.4.0-alpha.1'; sha256=$expectedCandidateSha }
+        candidate = [ordered]@{ version=$CandidateVersion; sha256=$expectedCandidateSha }
         artifacts = [ordered]@{ acceptanceSha256=$expectedAcceptanceSha; apiConsumerSha256=$expectedApiConsumerSha }
         java = [ordered]@{ feature=25 }
         mysql = [ordered]@{ product='MySQL'; version='8.0.42'; serverVersion='8.0.42' }
@@ -268,10 +280,8 @@ function Set-T21FixturePlatform([object]$report, [object]$platform) {
         $stage.runtimeIdentity.minecraftVersion = $platform.minecraftVersion
         $stage.runtimeIdentity.build = $platform.build
     }
-    $oldIdentity = '[20:30:00] [ServerMain/INFO]: Loading Paper 1.21.6-48 for Minecraft 1.21.6'
-    $softwareDisplay = [string]$platform.software
-    $softwareDisplay = $softwareDisplay.Substring(0, 1).ToUpperInvariant() + $softwareDisplay.Substring(1)
-    $newIdentity = "[20:30:00] [ServerMain/INFO]: Loading $softwareDisplay $($platform.minecraftVersion)-$($platform.build) for Minecraft $($platform.minecraftVersion)"
+    $oldIdentity = Format-T21FixtureStartupIdentity $endpoint
+    $newIdentity = Format-T21FixtureStartupIdentity $platform
     foreach ($entry in $report.platformLogs) {
         $path = Join-Path $root $entry.path
         $content = [IO.File]::ReadAllText($path)
@@ -421,6 +431,18 @@ try {
     }
     Write-Output 'PASS: accept existing 1.3.2 MySQL data through candidate startup/read and 1.3.2 rollback'
 
+    $beta3Version = '1.4.0-Beta.3'
+    $beta3Valid = New-T21ValidFixtureReport -CandidateVersion $beta3Version
+    if (-not (Test-T21MySqlLegacyDataUpgradeReport $beta3Valid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -ExpectedCandidateVersion $beta3Version)) {
+        throw 'A complete minimum-Paper MySQL legacy-data upgrade report with a Beta.3 candidate version was rejected.'
+    }
+    Write-Output 'PASS: accept a Beta.3 candidate version for the minimum-Paper MySQL legacy-data upgrade predicate'
+    if (Test-T21MySqlLegacyDataUpgradeReport $beta3Valid $endpoint.sha256 $expectedBaselineSha $expectedCandidateSha $expectedAcceptanceSha $expectedApiConsumerSha -ExpectedCandidateVersion '1.4.0-alpha.1') {
+        throw 'A Beta.3 legacy-data report was accepted under the mismatched alpha.1 candidate-version contract.'
+    }
+    Write-Output 'PASS: reject Beta.3 legacy-data evidence under a mismatched candidate-version contract'
+
+    $valid = New-T21ValidFixtureReport
     $maximumEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint Maximum
     $maximumValid = $valid | ConvertTo-Json -Depth 24 | ConvertFrom-Json -AsHashtable
     $maximumValid = Set-T21FixturePlatform $maximumValid $maximumEndpoint
@@ -503,6 +525,7 @@ try {
     if (-not (
         $runnerSource.Contains('if ($script:legacySqlDataUpgrade) {') -and
         $runnerSource.Contains('if (-not (Test-T21LegacySqlRuntimeTarget -DatabaseProduct $script:databaseProduct -PlatformEndpoint $PlatformEndpoint)) {') -and
+        $runnerSource.Contains('-ExpectedCandidateVersion $CandidateVersion') -and
         -not $runnerSource.Contains('$PlatformEndpoint -notin @(''Minimum'', ''Maximum'', ''CurrentStable'')') -and
         $runnerSource.Contains('task="T21-M05-LEGACY-SQL-DATA-$($script:databaseProduct)-$($script:platformTarget.taskSuffix)"') -and
         $runnerSource.Contains('Get-T21LegacyAuditSchemaMetadata $stage') -and

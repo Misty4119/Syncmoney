@@ -19,23 +19,23 @@ import static org.mockito.Mockito.when;
 class VersionDiagnosticsTest {
 
     @Test
-    void reportsTheEvidenceBacked14PaperSupportBounds() {
+    void reportsTheDeclared14MinecraftSupportMinimum() {
         Syncmoney plugin = mock(Syncmoney.class);
         Server server = mock(Server.class);
         when(plugin.getServer()).thenReturn(server);
         when(plugin.getDescription()).thenReturn(new PluginDescriptionFile(
                 "Syncmoney", "1.4.0-alpha.1", "noietime.syncmoney.Syncmoney"));
         when(server.getName()).thenReturn("Paper");
-        when(server.getVersion()).thenReturn("Paper 1.21.6-48");
-        when(server.getBukkitVersion()).thenReturn("1.21.6-R0.1-SNAPSHOT");
+        when(server.getVersion()).thenReturn("Paper 26.2-135");
+        when(server.getBukkitVersion()).thenReturn("26.2-R0.1-SNAPSHOT");
 
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(Bukkit::getServer).thenReturn(server);
             String rendered = VersionDiagnostics.basic(plugin).render();
 
-            assertTrue(rendered.contains("support.minimum_minecraft: Paper 1.21.6+"));
+            assertTrue(rendered.contains("support.minimum_minecraft: Minecraft 26.2+"));
             assertTrue(rendered.contains(
-                    "support.latest_verified_server: Paper 1.21.6-48 (1.4.0 minimum smoke; latest-build matrix pending)"));
+                    "support.latest_verified_server: Paper 26.2 (1.4.0 minimum API; runtime matrix pending)"));
         }
     }
 

@@ -70,8 +70,10 @@ class CMIEconomyMigrationLockTest {
         RedisManager redis = mock(RedisManager.class);
         Jedis jedis = mock(Jedis.class);
         when(redis.getResource()).thenReturn(jedis);
-        when(jedis.eval(anyString(), eq(2), anyString(), anyString(), anyString(), anyString()))
-                .thenReturn(1L);
+        when(jedis.mget(anyString(), anyString())).thenReturn(java.util.Arrays.asList(null, null));
+        when(jedis.eval(anyString(), eq(3), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(java.util.Arrays.asList(1L, "10.00", "100"));
         CMIEconomyHandler handler = new CMIEconomyHandler(plugin, config, redis, null, mock(CMIApi.class));
         UUID account = UUID.randomUUID();
 
@@ -84,7 +86,7 @@ class CMIEconomyMigrationLockTest {
 
         MigrationLock.unlock();
         assertEquals(true, trySync.invoke(handler, account, BigDecimal.TEN, BigDecimal.TEN, true, "CMI"));
-        verify(redis).getResource();
+        verify(redis, org.mockito.Mockito.times(2)).getResource();
     }
 
     @Test
@@ -127,5 +129,26 @@ class CMIEconomyMigrationLockTest {
         applyJoinMirror.invoke(handler, account, new BigDecimal("150.00"), 2L);
 
         verify(handler, never()).notifyInboundApplied(account, new BigDecimal("150.00"), 2L);
+    }
+
+    @Test
+    void newerCanonicalWithdrawalReconcilesAnOfflineCopyThatIsHigher() throws Exception {
+        Syncmoney plugin = mock(Syncmoney.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CMIEconomyMigrationLockTest"));
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        CMIApi cmiApi = mock(CMIApi.class);
+        UUID account = UUID.randomUUID();
+        when(cmiApi.getBalance(account)).thenReturn(4450.0);
+        when(cmiApi.setBalance(account, 0.0)).thenReturn(true);
+        CMIEconomyHandler handler = spy(new CMIEconomyHandler(plugin, config, mock(RedisManager.class),
+                null, cmiApi));
+        Method applyJoinMirror = CMIEconomyHandler.class.getDeclaredMethod(
+                "applyJoinMirror", UUID.class, BigDecimal.class, long.class);
+        applyJoinMirror.setAccessible(true);
+
+        applyJoinMirror.invoke(handler, account, BigDecimal.ZERO, 200L);
+
+        verify(cmiApi).setBalance(account, 0.0);
+        verify(handler).notifyInboundApplied(account, BigDecimal.ZERO, 200L);
     }
 }

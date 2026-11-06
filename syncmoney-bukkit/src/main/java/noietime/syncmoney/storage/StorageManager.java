@@ -55,16 +55,22 @@ public class StorageManager {
 
         this.redisManager = new RedisManager(plugin, config, redisRequired);
 
-        this.cacheManager = new CacheManager(plugin, redisManager, redisRequired, !config.isCMIMode());
+        // CMI mode has its own Redis mirror and does not create the generic
+        // Syncmoney balance cache at all.
+        if (config.isCMIMode()) {
+            this.cacheManager = null;
+            plugin.getLogger().fine("Generic balance cache skipped in CMI sync-only mode.");
+        } else {
+            this.cacheManager = new CacheManager(plugin, redisManager, redisRequired, true);
+        }
 
         EconomyMode mode = config.getEconomyMode();
-        boolean databaseRequiredForMode = mode == EconomyMode.SYNC
-                || (mode == EconomyMode.CMI && config.isDatabaseEnabled());
+        boolean databaseRequiredForMode = mode == EconomyMode.SYNC;
         if (databaseRequiredForMode) {
             this.databaseManager = new DatabaseManager(plugin, config);
         } else {
             this.databaseManager = null;
-            plugin.getLogger().fine("Database manager skipped (" + mode + " mode, database disabled or unused)");
+            plugin.getLogger().fine("Database manager skipped (" + mode + " mode, database disabled or outside the active authority path)");
         }
 
         this.dbWriteQueue = new DbWriteQueue(config.getQueueCapacity());

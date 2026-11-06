@@ -442,6 +442,9 @@ public class VaultProviderCore {
      * @return EconomyResponse with transaction result
      */
     public EconomyResponse pluginTransfer(OfflinePlayer from, OfflinePlayer to, double amount, String pluginName) {
+        if (config != null && config.isCMIMode()) {
+            return pairedTransferUnavailable();
+        }
         if (!enabled) return providerUnavailable();
         if (from == null || to == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Player is null");
@@ -537,6 +540,11 @@ public class VaultProviderCore {
     private EconomyResponse providerUnavailable() {
         return new EconomyResponse(0, Double.NaN, EconomyResponse.ResponseType.FAILURE,
                 "Economy provider is disabled or shutting down");
+    }
+
+    private EconomyResponse pairedTransferUnavailable() {
+        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
+                "Paired transfers are unavailable in CMI mode");
     }
 
     private double readyBalance(UUID uuid) {

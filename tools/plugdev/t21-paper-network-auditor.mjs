@@ -5,53 +5,54 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const T21_NETWORK_ENDPOINTS = Object.freeze({
-  "paper-1216-48": Object.freeze({
+  "paper-262-135": Object.freeze({
     product: "Paper",
-    version: "1.21.6",
-    build: 48,
-    serverJarSha256: "35e2dfa66b3491b9d2f0bb033679fa5aca1e1fdf097e7a06a80ce8afeda5c214",
+    version: "26.2",
+    build: 135,
+    serverJarSha256: "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1",
   }),
-  "paper-263-200": Object.freeze({
+  "paper-263-243": Object.freeze({
     product: "Paper",
     version: "26.3",
-    build: 200,
-    serverJarSha256: "0e104a19ad818f05266a4571c0a9b0cada241c2016ee64883e5d38435332fa8d",
+    build: 243,
+    serverJarSha256: "650805b63174770b557d83bbfcdd16ec39531124b7b850589bad59bc4b6a0af8",
   }),
-  "folia-1216-6": Object.freeze({
+  "folia-262-7": Object.freeze({
     product: "Folia",
-    version: "1.21.6",
+    version: "26.2",
+    build: 7,
+    serverJarSha256: "128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3",
+  }),
+  "folia-263-6": Object.freeze({
+    product: "Folia",
+    version: "26.3",
     build: 6,
-    serverJarSha256: "917a8abaa542c1d0ef0e969693e227a7bfe1c42e671aaa806309e00a64efc234",
+    serverJarSha256: "3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d",
   }),
-  "folia-263-3": Object.freeze({
-    product: "Folia",
-    version: "26.3",
-    build: 3,
-    serverJarSha256: "0c4cc7dd82c40bd1effa8a9c4cacfad55d41b7dc38377900957c961c2952c022",
-  }),
-  "canvas-1218-603": Object.freeze({
+  "canvas-262-994": Object.freeze({
     product: "Canvas",
-    version: "1.21.8",
-    build: 603,
-    serverJarSha256: "6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b",
+    version: "26.2",
+    build: 994,
+    serverJarSha256: "8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2",
   }),
-  "canvas-263-984": Object.freeze({
+  "canvas-263-1010": Object.freeze({
     product: "Canvas",
     version: "26.3",
-    build: 984,
-    serverJarSha256: "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa",
+    build: 1010,
+    serverJarSha256: "e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057",
   }),
 });
 // Keep existing Paper-only consumers scoped to Paper while the network map
 // admits additional products such as Folia.
 export const T21_PAPER_NETWORK_ENDPOINTS = Object.freeze({
-  "paper-1216-48": T21_NETWORK_ENDPOINTS["paper-1216-48"],
-  "paper-263-200": T21_NETWORK_ENDPOINTS["paper-263-200"],
+  "paper-262-135": T21_NETWORK_ENDPOINTS["paper-262-135"],
+  "paper-263-243": T21_NETWORK_ENDPOINTS["paper-263-243"],
 });
 
 export const T21_PAPER_NETWORK_ARTIFACTS = Object.freeze({
-  candidateSha256: "69ddd979a896884dc3bacfa4d271041e46b279dcccc357c7c158e03f9e7189c1",
-  acceptanceSha256: "4a8e5ffc8d32c482cd7cf2a474cfd480d5c46268c0ea9ec469d513ed6ff554df",
+  candidateVersion: "1.4.0-Beta.3",
+  candidateSha256: "de9ed76305b1f900d40f5fec238f86731d410ea9d046eb831715114a1c4392a3",
+  acceptanceSha256: "fdc0e11e44b8905fef6fa08cce5b2c11662f59992e2cbcf94da7e76f2b507ead",
   vaultUnlockedSha256: "4ec21910767a68b2defacb121cffee9840ded8b01abcbff03779fb9ab637296a",
   velocitySha256: "85be73b90f295acd8d5d45a00ad10bac791d4b72b7554172612a89565ebaaa8f",
 });
@@ -1180,24 +1181,24 @@ export function resolvePinnedArtifactSources(workspaceRoot, endpointId) {
   }
   const plugdevRoot = path.join(userRoot ?? "C:/Users/margo", ".plugdev");
   let server;
-  if (endpoint.product === "Paper" && endpointId === "paper-1216-48") {
-    server = path.join(plugdevRoot, "servers", "paper-1.21.6", "paper-1.21.6-48.jar");
-  } else if (endpoint.product === "Paper" && endpointId === "paper-263-200") {
-    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "paper-26.3-200.jar");
-  } else if (endpoint.product === "Folia" && endpointId === "folia-1216-6") {
-    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "folia-1.21.6-6.jar");
-  } else if (endpoint.product === "Folia" && endpointId === "folia-263-3") {
-    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "folia-26.3-3.jar");
-  } else if (endpoint.product === "Canvas" && endpointId === "canvas-1218-603") {
-    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "minimum-artifacts", "canvas-1.21.8-603.jar");
-  } else if (endpoint.product === "Canvas" && endpointId === "canvas-263-984") {
-    server = path.join(root, "build", "reports", "foundation", "T21-sql-runtime", "current-maximum-artifacts", "canvas-26.3-984.jar");
+  if (endpoint.product === "Paper" && endpointId === "paper-262-135") {
+    server = path.join(plugdevRoot, "servers", "paper-26.2", "paper-26.2-135.jar");
+  } else if (endpoint.product === "Paper" && endpointId === "paper-263-243") {
+    server = path.join(plugdevRoot, "servers", "paper-26.3", "paper-26.3-243.jar");
+  } else if (endpoint.product === "Folia" && endpointId === "folia-262-7") {
+    server = path.join(plugdevRoot, "servers", "folia-26.2", "folia-26.2-7.jar");
+  } else if (endpoint.product === "Folia" && endpointId === "folia-263-6") {
+    server = path.join(plugdevRoot, "servers", "folia-26.3", "folia-26.3-6.jar");
+  } else if (endpoint.product === "Canvas" && endpointId === "canvas-262-994") {
+    server = path.join(plugdevRoot, "servers", "canvas-26.2", "canvas-26.2-994.jar");
+  } else if (endpoint.product === "Canvas" && endpointId === "canvas-263-1010") {
+    server = path.join(plugdevRoot, "servers", "canvas-26.3", "canvas-26.3-1010.jar");
   } else {
     throw new NetworkAuditError([`no trusted server artifact source is configured for ${endpoint.product} endpoint ${endpointId}`]);
   }
   return {
     [endpointServerArtifactKind(endpoint)]: server,
-    candidate: path.join(root, "build", "libs", "Syncmoney-1.4.0-alpha.1.jar"),
+    candidate: path.join(root, "build", "libs", "Syncmoney-1.4.0-Beta.3.jar"),
     acceptance: path.join(root, "build", "acceptance", "SyncmoneyAcceptance.jar"),
     vaultUnlocked: path.join(plugdevRoot, "deps", "url-VaultUnlocked.jar"),
     velocity: path.join(plugdevRoot, "servers", "velocity-4.3.0", "velocity-4.3.0-44.jar"),
@@ -1318,7 +1319,7 @@ export function auditRunDirectory(runRoot, endpointId, workspaceRoot) {
 function main(argv) {
   const [runRoot, endpointId, workspaceRoot] = argv;
   if (!runRoot || !endpointId || !workspaceRoot || argv.length !== 3) {
-    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-1216-48|paper-263-200|folia-1216-6|folia-263-3|canvas-1218-603|canvas-263-984> <C:-workspace-root>\n");
+    process.stderr.write("Usage: node t21-paper-network-auditor.mjs <C:-run-directory> <paper-262-135|paper-263-243|folia-262-7|folia-263-6|canvas-262-994|canvas-263-1010> <C:-workspace-root>\n");
     process.exitCode = 2;
     return;
   }

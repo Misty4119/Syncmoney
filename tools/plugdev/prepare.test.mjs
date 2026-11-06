@@ -46,22 +46,40 @@ async function getClosedPortPair() {
 }
 
 test("the minimum Paper profile loads the exact candidate without rebuilding it", () => {
-  const options = validateOptions(["paper", "1.21.6", "local", "off", "1.4.0-alpha.1"]);
+  const options = validateOptions(["paper", "26.2", "local", "off", "1.4.0-Beta.3"]);
   const profile = createProfileConfig(options);
 
   assert.equal(profile.server, "paper");
-  assert.equal(profile.version, "1.21.6");
-  assert.deepEqual(profile.jvm.args, ["-Dsyncmoney.acceptance.version=1.4.0-alpha.1"]);
+  assert.equal(profile.version, "26.2");
+  assert.deepEqual(profile.jvm.args, ["-Dsyncmoney.acceptance.version=1.4.0-Beta.3"]);
   assert.equal(profile.build.task, "help");
   assert.equal(profile.build.jarTask, "help");
-  assert.equal(profile.build.jarPattern, "build/libs/Syncmoney-1.4.0-alpha.1.jar");
+  assert.equal(profile.build.jarPattern, "build/libs/Syncmoney-1.4.0-Beta.3.jar");
   assert.deepEqual(profile.deps, [
     { name: "VaultUnlocked", source: "hangar", author: "TNE", slug: "VaultUnlocked", version: "2.20.2" },
   ]);
 });
 
+test("the current Beta.3 candidate version is accepted without rebuilding a different JAR", () => {
+  const options = validateOptions(["paper", "26.2", "sync", "off", "1.4.0-Beta.3"]);
+  const profile = createProfileConfig(options);
+
+  assert.equal(options.candidateVersion, "1.4.0-Beta.3");
+  assert.equal(profile.build.jarPattern, "build/libs/Syncmoney-1.4.0-Beta.3.jar");
+  assert.deepEqual(profile.jvm.args, ["-Dsyncmoney.acceptance.version=1.4.0-Beta.3"]);
+});
+
+test("the public Beta.1 release candidate version is pinned without rebuilding a different JAR", () => {
+  const options = validateOptions(["paper", "26.2", "sync", "off", "1.4.0-Beta.1"]);
+  const profile = createProfileConfig(options);
+
+  assert.equal(options.candidateVersion, "1.4.0-Beta.1");
+  assert.equal(profile.build.jarPattern, "build/libs/Syncmoney-1.4.0-Beta.1.jar");
+  assert.deepEqual(profile.jvm.args, ["-Dsyncmoney.acceptance.version=1.4.0-Beta.1"]);
+});
+
 test("an isolated runtime may reserve a specific loopback game and derived RCON port", () => {
-  const options = validateOptions(["paper", "1.21.6", "sync", "off", "1.4.0-alpha.1"]);
+  const options = validateOptions(["paper", "26.2", "sync", "off", "1.4.0-alpha.1"]);
   const profile = createProfileConfig(options, { SYNCMONEY_TEST_GAME_PORT: "25677" });
 
   assert.equal(profile.bind, "127.0.0.1");
@@ -96,7 +114,7 @@ test("prepareProfile writes the injected game port into the generated PlugDev pr
 
     const { prepareProfile } = await import(pathToFileURL(preparePath).href);
     const result = await prepareProfile(
-      ["paper", "1.21.6", "sync", "off", "1.4.0-alpha.1"],
+      ["paper", "26.2", "sync", "off", "1.4.0-alpha.1"],
       { PLUGDEV_ROOT: plugdevRoot, SYNCMONEY_TEST_GAME_PORT: String(port) },
     );
     const profile = JSON.parse(await readFile(result.profilePath, "utf8"));
@@ -120,7 +138,7 @@ test("prepareProfile refuses an existing PlugDev directory without changing it",
 
     const { prepareProfile } = await import(pathToFileURL(preparePath).href);
     await assert.rejects(
-      prepareProfile(["paper", "1.21.6", "local", "off", "1.4.0-alpha.1"], {}),
+      prepareProfile(["paper", "26.2", "local", "off", "1.4.0-alpha.1"], {}),
       /Refusing to overwrite an existing \.plugdev directory/,
     );
 
@@ -141,10 +159,10 @@ test("an explicitly supplied server JAR is pinned through PlugDev's custom provi
   assert.equal(profile.build.jarTask, "help");
 });
 
-test("1.4 runtime profiles reject Paper below the minimum", () => {
+test("1.4 runtime profiles reject Minecraft below the minimum", () => {
   assert.throws(
-    () => validateOptions(["paper", "1.21.5", "local", "off", "1.4.0-alpha.1"]),
-    /Paper 1\.21\.6 or newer is required/,
+    () => validateOptions(["paper", "26.1", "local", "off", "1.4.0-alpha.1"]),
+    /Minecraft 26\.2 or newer is required/,
   );
 });
 
@@ -187,7 +205,7 @@ test("a live game server blocks preparation after PlugDev clears its session", a
   }
 });
 
-test("core, Paper, and acceptance descriptors all require API 1.21.6", async () => {
+test("core, Paper, and acceptance descriptors all require API 26.2", async () => {
   const descriptors = [
     new URL("../../src/main/resources/plugin.yml", import.meta.url),
     new URL("../../src/main/resources/paper-plugin.yml", import.meta.url),
@@ -196,7 +214,7 @@ test("core, Paper, and acceptance descriptors all require API 1.21.6", async () 
 
   for (const path of descriptors) {
     const contents = await readFile(path, "utf8");
-    assert.match(contents, /^api-version:\s*['"]?1\.21\.6['"]?\s*$/m, path.pathname);
+    assert.match(contents, /^api-version:\s*['"]?26\.2['"]?\s*$/m, path.pathname);
   }
 });
 
@@ -204,7 +222,7 @@ test("local mode produces an isolated config with the schema default and no netw
   const defaults = { "config-version": 12, redis: { enabled: true }, database: { enabled: true } };
   const settings = createEconomySettings(defaults, {
     software: "paper",
-    minecraftVersion: "1.21.6",
+    minecraftVersion: "26.2",
     mode: "local",
     features: "off",
   });
@@ -234,7 +252,7 @@ test("guard-only profile enables per-player protection independently on Canvas a
     "discord-webhook": { enabled: true },
   };
 
-  for (const [software, version] of [["paper", "1.21.6"], ["canvas", "26.3"], ["folia", "26.2"]]) {
+  for (const [software, version] of [["paper", "26.2"], ["canvas", "26.3"], ["folia", "26.2"]]) {
     const options = validateOptions([
       software, version, "local_redis", "off", "1.4.0-alpha.1", "guard-on",
     ]);

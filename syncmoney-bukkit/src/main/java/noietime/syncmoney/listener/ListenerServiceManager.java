@@ -47,6 +47,8 @@ public class ListenerServiceManager {
                 cmiHandler.setCmiListener(cmiListener);
                 registerListener(cmiListener, "CMI Economy Listener");
             }
+            plugin.getLogger().fine("CMI mode: generic player tracking and transfer-protection listeners skipped.");
+            return;
         }
 
         if (config.transferGuard().isTransferGuardEnabled()) {

@@ -241,6 +241,14 @@ public final class SyncmoneyConfig {
      * Throws IllegalArgumentException if validation fails.
      */
     public void validate() throws IllegalArgumentException {
+        // CMI remains the economy authority in CMI mode. Syncmoney does not
+        // register its wallet/transfer commands or management modules there,
+        // so their settings must not prevent the CMI synchronization path from
+        // starting.
+        if (isCMIMode()) {
+            return;
+        }
+
         double minAmount = payConfig.getPayMinAmount();
         double maxAmount = payConfig.getPayMaxAmount();
 

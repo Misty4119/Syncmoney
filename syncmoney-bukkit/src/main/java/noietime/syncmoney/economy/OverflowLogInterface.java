@@ -15,8 +15,17 @@ public interface OverflowLogInterface {
      */
     void log(EconomyEvent event);
 
-    /** Read legacy records without acknowledging, truncating, or deleting them. */
-    List<String> readWithoutClear() throws IOException;
+    /**
+     * Read legacy records without acknowledging, truncating, or deleting them.
+     *
+     * <p>The default preserves binary compatibility with implementations compiled
+     * before this recovery-safe read was added. Those implementations cannot be
+     * treated as having no pending records, so recovery fails closed until they
+     * provide a non-destructive read.</p>
+     */
+    default List<String> readWithoutClear() throws IOException {
+        throw new IOException("Overflow log does not support non-destructive legacy reads");
+    }
     
     /**
      * Read and clear the overflow log.

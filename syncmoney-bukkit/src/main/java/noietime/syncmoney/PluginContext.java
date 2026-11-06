@@ -319,8 +319,8 @@ public class PluginContext {
                 builder.nameResolver,
                 builder.fallbackWrapper,
                 builder.vaultProvider,
-                builder.crossServerSyncManager,
-                builder.economyModeRouter,
+                publicCrossServerSyncManager(builder.config, builder.crossServerSyncManager),
+                publicEconomyModeRouter(builder.config, builder.economyModeRouter),
                 builder.syncManager,
                 builder.baltopManager,
                 builder.shadowSyncTask,
@@ -337,6 +337,15 @@ public class PluginContext {
                 builder.permissionService,
                 builder.webAdminServer,
                 builder.webAdminConfig);
+    }
+
+    static EconomyModeRouter publicEconomyModeRouter(SyncmoneyConfig config, EconomyModeRouter router) {
+        return config != null && config.isCMIMode() ? null : router;
+    }
+
+    static CrossServerSyncManager publicCrossServerSyncManager(
+            SyncmoneyConfig config, CrossServerSyncManager syncManager) {
+        return config != null && config.isCMIMode() ? null : syncManager;
     }
 
     /**

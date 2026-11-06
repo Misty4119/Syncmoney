@@ -240,7 +240,9 @@ function Test-T21LegacySqlDataUpgradeReport(
     [string]$DatabaseProduct = 'MySQL',
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')]
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
     try {
         if ($null -eq $report) { return $false }
@@ -272,7 +274,7 @@ function Test-T21LegacySqlDataUpgradeReport(
         $candidate = Get-T21ObservedValue $report 'candidate'
         if ((Get-T21ObservedValue $baseline 'version') -cne '1.3.2' -or
             ([string](Get-T21ObservedValue $baseline 'sha256')).ToLowerInvariant() -cne $expectedBaselineSha256.ToLowerInvariant() -or
-            (Get-T21ObservedValue $candidate 'version') -cne '1.4.0-alpha.1' -or
+            (Get-T21ObservedValue $candidate 'version') -cne $ExpectedCandidateVersion -or
             ([string](Get-T21ObservedValue $candidate 'sha256')).ToLowerInvariant() -cne $expectedCandidateSha256.ToLowerInvariant()) { return $false }
 
         if ((Get-T21ObservedValue (Get-T21ObservedValue $report 'java') 'feature') -ne 25 -or
@@ -300,7 +302,7 @@ function Test-T21LegacySqlDataUpgradeReport(
 
         $expectedStages = @(
             [ordered]@{ name='legacy-seed'; version='1.3.2'; sha=$expectedBaselineSha256.ToLowerInvariant(); markerKind='write'; expectedVersion='1000.00'; expectedVersionB='520.00'; api='NOT_REQUIRED_FOR_BASELINE' },
-            [ordered]@{ name='candidate-existing-read'; version='1.4.0-alpha.1'; sha=$expectedCandidateSha256.ToLowerInvariant(); markerKind='read'; expectedVersion='1000.00'; expectedVersionB='520.00'; api='PASS' },
+            [ordered]@{ name='candidate-existing-read'; version=$ExpectedCandidateVersion; sha=$expectedCandidateSha256.ToLowerInvariant(); markerKind='read'; expectedVersion='1000.00'; expectedVersionB='520.00'; api='PASS' },
             [ordered]@{ name='legacy-rollback-read'; version='1.3.2'; sha=$expectedBaselineSha256.ToLowerInvariant(); markerKind='rollback'; expectedVersion='1000.00'; expectedVersionB='520.00'; api='NOT_REQUIRED_FOR_BASELINE' }
         )
         $stages = @(Get-T21ObservedValue $report 'stages')
@@ -568,11 +570,13 @@ function Test-T21MySqlLegacyDataUpgradeReport(
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')]
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
         $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
-        -DatabaseProduct MySQL -PlatformEndpoint $PlatformEndpoint
+        -DatabaseProduct MySQL -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $ExpectedCandidateVersion
 }
 
 function Test-T21MariaDbLegacyDataUpgradeReport(
@@ -584,11 +588,13 @@ function Test-T21MariaDbLegacyDataUpgradeReport(
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')]
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
         $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
-        -DatabaseProduct MariaDB -PlatformEndpoint $PlatformEndpoint
+        -DatabaseProduct MariaDB -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $ExpectedCandidateVersion
 }
 
 function Test-T21PostgresLegacyDataUpgradeReport(
@@ -600,9 +606,11 @@ function Test-T21PostgresLegacyDataUpgradeReport(
     [string]$expectedApiConsumerSha256,
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
-    [string]$PlatformEndpoint = 'Minimum'
+    [string]$PlatformEndpoint = 'Minimum',
+    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')]
+    [string]$ExpectedCandidateVersion = '1.4.0-alpha.1'
 ) {
     return Test-T21LegacySqlDataUpgradeReport $report $expectedServerSha256 $expectedBaselineSha256 `
         $expectedCandidateSha256 $expectedAcceptanceSha256 $expectedApiConsumerSha256 `
-        -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint
+        -DatabaseProduct PostgreSQL -PlatformEndpoint $PlatformEndpoint -ExpectedCandidateVersion $ExpectedCandidateVersion
 }

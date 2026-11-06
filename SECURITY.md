@@ -64,7 +64,7 @@ Web Admin is an administrative surface and should be treated as privileged infra
 
 - Node URL validation rejects user-info, query, fragment, and a static list of local/special-use IPv4 ranges, including shared, protocol-assignment, documentation, benchmarking, multicast, and reserved blocks, plus IPv6 unspecified, loopback, link-local, site-local, multicast, and ULA addresses. Validation errors log only the exception type; the URL and its user-info, query, and fragment are not logged. This check does not pin DNS resolution to the eventual HTTP connection. DNS-rebinding resistance is `DEFERRED / NOT VERIFIED`; node URLs are privileged configuration, and operators should restrict server egress to intended nodes.
 - `WebDownloader` does not currently enforce bounded transfer size, decompressed size, or archive entry count. These resource limits are `DEFERRED / NOT VERIFIED`; only use trusted download sources and treat this as an open resource-exhaustion hardening gap.
-- The CMI mirror's atomic compare-and-write behavior has unit and synthetic Redis integration coverage, but does not establish a licensed/live CMI runtime. CMI authorization is `UNKNOWN`; live CMI acceptance remains `BLOCKED / NOT VERIFIED`.
+- CMI sync-only routing and Redis mirror guards have source-level unit and synthetic coverage; these checks do not establish live CMI compatibility for a particular Syncmoney artifact. Operators must obtain CMI and CMILib from their publishers and comply with their respective licenses. Permission to use locally supplied copies for isolated testing does not grant redistribution rights and is not candidate-bound runtime evidence. Per-candidate runtime status belongs in the release-readiness record.
 
 ## Secret handling
 

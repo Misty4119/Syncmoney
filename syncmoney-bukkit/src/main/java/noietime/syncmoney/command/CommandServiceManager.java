@@ -87,6 +87,13 @@ public class CommandServiceManager {
      * Initialize all commands and register them.
      */
     public void initialize() {
+        this.syncmoneyRouter = new SyncmoneyCommandRouter(plugin);
+        if (config.isCMIMode()) {
+            registerCmiSyncOnlyCommands();
+            plugin.getLogger().fine("CMI mode: registered only the Syncmoney version command.");
+            return;
+        }
+
         this.cooldownManager = new CooldownManager(plugin, config.pay().getPayCooldownSeconds());
 
         this.transferLockManager = new TransferLockManager(
@@ -94,11 +101,14 @@ public class CommandServiceManager {
                 storageManager.getRedisManager(),
                 config.getEconomyMode() != EconomyMode.LOCAL);
 
-        this.syncmoneyRouter = new SyncmoneyCommandRouter(plugin);
-
         registerAllCommands();
 
         plugin.getLogger().fine("Command layer initialized");
+    }
+
+    private void registerCmiSyncOnlyCommands() {
+        VersionCommand versionCommand = new VersionCommand(plugin);
+        syncmoneyRouter.register("version", versionCommand);
     }
 
     /**
@@ -110,6 +120,11 @@ public class CommandServiceManager {
      */
     public void reload(SyncmoneyConfig newConfig) {
         this.config = newConfig;
+
+        if (newConfig.isCMIMode()) {
+            plugin.getLogger().fine("CMI sync-only command layer has no economy command settings to reload.");
+            return;
+        }
 
         if (cooldownManager != null) {
             cooldownManager.reload(newConfig.pay().getPayCooldownSeconds());

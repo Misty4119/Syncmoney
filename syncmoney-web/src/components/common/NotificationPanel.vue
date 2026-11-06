@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { X, Bell, Trash2 } from 'lucide-vue-next'
+import { X, Bell, Trash2 } from '@lucide/vue'
 import { useNotificationStore } from '@/stores/notification'
 import type { Notification } from '@/stores/notification'
 

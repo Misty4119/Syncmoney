@@ -20,6 +20,7 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -60,7 +61,7 @@ class CMIEconomyListenerLifecycleTest {
             releaseRedisWrite.await();
             return true;
         }).when(handler).trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("100.00")),
-                any(BigDecimal.class), eq(true), eq("CMI"));
+                any(BigDecimal.class), eq(true), eq("CMI"), anyString());
 
         CMIEconomyListener listener = new CMIEconomyListener(plugin, handler, config);
         Method publish = CMIEconomyListener.class.getDeclaredMethod(
@@ -91,6 +92,6 @@ class CMIEconomyListenerLifecycleTest {
         }
 
         verify(handler).trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("100.00")),
-                any(BigDecimal.class), eq(true), eq("CMI"));
+                any(BigDecimal.class), eq(true), eq("CMI"), anyString());
     }
 }

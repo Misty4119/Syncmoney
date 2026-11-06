@@ -129,7 +129,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, Download, X } from 'lucide-vue-next'
+import { Search, Download, X } from '@lucide/vue'
 import { useSettingsStore } from '@/stores/settings'
 import { normalizeTimezone } from '@/utils/timezone'
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'

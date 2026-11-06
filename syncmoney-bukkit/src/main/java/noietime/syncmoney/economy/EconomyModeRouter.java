@@ -19,6 +19,8 @@ import java.util.UUID;
  */
 public class EconomyModeRouter {
 
+    private static final BigDecimal CMI_OPERATION_REJECTED = BigDecimal.valueOf(-1);
+
     private final EconomyMode mode;
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -85,6 +87,9 @@ public class EconomyModeRouter {
      * [SYNC-ECO-078] Handle deposit operation.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (mode == EconomyMode.CMI) {
+            return CMI_OPERATION_REJECTED;
+        }
         return strategy().deposit(uuid, amount, source);
     }
 
@@ -92,6 +97,9 @@ public class EconomyModeRouter {
      * [SYNC-ECO-079] Handle withdrawal operation.
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+        if (mode == EconomyMode.CMI) {
+            return CMI_OPERATION_REJECTED;
+        }
         return strategy().withdraw(uuid, amount, source);
     }
 
@@ -106,6 +114,9 @@ public class EconomyModeRouter {
      * [SYNC-ECO-081] Handle balance setting.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
+        if (mode == EconomyMode.CMI) {
+            return CMI_OPERATION_REJECTED;
+        }
         return strategy().setBalance(uuid, newBalance, source);
     }
 

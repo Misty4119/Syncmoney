@@ -56,9 +56,9 @@ public final class VersionDiagnostics {
         report.add("host.arch", System.getProperty("os.arch", "UNKNOWN"));
         report.add("host.cpu_count", runtime.availableProcessors());
         report.add("host.memory_mb", "used=" + usedMb + " max=" + maxMb);
-        report.add("support.minimum_minecraft", "Paper 1.21.6+");
+        report.add("support.minimum_minecraft", "Minecraft 26.2+");
         report.add("support.latest_verified_server",
-                "Paper 1.21.6-48 (1.4.0 minimum smoke; latest-build matrix pending)");
+                "Paper 26.2 (1.4.0 minimum API; runtime matrix pending)");
         return report;
     }
 

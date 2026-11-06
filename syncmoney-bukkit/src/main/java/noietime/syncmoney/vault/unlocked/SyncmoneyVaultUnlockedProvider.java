@@ -374,6 +374,10 @@ public final class SyncmoneyVaultUnlockedProvider implements Economy {
 
     @Override
     public MultiEconomyResponse transfer(String pluginName, UUID from, UUID to, BigDecimal amount) {
+        if (config != null && config.isCMIMode()) {
+            return transferFailure(amount == null ? BigDecimal.ZERO : amount,
+                    "Paired transfers are unavailable in CMI mode");
+        }
         if (!enabled) {
             return transferFailure(amount == null ? BigDecimal.ZERO : amount,
                     "Economy provider is disabled or shutting down");

@@ -132,6 +132,7 @@ public final class CMIPubsubHandler {
                                     if (!pending.begin()) {
                                         return;
                                     }
+                                    Runnable clearExpectedEcho = () -> { };
                                     try {
                                         if (stopped || currentVersion(uuid) != appliedVersion) {
                                             return;
@@ -154,7 +155,13 @@ public final class CMIPubsubHandler {
                                             cmiHandler.notifyInboundApplied(uuid, targetBalance, appliedVersion);
                                             return;
                                         }
-                                        cmiHandler.suppressOutbound(uuid, 750L);
+                                        if (beforeObj != null) {
+                                            Runnable registeredCleanup = cmiHandler.expectInboundBalanceWrite(
+                                                    uuid, beforeObj, targetBalance.doubleValue());
+                                            if (registeredCleanup != null) {
+                                                clearExpectedEcho = registeredCleanup;
+                                            }
+                                        }
                                         cmiHandler.invalidateCachedBalanceForApi(uuid);
                                         boolean applied = cmiApi.setBalance(uuid, targetBalance.doubleValue());
                                         if (applied) {
@@ -186,7 +193,11 @@ public final class CMIPubsubHandler {
                                         plugin.getLogger().warning("[CMI Inbound] CMI write threw for " + uuid
                                                 + ": " + th.getMessage());
                                     } finally {
-                                        pending.finish();
+                                        try {
+                                            clearExpectedEcho.run();
+                                        } finally {
+                                            pending.finish();
+                                        }
                                     }
                                 }, pending::cancelBeforeStart);
                                 pending.setTask(scheduled);

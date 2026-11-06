@@ -4,6 +4,7 @@ import noietime.syncmoney.config.SyncmoneyConfig;
 import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.migration.MigrationLock;
 import noietime.syncmoney.sync.CMIDebounceManager;
+import noietime.syncmoney.util.NumericUtil;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
@@ -16,21 +17,31 @@ import org.bukkit.plugin.Plugin;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * CMI economy change listener — cross-server sync only.
  *
  * <p>Aligned with {@code reference/CMIEconomySync}: CMI is the local authority; this class
- * debounces {@code CMIUserBalanceChangeEvent}, reads the final CMI balance, and publishes
- * the absolute value to Redis. Inbound writes are handled by {@code CMIPubsubHandler}.
+ * debounces {@code CMIUserBalanceChangeEvent} and forwards its captured balance delta to Redis,
+ * which applies it to the latest shared mirror. Event-driven writes do not require the account
+ * holder to be online on this server.
+ * Inbound writes are handled by {@code CMIPubsubHandler}.
  *
  * <p>No polling while CMI events are available (polling duplicates publishes during rapid
  * {@code /cmi pay} spam). No mirror-pull during gameplay (only version-aware reconcile on join).
  *
- * [MainThread] CMI events fire on the main thread; Redis I/O runs on the async scheduler.
+ * [MainThread] CMI events fire on the main thread; outbound Redis I/O runs on an owned async worker.
  */
 public final class CMIEconomyListener implements Listener {
 
@@ -41,13 +52,17 @@ public final class CMIEconomyListener implements Listener {
     private final boolean cmiAvailable;
 
     private ScheduledTask pollingTask;
-    private final ConcurrentHashMap<UUID, BigDecimal> lastKnownCMIBalance = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Long> outboundSuppressUntilMs = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Integer> failedOutboundSyncAttempts = new ConcurrentHashMap<>();
+    private static final int MAX_BALANCE_OBSERVATIONS = 10_000;
+    private final LinkedHashMap<UUID, BigDecimal> lastKnownCMIBalance = new LinkedHashMap<>(16, 0.75f, true);
+    private final CMIInboundEchoTracker inboundEchoTracker = new CMIInboundEchoTracker();
+    private final ConcurrentHashMap<UUID, PendingCmiChange> pendingCmiChanges = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> failedOutboundSyncAttempts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> outboundRetryTasks = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService outboundExecutor;
     private volatile boolean stopped;
+    private volatile boolean closing;
     private final Object outboundLifecycleGate = new Object();
     private int inFlightOutboundCallbacks;
-    private static final long OUTBOUND_SUPPRESS_MS = 750L;
     private static final int MAX_OUTBOUND_SYNC_ATTEMPTS = 3;
 
     private static Class<?> cmiEventClass = null;
@@ -55,12 +70,21 @@ public final class CMIEconomyListener implements Listener {
     private static Method getFromMethod = null;
     private static Method getToMethod = null;
 
+    private record PendingCmiChange(BigDecimal localBalance, BigDecimal delta,
+                                    String sourceName, String operationId) {
+    }
+
     public CMIEconomyListener(Plugin plugin, CMIEconomyHandler cmiHandler, SyncmoneyConfig config) {
         this.plugin = plugin;
         this.cmiHandler = cmiHandler;
         this.config = config;
         this.debounceManager = new CMIDebounceManager(plugin, config.cmi().getCMIDebounceTicks());
         this.cmiAvailable = initCMIReflection();
+        this.outboundExecutor = cmiHandler == null ? null : Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "syncmoney-cmi-outbound");
+            thread.setDaemon(true);
+            return thread;
+        });
 
         if (cmiAvailable) {
             registerCMIEvent();
@@ -121,7 +145,7 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void handleCMIEvent(Event event) {
-        if (stopped || cmiHandler == null) {
+        if (stopped || closing || cmiHandler == null) {
             return;
         }
         try {
@@ -141,12 +165,29 @@ public final class CMIEconomyListener implements Listener {
                 return;
             }
             cmiHandler.invalidateCachedBalanceForApi(uuid);
-            if (isOutboundSuppressed(uuid)) {
+            if (inboundEchoTracker.consume(uuid, fromBalance, toBalance)) {
                 return;
             }
 
+            if (!Double.isFinite(fromBalance) || !Double.isFinite(toBalance)) {
+                plugin.getLogger().warning("Ignored CMI balance event with a non-finite balance for " + uuid);
+                return;
+            }
+            BigDecimal previous = NumericUtil.normalize(fromBalance);
+            BigDecimal absolute = NumericUtil.normalize(toBalance);
+            BigDecimal diff = absolute.subtract(previous);
             final String sourceName = "CMI";
-            debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
+            PendingCmiChange next = new PendingCmiChange(
+                    absolute, diff, sourceName, UUID.randomUUID().toString());
+            synchronized (outboundLifecycleGate) {
+                if (stopped || closing) {
+                    return;
+                }
+                pendingCmiChanges.merge(uuid, next, (pending, latest) -> new PendingCmiChange(
+                        latest.localBalance(), pending.delta().add(latest.delta()),
+                        latest.sourceName(), pending.operationId()));
+                debounceManager.scheduleDebounced(uuid, () -> flushPendingCmiChange(uuid));
+            }
 
             if (config.isDebug()) {
                 plugin.getLogger().fine("[CMI Event] " + getNameFromCMIUser(cmiUser)
@@ -158,22 +199,22 @@ public final class CMIEconomyListener implements Listener {
     }
 
     private void publishDebounced(UUID uuid, String sourceName) {
-        if (stopped) return;
+        if (stopped || closing) return;
         noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid,
                 player -> {
-                    if (!stopped) publishOnPlayerScheduler(uuid, sourceName);
+                    if (!stopped && !closing) publishOnPlayerScheduler(uuid, sourceName);
                 });
     }
 
     private void publishOnPlayerScheduler(UUID uuid, String sourceName) {
-        if (stopped || cmiHandler == null) {
+        if (stopped || closing || cmiHandler == null) {
             return;
         }
         BigDecimal absolute = cmiHandler.getCMILocalBalance(uuid);
         if (absolute == null) {
             return;
         }
-        BigDecimal previous = lastKnownCMIBalance.get(uuid);
+        BigDecimal previous = getLastKnownCMIBalance(uuid);
         if (MigrationLock.isLocked()) {
             // Polling is only an observer. A changed or unknown current balance cannot be
             // silently accepted into a snapshot whose baseline may predate that observation.
@@ -183,66 +224,131 @@ public final class CMIEconomyListener implements Listener {
             debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
             return;
         }
-        if (isOutboundSuppressed(uuid)) {
-            return;
-        }
-
         if (previous != null && previous.compareTo(absolute) == 0) {
             return;
         }
 
         BigDecimal diff = previous != null ? absolute.subtract(previous) : BigDecimal.ZERO;
-        boolean isDeposit = diff.compareTo(BigDecimal.ZERO) >= 0;
+        publishObservedChange(uuid, absolute, diff, sourceName);
+    }
 
-        plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
-            if (!beginOutboundCallback()) return;
-            try {
-                if (stopped) return;
-                if (cmiHandler.trySyncAbsoluteBalance(uuid, absolute, diff, isDeposit, sourceName)) {
-                    if (!stopped) {
-                        lastKnownCMIBalance.put(uuid, absolute);
-                        failedOutboundSyncAttempts.remove(uuid);
-                    }
-                } else {
-                    if (stopped) return;
-                    int attempts = failedOutboundSyncAttempts.merge(uuid, 1, Integer::sum);
-                    if (MigrationLock.isLocked() || attempts < MAX_OUTBOUND_SYNC_ATTEMPTS) {
-                        debounceManager.scheduleDebounced(uuid, () -> publishDebounced(uuid, sourceName));
-                    } else {
-                        failedOutboundSyncAttempts.remove(uuid, attempts);
-                        plugin.getLogger().warning("CMI balance mirror retries exhausted for " + uuid);
-                    }
-                }
-            } finally {
-                finishOutboundCallback();
+    /** Flushes the coalesced event delta, including changes for users offline on this server. */
+    private void flushPendingCmiChange(UUID uuid) {
+        PendingCmiChange change;
+        synchronized (outboundLifecycleGate) {
+            change = pendingCmiChanges.remove(uuid);
+            if (change == null || stopped) {
+                return;
             }
-        });
+            inFlightOutboundCallbacks++;
+        }
+        executeOutboundCallback(uuid, change.localBalance(), change.delta(),
+                change.sourceName(), change.operationId());
     }
 
-    public void suppressOutbound(UUID uuid, long durationMs) {
-        if (uuid != null && durationMs > 0) {
-            outboundSuppressUntilMs.put(uuid, System.currentTimeMillis() + durationMs);
+    private void publishObservedChange(UUID uuid, BigDecimal absolute, BigDecimal diff,
+                                       String sourceName) {
+        publishBalanceChange(uuid, absolute, diff, sourceName, UUID.randomUUID().toString(), false);
+    }
+
+    private void publishBalanceChange(UUID uuid, BigDecimal absolute, BigDecimal diff,
+                                      String sourceName, String operationId, boolean allowWhileClosing) {
+        if (cmiHandler == null || !reserveOutboundCallback(allowWhileClosing)) {
+            return;
+        }
+        boolean isDeposit = diff.compareTo(BigDecimal.ZERO) >= 0;
+        executeOutboundCallback(uuid, absolute, diff, isDeposit, sourceName, operationId);
+    }
+
+    private void executeOutboundCallback(UUID uuid, BigDecimal absolute, BigDecimal diff,
+                                         String sourceName, String operationId) {
+        executeOutboundCallback(uuid, absolute, diff, diff.compareTo(BigDecimal.ZERO) >= 0,
+                sourceName, operationId);
+    }
+
+    private void executeOutboundCallback(UUID uuid, BigDecimal absolute, BigDecimal diff,
+                                         boolean isDeposit, String sourceName, String operationId) {
+        if (outboundExecutor == null) {
+            finishOutboundCallback();
+            return;
+        }
+        try {
+            outboundExecutor.execute(() -> {
+                try {
+                    if (stopped) return;
+                    if (cmiHandler.trySyncAbsoluteBalance(uuid, absolute, diff, isDeposit,
+                            sourceName, operationId)) {
+                        rememberLastKnownCMIBalance(uuid, absolute);
+                        failedOutboundSyncAttempts.remove(operationId);
+                    } else {
+                        int attempts = failedOutboundSyncAttempts.merge(operationId, 1, Integer::sum);
+                        // While running normally, retain the legacy migration-fence retry
+                        // behavior. During shutdown, keep the drain bounded if an owner failed
+                        // to release the global fence; do not hold the server's disable path
+                        // forever for a write that the fence will continue to reject.
+                        if ((!closing && MigrationLock.isLocked()) || attempts < MAX_OUTBOUND_SYNC_ATTEMPTS) {
+                            scheduleOutboundRetry(uuid, absolute, diff, sourceName, operationId);
+                        } else {
+                            failedOutboundSyncAttempts.remove(operationId, attempts);
+                            String lockSuffix = closing && MigrationLock.isLocked()
+                                    ? " while the migration lock remained active; it was not mirrored before shutdown"
+                                    : "";
+                            plugin.getLogger().warning("CMI balance mirror retries exhausted for " + uuid + lockSuffix);
+                        }
+                    }
+                } finally {
+                    finishOutboundCallback();
+                }
+            });
+        } catch (RuntimeException exception) {
+            finishOutboundCallback();
+            failedOutboundSyncAttempts.remove(operationId);
+            plugin.getLogger().warning("Could not schedule CMI balance mirror write for " + uuid
+                    + ": " + exception.getMessage());
         }
     }
 
-    public boolean isOutboundSuppressed(UUID uuid) {
-        if (uuid == null) {
-            return false;
+    private void scheduleOutboundRetry(UUID uuid, BigDecimal absolute, BigDecimal diff,
+                                      String sourceName, String operationId) {
+        if (outboundExecutor == null || !reserveOutboundCallback(true)) {
+            return;
         }
-        Long until = outboundSuppressUntilMs.get(uuid);
-        if (until == null) {
-            return false;
+        AtomicReference<ScheduledFuture<?>> scheduledRef = new AtomicReference<>();
+        try {
+            ScheduledFuture<?> scheduled = outboundExecutor.schedule(() -> {
+                ScheduledFuture<?> self = scheduledRef.get();
+                if (self != null) {
+                    outboundRetryTasks.remove(operationId, self);
+                }
+                try {
+                    publishBalanceChange(uuid, absolute, diff, sourceName, operationId, true);
+                } finally {
+                    finishOutboundCallback();
+                }
+            }, Math.max(50L, config.cmi().getCMIDebounceTicks() * 50L), TimeUnit.MILLISECONDS);
+            scheduledRef.set(scheduled);
+            ScheduledFuture<?> previous = outboundRetryTasks.put(operationId, scheduled);
+            if (previous != null) {
+                previous.cancel(false);
+            }
+        } catch (RuntimeException exception) {
+            finishOutboundCallback();
+            failedOutboundSyncAttempts.remove(operationId);
+            plugin.getLogger().warning("Could not schedule CMI balance retry for " + uuid
+                    + ": " + exception.getMessage());
         }
-        if (System.currentTimeMillis() >= until) {
-            outboundSuppressUntilMs.remove(uuid, until);
-            return false;
+    }
+
+    public Runnable expectInboundBalanceWrite(UUID uuid, double fromBalance, double toBalance) {
+        if (stopped || closing) {
+            return () -> { };
         }
-        return true;
+        return inboundEchoTracker.expect(uuid, fromBalance, toBalance);
     }
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
-        if (stopped || cmiHandler == null) {
+        if (stopped || closing || cmiHandler == null) {
             return;
         }
         final UUID uuid = event.getPlayer().getUniqueId();
@@ -252,15 +358,14 @@ public final class CMIEconomyListener implements Listener {
             noietime.syncmoney.util.PlayerLookupUtil.runForPlayer(plugin, uuid, player -> {
                 if (stopped) return;
                 BigDecimal local = cmiHandler.getCMILocalBalance(uuid);
-                if (local != null) lastKnownCMIBalance.put(uuid, local);
+                if (local != null) rememberLastKnownCMIBalance(uuid, local);
             });
         });
     }
 
     public void notifyInboundApplied(UUID uuid, BigDecimal absoluteBalance) {
-        if (stopped) return;
-        suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
-        lastKnownCMIBalance.put(uuid, absoluteBalance);
+        if (stopped || closing) return;
+        rememberLastKnownCMIBalance(uuid, absoluteBalance);
     }
 
     private UUID getUUIDFromCMIUser(Object cmiUser) {
@@ -283,13 +388,28 @@ public final class CMIEconomyListener implements Listener {
 
     public void shutdown() {
         boolean interrupted = false;
+        List<Map.Entry<UUID, PendingCmiChange>> pending = new ArrayList<>();
         synchronized (outboundLifecycleGate) {
-            stopped = true;
-            while (inFlightOutboundCallbacks > 0) {
-                try {
-                    outboundLifecycleGate.wait();
-                } catch (InterruptedException e) {
-                    interrupted = true;
+            if (stopped) return;
+            if (closing) {
+                while (!stopped) {
+                    try {
+                        outboundLifecycleGate.wait();
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+                return;
+            }
+            closing = true;
+            for (Map.Entry<UUID, PendingCmiChange> entry : pendingCmiChanges.entrySet()) {
+                PendingCmiChange change = pendingCmiChanges.remove(entry.getKey());
+                if (change != null) {
+                    pending.add(Map.entry(entry.getKey(), change));
+                    // Count before dispatch so shutdown cannot miss work that has not reached
+                    // the executor yet.
+                    inFlightOutboundCallbacks++;
                 }
             }
         }
@@ -299,6 +419,27 @@ public final class CMIEconomyListener implements Listener {
         if (debounceManager != null) {
             debounceManager.cancelAll();
         }
+        for (Map.Entry<UUID, PendingCmiChange> entry : pending) {
+            PendingCmiChange change = entry.getValue();
+            executeOutboundCallback(entry.getKey(), change.localBalance(), change.delta(),
+                    change.sourceName(), change.operationId());
+        }
+        synchronized (outboundLifecycleGate) {
+            while (inFlightOutboundCallbacks > 0) {
+                try {
+                    outboundLifecycleGate.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            stopped = true;
+            outboundLifecycleGate.notifyAll();
+        }
+        if (outboundExecutor != null) {
+            outboundExecutor.shutdown();
+        }
+        outboundRetryTasks.values().forEach(task -> task.cancel(false));
+        outboundRetryTasks.clear();
         if (pollingTask != null) {
             pollingTask.cancel();
         }
@@ -308,9 +449,9 @@ public final class CMIEconomyListener implements Listener {
         }
     }
 
-    private boolean beginOutboundCallback() {
+    private boolean reserveOutboundCallback(boolean allowWhileClosing) {
         synchronized (outboundLifecycleGate) {
-            if (stopped) {
+            if (stopped || (closing && !allowWhileClosing)) {
                 return false;
             }
             inFlightOutboundCallbacks++;
@@ -321,8 +462,23 @@ public final class CMIEconomyListener implements Listener {
     private void finishOutboundCallback() {
         synchronized (outboundLifecycleGate) {
             inFlightOutboundCallbacks--;
-            if (inFlightOutboundCallbacks == 0) {
-                outboundLifecycleGate.notifyAll();
+            outboundLifecycleGate.notifyAll();
+        }
+    }
+
+    private BigDecimal getLastKnownCMIBalance(UUID uuid) {
+        synchronized (lastKnownCMIBalance) {
+            return lastKnownCMIBalance.get(uuid);
+        }
+    }
+
+    private void rememberLastKnownCMIBalance(UUID uuid, BigDecimal balance) {
+        if (uuid == null || balance == null) return;
+        synchronized (lastKnownCMIBalance) {
+            lastKnownCMIBalance.put(uuid, balance);
+            if (lastKnownCMIBalance.size() > MAX_BALANCE_OBSERVATIONS) {
+                UUID oldest = lastKnownCMIBalance.keySet().iterator().next();
+                lastKnownCMIBalance.remove(oldest);
             }
         }
     }

@@ -165,18 +165,12 @@ function New-ValidDatabaseManagerInitFailureReport(
     [ValidateSet('Minimum', 'MinimumFolia', 'CurrentMaximum', 'CurrentMaximumFolia', 'MinimumCanvas', 'CurrentMaximumCanvas')][string]$PlatformEndpoint = 'CurrentMaximum',
     [ValidateSet('PostgreSQL', 'MySQL')][string]$DatabaseProduct = 'PostgreSQL'
 ) {
-    $server = if ($PlatformEndpoint -ceq 'Minimum') {
-        [pscustomobject]@{ software = 'paper'; minecraftVersion = '1.21.6'; build = 48; sha256 = '0' * 64 }
-    } elseif ($PlatformEndpoint -ceq 'MinimumFolia') {
-        [pscustomobject]@{ software = 'folia'; minecraftVersion = '1.21.6'; build = 6; sha256 = '0' * 64 }
-    } elseif ($PlatformEndpoint -ceq 'MinimumCanvas') {
-        [pscustomobject]@{ software = 'canvas'; minecraftVersion = '1.21.8'; build = 603; sha256 = '0' * 64 }
-    } elseif ($PlatformEndpoint -ceq 'CurrentMaximumCanvas') {
-        [pscustomobject]@{ software = 'canvas'; minecraftVersion = '26.3'; build = 984; sha256 = '0' * 64 }
-    } elseif ($PlatformEndpoint -ceq 'CurrentMaximumFolia') {
-        [pscustomobject]@{ software = 'folia'; minecraftVersion = '26.3'; build = 3; sha256 = '0' * 64 }
-    } else {
-        [pscustomobject]@{ software = 'paper'; minecraftVersion = '26.3'; build = 200; sha256 = '0' * 64 }
+    $endpoint = Get-T21PlatformEndpoint -PlatformEndpoint $PlatformEndpoint
+    $server = [pscustomobject]@{
+        software = $endpoint.software
+        minecraftVersion = $endpoint.minecraftVersion
+        build = $endpoint.build
+        sha256 = '0' * 64
     }
     $databaseName = 'syncmoney_t21_89abcdef'
     $startupFailureMessage = if ($DatabaseProduct -ceq 'PostgreSQL') {
@@ -457,8 +451,8 @@ Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'MariaDB' 'Curr
 Assert-Predicate (-not (Test-T21DatabaseManagerInitFailureTarget 'PostgreSQL' 'MaximumCanvas')) 'The unselected historical Canvas endpoint must remain rejected.'
 
 $currentMaximumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint CurrentMaximumCanvas
-Assert-Predicate ($currentMaximumCanvasEndpoint.software -ceq 'canvas' -and $currentMaximumCanvasEndpoint.minecraftVersion -ceq '26.3' -and $currentMaximumCanvasEndpoint.build -eq 984 -and $currentMaximumCanvasEndpoint.sha256 -ceq '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa') 'The selected current-maximum Canvas endpoint must retain its formal version, build, and SHA-256 pin.'
-Assert-Predicate (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint CurrentMaximumCanvas -ExpectedServerSha256 '0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa') 'The current-maximum Canvas auditor pin helper must accept the formal SHA-256.'
+Assert-Predicate ($currentMaximumCanvasEndpoint.software -ceq 'canvas' -and $currentMaximumCanvasEndpoint.minecraftVersion -ceq '26.3' -and $currentMaximumCanvasEndpoint.build -eq 1010 -and $currentMaximumCanvasEndpoint.sha256 -ceq 'e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057') 'The selected current-maximum Canvas endpoint must retain its formal version, build, and SHA-256 pin.'
+Assert-Predicate (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint CurrentMaximumCanvas -ExpectedServerSha256 'e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057') 'The current-maximum Canvas auditor pin helper must accept the formal SHA-256.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint CurrentMaximumCanvas -ExpectedServerSha256 ('0' * 64))) 'The current-maximum Canvas auditor pin helper must reject a mismatched expected SHA-256.'
 $currentMaximumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoint CurrentMaximumCanvas
 $currentMaximumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $currentMaximumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'CurrentMaximumCanvas'
@@ -483,8 +477,8 @@ $minimumCanvasReport = New-ValidDatabaseManagerInitFailureReport -PlatformEndpoi
 $minimumCanvasReportPassed = Test-T21DatabaseManagerInitFailureReport $minimumCanvasReport ('0' * 64) ('1' * 64) ('a' * 40) ('b' * 64) ('c' * 64) ('4' * 64) ('5' * 64) ('d' * 40) 'MinimumCanvas'
 Assert-Predicate $minimumCanvasReportPassed 'The exactly pinned minimum-Canvas/PostgreSQL startup-failure report should pass.'
 $minimumCanvasEndpoint = Get-T21PlatformEndpoint -PlatformEndpoint MinimumCanvas
-Assert-Predicate ($minimumCanvasEndpoint.software -ceq 'canvas' -and $minimumCanvasEndpoint.minecraftVersion -ceq '1.21.8' -and $minimumCanvasEndpoint.build -eq 603 -and $minimumCanvasEndpoint.sha256 -ceq '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b') 'The selected minimum-Canvas endpoint must retain its formal version, build, and SHA-256 pin.'
-Assert-Predicate (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 '6577181e4bc8ac40a7a48ff00e262f2ac7a798f48ada446a07eb06618dc36f1b') 'The minimum-Canvas auditor pin helper must accept the formal SHA-256.'
+Assert-Predicate ($minimumCanvasEndpoint.software -ceq 'canvas' -and $minimumCanvasEndpoint.minecraftVersion -ceq '26.2' -and $minimumCanvasEndpoint.build -eq 994 -and $minimumCanvasEndpoint.sha256 -ceq '8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2') 'The selected minimum-Canvas endpoint must retain its formal version, build, and SHA-256 pin.'
+Assert-Predicate (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 '8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2') 'The minimum-Canvas auditor pin helper must accept the formal SHA-256.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 ('0' * 64))) 'The minimum-Canvas auditor pin helper must reject a mismatched expected SHA-256.'
 Assert-Predicate (-not (Test-T21DatabaseManagerInitExpectedPlatformServerPin -PlatformEndpoint MinimumCanvas -ExpectedServerSha256 'not-a-hash')) 'The minimum-Canvas auditor pin helper must reject a malformed expected SHA-256.'
 $minimumCanvasReport.server.software = 'paper'

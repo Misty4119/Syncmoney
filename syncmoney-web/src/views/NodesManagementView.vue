@@ -126,7 +126,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server } from 'lucide-vue-next'
+import { Server } from '@lucide/vue'
 import { useNodesStore } from '@/stores/nodes'
 import { apiClient } from '@/api/client'
 import Card from '@/components/common/Card.vue'

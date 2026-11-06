@@ -30,9 +30,11 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
@@ -93,7 +95,7 @@ class CmiOwnerFreshnessTest {
         fixture.scheduledWork.get(1).accept(mock(ScheduledTask.class));
 
         verify(fixture.cmiApi).setBalance(account, 20.0);
-        verify(fixture.cmiHandler).suppressOutbound(account, 750L);
+        verify(fixture.cmiHandler).expectInboundBalanceWrite(account, 10.0, 20.0);
         verify(fixture.cmiHandler).notifyInboundApplied(eq(account), eq(new BigDecimal("20.00")), eq(20L));
     }
 
@@ -101,14 +103,18 @@ class CmiOwnerFreshnessTest {
     void failedCmiWriteDoesNotMarkInboundVersionAppliedAndAllowsRedeliveryRetry() {
         UUID account = UUID.randomUUID();
         Fixture fixture = fixture(Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC), true, true);
+        AtomicLong echoCleanupCount = new AtomicLong();
         when(fixture.cmiApi.getBalance(account)).thenReturn(10.0);
         when(fixture.cmiApi.setBalance(account, 20.0)).thenReturn(false);
+        when(fixture.cmiHandler.expectInboundBalanceWrite(account, 10.0, 20.0))
+                .thenReturn(() -> echoCleanupCount.incrementAndGet());
 
         fixture.handler.process(message(account, "20.00", 20L));
         fixture.scheduledWork.get(0).accept(mock(ScheduledTask.class));
 
         verify(fixture.cmiApi).setBalance(account, 20.0);
         verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(20L));
+        assertEquals(1L, echoCleanupCount.get(), "failed CMI writes must clear an unconsumed echo registration");
 
         fixture.handler.process(message(account, "19.00", 19L));
         assertEquals(1, fixture.scheduledWork.size(),
@@ -120,6 +126,7 @@ class CmiOwnerFreshnessTest {
         fixture.scheduledWork.get(1).accept(mock(ScheduledTask.class));
         verify(fixture.cmiApi, times(2)).setBalance(account, 20.0);
         verify(fixture.cmiHandler, never()).notifyInboundApplied(eq(account), any(), eq(20L));
+        assertEquals(2L, echoCleanupCount.get(), "every retry must close its own echo registration");
     }
 
     @Test
@@ -393,13 +400,161 @@ class CmiOwnerFreshnessTest {
         CMIEconomyHandler cmiHandler = mock(CMIEconomyHandler.class);
         CMIEconomyListener listener = new CMIEconomyListener(plugin, cmiHandler, config);
         installEventMethods();
-        listener.suppressOutbound(account, 60_000L);
+        listener.expectInboundBalanceWrite(account, 10.0, 20.0);
 
         invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 10.0, 20.0));
 
         verify(cmiHandler).invalidateCachedBalanceForApi(account);
         verify(scheduler, never()).runDelayed(eq(plugin), any(), anyLong(), eq(TimeUnit.MILLISECONDS));
-        assertTrue(listener.isOutboundSuppressed(account));
+        listener.shutdown();
+    }
+
+    @Test
+    void offlineCmiPayeeBalanceEventPublishesWithoutLocalPlayerEntity() throws Exception {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
+        Server server = mock(Server.class);
+        AsyncScheduler scheduler = mock(AsyncScheduler.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getAsyncScheduler()).thenReturn(scheduler);
+        when(server.getPlayer(account)).thenReturn(null);
+
+        AtomicReference<Consumer<ScheduledTask>> debounceWork = new AtomicReference<>();
+        doAnswer(invocation -> {
+            debounceWork.set(invocation.getArgument(1));
+            return mock(ScheduledTask.class);
+        }).when(scheduler).runDelayed(eq(plugin), any(Consumer.class), anyLong(), eq(TimeUnit.MILLISECONDS));
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.cmi().getCMIDebounceTicks()).thenReturn(1);
+        CMIEconomyHandler handler = mock(CMIEconomyHandler.class);
+        when(handler.trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("125.00")),
+                eq(new BigDecimal("50.00")), eq(true), eq("CMI"), anyString())).thenReturn(false, true);
+        CMIEconomyListener listener = new CMIEconomyListener(plugin, handler, config);
+        installEventMethods();
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getServer).thenReturn(server);
+            invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 100.0, 125.0));
+            invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 125.0, 150.0));
+            assertNotNull(debounceWork.get(), "the post-change CMI event should enter the debounce path");
+
+            debounceWork.get().accept(mock(ScheduledTask.class));
+        }
+
+        verify(handler, org.mockito.Mockito.timeout(3_000).times(2)).trySyncAbsoluteBalance(
+                eq(account), eq(new BigDecimal("150.00")), eq(new BigDecimal("50.00")),
+                eq(true), eq("CMI"), anyString());
+        org.mockito.ArgumentCaptor<String> operationIds = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(handler, times(2)).trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("150.00")),
+                eq(new BigDecimal("50.00")), eq(true), eq("CMI"), operationIds.capture());
+        assertEquals(operationIds.getAllValues().get(0), operationIds.getAllValues().get(1),
+                "retry must reuse the same idempotency key");
+        verify(server, never()).getPlayer(account);
+        listener.shutdown();
+    }
+
+    @Test
+    void pendingCmiEventIsPublishedBeforeListenerShutdownReturns() throws Exception {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
+        Server server = mock(Server.class);
+        AsyncScheduler scheduler = mock(AsyncScheduler.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getAsyncScheduler()).thenReturn(scheduler);
+
+        AtomicReference<Consumer<ScheduledTask>> debounceWork = new AtomicReference<>();
+        doAnswer(invocation -> {
+            debounceWork.set(invocation.getArgument(1));
+            return mock(ScheduledTask.class);
+        }).when(scheduler).runDelayed(eq(plugin), any(Consumer.class), anyLong(), eq(TimeUnit.MILLISECONDS));
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.cmi().getCMIDebounceTicks()).thenReturn(1);
+        CMIEconomyHandler handler = mock(CMIEconomyHandler.class);
+        when(handler.trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("125.00")),
+                eq(new BigDecimal("25.00")), eq(true), eq("CMI"), anyString())).thenReturn(true);
+        CMIEconomyListener listener = new CMIEconomyListener(plugin, handler, config);
+        installEventMethods();
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getServer).thenReturn(server);
+            invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 100.0, 125.0));
+            assertNotNull(debounceWork.get(), "the post-change CMI event should enter the debounce path");
+            // Leave the debounce callback queued: shutdown must drain the accepted event itself.
+            listener.shutdown();
+        }
+
+        verify(handler).trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("125.00")),
+                eq(new BigDecimal("25.00")), eq(true), eq("CMI"), anyString());
+    }
+
+    @Test
+    void shutdownBoundsRetriesWhenTheMigrationFenceRemainsLocked() throws Exception {
+        UUID account = UUID.randomUUID();
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
+        Server server = mock(Server.class);
+        AsyncScheduler scheduler = mock(AsyncScheduler.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getAsyncScheduler()).thenReturn(scheduler);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(config.cmi().getCMIDebounceTicks()).thenReturn(1);
+        CMIEconomyHandler handler = mock(CMIEconomyHandler.class);
+        when(handler.trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("125.00")),
+                eq(new BigDecimal("25.00")), eq(true), eq("CMI"), anyString())).thenReturn(false);
+        CMIEconomyListener listener = new CMIEconomyListener(plugin, handler, config);
+        installEventMethods();
+
+        MigrationLock.disable();
+        MigrationLock.enable();
+        assertTrue(MigrationLock.lock(), "test must hold the migration fence");
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getServer).thenReturn(server);
+            invokeEventHandler(listener, new BalanceChangeEvent(new CmiUser(account), 100.0, 125.0));
+
+            // Shutdown drains the event, but the still-active fence rejects each bounded attempt.
+            listener.shutdown();
+        } finally {
+            MigrationLock.disable();
+        }
+
+        verify(handler, times(3)).trySyncAbsoluteBalance(eq(account), eq(new BigDecimal("125.00")),
+                eq(new BigDecimal("25.00")), eq(true), eq("CMI"), anyString());
+    }
+
+    @Test
+    void listenerBalanceObservationsAreBoundedWithoutAgeExpiry() throws Exception {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("CmiOwnerFreshnessTest"));
+        Server server = mock(Server.class);
+        when(plugin.getServer()).thenReturn(server);
+        AsyncScheduler scheduler = mock(AsyncScheduler.class);
+        when(server.getAsyncScheduler()).thenReturn(scheduler);
+        when(scheduler.runAtFixedRate(eq(plugin), any(Consumer.class), anyLong(), anyLong(),
+                eq(TimeUnit.MILLISECONDS))).thenReturn(mock(ScheduledTask.class));
+
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        CMIEconomyListener listener = new CMIEconomyListener(plugin,
+                mock(CMIEconomyHandler.class), config);
+        UUID oldest = null;
+        UUID newest = null;
+        for (int i = 0; i <= 10_000; i++) {
+            UUID uuid = UUID.randomUUID();
+            if (i == 0) oldest = uuid;
+            newest = uuid;
+            listener.notifyInboundApplied(uuid, BigDecimal.valueOf(i));
+        }
+
+        Field observationsField = CMIEconomyListener.class.getDeclaredField("lastKnownCMIBalance");
+        observationsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<UUID, BigDecimal> observations = (Map<UUID, BigDecimal>) observationsField.get(listener);
+        assertEquals(10_000, observations.size());
+        assertFalse(observations.containsKey(oldest), "the oldest entry should be evicted only at capacity");
+        assertTrue(observations.containsKey(newest), "the newest observation should be retained");
         listener.shutdown();
     }
 

@@ -158,7 +158,7 @@ public final class WebAdminServer {
                 "registerSW.js",
                 "sw.js",
                 "version.json",
-                "workbox-daba6f28.js"
+                "workbox-835c8c05.js"
         };
 
         for (String fileName : rootFiles) {
@@ -177,34 +177,34 @@ public final class WebAdminServer {
             Files.createDirectories(assetsDir);
         }
         String[] assetFiles = {
-                "AuditLogView-C8aWdyNF.js",
-                "AuditLogView-DSvYadoU.css",
-                "Badge.vue_vue_type_script_setup_true_lang-DkAYYURq.js",
-                "Button.vue_vue_type_script_setup_true_lang-C_Ced1Tp.js",
-                "Card-B-Qa8A8H.js",
+                "AuditLogView-BlXVLV9C.js",
+                "AuditLogView-CUB815AH.css",
+                "Badge.vue_vue_type_script_setup_true_lang-CyUHL2kd.js",
+                "Button.vue_vue_type_script_setup_true_lang-pg-efjpB.js",
+                "Card-BF-w6LnZ.js",
                 "Card-XdX29y7v.css",
-                "CentralDashboardView-Beedz-Wr.js",
-                "ConfigView-B-VfrSgQ.js",
-                "ConfigView-nxIbKMd_.css",
-                "DashboardView-BkwNz68e.js",
-                "EmptyState.vue_vue_type_script_setup_true_lang-BWiU4-xk.js",
-                "LoginView-BOib8Cxs.js",
-                "NodesManagementView-B78nQUsB.js",
-                "NodesManagementView-IuUDUfJE.css",
-                "NotFoundView-CZsFphNC.js",
+                "CentralDashboardView-CuYwJdlX.js",
+                "ConfigView-BnIeITJ9.js",
+                "ConfigView-Dnwf-FVK.css",
+                "DashboardView-BAZVjVe4.js",
+                "EmptyState.vue_vue_type_script_setup_true_lang-BOG2IFG6.js",
+                "LoginView-BtkNiDXl.js",
+                "NodesManagementView-C60cJTnG.css",
+                "NodesManagementView-CUIr0v4W.js",
                 "NotFoundView-ChI-bezx.css",
-                "SettingsView-SYGnDnFe.js",
-                "Skeleton.vue_vue_type_script_setup_true_lang-68hqMpXd.js",
-                "StatCard.vue_vue_type_script_setup_true_lang-CD94sMvN.js",
-                "Switch.vue_vue_type_script_setup_true_lang-B3Te9Ch7.js",
-                "SystemStatusView-BjC9gvrY.js",
-                "globe-hlLyQOwy.js",
-                "index-BmX9zL2-.js",
-                "index-D4b_KEqu.css",
-                "shield-Cg5mUBSk.js",
-                "ui-vendor-BNCDRwct.js",
-                "users-CMkceCGY.js",
-                "vue-vendor-BdqzwXPG.js"
+                "NotFoundView-Ybk71C4o.js",
+                "SettingsView-BXNIO51r.js",
+                "Skeleton.vue_vue_type_script_setup_true_lang-CaTbEQKQ.js",
+                "StatCard.vue_vue_type_script_setup_true_lang-Dc-oTy2N.js",
+                "Switch.vue_vue_type_script_setup_true_lang-l4dj0ZYl.js",
+                "SystemStatusView-DvYl9W-F.js",
+                "globe-niwOZ0X4.js",
+                "index-2TqQTWzg.css",
+                "index-Cxmwq97Q.js",
+                "shield-je-zmBbO.js",
+                "ui-vendor-Hv9Lp3c0.js",
+                "users-BcgUC5tB.js",
+                "vue-vendor-DzGWhrXX.js"
         };
 
         for (String fileName : assetFiles) {

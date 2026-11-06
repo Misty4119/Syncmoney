@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Inbox } from 'lucide-vue-next'
+import { Inbox } from '@lucide/vue'
 
 interface Props {
   icon?: Component

@@ -43,4 +43,25 @@ class EconomyModeRouterMigrationLockTest {
         verify(localHandler, never()).deposit(account, null, new BigDecimal("25.00"), "ADMIN_SET");
         verify(localHandler, never()).setBalance(account, null, new BigDecimal("125.00"), "ADMIN_SET");
     }
+
+    @Test
+    void cmiRouterRejectsEconomyWritesBeforeCallingCmiHandler() {
+        Syncmoney plugin = mock(Syncmoney.class);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.getEconomyMode()).thenReturn(EconomyMode.CMI);
+        CMIEconomyHandler cmiHandler = mock(CMIEconomyHandler.class);
+        EconomyModeRouter router = new EconomyModeRouter(plugin, config);
+        router.initialize(null, null, cmiHandler, null);
+        UUID account = UUID.randomUUID();
+
+        assertEquals(new BigDecimal("-1"), router.deposit(account, new BigDecimal("25.00"),
+                EconomyEvent.EventSource.ADMIN_SET));
+        assertEquals(new BigDecimal("-1"), router.withdraw(account, new BigDecimal("25.00"),
+                EconomyEvent.EventSource.ADMIN_SET));
+        assertEquals(new BigDecimal("-1"), router.setBalance(account, new BigDecimal("125.00"),
+                EconomyEvent.EventSource.ADMIN_SET));
+        verify(cmiHandler, never()).deposit(account, new BigDecimal("25.00"));
+        verify(cmiHandler, never()).withdraw(account, new BigDecimal("25.00"));
+        verify(cmiHandler, never()).setBalance(account, new BigDecimal("125.00"));
+    }
 }

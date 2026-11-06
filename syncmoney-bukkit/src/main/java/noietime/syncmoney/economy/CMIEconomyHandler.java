@@ -15,7 +15,6 @@ import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,6 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class CMIEconomyHandler {
 
     private static final int MAX_LAST_APPLIED_VERSION_ENTRIES = 10_000;
+    private static final int MAX_BALANCE_OBSERVATION_ENTRIES = 10_000;
 
     private final Syncmoney plugin;
     private final SyncmoneyConfig config;
@@ -46,7 +46,8 @@ public class CMIEconomyHandler {
     private record BalanceObservation(BigDecimal syncBaseline, BigDecimal apiAuthorityBalance) {
     }
 
-    private final ConcurrentHashMap<UUID, BalanceObservation> balanceObservations = new ConcurrentHashMap<>();
+    private final LinkedHashMap<UUID, BalanceObservation> balanceObservations =
+            new LinkedHashMap<>(16, 0.75f, true);
     private final LinkedHashMap<UUID, Long> lastAppliedVersion = new LinkedHashMap<>(16, 0.75f, true);
     private final AtomicLong versionCounter = new AtomicLong(0L);
     private final Object joinReconciliationGate = new Object();
@@ -67,7 +68,7 @@ public class CMIEconomyHandler {
         plugin.getLogger().fine("CMI Economy Handler initialized (CMI API available: " + cmiApi.isAvailable() + ")");
     }
 
-    public CMIApi getCmiApi() {
+    CMIApi getCmiApi() {
         return cmiApi;
     }
 
@@ -95,13 +96,12 @@ public class CMIEconomyHandler {
         }
     }
 
-    /**
-     * [FIX-CMI-ECHO] Suppress outbound re-publish while applying remote balance into local CMI.
-     */
-    public void suppressOutbound(UUID uuid, long durationMs) {
+    /** Registers the exact balance-change echo expected from an inbound CMI write. */
+    public Runnable expectInboundBalanceWrite(UUID uuid, double fromBalance, double toBalance) {
         if (cmiListener != null) {
-            cmiListener.suppressOutbound(uuid, durationMs);
+            return cmiListener.expectInboundBalanceWrite(uuid, fromBalance, toBalance);
         }
+        return () -> { };
     }
 
     private long generateNewVersion() {
@@ -120,35 +120,53 @@ public class CMIEconomyHandler {
     /** Returns false when the migration fence or the mirror write rejected this update. */
     public boolean trySyncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
                                           boolean isDeposit, String sourceName) {
+        return trySyncAbsoluteBalance(uuid, absoluteBalance, diff, isDeposit, sourceName,
+                UUID.randomUUID().toString());
+    }
+
+    /**
+     * Synchronizes one debounced CMI balance change. The event's absolute value can be stale when
+     * CMI changed an offline account on this server, so the event delta is applied to the current
+     * Redis mirror instead. The stable event ID makes retries idempotent.
+     */
+    public boolean trySyncAbsoluteBalance(UUID uuid, BigDecimal absoluteBalance, BigDecimal diff,
+                                          boolean isDeposit, String sourceName, String operationId) {
+        if (uuid == null || absoluteBalance == null || operationId == null || operationId.isBlank()) {
+            return false;
+        }
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             return false;
         }
         try (writeLease) {
-            BigDecimal newBalance = NumericUtil.normalize(absoluteBalance);
-            BigDecimal last = getSyncBaseline(uuid);
-            if (last != null && last.compareTo(newBalance) == 0) {
-                return true;
-            }
-
-            OptionalLong writtenVersion = setRedisBalanceWithVersion(uuid, newBalance);
-            if (writtenVersion.isEmpty()) {
+            BigDecimal localBalance = NumericUtil.normalize(absoluteBalance);
+            BigDecimal delta = diff != null ? NumericUtil.normalize(diff) : BigDecimal.ZERO;
+            CMIRedisMirror.ApplyResult applied = redisMirror.applyDelta(
+                    uuid, localBalance, delta, operationId, this::generateNewVersion);
+            if (applied.status() != CMIRedisMirror.WriteResult.ACCEPTED || applied.snapshot() == null) {
                 return false;
             }
-            long version = writtenVersion.getAsLong();
-            recordLastAppliedVersion(uuid, version);
+            BigDecimal newBalance = NumericUtil.normalize(applied.snapshot().balance());
+            long version = applied.snapshot().version();
+
+            // A rebased offline CMI account has not actually been brought to the mirrored value.
+            // Keep its older join watermark so a later entity-owner reconciliation corrects it.
+            if (newBalance.compareTo(localBalance) == 0) {
+                recordLastAppliedVersion(uuid, version);
+            }
 
             if (config.cmi().isCMICrossServerSync() && syncManager != null) {
                 String eventType = isDeposit ? "CMI_DEPOSIT" : "CMI_WITHDRAW";
-                double amount = diff != null ? diff.doubleValue() : 0.0;
+                double amount = delta.doubleValue();
                 syncManager.publishCMIUpdate(uuid, newBalance, version, eventType, amount, "CMI");
             }
 
             updateSyncBaseline(uuid, newBalance);
 
             if (config.isDebug()) {
-                plugin.getLogger().fine("[CMI] Absolute sync: " + uuid + " = " + newBalance
-                        + " v" + version + " (source=" + sourceName + ")");
+                plugin.getLogger().fine("[CMI] Delta sync: " + uuid + " = " + newBalance
+                        + " v" + version + " (local=" + localBalance + ", delta=" + delta
+                        + ", source=" + sourceName + ")");
             }
             return true;
         } catch (Exception e) {
@@ -179,7 +197,7 @@ public class CMIEconomyHandler {
         if (uuid == null) {
             throw new IllegalArgumentException("Account UUID must not be null");
         }
-        BalanceObservation observation = balanceObservations.get(uuid);
+        BalanceObservation observation = getBalanceObservation(uuid);
         return Optional.ofNullable(observation == null ? null : observation.apiAuthorityBalance());
     }
 
@@ -199,8 +217,12 @@ public class CMIEconomyHandler {
             return;
         }
         BigDecimal normalized = NumericUtil.normalize(balance);
-        balanceObservations.compute(uuid, (key, current) -> new BalanceObservation(
-                current == null ? null : current.syncBaseline(), normalized));
+        synchronized (balanceObservations) {
+            BalanceObservation current = balanceObservations.get(uuid);
+            balanceObservations.put(uuid, new BalanceObservation(
+                    current == null ? null : current.syncBaseline(), normalized));
+            evictOldestBalanceObservations();
+        }
     }
 
     /** Invalidates the API snapshot after an observed CMI mutation whose result is not confirmed. */
@@ -208,24 +230,50 @@ public class CMIEconomyHandler {
         if (uuid == null) {
             return;
         }
-        balanceObservations.computeIfPresent(uuid, (key, current) -> current.syncBaseline() == null
-                ? null
-                : new BalanceObservation(current.syncBaseline(), null));
+        synchronized (balanceObservations) {
+            BalanceObservation current = balanceObservations.get(uuid);
+            if (current == null) return;
+            if (current.syncBaseline() == null) {
+                balanceObservations.remove(uuid);
+            } else {
+                balanceObservations.put(uuid, new BalanceObservation(current.syncBaseline(), null));
+            }
+        }
     }
 
     private BigDecimal getSyncBaseline(UUID uuid) {
-        BalanceObservation observation = balanceObservations.get(uuid);
+        BalanceObservation observation = getBalanceObservation(uuid);
         return observation == null ? null : observation.syncBaseline();
     }
 
     private void updateSyncBaseline(UUID uuid, BigDecimal balance) {
-        balanceObservations.compute(uuid, (key, current) -> new BalanceObservation(balance,
-                current == null ? null : current.apiAuthorityBalance()));
+        synchronized (balanceObservations) {
+            BalanceObservation current = balanceObservations.get(uuid);
+            balanceObservations.put(uuid, new BalanceObservation(balance,
+                    current == null ? null : current.apiAuthorityBalance()));
+            evictOldestBalanceObservations();
+        }
+    }
+
+    private BalanceObservation getBalanceObservation(UUID uuid) {
+        synchronized (balanceObservations) {
+            return balanceObservations.get(uuid);
+        }
+    }
+
+    private void evictOldestBalanceObservations() {
+        if (balanceObservations.size() > MAX_BALANCE_OBSERVATION_ENTRIES) {
+            UUID oldest = balanceObservations.keySet().iterator().next();
+            balanceObservations.remove(oldest);
+        }
     }
 
     private void recordLastAppliedVersion(UUID uuid, long version) {
         synchronized (lastAppliedVersion) {
-            lastAppliedVersion.put(uuid, version);
+            long current = lastAppliedVersion.getOrDefault(uuid, 0L);
+            if (version > current) {
+                lastAppliedVersion.put(uuid, version);
+            }
             if (lastAppliedVersion.size() > MAX_LAST_APPLIED_VERSION_ENTRIES) {
                 UUID oldest = lastAppliedVersion.keySet().iterator().next();
                 lastAppliedVersion.remove(oldest);
@@ -332,13 +380,9 @@ public class CMIEconomyHandler {
             }
             return;
         }
-        if (local != null && local.compareTo(mirror) > 0) {
-            if (admitJoinReconciliationUpdate()) {
-                notifyInboundApplied(uuid, local, lastApplied > 0 ? lastApplied : null);
-            }
-            return;
-        }
-
+        // The mirror version is newer than the last version applied by this server, so it also
+        // carries newer withdrawals. A higher local CMI value can be a stale offline account copy;
+        // do not let that stale value veto the versioned canonical update.
         final double target = mirror.doubleValue();
         final BigDecimal normalizedMirror = mirror;
         final long version = mirrorVersion;
@@ -347,20 +391,27 @@ public class CMIEconomyHandler {
             return;
         }
         try (writeLease) {
-            suppressOutbound(uuid, OUTBOUND_SUPPRESS_MS);
-            invalidateCachedBalanceForApi(uuid);
-            if (cmiApi.setBalance(uuid, target)) {
-                recordApiAuthorityBalance(uuid, normalizedMirror);
-            } else {
-                BigDecimal observed = getCMILocalBalance(uuid);
-                if (observed == null || observed.compareTo(normalizedMirror) != 0) {
-                    invalidateCachedBalanceForApi(uuid);
-                    return;
+            Double beforeBalance = cmiApi.getBalance(uuid);
+            Runnable clearExpectedEcho = beforeBalance == null
+                    ? () -> { }
+                    : expectInboundBalanceWrite(uuid, beforeBalance, target);
+            try {
+                invalidateCachedBalanceForApi(uuid);
+                if (cmiApi.setBalance(uuid, target)) {
+                    recordApiAuthorityBalance(uuid, normalizedMirror);
+                } else {
+                    BigDecimal observed = getCMILocalBalance(uuid);
+                    if (observed == null || observed.compareTo(normalizedMirror) != 0) {
+                        invalidateCachedBalanceForApi(uuid);
+                        return;
+                    }
                 }
-            }
-            notifyInboundApplied(uuid, normalizedMirror, version);
-            if (config.isDebug()) {
-                plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
+                notifyInboundApplied(uuid, normalizedMirror, version);
+                if (config.isDebug()) {
+                    plugin.getLogger().fine("[CMI] Join reconcile " + uuid + " -> " + target + " v" + version);
+                }
+            } finally {
+                clearExpectedEcho.run();
             }
         }
     }
@@ -382,8 +433,6 @@ public class CMIEconomyHandler {
             return !joinReconciliationStopped;
         }
     }
-
-    private static final long OUTBOUND_SUPPRESS_MS = 750L;
 
     /**
      * @deprecated Use {@link #reconcileOnJoin(UUID)} only. Mirror-pull during gameplay reverts local CMI.
@@ -437,6 +486,9 @@ public class CMIEconomyHandler {
      * by the local CMI command that triggered this or by inbound consumers on other servers.
      */
     public BigDecimal deposit(UUID uuid, BigDecimal amount) {
+        if (config.isCMIMode()) {
+            return BigDecimal.valueOf(-1);
+        }
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             return BigDecimal.valueOf(-1);
@@ -460,6 +512,9 @@ public class CMIEconomyHandler {
      * Withdraw (CMI mode specific).
      */
     public BigDecimal withdraw(UUID uuid, BigDecimal amount) {
+        if (config.isCMIMode()) {
+            return BigDecimal.valueOf(-1);
+        }
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             return BigDecimal.valueOf(-1);
@@ -495,6 +550,9 @@ public class CMIEconomyHandler {
      * Sets balance.
      */
     public BigDecimal setBalance(UUID uuid, BigDecimal newBalance) {
+        if (config.isCMIMode()) {
+            return BigDecimal.valueOf(-1);
+        }
         MigrationLock.WriteLease writeLease = MigrationLock.tryAcquireWrite();
         if (writeLease == null) {
             return BigDecimal.valueOf(-1);

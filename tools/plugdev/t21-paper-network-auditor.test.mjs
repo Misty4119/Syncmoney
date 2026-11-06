@@ -11,6 +11,7 @@ import {
   T21_FOLIA_NETWORK_ARTIFACT_PATHS,
   NetworkAuditError,
   T21_NETWORK_ENDPOINTS,
+  T21_PAPER_NETWORK_ARTIFACTS,
   T21_PAPER_NETWORK_ENDPOINTS,
   T21_PAPER_NETWORK_ARTIFACT_PATHS,
   T21_PAPER_NETWORK_HARNESS_SOURCES,
@@ -30,7 +31,7 @@ test("auditor usage lists the current-maximum Canvas endpoint", () => {
   const auditorPath = fileURLToPath(new URL("./t21-paper-network-auditor.mjs", import.meta.url));
   const result = spawnSync(process.execPath, [auditorPath], { encoding: "utf8" });
   assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /canvas-263-984/);
+  assert.match(result.stderr, /canvas-263-1010/);
 });
 
 function hash(bytes) {
@@ -74,7 +75,7 @@ async function rewriteTextEvidence(fixture, relativePath, update) {
   await writeJson(fixture.root, "result.json", fixture.report);
 }
 
-async function createFixture({ endpointId = "paper-1216-48" } = {}) {
+async function createFixture({ endpointId = "paper-262-135" } = {}) {
   const runId = "audit-" + randomUUID().replaceAll("-", "").slice(0, 16);
   const root = await fs.mkdtemp(path.join(FIXTURE_PARENT, `t21-paper-network-${runId}-`));
   const uuidA = "a2345678-1234-4234-8234-1234567890ab";
@@ -314,6 +315,7 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
     serverJarSha256: hashes[serverKind],
   };
   const expectedArtifacts = {
+    candidateVersion: T21_PAPER_NETWORK_ARTIFACTS.candidateVersion,
     candidateSha256: hashes.candidate,
     acceptanceSha256: hashes.acceptance,
     vaultUnlockedSha256: hashes.vaultUnlocked,
@@ -386,6 +388,7 @@ async function createFixture({ endpointId = "paper-1216-48" } = {}) {
     endpoint: { ...expectedEndpoint },
     artifacts: {
       serverJarSha256: hashes[serverKind],
+      candidateVersion: T21_PAPER_NETWORK_ARTIFACTS.candidateVersion,
       candidateSha256: hashes.candidate,
       acceptanceSha256: hashes.acceptance,
       vaultUnlockedSha256: hashes.vaultUnlocked,
@@ -456,8 +459,8 @@ function audit(fixture) {
 }
 
 test("keeps the Paper endpoint export Paper-only and pins Folia server artifact paths", () => {
-  assert.deepEqual(Object.keys(T21_PAPER_NETWORK_ENDPOINTS), ["paper-1216-48", "paper-263-200"]);
-  assert.equal(T21_NETWORK_ENDPOINTS["folia-1216-6"].product, "Folia");
+  assert.deepEqual(Object.keys(T21_PAPER_NETWORK_ENDPOINTS), ["paper-262-135", "paper-263-243"]);
+  assert.equal(T21_NETWORK_ENDPOINTS["folia-262-7"].product, "Folia");
   const foliaServerCopies = T21_FOLIA_NETWORK_ARTIFACT_PATHS
     .filter(artifact => artifact.kind === "server")
     .map(artifact => artifact.path);
@@ -469,11 +472,11 @@ test("keeps the Paper endpoint export Paper-only and pins Folia server artifact 
 });
 
 test("accepts the minimum Folia network report using generic server artifact identity", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     assert.equal(fixture.report.endpoint.product, "Folia");
-    assert.equal(fixture.report.endpoint.version, "1.21.6");
-    assert.equal(fixture.report.endpoint.build, 6);
+    assert.equal(fixture.report.endpoint.version, "26.2");
+    assert.equal(fixture.report.endpoint.build, 7);
     assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
     assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
     let result;
@@ -482,34 +485,34 @@ test("accepts the minimum Folia network report using generic server artifact ide
     catch (caught) { error = caught; }
     assert.equal(error, undefined, error?.message);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
-    assert.equal(result.endpoint, "Folia 1.21.6#6");
+    assert.equal(result.endpoint, "Folia 26.2#7");
   } finally {
     await fixture.close();
   }
 });
 
 test("accepts the current-maximum Folia network report with the exact endpoint identity", async () => {
-  const fixture = await createFixture({ endpointId: "folia-263-3" });
+  const fixture = await createFixture({ endpointId: "folia-263-6" });
   try {
     assert.equal(fixture.report.endpoint.product, "Folia");
     assert.equal(fixture.report.endpoint.version, "26.3");
-    assert.equal(fixture.report.endpoint.build, 3);
+    assert.equal(fixture.report.endpoint.build, 6);
     assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
     assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
     const result = audit(fixture);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
-    assert.equal(result.endpoint, "Folia 26.3#3");
+    assert.equal(result.endpoint, "Folia 26.3#6");
   } finally {
     await fixture.close();
   }
 });
 
 test("accepts the minimum Canvas network report with its exact bootstrap identity", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  const fixture = await createFixture({ endpointId: "canvas-262-994" });
   try {
     assert.equal(fixture.report.endpoint.product, "Canvas");
-    assert.equal(fixture.report.endpoint.version, "1.21.8");
-    assert.equal(fixture.report.endpoint.build, 603);
+    assert.equal(fixture.report.endpoint.version, "26.2");
+    assert.equal(fixture.report.endpoint.build, 994);
     assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
     assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
     assert.equal(endpointServerArtifactKind(fixture.expectedEndpoint), "server");
@@ -521,7 +524,7 @@ test("accepts the minimum Canvas network report with its exact bootstrap identit
     ]);
     const result = audit(fixture);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
-    assert.equal(result.endpoint, "Canvas 1.21.8#603");
+    assert.equal(result.endpoint, "Canvas 26.2#994");
   } finally {
     await fixture.close();
   }
@@ -529,13 +532,13 @@ test("accepts the minimum Canvas network report with its exact bootstrap identit
 
 
 test("accepts the current-maximum Canvas network report with its exact endpoint identity", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  const fixture = await createFixture({ endpointId: "canvas-263-1010" });
   try {
     assert.equal(fixture.report.endpoint.product, "Canvas");
     assert.equal(fixture.report.endpoint.version, "26.3");
-    assert.equal(fixture.report.endpoint.build, 984);
-    assert.equal(T21_NETWORK_ENDPOINTS["canvas-263-984"].serverJarSha256,
-      "0b94c4cba3e415586dddb69915b5aacf250636c62d058f4651c1ab34eaf265fa");
+    assert.equal(fixture.report.endpoint.build, 1010);
+    assert.equal(T21_NETWORK_ENDPOINTS["canvas-263-1010"].serverJarSha256,
+      "e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057");
     assert.equal(fixture.report.endpoint.serverJarSha256, fixture.expectedEndpoint.serverJarSha256);
     assert.equal(fixture.report.backends[0].paperJarSha256, undefined);
     assert.equal(fixture.report.backends[0].serverJarSha256, fixture.report.endpoint.serverJarSha256);
@@ -549,16 +552,16 @@ test("accepts the current-maximum Canvas network report with its exact endpoint 
     ]);
     const result = audit(fixture);
     assert.equal(result.status, "PASS_BOUNDED_SUBCASE (E2)");
-    assert.equal(result.endpoint, "Canvas 26.3#984");
+    assert.equal(result.endpoint, "Canvas 26.3#1010");
   } finally {
     await fixture.close();
   }
 });
 
 test("rejects a current-maximum Canvas report when its endpoint build pin changes", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  const fixture = await createFixture({ endpointId: "canvas-263-1010" });
   try {
-    fixture.report.endpoint.build = 983;
+    fixture.report.endpoint.build = 1009;
     assert.throws(
       () => audit(fixture),
       error => error instanceof NetworkAuditError && /endpoint build pin mismatch/i.test(error.message),
@@ -569,15 +572,15 @@ test("rejects a current-maximum Canvas report when its endpoint build pin change
 });
 
 test("rejects a current-maximum Canvas server log with the wrong build identity", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  const fixture = await createFixture({ endpointId: "canvas-263-1010" });
   try {
     await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
-      "[bootstrap] Loading Canvas 26.3-984-fixture",
-      "[bootstrap] Loading Canvas 26.3-983-fixture",
+      "[bootstrap] Loading Canvas 26.3-1010-fixture",
+      "[bootstrap] Loading Canvas 26.3-1009-fixture",
     ));
     assert.throws(
       () => audit(fixture),
-      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 26\.3#984 startup identity marker/i.test(error.message),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 26\.3#1010 startup identity marker/i.test(error.message),
     );
   } finally {
     await fixture.close();
@@ -585,7 +588,7 @@ test("rejects a current-maximum Canvas server log with the wrong build identity"
 });
 
 test("rejects a current-maximum Canvas run when its copied server artifact changes", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-263-984" });
+  const fixture = await createFixture({ endpointId: "canvas-263-1010" });
   try {
     await fs.writeFile(path.join(fixture.root, "inputs", "canvas.jar"), Buffer.from("tampered-current-maximum-canvas-server-jar"));
     assert.throws(
@@ -598,15 +601,15 @@ test("rejects a current-maximum Canvas run when its copied server artifact chang
 });
 
 test("rejects a minimum Canvas server log with the wrong build identity", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  const fixture = await createFixture({ endpointId: "canvas-262-994" });
   try {
     await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
-      "[bootstrap] Loading Canvas 1.21.8-603-fixture",
-      "[bootstrap] Loading Canvas 1.21.8-604-fixture",
+      "[bootstrap] Loading Canvas 26.2-994-fixture",
+      "[bootstrap] Loading Canvas 26.2-995-fixture",
     ));
     assert.throws(
       () => audit(fixture),
-      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 1\.21\.8#603 startup identity marker/i.test(error.message),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Canvas 26\.2#994 startup identity marker/i.test(error.message),
     );
   } finally {
     await fixture.close();
@@ -614,7 +617,7 @@ test("rejects a minimum Canvas server log with the wrong build identity", async 
 });
 
 test("rejects a minimum Canvas run when its copied server artifact changes", async () => {
-  const fixture = await createFixture({ endpointId: "canvas-1218-603" });
+  const fixture = await createFixture({ endpointId: "canvas-262-994" });
   try {
     await fs.writeFile(path.join(fixture.root, "inputs", "canvas.jar"), Buffer.from("tampered-canvas-server-jar"));
     assert.throws(
@@ -627,15 +630,15 @@ test("rejects a minimum Canvas run when its copied server artifact changes", asy
 });
 
 test("rejects a current-maximum Folia server log with the wrong build identity", async () => {
-  const fixture = await createFixture({ endpointId: "folia-263-3" });
+  const fixture = await createFixture({ endpointId: "folia-263-6" });
   try {
     await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
-      "This server is running Folia version 26.3-3-fixture",
-      "This server is running Folia version 26.3-4-fixture",
+      "This server is running Folia version 26.3-6-fixture",
+      "This server is running Folia version 26.3-7-fixture",
     ));
     assert.throws(
       () => audit(fixture),
-      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 26\.3#3 startup identity marker/i.test(error.message),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 26\.3#6 startup identity marker/i.test(error.message),
     );
   } finally {
     await fixture.close();
@@ -643,7 +646,7 @@ test("rejects a current-maximum Folia server log with the wrong build identity",
 });
 
 test("rejects a Folia run when its copied server artifact changes", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     await fs.writeFile(path.join(fixture.root, "inputs", "folia.jar"), Buffer.from("tampered-folia-server-jar"));
     assert.throws(
@@ -656,7 +659,7 @@ test("rejects a Folia run when its copied server artifact changes", async () => 
 });
 
 test("rejects a Folia network report when either endpoint or backend server pin changes", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     const report = structuredClone(fixture.report);
     report.endpoint.serverJarSha256 = "0".repeat(64);
@@ -682,10 +685,10 @@ test("rejects a Folia network report when either endpoint or backend server pin 
 });
 
 test("rejects a Folia source manifest whose endpoint identity differs from the selected pin", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     await rewriteJsonEvidence(fixture, "evidence/source-manifest.json", manifest => {
-      manifest.endpoint.build = 7;
+      manifest.endpoint.build = 8;
     });
     assert.throws(
       () => audit(fixture),
@@ -697,15 +700,15 @@ test("rejects a Folia source manifest whose endpoint identity differs from the s
 });
 
 test("rejects a Folia server log with a Paper startup identity", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     await rewriteTextEvidence(fixture, "logs/server-b.log", text => text.replace(
-      "This server is running Folia version 1.21.6-6-fixture",
-      "This server is running Paper version 1.21.6-6-fixture",
+      "This server is running Folia version 26.2-7-fixture",
+      "This server is running Paper version 26.2-8-fixture",
     ));
     assert.throws(
       () => audit(fixture),
-      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 1\.21\.6#6 startup identity marker/i.test(error.message),
+      error => error instanceof NetworkAuditError && /backend B log lacks exact Folia 26\.2#7 startup identity marker/i.test(error.message),
     );
   } finally {
     await fixture.close();
@@ -713,15 +716,15 @@ test("rejects a Folia server log with a Paper startup identity", async () => {
 });
 
 test("rejects a Folia server log with the wrong build startup identity", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     await rewriteTextEvidence(fixture, "logs/server-a.log", text => text.replace(
-      "This server is running Folia version 1.21.6-6-fixture",
-      "This server is running Folia version 1.21.6-7-fixture",
+      "This server is running Folia version 26.2-7-fixture",
+      "This server is running Folia version 26.2-8-fixture",
     ));
     assert.throws(
       () => audit(fixture),
-      error => error instanceof NetworkAuditError && /backend A log lacks exact Folia 1\.21\.6#6 startup identity marker/i.test(error.message),
+      error => error instanceof NetworkAuditError && /backend A log lacks exact Folia 26\.2#7 startup identity marker/i.test(error.message),
     );
   } finally {
     await fixture.close();
@@ -729,7 +732,7 @@ test("rejects a Folia server log with the wrong build startup identity", async (
 });
 
 test("rejects a Folia server log that only has Paper's shutdown marker", async () => {
-  const fixture = await createFixture({ endpointId: "folia-1216-6" });
+  const fixture = await createFixture({ endpointId: "folia-262-7" });
   try {
     const foliaMarker = "[Region shutdown thread/INFO]: Stopping server";
     const paperMarker = "[Server thread/INFO]: Stopping server";

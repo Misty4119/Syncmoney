@@ -6,13 +6,10 @@ import noietime.syncmoney.economy.EconomyFacade;
 import noietime.syncmoney.economy.CMIEconomyHandler;
 import noietime.syncmoney.economy.CrossServerSyncManager;
 import noietime.syncmoney.config.SyncmoneyConfig;
-import noietime.syncmoney.storage.CacheManager;
-import noietime.syncmoney.storage.db.DbWriteQueue;
 import noietime.syncmoney.sync.CMIVersioning;
 import noietime.syncmoney.uuid.NameResolver;
 import noietime.syncmoney.util.NumericUtil;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.math.BigDecimal;
@@ -32,7 +29,6 @@ public class VaultTransferHandler {
     private volatile SyncmoneyConfig config;
     private final VaultPlayerHandler playerHandler;
     private final NameResolver nameResolver;
-    private volatile DbWriteQueue dbWriteQueue;
 
     private final AtomicLong cmiVersionCounter = new AtomicLong(0L);
 
@@ -61,10 +57,6 @@ public class VaultTransferHandler {
 
     public void setConfig(SyncmoneyConfig config) {
         this.config = config;
-    }
-
-    public void setDbWriteQueue(DbWriteQueue dbWriteQueue) {
-        this.dbWriteQueue = dbWriteQueue;
     }
 
     /**
@@ -109,22 +101,6 @@ public class VaultTransferHandler {
         }
     }
 
-    private void publishAtomicTransferUpdate(UUID uuid, BigDecimal newBalance, long version,
-                                             String eventType, double amount,
-                                             String sourcePlugin, String sourcePlayerName) {
-        if (syncManager == null || config == null) {
-            return;
-        }
-        if (config.isSyncMode()) {
-            String resolvedPlugin = sourcePlugin != null ? sourcePlugin : pluginDetector.detectCallingPlugin();
-            syncManager.publishAndNotify(uuid, newBalance, version, eventType, amount,
-                    resolvedPlugin, sourcePlayerName);
-        } else {
-            publishCrossServerUpdate(uuid, newBalance, eventType, amount,
-                    sourcePlugin, sourcePlayerName);
-        }
-    }
-
     /**
      * [SYNC-VAULT-011] Withdraw with an explicit target for an atomic transfer.
      */
@@ -147,6 +123,9 @@ public class VaultTransferHandler {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Cannot withdraw negative amount");
         }
         UUID uuid = player.getUniqueId();
+        if (toUuid != null && config != null && config.isCMIMode()) {
+            return pairedTransferUnavailable();
+        }
         if (toUuid != null && uuid.equals(toUuid)) {
             return new EconomyResponse(0, readyBalance(uuid), EconomyResponse.ResponseType.FAILURE,
                     "Cannot transfer to the same account");
@@ -193,10 +172,7 @@ public class VaultTransferHandler {
      * [FIX-003] Execute atomic transfer using Redis Lua script.
      */
     private EconomyResponse executeAtomicTransfer(OfflinePlayer player, UUID fromUuid, UUID toUuid, BigDecimal amountBd) {
-        if (config == null || !config.isCMIMode()) {
-            return executePairedMemoryTransfer(player, fromUuid, toUuid, amountBd);
-        }
-        return executeCmiAtomicTransfer(player, fromUuid, toUuid, amountBd);
+        return executePairedMemoryTransfer(player, fromUuid, toUuid, amountBd);
     }
 
     private EconomyResponse executePairedMemoryTransfer(OfflinePlayer player, UUID fromUuid,
@@ -252,88 +228,14 @@ public class VaultTransferHandler {
                 EconomyResponse.ResponseType.SUCCESS, "");
     }
 
-    private EconomyResponse executeCmiAtomicTransfer(OfflinePlayer player, UUID fromUuid,
-            UUID toUuid, BigDecimal amountBd) {
-        boolean sqlRequired = config != null && config.isDbEnabled();
-        if (sqlRequired && dbWriteQueue == null) {
-            return sqlAdmissionFailure(fromUuid, "SQL transfer persistence is unavailable");
-        }
-        DbWriteQueue.Reservation sqlReservation = sqlRequired ? dbWriteQueue.tryReserve() : null;
-        if (sqlRequired && sqlReservation == null) {
-            return sqlAdmissionFailure(fromUuid, "SQL write queue is full; retry shortly");
-        }
-        CacheManager.TransferResult confirmedResult = null;
-        try (sqlReservation) {
-            CacheManager.TransferResult result = economyFacade.executeAtomicTransfer(fromUuid, toUuid, amountBd);
-
-            if (result == null) {
-                double balance = readyBalance(fromUuid);
-                double receiverBalance = readyBalance(toUuid);
-                String message = Double.isNaN(balance) && Double.isNaN(receiverBalance)
-                        ? unconfirmedTransferMessage()
-                        : Double.isNaN(balance) || Double.isNaN(receiverBalance)
-                                ? notReadyMessage()
-                                : "Transfer outcome is not confirmed; verify both balances before retrying";
-                return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE,
-                        message);
-            }
-
-            if (result == CacheManager.TransferResult.insufficientFunds()) {
-                double currentBalance = readyBalance(fromUuid);
-                return new EconomyResponse(0, currentBalance, EconomyResponse.ResponseType.FAILURE,
-                        Double.isNaN(currentBalance) ? notReadyMessage() : "Insufficient funds");
-            }
-
-            confirmedResult = result;
-
-            try {
-                TransferReceiptSupport.accept(plugin, economyFacade, dbWriteQueue, config, nameResolver,
-                        sqlReservation, fromUuid, toUuid, result);
-
-                CrossServerNotifier.notifyBalanceChange(plugin, player, "vault.withdrawn", amountBd, result.fromNewBalance);
-
-                Player receiverPlayer = plugin.getServer().getPlayer(toUuid);
-                CrossServerNotifier.notifyBalanceChange(plugin, receiverPlayer, "vault.deposited", amountBd, result.toNewBalance);
-
-                String sourcePlugin = pluginDetector.detectCallingPlugin();
-
-                String senderName = nameResolver != null ? nameResolver.getName(fromUuid) : null;
-                if (senderName == null) {
-                    senderName = fromUuid.toString();
-                }
-                publishAtomicTransferUpdate(fromUuid, result.fromNewBalance, result.fromNewVersion,
-                        "VAULT_WITHDRAW", -amountBd.doubleValue(), sourcePlugin, senderName);
-                publishAtomicTransferUpdate(toUuid, result.toNewBalance, result.toNewVersion,
-                        "VAULT_DEPOSIT", amountBd.doubleValue(), sourcePlugin, senderName);
-            } catch (RuntimeException followUpFailure) {
-                plugin.getLogger().severe("Atomic transfer was confirmed by Redis, but a post-accept receipt or notification step failed; "
-                        + "the balance change remains in effect: " + followUpFailure.getMessage());
-            }
-
-            plugin.getLogger().info("Atomic transfer completed (Lua): " + fromUuid + " -> " + toUuid + " : " + amountBd);
-
-            return new EconomyResponse(amountBd.doubleValue(), result.fromNewBalance.doubleValue(),
-                EconomyResponse.ResponseType.SUCCESS, "");
-
-        } catch (Exception e) {
-            plugin.getLogger().severe("Atomic transfer exception: " + e.getMessage());
-            if (confirmedResult != null) {
-                return new EconomyResponse(amountBd.doubleValue(), confirmedResult.fromNewBalance.doubleValue(),
-                        EconomyResponse.ResponseType.SUCCESS, "");
-            }
-            return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "Transfer error: " + e.getMessage());
-        }
+    private EconomyResponse pairedTransferUnavailable() {
+        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
+                "Paired transfers are unavailable in CMI mode");
     }
 
     private double readyBalance(UUID uuid) {
         BigDecimal balance = economyFacade.getBalanceForPlaceholder(uuid);
         return balance == null ? Double.NaN : balance.doubleValue();
-    }
-
-    private EconomyResponse sqlAdmissionFailure(UUID uuid, String message) {
-        double balance = readyBalance(uuid);
-        return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE,
-                Double.isNaN(balance) ? notReadyMessage() : message);
     }
 
     private EconomyResponse accountNotReady() {
@@ -342,10 +244,6 @@ public class VaultTransferHandler {
 
     private String notReadyMessage() {
         return "Account is not ready; retry after it finishes loading";
-    }
-
-    private String unconfirmedTransferMessage() {
-        return "Transfer outcome is not confirmed; do not retry until both account balances are reconciled";
     }
 
 }

@@ -64,7 +64,7 @@ Web Admin 是特權管理介面：
 
 - Node URL 驗證會拒絕 user-info、query、fragment 與靜態列出的 local/special-use IPv4 位址範圍，包括 shared、protocol-assignment、documentation、benchmarking、multicast 與 reserved 區段，並拒絕 IPv6 unspecified、loopback、link-local、site-local、multicast 與 ULA 位址。驗證錯誤只記錄例外類型；URL 及其中的 user-info、query 與 fragment 都不會記錄。此檢查不會將 DNS resolution 固定到最後建立的 HTTP connection。DNS rebinding 防護為 `DEFERRED / NOT VERIFIED`；node URL 是高權限設定，operator 應限制 server egress 只連到預期 node。
 - `WebDownloader` 目前沒有限制傳輸大小、解壓後大小或 archive entry 數量。這些資源上限為 `DEFERRED / NOT VERIFIED`；只使用可信 download source，並將資源耗盡風險視為尚待 hardening 的缺口。
-- CMI mirror atomic compare-and-write 已有 unit 與 synthetic Redis integration coverage，但無法證明 licensed/live CMI runtime。CMI 授權狀態為 `UNKNOWN`；live CMI acceptance 仍為 `BLOCKED / NOT VERIFIED`。
+- CMI 僅同步路由與 Redis mirror guard 有 source-level unit 和 synthetic coverage；這些檢查不代表特定 Syncmoney 產物已通過 live CMI 相容性驗收。Operator 必須從各自發布者取得 CMI 與 CMILib，並遵守各自授權條款。允許使用本機提供的副本進行隔離測試，不代表可以重新散布，也不構成綁定特定候選版的 runtime 證據。各候選版的 runtime 狀態應記錄於 release-readiness。
 
 ## Secret 處理
 

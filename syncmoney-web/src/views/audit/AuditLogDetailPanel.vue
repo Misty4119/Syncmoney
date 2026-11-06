@@ -49,7 +49,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { X } from 'lucide-vue-next'
+import { X } from '@lucide/vue'
 import type { AuditRecord } from '@/api/client'
 import { useSettingsStore } from '@/stores/settings'
 import { formatInTimeZone } from 'date-fns-tz'

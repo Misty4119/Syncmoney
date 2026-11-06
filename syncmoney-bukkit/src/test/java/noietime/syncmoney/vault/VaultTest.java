@@ -268,26 +268,70 @@ class VaultTest {
     }
 
     @Test
-    void cmiVaultTransferUnknownOutcomeDoesNotSuggestRetry() {
+    void cmiVaultTransferRejectsPairedMutationBeforeReadingBalances() {
         UUID fromUuid = UUID.randomUUID();
         UUID toUuid = UUID.randomUUID();
         OfflinePlayer from = mock(OfflinePlayer.class);
         when(from.getUniqueId()).thenReturn(fromUuid);
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         when(config.isCMIMode()).thenReturn(true);
-        when(config.isDbEnabled()).thenReturn(false);
         transferHandler.setConfig(config);
-        when(economyFacade.isPlayerLocked(fromUuid)).thenReturn(false);
-        when(economyFacade.isPlayerLocked(toUuid)).thenReturn(false);
-        when(economyFacade.executeAtomicTransfer(eq(fromUuid), eq(toUuid), any(BigDecimal.class))).thenReturn(null);
-        when(economyFacade.getBalanceForPlaceholder(fromUuid)).thenReturn(null);
-        when(economyFacade.getBalanceForPlaceholder(toUuid)).thenReturn(null);
 
         EconomyResponse response = transferHandler.withdrawPlayer(from, 10.0, toUuid);
 
         assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
-        assertTrue(response.errorMessage.toLowerCase().contains("not confirmed"));
-        assertTrue(response.errorMessage.toLowerCase().contains("do not retry"));
+        assertTrue(response.errorMessage.toLowerCase().contains("cmi"));
+        verify(economyFacade, never()).isPlayerLocked(any(UUID.class));
+        verify(economyFacade, never()).getBalanceForPlaceholder(any(UUID.class));
+        verify(economyFacade, never()).atomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class),
+                any(EconomyEvent.EventSource.class));
+        verify(economyFacade, never()).executeAtomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class));
+    }
+
+    @Test
+    void cmiVaultZeroAmountExplicitTransferIsStillRejected() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        OfflinePlayer from = mock(OfflinePlayer.class);
+        when(from.getUniqueId()).thenReturn(fromUuid);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isCMIMode()).thenReturn(true);
+        transferHandler.setConfig(config);
+
+        EconomyResponse response = transferHandler.withdrawPlayer(from, 0.0, toUuid);
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        assertTrue(response.errorMessage.toLowerCase().contains("cmi"));
+        verifyNoEconomyCallsForCmiTransfer();
+    }
+
+    @Test
+    void cmiVaultPluginTransferRejectsBeforeReadingOrMutatingAccounts() {
+        UUID fromUuid = UUID.randomUUID();
+        UUID toUuid = UUID.randomUUID();
+        OfflinePlayer from = mock(OfflinePlayer.class);
+        OfflinePlayer to = mock(OfflinePlayer.class);
+        when(from.getUniqueId()).thenReturn(fromUuid);
+        when(to.getUniqueId()).thenReturn(toUuid);
+        SyncmoneyConfig config = mock(SyncmoneyConfig.class);
+        when(config.isCMIMode()).thenReturn(true);
+        providerCore.setConfig(config);
+
+        EconomyResponse response = providerCore.pluginTransfer(from, to, 10.0, "test-plugin");
+
+        assertEquals(EconomyResponse.ResponseType.FAILURE, response.type);
+        assertTrue(response.errorMessage.toLowerCase().contains("cmi"));
+        verifyNoEconomyCallsForCmiTransfer();
+    }
+
+    private void verifyNoEconomyCallsForCmiTransfer() {
+        verify(economyFacade, never()).isPlayerLocked(any(UUID.class));
+        verify(economyFacade, never()).getBalanceForPlaceholder(any(UUID.class));
+        verify(economyFacade, never()).atomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class),
+                any(EconomyEvent.EventSource.class));
+        verify(economyFacade, never()).executeAtomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class));
+        verify(economyFacade, never()).pluginAtomicTransfer(any(UUID.class), any(UUID.class), any(BigDecimal.class),
+                any(String.class));
     }
 
     @Test
@@ -320,7 +364,7 @@ class VaultTest {
     }
 
     @Test
-    void pairedVaultTransferDoesNotBypassToWriteRedisWhenSqlQueueIsFull() {
+    void pairedVaultTransferUsesMemoryAdmissionForSharedDatabaseMode() {
         UUID fromUuid = UUID.randomUUID();
         UUID toUuid = UUID.randomUUID();
         OfflinePlayer from = mock(OfflinePlayer.class);
@@ -332,24 +376,16 @@ class VaultTest {
 
         SyncmoneyConfig config = mock(SyncmoneyConfig.class);
         when(config.isDbEnabled()).thenReturn(true);
-        DbWriteQueue dbWriteQueue = new DbWriteQueue(5);
-        for (int i = 0; i < 4; i++) {
-            UUID account = UUID.randomUUID();
-            assertTrue(dbWriteQueue.offer(new DbWriteQueue.DbWriteTask("filler-" + i,
-                    new ConfirmedAccount(account, BigDecimal.ONE, 1L), "filler", "server", Instant.now())));
-        }
         VaultTransferHandler syncTransferHandler = new VaultTransferHandler(
                 plugin, economyFacade, null, pluginDetector, config, playerHandler, nameResolver);
-        syncTransferHandler.setDbWriteQueue(dbWriteQueue);
 
         EconomyResponse response = syncTransferHandler.withdrawPlayer(from, 10.0, toUuid);
 
         assertEquals(EconomyResponse.ResponseType.SUCCESS, response.type,
-                "explicit transfers use the same paired memory admission path as Vault's other mutations");
+                "shared-backend transfers use memory-first paired admission and asynchronous persistence");
         verify(economyFacade).atomicTransfer(fromUuid, toUuid, new BigDecimal("10.00"),
                 EconomyEvent.EventSource.VAULT_WITHDRAW);
         verify(economyFacade, never()).executeAtomicTransfer(eq(fromUuid), eq(toUuid), any(BigDecimal.class));
-        assertEquals(4, dbWriteQueue.size(), "failed admission must not consume or alter existing SQL work");
     }
 
     @Test

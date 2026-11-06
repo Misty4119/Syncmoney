@@ -18,11 +18,11 @@ Use:
 - Node.js + pnpm for `syncmoney-web`;
 - an appropriate Paper/Folia/Canvas server for runtime acceptance;
 - Redis and SQL only for the modes/features being tested;
-- locally supplied CMI and CMILib builds for CMI runtime checks; verify any applicable license separately (the current 1.4.0 probe did not establish license status).
+- locally supplied CMI and CMILib builds, plus any required license authorization, for CMI-specific runtime checks.
 
-The 1.4.0 target requires Java 25 or newer at build and runtime and Paper 1.21.6 or newer. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0; that is historical context, not the 1.4.0 toolchain or runtime minimum.
+The 1.4.0 target requires Java 25 or newer at build and runtime and targets Minecraft 26.2–26.3 on Paper, Folia, and Canvas. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0; that is historical context, not the 1.4.0 toolchain or runtime target.
 
-**Current 1.4.0 status (2026-10-26 R63 R9): BLOCKED / NOT VERIFIED.** With the local `-PreleaseVersion=1.4.0` override, the Java 25.0.4 / Gradle 9.8.0 source/package gate passed 59 actionable tasks (59 executed): 170 unit suites / 945 tests and 9 Sync integration suites / 44 tests (179 suites / 989 tests total), with zero failures, errors, or skips. Architecture, packaging (classfile major 69), API-consumer/acceptance packaging, Central publisher isolation, and frontend typecheck, 4 unit files / 22 tests, and production build passed. Current core JAR: 31,646,522 bytes / SHA-256 `BB8C014ADB37CD407AEEED93BDDE16EBE13BA64272D0511F26155DB7EF3B1916`; PAPI JAR: 13,872 bytes / `A4D893AC4892E9E715A1710A4760D7FB168EE84A7987BC43D1BAEA86EC6C319C`; acceptance JAR: 54,905 bytes / `29C41C996026B6275AD9276587D05E800759C710E4B485E5891CF1F85C281824`. R63 verifies durable recovery for the live queued `/pay` path; ADR-16 does not cover direct Vault/plugin recovery, which remains `DEFERRED / NOT VERIFIED` under ADR-07. Exact-candidate Paper runtime/T22 Beta, storage-service integration, minimum-Paper SQL, licensed/live CMI (authorization UNKNOWN), broad V03, full public API compatibility, and T21 completion remain `NOT VERIFIED` or `BLOCKED`; Stable and external release remain `NOT VERIFIED / NOT PERFORMED`. Stable metadata remains 1.3.2; no external release action occurred.
+For the current 1.4.0 candidate status, final artifact pins, test evidence, and unverified gates, see the versioned [release-readiness snapshot](release/1.4.0-readiness.md).
 
 ## 2. Repository map
 
@@ -130,7 +130,7 @@ Primary channels:
 
 CMI remote application needs echo suppression so applying a received state does not create an endless publish loop.
 
-Queued `/pay` transfers use the existing `recovery-v1.jsonl` spool. Startup validates the queued spool and legacy overflow log before opening shared-mode write admission; unreadable or malformed recovery evidence keeps admission closed, while affected accounts remain unavailable until their pending recovery is resolved. A forced `RETRYABLE` paired-admission checkpoint precedes queue commit. After Redis dispatch, `ATTEMPTING`/`AMBIGUOUS` outcomes remain quarantined across restart and are visible through admin-only `/syncmoney recovery list|inspect|reconcile <id>` (permission `syncmoney.admin.recovery` or `syncmoney.admin`). Reconciliation runs asynchronously and accepts only an exact Redis receipt matching the stable operation ID, canonical fingerprint, account pair, and versions. Missing, malformed, colliding, in-flight, mismatched, or unreadable receipts retain quarantine; balances alone do not resolve an ambiguous operation, and there is no automatic replay or force-clear path. FileChannel force supports local process-restart recovery; power-loss and storage-device durability beyond that behavior are not claimed. Direct Vault/plugin atomic-transfer recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; no direct-transfer journal, capability, provider wiring, or command recovery path is included. Exact-candidate Paper runtime acceptance remains NOT VERIFIED.
+Queued `/pay` transfers use the existing `recovery-v1.jsonl` spool. Startup validates the queued spool and legacy overflow log before opening shared-mode write admission; unreadable or malformed recovery evidence keeps admission closed, while affected accounts remain unavailable until their pending recovery is resolved. A forced `RETRYABLE` paired-admission checkpoint precedes queue commit. After Redis dispatch, `ATTEMPTING`/`AMBIGUOUS` outcomes remain quarantined across restart and are visible through admin-only `/syncmoney recovery list|inspect|reconcile <id>` (permission `syncmoney.admin.recovery` or `syncmoney.admin`). Reconciliation runs asynchronously and accepts only an exact Redis receipt matching the stable operation ID, canonical fingerprint, account pair, and versions. Missing, malformed, colliding, in-flight, mismatched, or unreadable receipts retain quarantine; balances alone do not resolve an ambiguous operation, and there is no automatic replay or force-clear path. FileChannel force supports local process-restart recovery; power-loss and storage-device durability beyond that behavior are not claimed. Direct Vault/plugin atomic-transfer recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; no direct-transfer journal, capability, provider wiring, or command recovery path is included.
 
 Legacy Redis add/set/transfer overloads without a caller-supplied stable operation ID use a 300-second receipt TTL to bound key growth. The queued `/pay` recovery path supplies stable IDs; those receipts do not expire automatically and may be removed only after explicit recovery acknowledgement.
 
@@ -185,26 +185,34 @@ A blank `server-name` prevents normal operation, so test startup validation when
 
 ## 9. CMI integration
 
-In `cmi` mode, CMI remains the economy authority.
+In `cmi` mode, CMI remains the economy authority and Syncmoney is a sync-only bridge for CMI game currency. This mode requires enabled CMI and Redis; Vault is not required. Syncmoney does not construct its general economy facade/loaders or register its Vault provider or read-only economy query API. Its separate PlaceholderAPI expansion has no Syncmoney balance, rank, or leaderboard data in this mode.
+
+Paper dependency order is declared in `paper-plugin.yml`. For a server dependency, `load: BEFORE` means that dependency loads before Syncmoney; `load: AFTER` means it loads after Syncmoney. Keep CMI optional there (`required: false`) so non-CMI modes remain loadable, then require it in the CMI-mode startup check. Setting `required: true` only changes behavior when CMI is absent; it does not correct an `AFTER` ordering. CMI's own dependency chain loads CMILib before CMI.
+
+Syncmoney starts the CMI balance listener, the dedicated `syncmoney:cmi:balance:update` Redis channel, and the inbound CMI apply path. It does not start the generic balance channel/cache, SQL, generic version repair, wallet/transfer/leaderboard commands, player tracking/protection, permission service, breaker, Shadow Sync, audit/event consumers, Web Admin, or bStats. `/syncmoney version` is the only Syncmoney command exposed in this mode.
+
+Outbound `CMIUserBalanceChangeEvent` handling publishes its absolute `to` balance by UUID after debounce. It does not look up a local Bukkit `Player`, so a Vault/QuickShop purchase can synchronize the offline shop owner while that owner is online on another server. Inbound CMI writes still run on the target player's entity scheduler when the player is online.
 
 CMI API mutations that touch a player must run on that player's entity scheduler. Redis/network work stays off that scheduler.
 
 When applying cross-server CMI updates:
 
 - compare versions/freshness;
-- suppress outbound echo while applying remote state;
+- suppress only the exact expected from/to event for an inbound write, so a nearby local CMI transaction is still published;
 - re-check player availability/ownership after asynchronous work;
 - keep migration and Shadow Sync separate from live authority.
 
 CMI is licensed and not distributed by this repository. Acceptance depends on a locally supplied plugin.
 
-One earlier `1.4.0-alpha.1` candidate was used for a bounded read-only check on Paper 1.21.6 with locally supplied CMI 9.8.10.5 and CMILib 1.6.0.1; CMI's direct balance, Syncmoney's CMI route, and the public `BalanceSnapshot` API matched for one online player. Exact final-candidate CMI runtime acceptance remains **NOT VERIFIED**. The observation does not establish an active CMI license, Syncmoney Vault provider registration in CMI mode, any mutation, cross-server behavior, or Folia/Canvas behavior. Under ADR-12, CMI mode is outside the verified 1.4.0 support scope and is not validated for production use; full CMI runtime acceptance remains **NOT VERIFIED**.
+
+
+Candidate-specific live CMI runtime results are maintained in the versioned release-readiness record. Do not infer live compatibility from source, unit, or synthetic coverage.
 
 In CMI mode, `/syncmoney admin` balance operations and `/syncmoney sync-balance` are disabled because they do not update CMI's authoritative balance.
 
 Syncmoney `/pay` is also disabled in CMI mode because the adapter has no atomic two-account transfer contract. The command rejects before balance mutation, and its response is scheduled on the sender's entity owner. This source-level behavior does not establish licensed/live CMI acceptance.
 
-The same fail-closed rule covers Vault's explicit target-player and plugin transfer methods, VaultUnlocked transfer delegates, and the public low-level Redis transfer API. These entrypoints reject before Syncmoney memory, queue, or Redis mutation. Single-account CMI operations remain under CMI authority. Exact-candidate licensed/live CMI acceptance remains **NOT VERIFIED**.
+The same fail-closed rule covers Vault's explicit target-player and plugin transfer methods, VaultUnlocked transfer delegates, and the public low-level Redis transfer API. These entrypoints reject before Syncmoney memory, queue, or Redis mutation. Applying accepted remote CMI balance updates is the only Syncmoney-managed balance write in this mode. Candidate-specific licensed/live CMI results are maintained in the versioned release-readiness record.
 
 ## 10. Web Admin backend development
 
@@ -325,9 +333,11 @@ Use `tools/plugdev/README.md` for real-server acceptance. PlugDev is development
 
 Scheduler, lifecycle, storage, CMI, and cross-server synchronization changes require more than compilation. Record separately the exact Minecraft/Paper/Folia/Canvas version, runtime Java version, Syncmoney artifact/version, optional dependency versions actually present, player-side behavior, startup/shutdown logs, cross-server propagation where applicable, and scenarios that could not be tested.
 
+The current 1.4.0 target matrix is Minecraft 26.2–26.3 on Paper, Folia, and Canvas. Historical 1.21.6 runtime results remain bound to their older artifacts and do not satisfy this target. Record only exact platform builds exercised with the candidate hash in the [release-readiness snapshot](release/1.4.0-readiness.md).
+
 The earlier pre-fix 66a25c4 artifact smoke (JAR SHA-256 663B1FB6CD3B4FD83F94C0CEEE69AD93252268E066F36ABC940634218F0D0D18), historical r24 snapshot (JAR SHA-256 390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E), and R29 artifact (JAR SHA-256 4BE022B1760209D610A390144D5B3328A094E290C2AB53A9E557BDF27FAA92F6) remain artifact-bound historical results. R39 core JAR SHA-256 63E25A450FA38F0AE57B535825617515979DBD6257BA7059629C48B21D80DE19 produced API CLASSLOADER PASS and ACCEPTANCE PASS total=1520.00 on Paper 1.21.6#48 / Java 25.0.4+7-LTS-189 / LOCAL synthetic accounts. A separate read-only recovery verified the restart read cold-vault-a=NaN, cold-vault-unlocked-b=null, a=1000.00, b=520.00, vault-unlocked-b=520.00 and graceful final stop. The composite watcher action remains failed; the recovery action is confirmed. This is PASS_BOUNDED_SUBCASE only; full T22 Beta remains NOT VERIFIED. Storage-service integration remains DEFERRED / NOT VERIFIED.
 
-For 1.4.0, use JDK 25 or newer with the repository Gradle 9.8.0 wrapper; servers must run Java 25 or newer and Paper 1.21.6 or newer. The Java 21 / Gradle 9.1.0 values describe the 1.3.2 baseline only.
+For 1.4.0, use JDK 25 or newer with the repository Gradle 9.8.0 wrapper; servers must run Java 25 or newer. The target runtime range is Minecraft 26.2–26.3 across Paper, Folia, and Canvas. The Java 21 / Gradle 9.1.0 values describe the 1.3.2 baseline only.
 
 ### Upgrade and rollback runbook
 
@@ -335,14 +345,14 @@ This is the operator sequence for V03/M01–M03. A successful PlugDev report is 
 
 #### M01 — Maintenance window and backup
 
-1. Confirm Java 25 or newer, Paper 1.21.6 or newer, the exact server builds, unique `server-name` values, configured economy modes, optional dependencies, SQL schema versions, Redis topology, Syncmoney artifact hashes, and config schema. For acceptance, use the exact user-pinned server artifacts listed in the [PlugDev guide](../tools/plugdev/README.md); any additional current-stable build is supplemental. Keep a redacted inventory; do not put credentials in reports.
-2. Announce maintenance and stop all economy producers on every node: player/admin commands, Web Admin writes, scheduled rewards, automation, and third-party integrations. If CMI is the configured authority, stop its economy commands/module and quiesce external CMI API and SQL writers too. A post-change CMI balance event cannot veto an arbitrary direct API mutation; full CMI runtime acceptance remains **NOT VERIFIED**. Only the bounded read check in §9 has run, and CMI mode is outside 1.4.0 verified support claims.
+1. Confirm Java 25 or newer, a target Minecraft 26.2–26.3 Paper/Folia/Canvas build, unique `server-name` values, configured economy modes, optional dependencies, SQL schema versions, Redis topology, Syncmoney artifact hashes, and config schema. For acceptance, use the exact user-pinned server artifacts listed in the [PlugDev guide](../tools/plugdev/README.md); any additional current-stable build is supplemental. Keep a redacted inventory; do not put credentials in reports.
+2. Announce maintenance and stop all economy producers on every node: player/admin commands, Web Admin writes, scheduled rewards, automation, and third-party integrations. If CMI is the configured authority, stop its economy commands/module and quiesce external CMI API and SQL writers too. A post-change CMI balance event cannot veto an arbitrary direct API mutation. Check the release-readiness snapshot for candidate-specific CMI runtime results; source and synthetic results do not establish live CMI behavior.
 3. Establish that accepted writes, retries, in-flight work, database writes, and audit work have drained before continuing. The current runtime does not expose complete fleet-wide queue/retry/in-flight counters. A `Syncmoney disabled.` log line and zero pending recovery records alone do not prove a production fleet is drained. If the available evidence cannot establish the state for every node and writer, keep the maintenance window open and do not proceed with the upgrade.
 4. Stop every node normally and verify its process has exited. Only then capture the latest configuration, messages, aliases, SQL data, local SQLite database and any WAL/SHM files, Redis RDB/AOF state, and recovery/overflow files. Record versions and SHA-256 hashes. These backups are for separately authorized disaster recovery, not the ordinary rollback path.
 
 #### M02 — Candidate canary and rollout
 
-1. Keep producers disabled. Install exactly one candidate `Syncmoney-1.4.0.jar` on a canary node, preserve its existing data directory, and leave the remaining old nodes stopped. Check the candidate JAR hash, startup, config/schema retention, optional-module state, and Vault provider readiness.
+1. Keep producers disabled. Install exactly one candidate `Syncmoney-<candidate-version>.jar` on a canary node, preserve its existing data directory, and leave the remaining old nodes stopped. Check the candidate JAR hash, startup, config/schema retention, optional-module state, and Vault provider readiness.
 2. Use disposable accounts to verify reads and writes, accepted transaction results, and SQL/Redis balance and version parity where configured. Do not inject destructive faults into real player balances. A production canary write requires separate operator authorization.
 3. Upgrade the remaining nodes while producers remain disabled. Resume producers only after every node runs the verified candidate, reports ready, and reconciles its recorded balances and versions. Do not resume while an old writer remains active; the legacy 1.3.2 SQL writer can regress a newer row.
 
@@ -353,7 +363,7 @@ This is the operator sequence for V03/M01–M03. A successful PlugDev report is 
 3. Replace the candidate JAR with a checksum-verified 1.3.2 JAR while keeping compatible current data and versions. Verify that 1.3.2 reads transactions written during the upgrade. Keep Java 25 and the supported server where possible; if the JVM or server must also be downgraded, use versions supported by 1.3.2 rather than assuming a newer server runs on Java 21.
 4. Do not flush Redis, reset balances, or restore the pre-upgrade backup as ordinary rollback. Restoring an old backup can discard valid transactions made afterward. Reintroducing 1.3.2 also restores its known stale SQL-writer limitation, so do not run old and new writers together.
 
-The existing M01–M03 runtime reports cover two synthetic nodes on the six user-pinned Paper/Folia/Canvas endpoints, with a separate current-stable Paper report as supplemental evidence. Those reports are from earlier candidates and do not establish exact-final-candidate upgrade/rollback acceptance or production fleet-wide quiescence. They also do not prove complete drain counters or full CMI acceptance. Under ADR-12, full CMI mode and the unrun T21 cases are outside verified 1.4.0 support claims. The 2026-10-24 r24 minimum-Paper smoke used the r24 candidate JAR hash `390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E` and passed one bounded `LOCAL` transaction plus persisted-read subcase. It does not establish the entire Paper/Java range or full T22 Beta, and it does not replace the persisted-state upgrade and rollback gate in V03/M00–M12.
+The existing M01–M03 runtime reports cover two synthetic nodes on the six user-pinned Paper/Folia/Canvas endpoints, with a separate current-stable Paper report as supplemental evidence. Those reports are from earlier candidates and do not establish exact-final-candidate upgrade/rollback acceptance or production fleet-wide quiescence. They also do not prove complete drain counters or full CMI acceptance. The CMI sync-only source behavior and its unit coverage do not establish exact-candidate live CMI acceptance; the unrun T21 cases also remain outside the verified support claims. The 2026-10-24 r24 minimum-Paper smoke used the r24 candidate JAR hash `390499303A2FD2F065BA7E0535768C61A297514148B2F3C600934DB57391501E` and passed one bounded `LOCAL` transaction plus persisted-read subcase. It does not establish the entire Paper/Java range or full T22 Beta, and it does not replace the persisted-state upgrade and rollback gate in V03/M00–M12.
 
 ## 18. Documentation, security, and release hygiene
 
