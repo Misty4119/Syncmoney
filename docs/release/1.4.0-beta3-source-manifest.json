@@ -1,0 +1,65 @@
+{
+  "binaryComparison": {
+    "beta1Artifact": {
+      "bytes": 31668136,
+      "path": "build/libs/Syncmoney-1.4.0-Beta.1.jar",
+      "sha256": "bed58546413e268d395f50c4df6899ce8d3ce4fbd551ce56ed98f38fd704e7df"
+    },
+    "currentBeta3RuntimeMatrix": "NOT RUN; use the exact Beta.1 runtime evidence for the public artifact",
+    "onlyDifferentEntries": [
+      "paper-plugin.yml",
+      "plugin.yml",
+      "syncmoney-version.properties"
+    ]
+  },
+  "buildEvidence": {
+    "frontendLog": {
+      "bytes": 13219,
+      "path": "build/reports/release/1.4.0-Beta.1/frontend-final-20261107.log",
+      "sha256": "06af946577f71903500d59382b7a865851f2a007450722da80045088de15f4b3"
+    },
+    "frontendUnitTests": {
+      "failures": 0,
+      "total": 22
+    },
+    "gradleVersion": "9.8.0",
+    "javaPackageLog": {
+      "bytes": 10626,
+      "path": "build/reports/release/1.4.0-Beta.1/complete-java-package-verification-20261107-final-beta1.log",
+      "sha256": "65631d335cd0748f6ad2ea0cf97d562ed08b26987010c84dee89985fc14b664b"
+    },
+    "javaTests": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "total": 982
+    },
+    "javaToolchain": "25.0.4",
+    "reproducibilityLog": {
+      "bytes": 3007,
+      "path": "build/reports/release/1.4.0-Beta.1/reproducible-final-package-20261107.log",
+      "sha256": "ea28f4ba3151f67c810a16cf055aa94798a472698649db198bb710ff03ae121b"
+    }
+  },
+  "candidate": {
+    "bytes": 31668137,
+    "disposition": "STATIC_CANDIDATE_NOT_RELEASE_APPROVED",
+    "path": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
+    "sha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
+    "version": "1.4.0-Beta.3"
+  },
+  "runtimeBinding": {
+    "endpointCount": 6,
+    "jarSha256": "bed58546413e268d395f50c4df6899ce8d3ce4fbd551ce56ed98f38fd704e7df",
+    "matrixPath": "docs/release/1.4.0-beta.1-runtime-matrix.json",
+    "matrixSha256": "4cb38fab0fb75d837b5bce013d15ae78074c3d93a33d9e59c5eb76ffd814833f",
+    "matrixStatus": "PASS_BOUNDED_SUBCASE",
+    "version": "1.4.0-Beta.1"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "clean": true,
+    "commit": "407569c640f96b5f486e644659e88068d01f33cd",
+    "tree": "3f1149eea49db0131e55d5c8d9fee5ceda7f5158"
+  }
+}
