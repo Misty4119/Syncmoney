@@ -17,7 +17,14 @@ from urllib.parse import parse_qs, urlparse
 
 SCRIPT = Path(__file__).resolve().parents[1] / "publish_central.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from publish_central import PublisherError, _coordinate_content_hash, sha256_file, stage_bundle, verify_bundle_signatures
+from publish_central import (
+    PublisherError,
+    _coordinate_content_hash,
+    sha256_file,
+    stage_bundle,
+    verify_bundle_signatures,
+    verify_consumer,
+)
 
 GROUP = "io.github.misty4119"
 ARTIFACT = "syncmoney-api"
@@ -215,6 +222,16 @@ class PublishCentralTest(unittest.TestCase):
 
     def upload(self):
         return self.run_cli("upload", "--bundle", str(self.bundle), "--state-file", str(self.state))
+
+    @patch("publish_central.subprocess.run")
+    def test_verify_consumer_passes_absolute_gradle_wrapper_path(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "", "")
+
+        verify_consumer(self.bundle, Path("./gradlew"))
+
+        command = run.call_args.args[0]
+        wrapper_index = 3 if os.name == "nt" else 0
+        self.assertEqual(Path(command[wrapper_index]), Path("./gradlew").resolve())
 
     def test_same_bundle_resumes_by_status_without_uploading_again(self):
         first = self.upload()

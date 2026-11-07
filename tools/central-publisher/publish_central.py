@@ -675,6 +675,7 @@ def verify_consumer(bundle: Path, gradle_wrapper: Path) -> None:
     info = inspect_bundle(bundle, require_signatures=False)
     if not gradle_wrapper.is_file():
         raise PublisherError(f"Gradle wrapper does not exist: {gradle_wrapper}")
+    gradle_wrapper = gradle_wrapper.resolve()
 
     with tempfile.TemporaryDirectory(prefix="syncmoney-central-consumer-") as temporary:
         root = Path(temporary)
