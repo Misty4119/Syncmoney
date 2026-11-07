@@ -71,10 +71,28 @@ jobs:
           fi
 
           git fetch origin main
-          release_commit="$(git rev-parse HEAD)"
-          if [[ "$release_commit" != "$GITHUB_SHA" ]]; then
-            echo "Checked-out source $release_commit does not match dispatch commit $GITHUB_SHA." >&2
+          dispatch_commit="$(git rev-parse HEAD)"
+          if [[ "$dispatch_commit" != "$GITHUB_SHA" ]]; then
+            echo "Checked-out source $dispatch_commit does not match dispatch commit $GITHUB_SHA." >&2
             exit 1
+          fi
+          if ! git merge-base --is-ancestor "$dispatch_commit" origin/main; then
+            echo "Dispatch source $dispatch_commit is not merged into main." >&2
+            exit 1
+          fi
+
+          release_commit="$dispatch_commit"
+          tag_ref="refs/tags/$canonical_tag"
+          verify_ref="refs/verify-release-input/$canonical_tag"
+          if [[ -n "$(git ls-remote origin "$tag_ref" "$tag_ref^{}")" ]]; then
+            git fetch origin "$tag_ref:$verify_ref"
+            tag_commit="$(git rev-parse "$verify_ref^{commit}")"
+            if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+              echo "Existing release tag $canonical_tag does not point to a commit merged into main." >&2
+              exit 1
+            fi
+            release_commit="$tag_commit"
+            git checkout --detach "$release_commit"
           fi
           if ! git merge-base --is-ancestor "$release_commit" origin/main; then
             echo "Release source $release_commit is not merged into main." >&2
@@ -479,7 +497,8 @@ jobs:
             --root "$verify_dir" \
             --evidence-root . \
             --verify-release-manifest "$verify_dir/release-manifest.json" \
-            --expected-commit "$RELEASE_SOURCE_COMMIT"
+            --expected-commit "$RELEASE_SOURCE_COMMIT" \
+            --public-only
 
   publish:
     name: Approve, sync Web, and publish
