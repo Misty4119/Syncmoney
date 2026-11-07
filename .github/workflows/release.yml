@@ -700,7 +700,7 @@ jobs:
               | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
             if [[ "$tagged_version" != "$RELEASE_VERSION" || "$tagged_package_version" != "$RELEASE_VERSION" \
               || "$tagged_core_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
-              echo "Web tag $web_tag does not pin the expected Beta.1 version and Core source commit." >&2
+              echo "Web tag $web_tag does not pin the expected release version and Core source commit." >&2
               return 1
             fi
             if ! git -C web-release diff --quiet "$verified_ref" HEAD -- \

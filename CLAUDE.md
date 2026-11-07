@@ -95,7 +95,7 @@ For scheduler/storage/lifecycle/cross-server changes, use PlugDev and report the
 
 ## Release facts
 
-Root Gradle release metadata still resolves to `1.3.2` until the release task; the 1.4.0 foundation branch compiles with Java 25 and Gradle 9.8.0. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
+Root Gradle release metadata resolves to `1.4.0`; stable publication is tracked separately in the release readiness record. The 1.4.0 target uses Java 25 and Gradle 9.8.0. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
 
 Frontend release metadata and embedded `src/main/resources/syncmoney-web/dist` assets must move together when web release assets change.
 
