@@ -1,16 +1,16 @@
 {
   "artifacts": {
     "acceptance": {
-      "bytes": 54904,
+      "bytes": 54893,
       "path": "build/acceptance/SyncmoneyAcceptance.jar",
       "public": false,
-      "sha256": "fdc0e11e44b8905fef6fa08cce5b2c11662f59992e2cbcf94da7e76f2b507ead"
+      "sha256": "c3fd6f21ce0949017ce9211c300056d04d2e197e82d96af01457fe1e01d561ba"
     },
     "apiConsumer": {
-      "bytes": 2759,
+      "bytes": 2754,
       "path": "build/acceptance/SyncmoneyApiConsumer.jar",
       "public": false,
-      "sha256": "58918836ad2ed91d4302fc53460ff747a40ab344fad36fd212d40294d5419cab"
+      "sha256": "2196933554215022ed8c7480ef9151217463ebd856bca3d319670e83ff0e6953"
     },
     "core": {
       "bytes": 31668136,

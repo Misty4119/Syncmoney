@@ -1,4 +1,6 @@
 .gitattributes text eol=lf
+src/acceptance/resources/plugin.yml text eol=lf
+src/api-consumer/resources/plugin.yml text eol=lf
 syncmoney-web/** text=auto eol=lf
 src/main/resources/syncmoney-web/dist/** text=auto eol=lf
 syncmoney-protocol/src/main/resources/lua/*.lua text eol=lf
