@@ -78,14 +78,14 @@ jobs:
       - name: Test and build
         run: bash ./gradlew -PreleaseVersion="${{ needs.build-metadata.outputs.version }}" test :syncmoney-api:check nmcpZipAggregation :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
 
-      - name: Rebuild and verify pinned Beta.1 artifacts on Linux
+      - name: Rebuild and verify pinned stable 1.4.0 artifacts on Linux
         if: github.event_name == 'pull_request' && github.head_ref == 'release/1.4.0'
         run: |
           set -euo pipefail
-          ./gradlew -PreleaseVersion=1.4.0-Beta.1 shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar
+          ./gradlew -PreleaseVersion=1.4.0 shadowJar :syncmoney-papi-expansion:jar acceptanceJar apiConsumerJar
           python3 .github/scripts/verify_release_pins.py \
-            --pins docs/release/1.4.0-beta.1-artifact-pins.json \
-            --version 1.4.0-Beta.1 \
+            --pins docs/release/1.4.0-artifact-pins.json \
+            --version 1.4.0 \
             --root .
 
       - name: Validate Central bundle and offline consumer
