@@ -52,7 +52,7 @@
     "endpointCount": 6,
     "jarSha256": "bed58546413e268d395f50c4df6899ce8d3ce4fbd551ce56ed98f38fd704e7df",
     "matrixPath": "docs/release/1.4.0-beta.1-runtime-matrix.json",
-    "matrixSha256": "4cb38fab0fb75d837b5bce013d15ae78074c3d93a33d9e59c5eb76ffd814833f",
+    "matrixSha256": "a3fb1d316e78080de2c197b93b4b2ca80bba3e0db50c9192db0c41ed481f0a2e",
     "matrixStatus": "PASS_BOUNDED_SUBCASE",
     "version": "1.4.0-Beta.1"
   },

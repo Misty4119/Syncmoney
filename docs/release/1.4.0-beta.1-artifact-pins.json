@@ -31,7 +31,7 @@
     "jarPath": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
     "jarSha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
     "sourceManifestPath": "docs/release/1.4.0-beta3-source-manifest.json",
-    "sourceManifestSha256": "7325447305f82254aa4e6ee69ff0c664d6babb22d2acd311459877b228766497",
+    "sourceManifestSha256": "d8c5ea39530b328902e81577208397bfcdd8eed92653fbddd4cffcb705a4c1c6",
     "version": "1.4.0-Beta.3"
   },
   "candidateGatePassed": true,
@@ -74,7 +74,7 @@
       }
     },
     "matrixPath": "docs/release/1.4.0-beta.1-runtime-matrix.json",
-    "matrixSha256": "4cb38fab0fb75d837b5bce013d15ae78074c3d93a33d9e59c5eb76ffd814833f",
+    "matrixSha256": "a3fb1d316e78080de2c197b93b4b2ca80bba3e0db50c9192db0c41ed481f0a2e",
     "status": "PASS_BOUNDED_SUBCASE",
     "version": "1.4.0-Beta.1"
   },
