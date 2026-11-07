@@ -6,7 +6,7 @@ This document is a factual project snapshot for maintainers, contributors, and c
 
 - Project: Syncmoney
 - Repository: `Misty4119/Syncmoney`
-- Current build version: `1.3.2`
+- Current build version: `1.4.0`
 - Configuration schema: `12`
 - Build toolchain: Java 25 for the 1.4.0 target; Gradle 9.8.0
 - Plugin API descriptor: `api-version: 26.2` (current descriptor metadata)
@@ -221,8 +221,8 @@ If a real secret is found in a tracked file/history, removing it from the latest
 
 Current artifacts:
 
-- `Syncmoney-1.3.2.jar`
-- `SyncmoneyExpansion-1.3.2.jar`
+- `Syncmoney-1.4.0.jar`
+- `SyncmoneyExpansion-1.4.0.jar`
 - `SyncmoneyAcceptance.jar`
 
 Web checks:

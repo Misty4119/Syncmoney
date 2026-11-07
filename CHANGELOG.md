@@ -2,7 +2,7 @@
 
 All notable user-facing changes are documented here. This file follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0-Beta.1] - 2026-11-07
+## [1.4.0] - 2026-11-07
 
 ### Compatibility and verification
 
@@ -11,7 +11,7 @@ All notable user-facing changes are documented here. This file follows [Keep a C
 
 ### Security audit notes
 
-- The full frontend dependency audit reports a low-severity build-time `deepmerge@4.3.1` advisory (GHSA-gcqx-w48m-w2h4 / CVE-2026-93753) with no upstream patched version. The production-only audit passes; this residual risk is accepted for the prerelease.
+- The full frontend dependency audit reports a low-severity build-time `deepmerge@4.3.1` advisory (GHSA-gcqx-w48m-w2h4 / CVE-2026-93753) with no upstream patched version. The production-only audit passes; this residual risk is accepted for this release.
 - GitHub's Malware-alert inventory is unavailable and remains `UNKNOWN`; this is not a claim of zero malware alerts.
 
 ### Added

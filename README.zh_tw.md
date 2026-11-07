@@ -12,7 +12,7 @@ English: [README.md](README.md)
 </p>
 <p align="center">
   <a href="https://docs.papermc.io/paper/getting-started/"><img src="https://img.shields.io/badge/Targets-Paper%20%7C%20Folia%20%7C%20Canvas-orange.svg" alt="Paper、Folia 與 Canvas 目標"></a>
-  <img src="https://img.shields.io/badge/Java-21%20%2F%2025-blueviolet.svg" alt="Java 21 與 25">
+  <img src="https://img.shields.io/badge/Java-25%2B-blueviolet.svg" alt="Java 25 以上">
   <a href="https://official.noie.fun"><img src="https://img.shields.io/badge/Discord-Community-7289DA.svg?logo=discord&logoColor=white" alt="Discord 社群"></a>
   <a href="https://paypal.me/NoieSrv"><img src="https://img.shields.io/badge/Donate-PayPal-blue" alt="以 PayPal 贊助"></a>
 </p>
@@ -23,7 +23,7 @@ English: [README.md](README.md)
 
 Syncmoney 管理玩家餘額、貨幣交易與自身經濟指令。它支援單伺服器 SQLite 經濟、以 Redis 同步跨服餘額、關聯式資料庫持久化，以及由 CMI 維持經濟權威的選用同步模式。Syncmoney 不會複製任意權限或第三方指令。
 
-目前已發布的穩定版為 1.3.2。`1.4.0-Beta.1` 是 1.4.0 系列的預覽版，需要 Java 25；它不是穩定版 1.4.0。請查看[發布頁面](https://github.com/Misty4119/Syncmoney/releases)確認是否已提供下載與各版本說明。
+目前穩定版為 1.4.0，需要 Java 25 以上。請查看 [1.4.0 發布頁面](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0)下載正式產物並閱讀版本說明。
 
 ## 主要功能
 
@@ -43,24 +43,24 @@ Syncmoney 管理玩家餘額、貨幣交易與自身經濟指令。它支援單�
 | 元件 | 需求或狀態 |
 |---|---|
 | **伺服器引擎** | Paper 相容伺服器。Minecraft 26.2–26.3 的 Paper、Folia 與 Canvas 是 1.4.0 目標矩陣。不支援純 Spigot。 |
-| **Java runtime** | 已發布的 1.3.2 穩定版需要 Java 21 以上；1.4.0 預覽版需要 Java 25 以上。 |
+| **Java runtime** | Syncmoney 1.4.0 需要 Java 25 以上。 |
 | **經濟橋接** | 可選擇 Vault 1.7 或相容的 VaultUnlocked 進行互通。CMI 模式不會註冊 Syncmoney 經濟提供者。 |
 | **訊息代理** | `local_redis`、`sync` 與 `cmi` 模式需要 Redis。 |
 | **資料庫** | `local` 使用本機 SQLite；`sync` 共享 SQL 可使用 MySQL、MariaDB 或 PostgreSQL。 |
 | **選用整合** | PlaceholderAPI 使用獨立的 `SyncmoneyExpansion` JAR。CMI 模式需要 CMI、CMILib 與 Redis；請向其發布者取得 CMI 與 CMILib，並遵守各自授權。 |
 
-1.4.0 的目標範圍不代表所有模式與整合都已完整驗證。[1.4.0-Beta.1 發布說明](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0-Beta.1)會列出該版本實際測試的伺服器 build 與情境。變更正式經濟資料前，請先在 staging 環境驗證升級。
+1.4.0 的目標範圍不代表所有模式與整合都已完整驗證。[1.4.0 發布說明](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0)會列出本版實際測試的伺服器 build 與情境。變更正式經濟資料前，請先在 staging 環境驗證升級。
 
 設定 schema 版本與插件版本分開管理。升級前請備份設定與經濟資料。
 
 ## 安裝與設定
 
 1. **備份資料。** 停止伺服器，備份 Syncmoney 設定、SQLite 或 SQL 資料庫，以及經濟系統使用的 Redis 資料。
-2. **安裝 JAR。** 使用 1.4.0-Beta.1 預覽版時，請從其發布頁下載 `Syncmoney-1.4.0-Beta.1.jar`，放入伺服器的 `plugins/` 目錄。移除舊版 Syncmoney JAR，確保只載入一個版本。
+2. **安裝 JAR。** 從 [1.4.0 發布頁面](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0)下載 `Syncmoney-1.4.0.jar`，放入伺服器的 `plugins/` 目錄。移除舊版 Syncmoney JAR，確保只載入一個版本。
 3. **安裝模式依賴。** `local` 使用 SQLite；`local_redis` 需要 Redis；`sync` 需要 Redis 與關聯式資料庫；`cmi` 需要 CMI、CMILib 與 Redis。Vault 或 VaultUnlocked 是 Syncmoney 自行管理經濟模式的選用互通依賴。
 4. **產生並編輯設定。** 啟動伺服器一次以產生設定檔，接著停止伺服器。為每台伺服器在 `plugins/Syncmoney/config.yml` 設定不同且非空白的 `server-name`。
 5. **選擇經濟模式。** 設定該模式需要的 Redis 與資料庫連線。使用 `cmi` 模式時，請由 CMI 獨自維持經濟權威。
-6. **選用 PlaceholderAPI。** 使用 1.4.0-Beta.1 預覽版時，請將 `SyncmoneyExpansion-1.4.0-Beta.1.jar` 放入 `plugins/PlaceholderAPI/expansions/`，然後執行 `/papi reload`。Expansion 版本必須與 core JAR 相同。
+6. **選用 PlaceholderAPI。** 將 `SyncmoneyExpansion-1.4.0.jar` 放入 `plugins/PlaceholderAPI/expansions/`，然後執行 `/papi reload`。Expansion 版本必須與 core JAR 相同。
 7. **選用 Web Admin。** 啟用前先替換預設 API key 佔位值。CMI 僅同步模式不會啟動 Web Admin。
 8. **開放交易前先驗證。** 確認經濟權威與必要服務已載入，並在 staging 測試所選模式。
 
@@ -181,7 +181,7 @@ CMI 模式不提供 Syncmoney 自行管理的經濟指令，經濟權威維持�
 
 ## PlaceholderAPI 佔位符
 
-將 `SyncmoneyExpansion-1.4.0-Beta.1.jar` 與 1.4.0-Beta.1 core JAR 搭配安裝後，即可使用下列 PlaceholderAPI 佔位符：
+將 `SyncmoneyExpansion-1.4.0.jar` 與 1.4.0 core JAR 搭配安裝後，即可使用下列 PlaceholderAPI 佔位符：
 
 | 佔位符 | 說明 |
 |---|---|
@@ -273,7 +273,7 @@ Core JAR 輸出於 `build/libs/`；expansion JAR 輸出於 `syncmoney-papi-expan
 
 Pull request 與更新 `main` 時會執行 Java 與 Web checks。CI artifacts 僅供測試，不是公開 GitHub Release。
 
-Core release tag 不加 `v` 前綴，例如 `1.4.0-Beta.1`。Alpha 與 beta tag 會以 prerelease 處理。Web Admin source 以本 repository 為主，並鏡像至 [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)；鏡像使用對應的 `v` 前綴 tag 與 deterministic source archive。正式 JAR 與各版本說明請查看 GitHub release page。
+穩定版 Core tag 不加 `v` 前綴，例如 `1.4.0`；alpha 與 beta tag 會以 prerelease 處理。Web Admin source 以本 repository 為主，並鏡像至 [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)；鏡像使用對應的 `v` 前綴 tag，例如 `v1.4.0`，並建立 deterministic source archive。正式 JAR 與版本說明請查看 [GitHub release page](https://github.com/Misty4119/Syncmoney/releases)。
 
 Web frontend 發布前，請在 `syncmoney-web` 執行 `pnpm build:embedded`，確保 embedded distribution 與 Java extraction list 一起更新。
 

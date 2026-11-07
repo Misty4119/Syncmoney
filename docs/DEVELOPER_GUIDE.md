@@ -1,6 +1,6 @@
 # Syncmoney Developer Guide
 
-> Current release: `1.3.2`
+> Current release: `1.4.0`
 > 1.4.0 target build toolchain: Java 25 / Gradle 9.8.0
 > Configuration schema: `12`
 

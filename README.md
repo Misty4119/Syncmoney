@@ -12,7 +12,7 @@
 </p>
 <p align="center">
   <a href="https://docs.papermc.io/paper/getting-started/"><img src="https://img.shields.io/badge/Targets-Paper%20%7C%20Folia%20%7C%20Canvas-orange.svg" alt="Paper, Folia, and Canvas targets"></a>
-  <img src="https://img.shields.io/badge/Java-21%20%2F%2025-blueviolet.svg" alt="Java 21 and 25">
+  <img src="https://img.shields.io/badge/Java-25%2B-blueviolet.svg" alt="Java 25 or newer">
   <a href="https://official.noie.fun"><img src="https://img.shields.io/badge/Discord-Community-7289DA.svg?logo=discord&logoColor=white" alt="Discord community"></a>
   <a href="https://paypal.me/NoieSrv"><img src="https://img.shields.io/badge/Donate-PayPal-blue" alt="Donate with PayPal"></a>
 </p>
@@ -23,7 +23,7 @@
 
 Syncmoney manages player balances, currency operations, and its own economy commands. It supports single-server SQLite economies, Redis-backed cross-server synchronization, relational persistence, and an optional CMI-authoritative currency sync mode. It does not replicate arbitrary permissions or third-party commands.
 
-The published stable line is 1.3.2. Version `1.4.0-Beta.1` is the prerelease build for the 1.4.0 line and requires Java 25; it is not a stable 1.4.0 release. Check the [release page](https://github.com/Misty4119/Syncmoney/releases) for availability, downloads, and version-specific notes.
+The current stable release is 1.4.0 and requires Java 25 or newer. Check the [release page](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0) for official downloads and version-specific notes.
 
 ## Key Features
 
@@ -43,24 +43,24 @@ The published stable line is 1.3.2. Version `1.4.0-Beta.1` is the prerelease bui
 | Component | Requirement or status |
 |---|---|
 | **Server engine** | Paper-compatible servers. Minecraft 26.2–26.3 on Paper, Folia, and Canvas are the 1.4.0 target matrix. Plain Spigot is not supported. |
-| **Java runtime** | Java 21 or newer for the published 1.3.2 stable line; Java 25 or newer for 1.4.0 prereleases. |
+| **Java runtime** | Java 25 or newer for Syncmoney 1.4.0. |
 | **Economy bridge** | Vault 1.7 or compatible VaultUnlocked for interoperability. Vault is optional. CMI mode does not register a Syncmoney economy provider. |
 | **Message broker** | Redis is required for `local_redis`, `sync`, and `cmi` modes. |
 | **Database** | Local SQLite for `local`; MySQL, MariaDB, or PostgreSQL for shared SQL persistence in `sync`. |
 | **Optional integrations** | PlaceholderAPI uses the separate `SyncmoneyExpansion` JAR. CMI mode requires CMI, CMILib, and Redis; obtain CMI and CMILib from their publishers and comply with their licenses. |
 
-The 1.4.0 target range is not a blanket guarantee for every mode or integration. The [1.4.0-Beta.1 release notes](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0-Beta.1) identify the exact server builds and scenarios exercised for that release. Validate upgrades on a staging server before changing production economy data.
+The 1.4.0 target range is not a blanket guarantee for every mode or integration. The [1.4.0 release notes](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0) identify the exact server builds and scenarios exercised for this release. Validate upgrades on a staging server before changing production economy data.
 
 The configuration schema has its own version and is separate from the plugin version. Back up configuration and economy data before upgrading.
 
 ## Installation & Setup
 
 1. **Back up your data.** Stop the server and back up the Syncmoney configuration, SQLite or SQL database, and Redis data used by the economy.
-2. **Install the JAR.** For the 1.4.0-Beta.1 preview, install `Syncmoney-1.4.0-Beta.1.jar` from its release page in the server's `plugins/` directory. Remove older Syncmoney JARs so only one version loads.
+2. **Install the JAR.** Download `Syncmoney-1.4.0.jar` from the [1.4.0 release page](https://github.com/Misty4119/Syncmoney/releases/tag/1.4.0) and place it in the server's `plugins/` directory. Remove older Syncmoney JARs so only one version loads.
 3. **Install mode dependencies.** `local` uses SQLite. `local_redis` needs Redis. `sync` needs Redis and a relational database. `cmi` needs CMI, CMILib, and Redis. Vault or VaultUnlocked is optional interoperability for Syncmoney-managed economy modes.
 4. **Generate and edit the configuration.** Start the server once, then stop it. Set a unique, non-empty `server-name` in `plugins/Syncmoney/config.yml` for each server.
 5. **Choose the economy mode.** Configure the Redis and database connections required by that mode. Keep CMI as the sole economy authority when using `cmi` mode.
-6. **Set up PlaceholderAPI (optional).** For the 1.4.0-Beta.1 preview, install `SyncmoneyExpansion-1.4.0-Beta.1.jar` in `plugins/PlaceholderAPI/expansions/`, then run `/papi reload`. The expansion version must match the core JAR.
+6. **Set up PlaceholderAPI (optional).** Install `SyncmoneyExpansion-1.4.0.jar` in `plugins/PlaceholderAPI/expansions/`, then run `/papi reload`. The expansion version must match the core JAR.
 7. **Set up Web Admin (optional).** Replace the shipped API-key placeholder before enabling Web Admin. CMI sync-only mode does not start Web Admin.
 8. **Verify before opening transactions.** Confirm the configured economy authority and required services load, then test the selected mode on staging.
 
@@ -181,7 +181,7 @@ The daily-limit switch and tier limits are configurable. The root `syncmoney.adm
 
 ## PlaceholderAPI Identifiers
 
-Install `SyncmoneyExpansion-1.4.0-Beta.1.jar` alongside the 1.4.0-Beta.1 core JAR to use these PlaceholderAPI identifiers:
+Install `SyncmoneyExpansion-1.4.0.jar` alongside the 1.4.0 core JAR to use these PlaceholderAPI identifiers:
 
 | Placeholder | Description |
 |---|---|
@@ -273,7 +273,7 @@ The core JAR is written under `build/libs/`; the expansion JAR is written under 
 
 Pull requests and `main` updates run the repository's Java and Web checks. CI artifacts are for testing and are not public GitHub Releases.
 
-Core release tags are unprefixed, such as `1.4.0-Beta.1`. The release workflow treats alpha and beta tags as prereleases. The Web Admin source is maintained in this repository and mirrored to [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web); the mirror uses the corresponding `v`-prefixed tag and a deterministic source archive. Check the GitHub release page for official JARs and version-specific notes.
+Stable Core release tags are unprefixed, such as `1.4.0`; alpha and beta tags are prereleases. The Web Admin source is maintained in this repository and mirrored to [Syncmoney-web](https://github.com/Misty4119/Syncmoney-web); the mirror uses the corresponding `v`-prefixed tag, such as `v1.4.0`, and a deterministic source archive. Check the [GitHub release page](https://github.com/Misty4119/Syncmoney/releases) for official JARs and version-specific notes.
 
 For a frontend release, run `pnpm build:embedded` from `syncmoney-web` so the embedded distribution and Java extraction list are updated together.
 

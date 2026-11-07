@@ -13,7 +13,7 @@ param(
     [Alias('PaperEndpoint')]
     [ValidateSet('Minimum', 'Maximum', 'CurrentMaximum', 'CurrentStable', 'MinimumFolia', 'MaximumFolia', 'CurrentMaximumFolia', 'MinimumCanvas', 'MaximumCanvas', 'CurrentMaximumCanvas')]
     [string]$PlatformEndpoint = 'Minimum',
-    [ValidatePattern('^1\.4\.0-(?:alpha\.\d+|Beta\.\d+)$')][string]$CandidateVersion = '1.4.0-alpha.1',
+    [ValidatePattern('^1\.4\.0(?:-(?:alpha\.\d+|Beta\.\d+))?$')][string]$CandidateVersion = '1.4.0-alpha.1',
     [switch]$LegacySqlDataUpgrade,
     [switch]$NewerAuditSchemaStartupFailure,
     [switch]$DatabaseManagerInitFailureStartupFailure,

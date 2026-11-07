@@ -1,6 +1,6 @@
 # Syncmoney 開發者指南
 
-> 專案版本：`1.3.2`
+> 專案版本：`1.4.0`
 > Config schema：`12`
 > 1.4.0 target build toolchain：Java 25／Gradle 9.8.0
 

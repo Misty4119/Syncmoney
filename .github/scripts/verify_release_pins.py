@@ -116,7 +116,7 @@ def load_pins(path: Path, version: str) -> dict[str, Any]:
 
     residuals = pins.get("securityResiduals")
     if not isinstance(residuals, dict):
-        raise ValueError("securityResiduals must record accepted prerelease residuals")
+        raise ValueError("securityResiduals must record accepted release residuals")
     deepmerge = residuals.get("deepmerge")
     if not isinstance(deepmerge, dict) or deepmerge.get("version") != "4.3.1" or deepmerge.get("accepted") is not True:
         raise ValueError("deepmerge 4.3.1 must be recorded as an accepted residual")

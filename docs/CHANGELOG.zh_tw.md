@@ -2,7 +2,7 @@
 
 本文件記錄使用者可見的變更，格式遵循 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 與 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [1.4.0-Beta.1] - 2026-11-07
+## [1.4.0] - 2026-11-07
 
 ### 相容性與驗證
 
@@ -11,7 +11,7 @@
 
 ### 安全稽核說明
 
-- 完整前端依賴稽核回報一項低嚴重度 build-time `deepmerge@4.3.1` advisory（GHSA-gcqx-w48m-w2h4／CVE-2026-93753），目前沒有上游修補版。Production-only audit 通過；本預覽版接受並保留此殘餘風險。
+- 完整前端依賴稽核回報一項低嚴重度 build-time `deepmerge@4.3.1` advisory（GHSA-gcqx-w48m-w2h4／CVE-2026-93753），目前沒有上游修補版。Production-only audit 通過；本次正式版接受並保留此殘餘風險。
 - GitHub 的 Malware-alert inventory 無法取得，狀態維持 `UNKNOWN`；這不代表零個 malware alerts。
 
 ### 已新增（Added）

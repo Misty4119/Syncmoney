@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'noietime'
-version = providers.gradleProperty('releaseVersion').orElse('1.3.2').get()
+version = providers.gradleProperty('releaseVersion').orElse('1.4.0').get()
 
 def minimumMinecraftVersion = providers.gradleProperty('minimumMinecraftVersion').orElse('26.2').get()
 def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('26.2.build.135-stable').get()

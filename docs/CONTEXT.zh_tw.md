@@ -6,7 +6,7 @@
 
 - 專案：Syncmoney
 - 儲存庫：`Misty4119/Syncmoney`
-- 目前 build 版本：`1.3.2`
+- 目前 build 版本：`1.4.0`
 - 設定 schema：`12`
 - 編譯 toolchain：Java 25（1.4.0 target）；Gradle 9.8.0
 - Plugin API descriptor：`api-version: 26.2`（目前的 descriptor metadata）
@@ -221,8 +221,8 @@ SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token�
 
 目前產物：
 
-- `Syncmoney-1.3.2.jar`
-- `SyncmoneyExpansion-1.3.2.jar`
+- `Syncmoney-1.4.0.jar`
+- `SyncmoneyExpansion-1.4.0.jar`
 - `SyncmoneyAcceptance.jar`
 
 Web checks：

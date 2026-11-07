@@ -1,6 +1,6 @@
 # Syncmoney 架構
 
-> 專案版本：`1.3.2`
+> 專案版本：`1.4.0`
 > Config schema：`12`
 > 1.4.0 target toolchain：Java 25／Gradle 9.8.0
 
@@ -230,7 +230,7 @@ SSE manager 約每 15 秒送出 keepalive activity，並從 `PostTransactionEven
 
 `syncmoney-web` 使用 Vue 3、Vite、Pinia、`vue-i18n` 與 PWA tooling。Production build 會嵌入 `src/main/resources/syncmoney-web/dist`。
 
-Core repository 是 frontend 的 canonical source。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新；公開的 `Syncmoney-web` mirror 會接收相同 source，並發佈帶 `v` 前綴的 deterministic source archive。Core tag 不帶前綴，Web tag 使用 `v`。目前 frontend package version 為 `1.3.2`。
+Core repository 是 frontend 的 canonical source。Release 若包含 web asset，frontend metadata 與 embedded bundle 要和 root release 一起更新；公開的 `Syncmoney-web` mirror 會接收相同 source，並發佈帶 `v` 前綴的 deterministic source archive。Core tag 不帶前綴，Web tag 使用 `v`。目前 frontend package version 為 `1.4.0`。
 
 ## 11. PlaceholderAPI expansion
 

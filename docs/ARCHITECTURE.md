@@ -1,6 +1,6 @@
 # Syncmoney Architecture
 
-> Project version: `1.3.2`
+> Project version: `1.4.0`
 > Configuration schema: `12`
 > 1.4.0 target toolchain: Java 25 / Gradle 9.8.0
 > This document describes the implementation in the current repository. Code and executable configuration remain authoritative.
@@ -261,7 +261,7 @@ This is a known implementation limitation and a security-sensitive area for futu
 
 `syncmoney-web` uses Vue 3, Vite, Pinia, `vue-i18n`, and PWA tooling. The built production bundle is copied/embedded into `src/main/resources/syncmoney-web/dist`.
 
-The core repository is the canonical frontend source. Frontend release metadata and the embedded bundle move with the root release when frontend assets are part of that release; the public `Syncmoney-web` mirror receives the same source and publishes a `v`-prefixed deterministic source archive. Core tags are unprefixed, while Web tags use `v`. The current frontend package version is `1.3.2`.
+The core repository is the canonical frontend source. Frontend release metadata and the embedded bundle move with the root release when frontend assets are part of that release; the public `Syncmoney-web` mirror receives the same source and publishes a `v`-prefixed deterministic source archive. Core tags are unprefixed, while Web tags use `v`. The current frontend package version is `1.4.0`.
 
 ## 11. PlaceholderAPI expansion
 
