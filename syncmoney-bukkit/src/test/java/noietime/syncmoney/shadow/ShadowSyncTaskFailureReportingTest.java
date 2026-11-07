@@ -1013,6 +1013,7 @@ class ShadowSyncTaskFailureReportingTest {
         CountDownLatch releaseFirstWrite = new CountDownLatch(1);
         CountDownLatch secondWriteFinished = new CountDownLatch(1);
         CountDownLatch databaseClosedSignal = new CountDownLatch(1);
+        CountDownLatch redisClosedSignal = new CountDownLatch(1);
         AtomicInteger writeCalls = new AtomicInteger();
         AtomicLong persistedVersion = new AtomicLong();
         AtomicInteger writesAfterDatabaseClose = new AtomicInteger();
@@ -1053,6 +1054,10 @@ class ShadowSyncTaskFailureReportingTest {
             databaseClosedSignal.countDown();
             return null;
         }).when(databaseManager).close();
+        doAnswer(invocation -> {
+            redisClosedSignal.countDown();
+            return null;
+        }).when(redisManager).close();
 
         try (MockedConstruction<SqliteShadowStorage> storages = mockConstruction(SqliteShadowStorage.class)) {
             ShadowSyncTask task = new ShadowSyncTask(plugin, config, economyFacade, null, databaseManager,
@@ -1086,6 +1091,8 @@ class ShadowSyncTaskFailureReportingTest {
                     "late executor termination should run the final Shadow Sync drain");
             assertTrue(databaseClosedSignal.await(5, TimeUnit.SECONDS),
                     "the database should close after the late final drain releases its lease");
+            assertTrue(redisClosedSignal.await(5, TimeUnit.SECONDS),
+                    "Redis should close after the database manager finishes closing");
 
             assertEquals(2, writeCalls.get(), "the queued event should receive the late final drain");
             assertEquals(0, writesAfterDatabaseClose.get(),
@@ -1123,6 +1130,7 @@ class ShadowSyncTaskFailureReportingTest {
         CountDownLatch releaseSecondWrite = new CountDownLatch(1);
         CountDownLatch secondWriteFinished = new CountDownLatch(1);
         CountDownLatch databaseClosedSignal = new CountDownLatch(1);
+        CountDownLatch redisClosedSignal = new CountDownLatch(1);
         AtomicInteger writeCalls = new AtomicInteger();
         AtomicLong persistedVersion = new AtomicLong();
         AtomicInteger writesAfterDatabaseClose = new AtomicInteger();
@@ -1176,6 +1184,10 @@ class ShadowSyncTaskFailureReportingTest {
             databaseClosedSignal.countDown();
             return null;
         }).when(databaseManager).close();
+        doAnswer(invocation -> {
+            redisClosedSignal.countDown();
+            return null;
+        }).when(redisManager).close();
 
         try (MockedConstruction<SqliteShadowStorage> storages = mockConstruction(SqliteShadowStorage.class)) {
             ShadowSyncTask task = new ShadowSyncTask(plugin, config, economyFacade, null, databaseManager,
@@ -1207,6 +1219,8 @@ class ShadowSyncTaskFailureReportingTest {
                 assertTrue(secondWriteFinished.await(5, TimeUnit.SECONDS));
                 assertTrue(databaseClosedSignal.await(5, TimeUnit.SECONDS),
                         "the shared database should close after the worker completes the final drain");
+                assertTrue(redisClosedSignal.await(5, TimeUnit.SECONDS),
+                        "Redis should close after the database manager finishes closing");
                 stopping.get(5, TimeUnit.SECONDS);
 
                 assertEquals(2, writeCalls.get());
