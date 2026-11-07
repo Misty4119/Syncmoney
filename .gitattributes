@@ -7,3 +7,6 @@ src/api-consumer/resources/plugin.yml text eol=lf
 syncmoney-web/** text=auto eol=lf
 src/main/resources/syncmoney-web/dist/** text=auto eol=lf
 syncmoney-protocol/src/main/resources/lua/*.lua text eol=lf
+/docs/release/1.4.0-artifact-pins.json text eol=lf
+/docs/release/1.4.0-stable-runtime-matrix.json text eol=lf
+/docs/release/1.4.0-stable-source-manifest.json text eol=lf

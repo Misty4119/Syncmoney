@@ -31,7 +31,7 @@
     "jarPath": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
     "jarSha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
     "sourceManifestPath": "docs/release/1.4.0-stable-source-manifest.json",
-    "sourceManifestSha256": "77ad82545580410b7539457afa10051bad0857d61d0e2ad6b917e9d79de9a31a",
+    "sourceManifestSha256": "84d9952272a9f31350850d2f91585cfa49681d9de9cfccf6b4090d8be4700d57",
     "version": "1.4.0-Beta.3"
   },
   "candidateGatePassed": true,
