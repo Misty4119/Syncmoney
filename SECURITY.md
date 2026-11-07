@@ -6,7 +6,7 @@ Traditional Chinese: [`docs/SECURITY.zh_tw.md`](docs/SECURITY.zh_tw.md)
 
 ## Supported versions
 
-Security fixes are developed against the current repository release line. At the time this document was updated, root `build.gradle` declares version `1.3.2`.
+Security fixes are developed against the current repository release line. Root `build.gradle` declares version `1.4.0`; check GitHub Releases for the latest published version.
 
 Older releases may no longer receive fixes. If a report affects an older build, reproduce it on the current release or current `main` when practical and include the exact version tested.
 

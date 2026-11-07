@@ -95,7 +95,7 @@ scheduler、storage、lifecycle、cross-server 變更要用 PlugDev，並只報�
 
 ## 發布事實
 
-根目錄 Gradle release metadata 目前仍為 `1.3.2`，待 release task 更新；1.4.0 foundation branch 使用 Java 25 與 Gradle 9.8.0。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。PAPI 繼承根版本。主要產物為 `Syncmoney-<version>.jar`、`SyncmoneyExpansion-<version>.jar`、`SyncmoneyAcceptance.jar`。
+根目錄 Gradle release metadata 已設為 `1.4.0`；正式發布狀態另見 release readiness。1.4.0 target 使用 Java 25 與 Gradle 9.8.0。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。PAPI 繼承根版本。主要產物為 `Syncmoney-<version>.jar`、`SyncmoneyExpansion-<version>.jar`、`SyncmoneyAcceptance.jar`。
 
 涉及 web 資產的 release，frontend release metadata 與 `src/main/resources/syncmoney-web/dist` 必須一起更新。Core repository 是 canonical frontend source；Core tag 不帶 `v`，公開 Web mirror 使用 `v` tag 並先發佈 deterministic source archive。Frontend 變更使用 `pnpm build:embedded`，確保 embedded bundle 與 `WebAdminServer.extractIndividualFiles` 同步。
 

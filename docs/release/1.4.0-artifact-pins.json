@@ -13,10 +13,10 @@
       "sha256": "2196933554215022ed8c7480ef9151217463ebd856bca3d319670e83ff0e6953"
     },
     "core": {
-      "bytes": 31668140,
+      "bytes": 31667635,
       "path": "build/libs/Syncmoney-1.4.0.jar",
       "public": true,
-      "sha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001"
+      "sha256": "1c84b0b4a72957e4dfcf11b0e88c1c08a68e0000a0f5f97185707183d919371a"
     },
     "papi": {
       "bytes": 13872,
@@ -31,16 +31,20 @@
     "jarPath": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
     "jarSha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
     "sourceManifestPath": "docs/release/1.4.0-stable-source-manifest.json",
-    "sourceManifestSha256": "84d9952272a9f31350850d2f91585cfa49681d9de9cfccf6b4090d8be4700d57",
+    "sourceManifestSha256": "b920547c31148eb9f192ef88d342ac485e63f398fb15303619aac8e8eabcd1c7",
     "version": "1.4.0-Beta.3"
   },
   "candidateGatePassed": true,
   "dependabotPolicy": {
     "afterReleasePrMerge": "Close only PRs confirmed superseded by merged dependency changes",
-    "openPullRequests": "Keep open during release preparation"
+    "mergedDependencyPullRequests": [
+      42,
+      43
+    ],
+    "openPullRequests": "None in Syncmoney or Syncmoney-web at the 2026-11-07 inventory refresh, before opening the release evidence PR"
   },
   "runtimeEvidence": {
-    "candidateJarSha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001",
+    "candidateJarSha256": "1c84b0b4a72957e4dfcf11b0e88c1c08a68e0000a0f5f97185707183d919371a",
     "endpoints": {
       "canvas-26.2": {
         "build": 994,
@@ -74,7 +78,7 @@
       }
     },
     "matrixPath": "docs/release/1.4.0-stable-runtime-matrix.json",
-    "matrixSha256": "b8ed18d922f24280ce4205df9c0a97aab3ff07a174cbe4e282ccab718b6c7712",
+    "matrixSha256": "4446bdbe141be284be3d5943e1b961ca2f93bd39fea61b0d12dcbe822e6e7785",
     "status": "PASS_BOUNDED_SUBCASE",
     "version": "1.4.0"
   },

@@ -19,7 +19,7 @@ python tools/central-publisher/publish_central.py verify-consumer --bundle build
 ```
 
 The `releaseVersion` property applies only to this local candidate build; the
-committed stable metadata remains `1.3.2`. These validation commands do not
+committed stable metadata is `1.4.0`. These validation commands do not
 stage, sign, upload, or publish an artifact.
 
 The signing fixture creates a temporary PGP key, verifies every signature in
