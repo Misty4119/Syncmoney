@@ -33,7 +33,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useNotificationStore } from '@/stores/notification'
-import { CheckCircle, XCircle, AlertTriangle, Info, X } from 'lucide-vue-next'
+import { CheckCircle, XCircle, AlertTriangle, Info, X } from '@lucide/vue'
 
 const notificationStore = useNotificationStore()
 const toasts = computed(() => notificationStore.toasts)

@@ -9,20 +9,20 @@
 ## 開發需求
 
 - Git
-- JDK 21，供 Gradle toolchain/build 使用
+- JDK 25 或更新版本，供 1.4.0 Gradle toolchain/build 使用
 - repository Gradle wrapper（Windows 為 `gradlew.bat`）
 - Node.js 與 pnpm，供 `syncmoney-web` 使用
-- 相容的 Paper/Folia/Canvas 測試 server，供 runtime acceptance
+- Minecraft 26.2–26.3 範圍內的 Paper、Folia 或 Canvas 測試 server，供 runtime acceptance；需記錄實際測試的 build
 - 只有測試需要 Redis/SQL 的 mode/feature 時才需要對應服務
 - 測試 CMI integration 時需自行提供合法授權的 CMI；repository 不散布 CMI
 
-較新的 Minecraft server 可能要求比專案 compiler 更高版本的 runtime JVM。依 `tools/plugdev/README.md` 為準；目前 PlugDev 對較新 Paper 26.1+ 環境記載 Java 25。
+目前候選版的 source、package 與 frontend 結果、artifact pins 及未完成 gate，請查看[版本化 1.4.0 發布準備紀錄](release/1.4.0-readiness.zh_tw.md)。狀態會隨證據更新，本貢獻指南不重複維護易變的驗證快照。
 
 ## 儲存庫配置
 
 | 路徑 | 用途 |
 |---|---|
-| `src/main/java/noietime/syncmoney` | Core plugin implementation |
+| `syncmoney-bukkit/src/main/java/noietime/syncmoney` | Core plugin implementation |
 | `src/main/resources` | 預設 config/message、plugin descriptor、Lua/assets、embedded web bundle |
 | `syncmoney-papi-expansion` | 獨立 PlaceholderAPI expansion |
 | `syncmoney-web` | Vue/Vite Web Admin frontend |
@@ -57,7 +57,7 @@ Vault API 是同步的，因此 hot-path read 刻意由 memory 提供。不要�
 - `TransferOrchestrator`：cross-account transfer；
 - `EconomyModeRouter` 與 mode strategy：authority/persistence 決策。
 
-保留單調 balance version、duplicate/echo suppression、insufficient-funds 行為、queue backpressure/recovery、shutdown 時已接受寫入的 draining。延遲 remote/CMI update 套用前要重新檢查 version freshness。
+Redis-backed economy update 要保留 per-account version ordering、duplicate/echo suppression、insufficient-funds 行為、queue backpressure/recovery、shutdown 時已接受寫入的 draining。CMI 保留 legacy timestamp-derived version，不保證 global ordering；延遲 CMI update 套用前仍須重新檢查本機已觀察到的 freshness。
 
 `cmi` mode 由 CMI 維持 economy authority。Migration 與 Shadow Sync 不得變成隱性的 live-authority switch。
 
@@ -101,7 +101,7 @@ Vault API 是同步的，因此 hot-path read 刻意由 memory 提供。不要�
 
 Backend 是 Undertow。一般 `/api/*` 使用 `Authorization: Bearer <api-key>`；`/health` 不需 authentication。前端 live stream 是 `/api/sse`，session token 由 `POST /api/auth/ws-token` 發出。
 
-不要把 `/ws` 描述為 production-ready；目前 WebSocket transport 不完整。
+所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`。不要把它描述為 production-ready WebSocket transport。
 
 API 變更時：
 
@@ -153,14 +153,14 @@ pnpm build
 
 ## Release 流程
 
-Core repository 是 Web Admin 的 canonical source。穩定版本保存在 root `build.gradle`；preview build 由 CI 傳入 `-PreleaseVersion`，因此不需要把 alpha/beta 版本提交到 source metadata。目前 repository variable `NEXT_VERSION` 選擇下一條 preview line：`1.3.3`。
+Core repository 是 Web Admin 的 canonical source。穩定版本保存在 root `build.gradle`；preview build 由 CI 傳入 `-PreleaseVersion`，因此不需要把 alpha/beta 版本提交到 source metadata。CI 會優先使用 repository variable `NEXT_VERSION`，未設定時則使用 root version；此 checkout 無法取得 hosted variable 的值，因此文件不能假設固定的 preview base。
 
-Pull request 與 `main` 都會執行 Java/Web checks 並產生 CI artifact；preview artifact 預設命名為 `1.3.3-alpha.<run-number>`，只保留在 GitHub Actions，不會建立公開 Release。
+Pull request 與 `main` 都會執行 Java/Web checks 並產生 CI artifact；preview artifact 命名為 `<base-version>-alpha.<run-number>`，只保留在 GitHub Actions，不會建立公開 Release。
 
 Core repository tag 不帶前綴：
 
-- `1.3.3-alpha.1` 或 `1.3.3-beta.1` 發佈 prerelease；
-- `1.3.3` 在 `production-release` environment 審核通過且 `CHANGELOG.md` 有對應 section 後發佈 stable release。
+- `<version>-alpha.1` 或 `<version>-beta.1` 發佈 prerelease；
+- `<version>` 在 `production-release` environment 審核通過且 `CHANGELOG.md` 有對應 section 後發佈 stable release。
 
 Release workflow 會把 canonical `syncmoney-web` source 同步到 [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web)，套用 release version，先推送對應的 `v` 前綴 tag。Web workflow 先發佈 deterministic `syncmoney-web.tar.gz` 與 checksum；Web release 存在後，core workflow 才發佈 plugin 與 PlaceholderAPI JAR。跨 repository job 需要 fine-grained `SYNC_WEB_RELEASE_TOKEN` secret，且 write access 限定在 Web repository。
 

@@ -79,7 +79,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useNotificationStore } from '@/stores/notification'
 import { useSSEStore } from '@/stores/sse'
 import { useBreakpoints, breakpointsTailwind } from '@vueuse/core'
-import { Menu, Bell, Sun, Moon } from 'lucide-vue-next'
+import { Menu, Bell, Sun, Moon } from '@lucide/vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import NotificationPanel from '@/components/common/NotificationPanel.vue'
 

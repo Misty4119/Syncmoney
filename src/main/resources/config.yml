@@ -411,9 +411,9 @@ migration:
         - "plugins/CMI/cmi.sqlite.db"
       # Merge strategy: latest (based on the last login), sum (total), max (maximum)
       merge-strategy: "latest"
-    # After migration, automatically disable CMI economy commands (balance, pay, baltop, money)
+    # Required for a safe CMI snapshot; commands stay disabled after a successful migration
     auto-disable-commands: true
-    # After migration, automatically disable CMI economy module
+    # Required for a safe CMI snapshot; the module stays disabled after a successful migration
     auto-disable-economy: true
   # Batch size
   batch-size: 100
@@ -424,8 +424,8 @@ migration:
     keep-count: 10
   # Populate Redis during migration (strongly recommended for SYNC mode)
   populate-redis: true
-  # Lock economy operations during migration (prevents data inconsistency)
-  lock-economy: false
+  # Retained for 1.3.2 config compatibility. CMI and LOCAL migrations always fence Syncmoney writes.
+  lock-economy: true
 
 # Shadow sync settings (backup Syncmoney balance to secondary database)
 # Use case: When main database corrupts, can restore from backup

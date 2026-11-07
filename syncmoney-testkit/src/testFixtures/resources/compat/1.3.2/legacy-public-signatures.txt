@@ -1,0 +1,146 @@
+Generated from the official Syncmoney-1.3.2.jar with javap -public. This is a static signature inventory, not a compiled third-party compatibility test.
+
+=== noietime.syncmoney.Syncmoney ===
+Compiled from "Syncmoney.java"
+public final class noietime.syncmoney.Syncmoney extends org.bukkit.plugin.java.JavaPlugin {
+  public noietime.syncmoney.Syncmoney();
+  public void onEnable();
+  public void onDisable();
+  public noietime.syncmoney.config.SyncmoneyConfig getSyncmoneyConfig();
+  public noietime.syncmoney.storage.RedisManager getRedisManager();
+  public noietime.syncmoney.storage.CacheManager getCacheManager();
+  public noietime.syncmoney.storage.db.DatabaseManager getDatabaseManager();
+  public noietime.syncmoney.storage.db.DbWriteQueue getDbWriteQueue();
+  public noietime.syncmoney.economy.EconomyFacade getEconomyFacade();
+  public noietime.syncmoney.uuid.NameResolver getNameResolver();
+  public noietime.syncmoney.economy.FallbackEconomyWrapper getFallbackWrapper();
+  public noietime.syncmoney.vault.SyncmoneyVaultProvider getVaultProvider();
+  public noietime.syncmoney.economy.CrossServerSyncManager getCrossServerSyncManager();
+  public noietime.syncmoney.economy.EconomyModeRouter getEconomyModeRouter();
+  public noietime.syncmoney.sync.SyncManager getSyncManager();
+  public noietime.syncmoney.breaker.BreakerManager getBreakerManager();
+  public noietime.syncmoney.permission.PermissionManager getPermissionManager();
+  public noietime.syncmoney.listener.PlayerJoinListener getPlayerJoinListener();
+  public noietime.syncmoney.listener.PlayerQuitListener getPlayerQuitListener();
+  public noietime.syncmoney.guard.PlayerTransferGuard getPlayerTransferGuard();
+  public noietime.syncmoney.uuid.OnlinePlayerRegistry getOnlinePlayerRegistry();
+  public noietime.syncmoney.shadow.ShadowSyncTask getShadowSyncTask();
+  public noietime.syncmoney.audit.AuditLogger getAuditLogger();
+  public noietime.syncmoney.baltop.BaltopManager getBaltopManager();
+  public noietime.syncmoney.schema.SchemaManager getSchemaManager();
+  public noietime.syncmoney.permission.AdminPermissionService getPermissionService();
+  public noietime.syncmoney.breaker.EconomicCircuitBreaker getCircuitBreaker();
+  public long getStartTime();
+  public noietime.syncmoney.web.server.WebAdminServer getWebAdminServer();
+  public noietime.syncmoney.web.server.WebAdminConfig getWebAdminConfig();
+  public noietime.syncmoney.breaker.PlayerTransactionGuard getPlayerTransactionGuard();
+  public noietime.syncmoney.breaker.NotificationService getNotificationService();
+  public java.lang.String getMessage(java.lang.String);
+  public net.kyori.adventure.text.Component getMessageComponent(java.lang.String);
+  public net.kyori.adventure.text.Component getMessageComponent(java.lang.String, java.util.Map<java.lang.String, java.lang.String>);
+  public boolean reloadMessagesConfig();
+  public int getMessageComponentCacheSize();
+  public boolean reloadPluginConfig();
+  public void reloadSyncmoneyConfig();
+  public void reloadPermissionService();
+  public void reloadEconomyFacade();
+  public noietime.syncmoney.PluginContext getPluginContext();
+}
+
+=== noietime.syncmoney.economy.EconomyFacade ===
+Compiled from "EconomyFacade.java"
+public final class noietime.syncmoney.economy.EconomyFacade {
+  public noietime.syncmoney.economy.EconomyFacade(org.bukkit.plugin.Plugin, noietime.syncmoney.config.SyncmoneyConfig, noietime.syncmoney.storage.CacheManager, noietime.syncmoney.storage.RedisManager, noietime.syncmoney.storage.db.DatabaseManager, noietime.syncmoney.economy.LocalEconomyHandler, noietime.syncmoney.economy.EconomyWriteQueue, noietime.syncmoney.economy.FallbackEconomyWrapper);
+  public noietime.syncmoney.economy.EconomyFacade(org.bukkit.plugin.Plugin, noietime.syncmoney.config.SyncmoneyConfig, noietime.syncmoney.storage.CacheManager, noietime.syncmoney.storage.RedisManager, noietime.syncmoney.storage.db.DatabaseManager, noietime.syncmoney.economy.LocalEconomyHandler, noietime.syncmoney.economy.EconomyWriteQueue, noietime.syncmoney.economy.FallbackEconomyWrapper, noietime.syncmoney.breaker.PlayerTransactionGuard);
+  public noietime.syncmoney.economy.EconomyFacade(org.bukkit.plugin.Plugin, noietime.syncmoney.config.SyncmoneyConfig, noietime.syncmoney.storage.CacheManager, noietime.syncmoney.storage.RedisManager, noietime.syncmoney.storage.db.DatabaseManager, noietime.syncmoney.economy.LocalEconomyHandler, noietime.syncmoney.economy.EconomyWriteQueue, noietime.syncmoney.economy.FallbackEconomyWrapper, noietime.syncmoney.breaker.PlayerTransactionGuard, noietime.syncmoney.economy.OverflowLogInterface);
+  public boolean isLocalMode();
+  public noietime.syncmoney.economy.OverflowLogInterface getOverflowLog();
+  public void setOverflowLog(noietime.syncmoney.economy.OverflowLogInterface);
+  public void setPlayerTransactionGuard(noietime.syncmoney.breaker.PlayerTransactionGuard);
+  public void setCircuitBreaker(noietime.syncmoney.breaker.EconomicCircuitBreaker);
+  public void setNameResolver(noietime.syncmoney.uuid.NameResolver);
+  public java.math.BigDecimal getBalance(java.util.UUID);
+  public double getBalanceAsDouble(java.util.UUID);
+  public java.math.BigDecimal getBalanceForPlaceholder(java.util.UUID);
+  public java.math.BigDecimal getBalanceSync(java.util.UUID);
+  public java.math.BigDecimal deposit(java.util.UUID, java.math.BigDecimal, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public double deposit(java.util.UUID, double, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public java.math.BigDecimal withdraw(java.util.UUID, java.math.BigDecimal, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public double withdraw(java.util.UUID, double, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public noietime.syncmoney.storage.CacheManager$TransferResult executeAtomicTransfer(java.util.UUID, java.util.UUID, java.math.BigDecimal);
+  public java.math.BigDecimal atomicTransfer(java.util.UUID, java.util.UUID, java.math.BigDecimal, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public noietime.syncmoney.economy.EconomyFacade$PendingRollback getPendingRollback(java.util.UUID);
+  public java.math.BigDecimal pluginDeposit(java.util.UUID, java.math.BigDecimal, java.lang.String);
+  public java.math.BigDecimal pluginWithdraw(java.util.UUID, java.math.BigDecimal, java.lang.String);
+  public noietime.syncmoney.storage.CacheManager$TransferResult pluginAtomicTransfer(java.util.UUID, java.util.UUID, java.math.BigDecimal, java.lang.String);
+  public java.math.BigDecimal setBalance(java.util.UUID, java.math.BigDecimal, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public double setBalance(java.util.UUID, double, noietime.syncmoney.economy.EconomyEvent$EventSource);
+  public boolean updateMemoryState(java.util.UUID, java.math.BigDecimal, long);
+  public boolean updateMemoryState(java.util.UUID, double, long);
+  public void invalidate(java.util.UUID);
+  public noietime.syncmoney.economy.EconomyFacade$EconomyState getMemoryState(java.util.UUID);
+  public void forceUpdateMemoryState(java.util.UUID, java.math.BigDecimal, long);
+  public java.util.Set<java.util.UUID> getOnlinePlayerUuids();
+  public boolean hasInMemory(java.util.UUID);
+  public int cleanupExpiredEntries();
+  public int getMemorySize();
+  public int getCachedPlayerCount();
+  public void recordSuccessfulTransaction(java.util.UUID);
+  public boolean unlockPlayer(java.util.UUID);
+  public noietime.syncmoney.breaker.PlayerTransactionGuard$ProtectionState getPlayerProtectionState(java.util.UUID);
+  public boolean isPlayerLocked(java.util.UUID);
+  public long getDroppedEventCount();
+  public void shutdown();
+}
+
+=== noietime.syncmoney.baltop.BaltopManager ===
+Compiled from "BaltopManager.java"
+public final class noietime.syncmoney.baltop.BaltopManager {
+  public noietime.syncmoney.baltop.BaltopManager(org.bukkit.plugin.Plugin, noietime.syncmoney.config.SyncmoneyConfig, noietime.syncmoney.storage.RedisManager, noietime.syncmoney.uuid.NameResolver, noietime.libs.hikari.HikariDataSource);
+  public noietime.syncmoney.baltop.BaltopManager(org.bukkit.plugin.Plugin, noietime.syncmoney.config.SyncmoneyConfig, noietime.syncmoney.storage.RedisManager, noietime.syncmoney.uuid.NameResolver, noietime.libs.hikari.HikariDataSource, noietime.syncmoney.economy.LocalEconomyHandler);
+  public void saveToDatabase();
+  public void updatePlayerRank(java.util.UUID, double);
+  public void removePlayerRank(java.util.UUID);
+  public java.util.List<noietime.syncmoney.baltop.RankEntry> getTopRank(int);
+  public int getPlayerRank(java.util.UUID);
+  public double getPlayerBalance(java.util.UUID);
+  public double getTotalSupply();
+  public int getTotalPlayers();
+  public int getTotalRegisteredPlayers();
+  public java.lang.String formatNumberSmart(double);
+  public java.lang.String formatNumberAbbreviated(double);
+  public void invalidateCache();
+  public void syncFromBalance(java.util.UUID, double);
+}
+
+=== noietime.syncmoney.baltop.RankEntry ===
+Compiled from "RankEntry.java"
+public final class noietime.syncmoney.baltop.RankEntry extends java.lang.Record {
+  public noietime.syncmoney.baltop.RankEntry(int, java.util.UUID, java.lang.String, double);
+  public java.lang.String getFormattedBalance();
+  public boolean isValid();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public int rank();
+  public java.util.UUID uuid();
+  public java.lang.String name();
+  public double balance();
+}
+
+=== noietime.syncmoney.uuid.NameResolver ===
+Compiled from "NameResolver.java"
+public final class noietime.syncmoney.uuid.NameResolver {
+  public noietime.syncmoney.uuid.NameResolver(org.bukkit.plugin.Plugin, noietime.syncmoney.storage.CacheManager, noietime.syncmoney.storage.db.DatabaseManager);
+  public java.util.Optional<java.util.UUID> resolve(java.lang.String);
+  public void cacheName(java.lang.String, java.util.UUID);
+  public java.util.Map<java.util.UUID, java.lang.String> getCachedUuidNameMap();
+  public void invalidate(java.lang.String);
+  public int getCacheSize();
+  public java.util.UUID resolveUUID(java.lang.String);
+  public java.util.UUID resolveUUIDForPlaceholder(java.lang.String);
+  public java.lang.String getName(java.util.UUID);
+  public void triggerAsyncNameLookup(java.util.UUID);
+  public java.lang.String getNameCachedOnly(java.util.UUID);
+  public java.util.Collection<java.lang.String> getAllCachedNames();
+}

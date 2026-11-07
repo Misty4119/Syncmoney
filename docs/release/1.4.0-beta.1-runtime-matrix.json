@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "createdAtLocal": "2026-11-07T03:33:00.0319955+08:00",
+  "candidate": {
+    "path": "build/libs/Syncmoney-1.4.0-Beta.1.jar",
+    "sha256": "bed58546413e268d395f50c4df6899ce8d3ce4fbd551ce56ed98f38fd704e7df"
+  },
+  "database": "Disposable MySQL 8.0.42 and run-owned Redis 8.10.1; no Docker or Windows Sandbox",
+  "platformEndpointCount": 6,
+  "status": "PASS_BOUNDED_SUBCASE",
+  "cells": [
+    {
+      "key": "paper-26.2-135",
+      "software": "paper",
+      "minecraftVersion": "26.2",
+      "build": 135,
+      "serverBytes": 64525370,
+      "serverSha256": "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-minimum-paper-20261107-031342-99e76fae6d8546d0808f01e97851bf03/result.json",
+      "reportSha256": "88a198309be7679522e0eb50454e6ad83255d220c9adb515ea73a52b7baf09f0",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    },
+    {
+      "key": "folia-26.2-7",
+      "software": "folia",
+      "minecraftVersion": "26.2",
+      "build": 7,
+      "serverBytes": 64717630,
+      "serverSha256": "128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-minimum-folia-20261107-031549-10a34f52adbc405495231f98e9047585/result.json",
+      "reportSha256": "3998c354216fad9f9dfbbc50e0161fedf8dd93240c09c9a9c1b33582397cf640",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    },
+    {
+      "key": "canvas-26.2-994",
+      "software": "canvas",
+      "minecraftVersion": "26.2",
+      "build": 994,
+      "serverBytes": 65707572,
+      "serverSha256": "8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-minimum-canvas-20261107-031742-ed57fb9efe504dd18fd2376041e1bd3f/result.json",
+      "reportSha256": "a3e9db92a0f5dea5686eb919ffdfcf6c1043c7930c3e0c5966b0a80baa22b552",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    },
+    {
+      "key": "paper-26.3-244",
+      "software": "paper",
+      "minecraftVersion": "26.3",
+      "build": 244,
+      "serverBytes": 55279049,
+      "serverSha256": "9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-current-maximum-paper-20261107-032707-96974fb5d9ad49519b5e51dd42be06e7/result.json",
+      "reportSha256": "4b3888b3edfc2111d414aa9de1d042fad69cacb254c8d58655a14e201574316b",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    },
+    {
+      "key": "folia-26.3-6",
+      "software": "folia",
+      "minecraftVersion": "26.3",
+      "build": 6,
+      "serverBytes": 55544086,
+      "serverSha256": "3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-current-maximum-folia-20261107-032859-539d4fa5896a4bb4a9153382f5657b01/result.json",
+      "reportSha256": "d3566265ede890ca3660295a69b8928309018b6e1cbc25fc449f27b2852910c5",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    },
+    {
+      "key": "canvas-26.3-1010",
+      "software": "canvas",
+      "minecraftVersion": "26.3",
+      "build": 1010,
+      "serverBytes": 56476394,
+      "serverSha256": "e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057",
+      "reportPath": "build/reports/release/1.4.0-Beta.1/runtime-final-20261107-beta1/mysql-sync-current-maximum-canvas-20261107-033100-cb857b001ff445b7b0f3fd4862bf3001/result.json",
+      "reportSha256": "dbbb683e9165f548253b0619adea70e159eccc3cdf9bc322ca6f47712664680a",
+      "status": "PASS_BOUNDED_SUBCASE",
+      "apiConsumerMarkers": 2,
+      "retainedLogCount": 33,
+      "cleanupFailures": 0
+    }
+  ]
+}

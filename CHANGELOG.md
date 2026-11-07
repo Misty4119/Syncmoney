@@ -1,9 +1,34 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable user-facing changes are documented here. This file follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.4.0] - 2026-11-07
+
+### Compatibility and verification
+
+- The 1.4.0 target runtime matrix is Minecraft 26.2–26.3 on Paper, Folia, and Canvas. Exact tested builds, bounded scenario coverage, and the explicitly waived scenarios are recorded in the [release-readiness record](docs/release/1.4.0-readiness.md).
+- T21 live acceptance, the candidate-bound CMI runtime retest, and the PAPI old/new cross-pair runtime scenario are `WAIVED / NOT VERIFIED`; they are not reported as passes. The owner's manual CMI capability test is accepted as complete by report, without candidate-hash evidence.
+
+### Security audit notes
+
+- The full frontend dependency audit reports a low-severity build-time `deepmerge@4.3.1` advisory (GHSA-gcqx-w48m-w2h4 / CVE-2026-93753) with no upstream patched version. The production-only audit passes; this residual risk is accepted for this release.
+- GitHub's Malware-alert inventory is unavailable and remains `UNKNOWN`; this is not a claim of zero malware alerts.
+
+### Added
+- Administrators can inspect and reconcile queued `/pay` transfers whose Redis outcome is ambiguous. Reconciliation accepts only the exact operation receipt.
+
+### Changed
+- Local-to-shared migration validates source UUIDs and shared balance limits before writing rows, and protects existing shared balances unless an administrator explicitly requests replacement.
+- Web Admin node management checks permissions for the requested operation and target path, limits proxy request and response sizes, and removes sensitive URL components from status output.
+- CMI mode is sync-only: CMI remains the currency authority, Redis carries CMI balance updates, and Syncmoney does not register its own economy provider/API or management modules; its PAPI economy placeholders have no Syncmoney balance data in that mode.
+
+### Fixed
+- Queued payment recovery records a forced checkpoint before queue commit and keeps ambiguous outcomes quarantined across restart.
+- Node health and proxy diagnostics avoid logging configured node URLs or exception messages that could expose connection details.
+- Inbound CMI echo suppression now matches the exact expected from/to event, so an immediate local CMI transaction is not hidden by a broad time window.
+- Paper dependency ordering now loads optional server integrations before Syncmoney; CMI remains required only when CMI mode is selected.
+- CMI balance events for offline Vault/QuickShop payees now synchronize without requiring the account holder to be online on the source server.
+- CMI balance events now apply their delta atomically to the latest Redis mirror and use retry receipts, preventing stale offline account snapshots from overwriting newer cross-server balances or duplicating a retried credit.
 
 ## [1.3.2] - 2026-09-20
 
@@ -112,7 +137,7 @@ These entries summarize tagged Git history and are not newly reimplemented featu
 ### Fixed
 
 #### CMI Mode Cross-Server Sync
-- **Authority & Publishing**: Rewrote CMI sync to use CMI API as the local authority; publishes absolute balances with monotonic version numbers instead of runtime CMI database queries.
+- **Authority & Publishing**: Rewrote CMI sync to use CMI API as the local authority; publishes absolute balances with legacy timestamp-derived versions instead of runtime CMI database queries. These versions are not globally monotonic across clock rollback, restart, or multiple servers.
 - **Echo Loop Prevention**: Added `suppressOutbound` to stop re-publish loops when applying remote balances into local CMI.
 - **Join Reconcile**: Version-aware balance reconcile on player join to fix cross-server balance drift.
 - **Event vs Polling**: Disables polling when CMI events are available, preventing duplicate publishes during rapid `/cmi pay` spam.
@@ -226,7 +251,7 @@ These entries summarize tagged Git history and are not newly reimplemented featu
 - **System API**: Provided new `/api/system/status`, `/api/system/redis`, `/api/system/breaker`, and `/api/system/metrics` endpoints.
 - **Economy & Audit API**: Retrieve total supply, player balances, top statistics, and transaction audit logs seamlessly.
 - **Settings & Config API**: REST interface to read and update plugin configurations dynamically (`/api/config/reload`).
-- **Real-Time Communications**: Added WebSocket support for instant transaction & circuit breaker alerts alongside Server-Sent Events (SSE).
+- **Real-Time Communications**: Added initial WebSocket scaffolding and event payload hooks alongside Server-Sent Events (SSE). Full WebSocket transport was not completed; `/ws` currently returns `503 WEBSOCKET_UNAVAILABLE`, and SSE is the available live channel.
 
 #### Core System & Infrastructure
 - **Initialization Manager**: Introduced `PluginInitializationManager` to reliably coordinate component startup/shutdown dependencies.

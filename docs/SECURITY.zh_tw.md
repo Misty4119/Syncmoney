@@ -37,7 +37,7 @@ Syncmoney 是經濟插件；安全問題可能影響餘額、憑證、跨服同�
 
 - 貨幣被建立、複製、遺失或未授權轉移；
 - transaction limit、player protection、circuit breaker 被繞過；
-- stale/replayed update 破壞單調 balance version；
+- stale/replayed cross-server update 繞過 per-account version 檢查，包括 CMI legacy timestamp version 不具 global ordering 的限制及 compare-and-write mirror guard；
 - Pub/Sub spoofing、echo loop 或 duplicate handling 改變餘額；
 - queue saturation 或 shutdown 靜默遺失已接受的 economic write；
 - Folia/Canvas 上不安全的 scheduler 存取造成狀態損壞；
@@ -50,13 +50,21 @@ Syncmoney 是經濟插件；安全問題可能影響餘額、憑證、跨服同�
 Web Admin 是特權管理介面：
 
 - 對外暴露前先更換 `web-admin.security.api-key`。
-- shipped config 使用 `change-me-in-production`；validation 會警告，但 `WebServiceManager` 目前只在 key 精確等於 `change-me` 時自動停用，不能依賴此 guard 保護未修改的預設值。
+- shipped config 使用 `change-me-in-production`。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，`WebServiceManager` 會停用 Web Admin；economy plugin 仍正常啟動。
 - 綁定可信介面，或放在正確設定的 reverse proxy/firewall 後方。
-- CORS origin 應限制為可信來源；plugin 會對 `*` 發出警告。
+- CORS origin 應限制為可信來源；CORS 控制瀏覽器能否讀取 response，不能取代 API-key authentication。Plugin 會對 `*` 發出警告。
 - 流量離開可信本機網路時，應在 reverse proxy 使用 TLS。
 - Node API key 視為 secret，限制 central 與 managed node 的可達性。
+- Node list、status、管理 API response 與 node-status SSE event 會移除設定 URL 中的 URI user-info、query 與 fragment；無效值會標示為 `[invalid URL]`。Health check 失敗日誌不含設定 URL 或例外訊息。設定驗證會拒絕新增或更新含有 user-info、query 或 fragment 的 URL。
+- Node proxy 僅接受 allowlist HTTP methods，並在使用設定的 node key 前檢查 caller 對 target API path 的 permission；未映射 path 只允許 `syncmoney.web.central`。讀取 proxy method 需要 `syncmoney.web.nodes.view`；會改變狀態的 method 另需 `syncmoney.web.nodes.manage` 或 `syncmoney.web.central`。Proxy request body 上限為 1 MiB，超限時會在解析或使用 node key 前回 HTTP 413。可選 query string 會轉送至設定的 node origin。上游 response body 會先完整緩衝，最多 8 MiB，再轉送；超限時回 HTTP 502 且不會轉送部分內容。
 - `/health` 刻意不需 authentication；一般 `/api/*` 會走 Bearer API-key auth，再依 endpoint 行為處理。
-- 前端目前實作的 live transport 是 SSE；`/ws` 尚未完整，不應視為 hardened production channel。
+- 前端目前實作的 live transport 是 SSE；所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`，不提供 production transport。
+
+## 已知 hardening 限制
+
+- Node URL 驗證會拒絕 user-info、query、fragment 與靜態列出的 local/special-use IPv4 位址範圍，包括 shared、protocol-assignment、documentation、benchmarking、multicast 與 reserved 區段，並拒絕 IPv6 unspecified、loopback、link-local、site-local、multicast 與 ULA 位址。驗證錯誤只記錄例外類型；URL 及其中的 user-info、query 與 fragment 都不會記錄。此檢查不會將 DNS resolution 固定到最後建立的 HTTP connection。DNS rebinding 防護為 `DEFERRED / NOT VERIFIED`；node URL 是高權限設定，operator 應限制 server egress 只連到預期 node。
+- `WebDownloader` 目前沒有限制傳輸大小、解壓後大小或 archive entry 數量。這些資源上限為 `DEFERRED / NOT VERIFIED`；只使用可信 download source，並將資源耗盡風險視為尚待 hardening 的缺口。
+- CMI 僅同步路由與 Redis mirror guard 有 source-level unit 和 synthetic coverage；這些檢查不代表特定 Syncmoney 產物已通過 live CMI 相容性驗收。Operator 必須從各自發布者取得 CMI 與 CMILib，並遵守各自授權條款。允許使用本機提供的副本進行隔離測試，不代表可以重新散布，也不構成綁定特定候選版的 runtime 證據。各候選版的 runtime 狀態應記錄於 release-readiness。
 
 ## Secret 處理
 
@@ -73,7 +81,7 @@ Web Admin 是特權管理介面：
 
 ## 變更的安全要求
 
-經濟相關變更必須保留 `BigDecimal` normalization、insufficient-funds check、transfer ordering/atomicity、單調 version、已接受寫入 durability、echo/duplicate suppression。Vault/placeholder/entity hot path 不得加入阻塞 network/database I/O。
+經濟相關變更必須保留 `BigDecimal` normalization、insufficient-funds check、transfer ordering/atomicity、per-account Redis version ordering、已接受寫入 durability、echo/duplicate suppression。CMI 維持 legacy timestamp-derived version，不保證 global monotonic。Vault/placeholder/entity hot path 不得加入阻塞 network/database I/O。
 
 Scheduler-sensitive 變更要遵守 Paper/Folia entity ownership；CMI mutation 與 player/entity 操作必須在 owning entity scheduler 上執行。
 

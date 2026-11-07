@@ -6,15 +6,16 @@ This document is a factual project snapshot for maintainers, contributors, and c
 
 - Project: Syncmoney
 - Repository: `Misty4119/Syncmoney`
-- Current build version: `1.3.2`
+- Current build version: `1.4.0`
 - Configuration schema: `12`
-- Build toolchain: Java 21
-- Plugin API descriptor: `api-version: 1.20`
+- Build toolchain: Java 25 for the 1.4.0 target; Gradle 9.8.0
+- Plugin API descriptor: `api-version: 26.2` (current descriptor metadata)
+- 1.4.0 runtime target: Minecraft 26.2–26.3 on Paper, Folia, and Canvas; exact candidate coverage is tracked in the release-readiness snapshot.
 - Main server targets: Paper, Folia, Canvas
 - Optional integrations: VaultUnlocked, CMI, PlaceholderAPI
 - License: Apache License 2.0
 
-Runtime Java requirements depend on the Minecraft server. PlugDev documents Java 25 for newer Paper 26.1+ environments even though project compilation uses Java 21.
+Current candidate status, artifact pins, test evidence, and open gates are maintained in the [versioned release-readiness snapshot](docs/release/1.4.0-readiness.md), so this architecture context stays useful across test runs.
 
 ## Product boundary
 
@@ -26,7 +27,7 @@ The main design goal is a synchronous Vault-compatible API backed by memory, whi
 
 ### Core plugin
 
-`src/main/java/noietime/syncmoney` contains lifecycle, economy, persistence, synchronization, commands, configuration, audit, breaker/guard, web, migration, and optional integrations.
+`syncmoney-bukkit/src/main/java/noietime/syncmoney` contains lifecycle, economy, persistence, synchronization, commands, configuration, audit, breaker/guard, web, migration, and optional integrations.
 
 `src/main/resources` contains the plugin descriptor, default configuration/messages, and embedded web distribution.
 
@@ -93,7 +94,9 @@ Delayed messages are expected in distributed systems; version checks must not be
 
 ## Persistence
 
-The shared `players` table includes UUID, player name, `DECIMAL(20,2)` balance, monotonic `BIGINT` version, last server, and update timestamp.
+The shared `players` table includes UUID, player name, `DECIMAL(20,2)` balance, monotonic `BIGINT` version, last server, and update timestamp. Syncmoney-owned `LOCAL_REDIS` and `SYNC` balances are capped at `999999999999999999.99`; this does not change the existing `LOCAL` policy or migrate local data.
+
+Queued `/pay` transfers use the existing `recovery-v1.jsonl` spool. Startup validates the queued spool and legacy overflow log before opening shared-mode write admission; unreadable or malformed recovery evidence keeps admission closed, while affected accounts remain unavailable until their pending recovery is resolved. A forced `RETRYABLE` paired-admission checkpoint precedes queue commit. After Redis dispatch, `ATTEMPTING`/`AMBIGUOUS` outcomes remain quarantined across restart and are visible through admin-only `/syncmoney recovery list|inspect|reconcile <id>` (permission `syncmoney.admin.recovery` or `syncmoney.admin`). Reconciliation runs asynchronously and accepts only an exact Redis receipt matching the stable operation ID, canonical fingerprint, account pair, and versions. Missing, malformed, colliding, in-flight, mismatched, or unreadable receipts retain quarantine; balances alone do not resolve an ambiguous operation, and there is no automatic replay or force-clear path. FileChannel force supports local process-restart recovery; power-loss and storage-device durability beyond that behavior are not claimed. Direct Vault/plugin atomic-transfer recovery remains `DEFERRED / NOT VERIFIED` under ADR-07; no direct-transfer journal, capability, provider wiring, or command recovery path is included.
 
 Additional storage covers baltop, audit logs and audit schema evolution, schema-version tracking, local SQLite player balances/transactions, and Shadow Sync history.
 
@@ -194,7 +197,7 @@ Cross-server aggregate routes are registered only in central mode.
 
 SSE is served at `/api/sse`. The frontend obtains a session token from `/api/auth/ws-token` and opens SSE with that token. Older `/sse` documentation is stale.
 
-`/ws` currently has incomplete transport support. `WebSocketManager` performs upgrade-shaped handling, subscription bookkeeping, and logging, but its broadcast methods do not send through a full Undertow WebSocket channel. Treat it as limited/non-production until implementation changes.
+Every `/ws` request currently returns `503 WEBSOCKET_UNAVAILABLE`; no WebSocket upgrade occurs. Full transport remains deferred.
 
 `SystemApiHandler` and `NodesApiHandler` both register node GET routes. The registry replaces duplicate keys with `Map.put` and `NodesApiHandler` registers later, so it is effective for duplicates.
 
@@ -202,7 +205,7 @@ SSE is served at `/api/sse`. The frontend obtains a session token from `/api/aut
 
 Sensitive data includes Web/node API keys, Redis/SQL credentials, migration/Shadow credentials, audit exports, and acceptance/RCON secrets. Never commit real values.
 
-The default Web Admin API key is unsafe for exposure. Current code warns when it remains `change-me-in-production`, while the service disable guard checks `change-me`; operators must explicitly replace the default.
+The default Web Admin API key is unsafe for exposure. The service disables Web Admin for a blank key or `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin continues to start.
 
 If a real secret is found in a tracked file/history, removing it from the latest tree is insufficient. Rotate it and assess history/exposure.
 
@@ -218,8 +221,8 @@ If a real secret is found in a tracked file/history, removing it from the latest
 
 Current artifacts:
 
-- `Syncmoney-1.3.2.jar`
-- `SyncmoneyExpansion-1.3.2.jar`
+- `Syncmoney-1.4.0.jar`
+- `SyncmoneyExpansion-1.4.0.jar`
 - `SyncmoneyAcceptance.jar`
 
 Web checks:
@@ -235,7 +238,7 @@ When web source changes, reconcile the built frontend with the embedded distribu
 
 ## Acceptance baseline
 
-The current PlugDev documentation covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure. Folia 26.2 Beta was exercised successfully; this is observed coverage for that beta build, not a guarantee for future Folia releases.
+The historical 1.3.2 PlugDev record covers Paper 1.20.4, Paper 26.2, Folia `26.2.build.7-beta`, Canvas 26.2, and a two-backend Paper 26.2 network using shared Redis/PostgreSQL test infrastructure. Folia 26.2 Beta was exercised successfully; this is observed coverage for that beta build, not a guarantee for future Folia releases.
 
 Licensed CMI is not bundled; CMI acceptance requires a locally supplied licensed plugin. Do not turn this observed matrix into guarantees for future server releases.
 

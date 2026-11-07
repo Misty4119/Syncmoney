@@ -6,15 +6,16 @@
 
 - 專案：Syncmoney
 - 儲存庫：`Misty4119/Syncmoney`
-- 目前 build 版本：`1.3.2`
+- 目前 build 版本：`1.4.0`
 - 設定 schema：`12`
-- 編譯 toolchain：Java 21
-- Plugin API descriptor：`api-version: 1.20`
+- 編譯 toolchain：Java 25（1.4.0 target）；Gradle 9.8.0
+- Plugin API descriptor：`api-version: 26.2`（目前的 descriptor metadata）
+- 1.4.0 執行環境目標：Minecraft 26.2–26.3 的 Paper、Folia 與 Canvas；候選版實際驗收狀態記錄於發布準備快照。
 - 主要伺服器目標：Paper、Folia、Canvas
 - 選用整合：VaultUnlocked、CMI、PlaceholderAPI
 - 授權：Apache License 2.0
 
-Runtime Java 需求由 Minecraft server 決定。PlugDev 對較新的 Paper 26.1+ 環境記載使用 Java 25，但專案本身仍以 Java 21 編譯。
+目前候選版狀態、artifact pins、測試證據與未完成 gate，集中記錄於[版本化發布準備快照](release/1.4.0-readiness.zh_tw.md)，讓本架構背景文件不需每次測試都改動。
 
 ## 產品邊界
 
@@ -26,7 +27,7 @@ Syncmoney 負責經濟餘額、轉帳/管理命令、同步、監控、稽核與
 
 ### Core plugin
 
-`src/main/java/noietime/syncmoney` 包含 lifecycle、economy、persistence、synchronization、commands、configuration、audit、breaker/guard、web、migration 與選用整合。
+`syncmoney-bukkit/src/main/java/noietime/syncmoney` 包含 lifecycle、economy、persistence、synchronization、commands、configuration、audit、breaker/guard、web、migration 與選用整合。
 
 `src/main/resources` 包含 plugin descriptor、預設設定/訊息，以及嵌入式 web distribution。
 
@@ -93,7 +94,9 @@ Balance 與 version 成對存在。遠端 handler 套用狀態前先比對 versi
 
 ## 持久化
 
-Shared `players` table 包含 UUID、player name、`DECIMAL(20,2)` balance、單調 `BIGINT` version、last server 與 updated timestamp。
+Shared `players` table 包含 UUID、player name、`DECIMAL(20,2)` balance、單調 `BIGINT` version、last server 與 updated timestamp。Syncmoney-owned `LOCAL_REDIS` 與 `SYNC` balance 上限為 `999999999999999999.99`；既有 `LOCAL` policy 不變，也不會 migration local data。
+
+live `/pay` 成對轉帳使用既有 `recovery-v1.jsonl` spool。啟動時會先驗證 queued spool 與 legacy overflow log，再開啟 shared-mode write admission；recovery evidence 無法讀取或格式錯誤時會保持 admission 關閉，受影響帳戶則在 pending recovery 解決前維持 unavailable。queue commit 前會先 force 一筆 `RETRYABLE` 成對 admission checkpoint。Redis dispatch 後的 `ATTEMPTING`／`AMBIGUOUS` 結果會在 restart 後持續 quarantine，並可透過限管理員使用的 `/syncmoney recovery list|inspect|reconcile <id>` 查閱（permission `syncmoney.admin.recovery` 或 `syncmoney.admin`）。Reconciliation 以非同步方式執行，只接受 stable operation ID、canonical fingerprint、帳戶配對與版本皆相符的 exact Redis receipt。receipt 缺失、格式錯誤、collision、in-flight、mismatch 或無法讀取時都保留 quarantine；不能只靠 balance snapshot 解決 ambiguous operation，也不會自動重播或提供 force-clear。FileChannel force 支援本機 process restart recovery；不宣稱超出該行為的斷電或儲存裝置耐久性。Direct Vault/plugin atomic-transfer recovery 依 ADR-07 維持 `DEFERRED / NOT VERIFIED`；不包含 direct-transfer journal、capability、provider wiring 或 command recovery path。
 
 其他 storage 分別處理 baltop、audit log 與 audit schema 演進、schema-version tracking、本機 SQLite player balance/transaction，以及 Shadow Sync history。
 
@@ -152,7 +155,7 @@ Storage 必須等已接受 event/write consumer 排空後才關閉。
 - `/pay <player> <amount>`，包含確認流程
 - `/baltop [page|me]`
 
-管理入口為 `/syncmoney`。註冊的 subcommand 包含 `migrate`、`audit`、條件式 `breaker`、`admin`、`web`、條件式 `shadow`、`monitor`、`debug`、`sync-balance`、`test`、條件式 `econstats`、`reload`、`version`。
+管理入口為 `/syncmoney`。註冊的 subcommand 包含 `migrate`、`audit`、管理員專用 queued recovery `recovery list|inspect|reconcile`、條件式 `breaker`、`admin`、`web`、條件式 `shadow`、`monitor`、`debug`、`sync-balance`、`test`、條件式 `econstats`、`reload`、`version`。
 
 Permission 宣告在 `src/main/resources/plugin.yml`，部分 subcommand 另有更細的 specialized/tier 檢查。
 
@@ -194,7 +197,7 @@ Cross-server aggregate route 只在 central mode 註冊。
 
 SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token，再以該 token 開啟 SSE；舊的 `/sse` 說明已過時。
 
-`/ws` 目前 transport 不完整。`WebSocketManager` 有 upgrade-shaped handling、subscription bookkeeping 與 logging，但 broadcast method 並未透過完整 Undertow WebSocket channel 傳送，應視為 limited/non-production。
+所有 `/ws` request 目前都回 `503 WEBSOCKET_UNAVAILABLE`，不會執行 WebSocket upgrade。完整 transport 延後處理。
 
 `SystemApiHandler` 與 `NodesApiHandler` 都註冊 node GET route；registry 使用 `Map.put` 取代相同 key，且 `NodesApiHandler` 較晚註冊，因此 duplicate route 最後由它生效。
 
@@ -202,7 +205,7 @@ SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token�
 
 敏感資料包含 Web/node API key、Redis/SQL credentials、migration/Shadow credentials、audit export、acceptance/RCON secrets。不得 commit 真實值。
 
-預設 Web Admin API key 不適合對外暴露。程式會警告 `change-me-in-production`，但 service disable guard 只比對 `change-me`；operator 必須主動替換預設值。
+預設 Web Admin API key 不適合對外暴露。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，service 會停用 Web Admin，economy plugin 仍正常啟動。
 
 若真實 secret 已進入 tracked file/history，只從最新 tree 刪除並不夠；必須 rotate/revoke 並評估 history/exposure。
 
@@ -218,8 +221,8 @@ SSE 位於 `/api/sse`。前端先向 `/api/auth/ws-token` 取得 session token�
 
 目前產物：
 
-- `Syncmoney-1.3.2.jar`
-- `SyncmoneyExpansion-1.3.2.jar`
+- `Syncmoney-1.4.0.jar`
+- `SyncmoneyExpansion-1.4.0.jar`
 - `SyncmoneyAcceptance.jar`
 
 Web checks：
@@ -235,7 +238,7 @@ web source 變更時，要同步處理 build output 與 embedded distribution。
 
 ## 驗收基線
 
-目前 PlugDev 文件涵蓋 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。Folia 26.2 Beta 已實際通過測試；這是該 beta build 的觀察結果，不是對未來 Folia release 的保證。
+歷史 1.3.2 PlugDev 紀錄涵蓋 Paper 1.20.4、Paper 26.2、Folia `26.2.build.7-beta`、Canvas 26.2，以及使用 shared Redis/PostgreSQL test infrastructure 的雙後端 Paper 26.2 network。Folia 26.2 Beta 已實際通過測試；這是該 beta build 的觀察結果，不是對未來 Folia release 的保證。
 
 CMI 為授權軟體且不隨儲存庫提供；CMI acceptance 需要本機另備合法 plugin。不能把目前觀察到的 matrix 當成未來 server release 的保證。
 

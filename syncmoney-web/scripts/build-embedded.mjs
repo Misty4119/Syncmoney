@@ -37,13 +37,13 @@ function run(command, args, useShell = process.platform === 'win32') {
   })
 }
 
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const packageManager = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const versionPayload = JSON.parse(originalVersionFile)
 versionPayload.version = version
 
 try {
   await writeFile(versionFile, `${JSON.stringify(versionPayload, null, 2)}\n`, 'utf8')
-  await run(pnpm, ['run', 'build'])
+  await run(packageManager, ['pnpm', 'run', 'build'])
   try {
     await access(syncScript)
     await run(process.execPath, [syncScript], false)

@@ -1,8 +1,34 @@
-# 更新日誌 (Changelog)
+# 更新日誌（Changelog）
 
-本專案的所有重大變更都將記錄於此檔案中。
+本文件記錄使用者可見的變更，格式遵循 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 與 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-本變更日誌格式基於 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，且本專案遵循 [語意化版本](https://semver.org/spec/v2.0.0.html)。
+## [1.4.0] - 2026-11-07
+
+### 相容性與驗證
+
+- 1.4.0 的執行環境驗收矩陣為 Minecraft 26.2–26.3 的 Paper、Folia 與 Canvas。精確測試 build、有界情境的覆蓋範圍與明確豁免情境記錄於[發布準備紀錄](release/1.4.0-readiness.zh_tw.md)。
+- T21 live acceptance、候選綁定的 CMI runtime 重測，以及 PAPI 新舊版本 cross-pair runtime 情境均為 `WAIVED / NOT VERIFIED`，不會報成通過。CMI 人工能力測試依負責人回報為完成，但沒有候選 JAR hash 證據。
+
+### 安全稽核說明
+
+- 完整前端依賴稽核回報一項低嚴重度 build-time `deepmerge@4.3.1` advisory（GHSA-gcqx-w48m-w2h4／CVE-2026-93753），目前沒有上游修補版。Production-only audit 通過；本次正式版接受並保留此殘餘風險。
+- GitHub 的 Malware-alert inventory 無法取得，狀態維持 `UNKNOWN`；這不代表零個 malware alerts。
+
+### 已新增（Added）
+- 管理員可檢視結果不明的佇列 `/pay` 轉帳；僅接受完全相符的操作收據進行對帳。
+
+### 已變更（Changed）
+- LOCAL-to-SYNC 遷移會在寫入前驗證來源 UUID 與共享餘額限制；除非管理員明確要求取代，否則保留既有共享餘額。
+- Web Admin 節點管理會依請求操作與目標路徑檢查權限、限制代理請求與回應大小，並從狀態資訊移除敏感 URL 組件。
+- CMI 僅同步模式由 CMI 維持經濟權威，透過 Redis 傳遞餘額更新；Syncmoney 在此模式不註冊自己的經濟提供者/API 或管理模組，PAPI 經濟佔位符也不會提供 Syncmoney 餘額資料。
+
+### 已修復（Fixed）
+- 佇列付款復原會在 queue commit 前強制寫入 checkpoint，並在重新啟動後繼續隔離結果不明的操作。
+- 節點健康檢查與代理診斷不會記錄已設定的節點 URL 或可能暴露連線資訊的例外訊息。
+- Inbound CMI echo suppression 現在只比對預期 from/to event，避免寬鬆的時間窗吞掉緊接著的本地 CMI 交易。
+- 修正 Paper dependency 順序，讓 optional server integrations 先於 Syncmoney 載入；只有選擇 CMI mode 時才要求 CMI。
+- CMI balance event 現在不要求收款玩家在線於來源伺服器也能同步，涵蓋離線 Vault／QuickShop 收款對象。
+- CMI balance event 現在會用原子版本比較將事件差額套用至 Redis 最新鏡像，並以重試收據避免重複入帳，防止離線帳戶的陳舊副本覆寫較新的跨服餘額。
 
 ## [1.3.2] - 2026-09-20
 
@@ -111,7 +137,7 @@ Paper 1.20.4、Paper 26.2、Folia 26.2 BETA、Canvas 26.2 — 多後端（Postgr
 ### 已修復 (Fixed)
 
 #### CMI 模式跨伺服器同步
-- **權威性與發布機制**：重寫 CMI 同步，將 CMI API 作為本地權威（Authority）；發布帶有單調遞增版本號的絕對餘額，而非在執行期查詢 CMI 資料庫。
+- **權威性與發布機制**：重寫 CMI 同步，將 CMI API 作為本地權威（Authority）；發布帶有 legacy timestamp-derived version 的絕對餘額，而非在執行期查詢 CMI 資料庫。Clock rollback、restart 或多伺服器時不保證全域單調排序。
 - **防止迴圈廣播（Echo Loop）**：新增 `suppressOutbound` 標記，在將遠端餘額套用至本地 CMI 時停止重複發布迴圈。
 - **加入伺服器同步（Join Reconcile）**：玩家加入時進行具版本意識的餘額對帳，修復跨伺服器餘額偏差問題。
 - **事件與輪詢切換**：當 CMI 事件可用時停用輪詢，防止在頻繁洗板 `/cmi pay` 時發生重複發布。
@@ -225,7 +251,7 @@ Paper 1.20.4、Paper 26.2、Folia 26.2 BETA、Canvas 26.2 — 多後端（Postgr
 - **系統 API**：提供全新的 `/api/system/status`、`/api/system/redis`、`/api/system/breaker` 與 `/api/system/metrics` 端點。
 - **經濟與審計 API**：無縫獲取總供給量、玩家餘額、排行榜統計數據與交易審計日誌。
 - **設定與配置 API**：用於動態讀取與更新插件設定的 REST 介面（`/api/config/reload`）。
-- **即時通訊**：新增 WebSocket 支援以提供即時交易與斷路器告警，並搭配伺服器傳送事件（SSE）。
+- **即時通訊**：新增初始 WebSocket scaffold 與事件 payload hooks，並搭配伺服器傳送事件（SSE）。完整 WebSocket transport 並未完成；`/ws` 目前回傳 `503 WEBSOCKET_UNAVAILABLE`，可用的即時通道為 SSE。
 
 #### 核心系統與基礎架構
 - **初始化管理器**：導入 `PluginInitializationManager`，可靠地協調元件的啟動／關閉相依性。

@@ -111,7 +111,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Wallet, Users, ArrowUpDown, TrendingUp, Server, Activity } from 'lucide-vue-next'
+import { Wallet, Users, ArrowUpDown, TrendingUp, Server, Activity } from '@lucide/vue'
 import { useNodesStore, type NodeInfo } from '@/stores/nodes'
 import { fetchCrossServerStats, fetchAllNodesStatus } from '@/services/systemService'
 import { useSSE } from '@/composables/useSSE'

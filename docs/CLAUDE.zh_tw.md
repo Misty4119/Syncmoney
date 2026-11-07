@@ -6,13 +6,13 @@
 
 Syncmoney 是相容 Vault 的 Minecraft 經濟插件，支援選用 VaultUnlocked/CMI 整合、Redis 跨伺服器同步、SQL/本機持久化、稽核與保護模組、Undertow Web 管理服務，以及獨立的 PlaceholderAPI 擴充。
 
-正確性優先順序為：不得憑空增減資金、分散式狀態版本必須單調、區域執行緒安全、生命週期擁有權清楚、熱門路徑不得阻塞，之後才是易用性與效能改善。
+正確性優先順序為：不得憑空增減資金、保留 Redis-backed per-account ordering 並明確記錄 CMI legacy timestamp version 不具 global ordering、區域執行緒安全、生命週期擁有權清楚、熱門路徑不得阻塞，之後才是易用性與效能改善。
 
 ## 真實來源
 
 文字說明若與程式或可執行設定衝突，以後者為準：
 
-- `src/main/java/noietime/syncmoney`
+- `syncmoney-bukkit/src/main/java/noietime/syncmoney`
 - `src/main/resources/config.yml`
 - `src/main/resources/plugin.yml`
 - `build.gradle`
@@ -28,8 +28,8 @@ Syncmoney 是相容 Vault 的 Minecraft 經濟插件，支援選用 VaultUnlocke
 - Vault 面向的讀取必須維持記憶體優先，不得加入阻塞 Redis、SQL 或網路 I/O。
 - 寫入應走既有 facade / state / writer / orchestrator 路徑。
 - 已接受的寫入在玩家登出與關機流程中必須可被妥善排空。
-- 保留單調版本與 Pub/Sub 回音抑制。
-- 延遲的非同步工作套用前要重新檢查新鮮度。
+- 保留 Redis-backed per-account version ordering 與 Pub/Sub 回音抑制。CMI 維持 legacy timestamp-derived version，不保證 global monotonic。
+- 延遲的非同步工作（含 CMI entity callback）套用前要重新檢查本機已觀察到的新鮮度。
 - `cmi` 模式由 CMI 維持經濟權威；玩家異動必須在該玩家的 entity scheduler 上執行。
 - Migration 與 Shadow Sync 是明確工作流程，不是透明切換即時權威的機制。
 
@@ -54,13 +54,13 @@ Paper/Folia/Canvas 安全性必須由 ownership 正確性證明，不能只因 `
 
 `SyncmoneyConfig` 是 runtime snapshot。目前只有 `display`、`pay`、`permissions`、`admin-permissions`、`debug` 可即時重載。連線、權威或模組 owner 變更，除非 `ConfigReloadPolicy` 明確允許，否則視為需要重啟。
 
-Web Admin 預設 API key 為 `change-me-in-production`。設定驗證會警告此值，但 `WebServiceManager` 目前只會對精確的 `change-me` 自動停用，因此不能把出廠 placeholder 描述成會自動被阻擋。
+Web Admin 預設 API key 為 `change-me-in-production`。Key 空白或 trim 並忽略大小寫後等於 `change-me` / `change-me-in-production` 時，Web Admin 會自動停用，但 economy plugin 仍正常啟動。
 
 ## Web 與 API
 
 Web Admin 後端使用 Undertow。REST 通常使用 `Authorization: Bearer <api-key>`；`/health` 為健康檢查。前端即時串流是 `/api/sse`，session token 由 `POST /api/auth/ws-token` 取得。
 
-目前 `/ws` 並不是完整的 production WebSocket transport，不得文件化成完整支援。
+所有 `/ws` request 都回 `503 WEBSOCKET_UNAVAILABLE`，不得文件化成 production WebSocket transport。
 
 修改路由時，需同時檢查 handler、`RouteRegistry`、`HttpHandlerRegistry`，並同步更新中英文 API reference。
 
@@ -95,7 +95,7 @@ scheduler、storage、lifecycle、cross-server 變更要用 PlugDev，並只報�
 
 ## 發布事實
 
-根目錄 Gradle 目前版本為 `1.3.2`，編譯 toolchain 為 Java 21。PAPI 繼承根版本。主要產物為 `Syncmoney-<version>.jar`、`SyncmoneyExpansion-<version>.jar`、`SyncmoneyAcceptance.jar`。
+根目錄 Gradle release metadata 目前仍為 `1.3.2`，待 release task 更新；1.4.0 foundation branch 使用 Java 25 與 Gradle 9.8.0。保留的 1.3.2 baseline 使用 Java 21／Gradle 9.1.0。PAPI 繼承根版本。主要產物為 `Syncmoney-<version>.jar`、`SyncmoneyExpansion-<version>.jar`、`SyncmoneyAcceptance.jar`。
 
 涉及 web 資產的 release，frontend release metadata 與 `src/main/resources/syncmoney-web/dist` 必須一起更新。Core repository 是 canonical frontend source；Core tag 不帶 `v`，公開 Web mirror 使用 `v` tag 並先發佈 deterministic source archive。Frontend 變更使用 `pnpm build:embedded`，確保 embedded bundle 與 `WebAdminServer.extractIndividualFiles` 同步。
 

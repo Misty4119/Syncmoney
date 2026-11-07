@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "profileId": "local-smoke",
+  "mode": "open-loop",
+  "arrivalRateFractions": [0.25],
+  "warmupSecondsPerRate": 0,
+  "measurementSecondsPerRate": 2,
+  "minimumMeasurementSamples": 1000,
+  "workerThreads": 4,
+  "maxInFlight": 128,
+  "batchSizes": [1],
+  "maxBatchWaitMillis": [1],
+  "redis": {
+    "hostEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_HOST",
+    "portEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_PORT",
+    "passwordEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_PASSWORD",
+    "databaseEnvironmentVariable": "SYNCMONEY_BENCHMARK_REDIS_DATABASE"
+  },
+  "sql": {
+    "urlEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_URL",
+    "userEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_USER",
+    "passwordEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_PASSWORD",
+    "dialectEnvironmentVariable": "SYNCMONEY_BENCHMARK_SQL_DIALECT"
+  },
+  "outputDirectory": "build/reports/benchmarks"
+}

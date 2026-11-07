@@ -1,0 +1,114 @@
+package noietime.syncmoney.audit;
+
+import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
+import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.storage.RedisManager;
+import noietime.syncmoney.web.server.WebAdminServer;
+import com.zaxxer.hikari.HikariDataSource;
+
+/**
+ * Unified audit service manager.
+ * Manages AuditLogger, HybridAuditManager, AuditLogCleanup, and AuditLogExporter.
+ */
+public class AuditServiceManager {
+
+    private final Syncmoney plugin;
+    private final SyncmoneyConfig config;
+    private final RedisManager redisManager;
+    private final HikariDataSource dataSource;
+
+    private AuditLogger auditLogger;
+    private HybridAuditManager hybridAuditManager;
+    private AuditLogCleanup auditLogCleanup;
+    private AuditLogExporter auditLogExporter;
+
+    public AuditServiceManager(Syncmoney plugin, SyncmoneyConfig config,
+                              RedisManager redisManager, HikariDataSource dataSource) {
+        this.plugin = plugin;
+        this.config = config;
+        this.redisManager = redisManager;
+        this.dataSource = dataSource;
+    }
+
+    /**
+     * Initialize all audit components.
+     */
+    public void initialize() {
+        this.auditLogger = new AuditLogger(plugin, config, dataSource);
+        if (!config.audit().isAuditEnabled()) {
+            plugin.getLogger().fine("Audit disabled; no audit resources started.");
+            return;
+        }
+
+        var webAdminServer = plugin.getWebAdminServer();
+        var sseManager = webAdminServer != null ? webAdminServer.getSseManager() : null;
+
+
+        if (config.audit().isAuditRedisEnabled() && redisManager != null && !redisManager.isDegraded()) {
+            this.hybridAuditManager = new HybridAuditManager(plugin, config, redisManager, dataSource, sseManager);
+            plugin.getLogger().info("HybridAuditManager initialized (Redis sliding window mode)");
+        }
+
+
+        plugin.getLogger().fine("AuditLogger initialized");
+
+        if (dataSource != null) {
+            if (config.audit().isAuditCleanupEnabled()) {
+            this.auditLogCleanup = new AuditLogCleanup(plugin, config, dataSource);
+            auditLogCleanup.start();
+            plugin.getLogger().fine("AuditLogCleanup started");
+            }
+
+            if (config.audit().isAuditExportEnabled()) {
+            this.auditLogExporter = new AuditLogExporter(plugin, config, dataSource);
+            auditLogExporter.start();
+            plugin.getLogger().fine("AuditLogExporter started");
+            }
+        }
+
+        plugin.getLogger().fine("Audit layer initialized");
+    }
+
+    /**
+     * Shutdown audit components.
+     */
+    public void shutdown() {
+        plugin.getLogger().fine("Shutting down audit layer...");
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("hybrid audit", () -> {
+                    if (hybridAuditManager != null) {
+                        hybridAuditManager.close();
+                    } else {
+                        plugin.getLogger().info("T21_DRAIN owner=hybridAudit status=disabled enabled=false "
+                                + "queued=0 inFlight=0 retry=0 lateRejected=0");
+                    }
+                }),
+                new ShutdownStepRunner.Step("audit logger", () -> {
+                    if (auditLogger != null) auditLogger.close();
+                }),
+                new ShutdownStepRunner.Step("audit cleanup", () -> {
+                    if (auditLogCleanup != null) auditLogCleanup.stop();
+                }),
+                new ShutdownStepRunner.Step("audit exporter", () -> {
+                    if (auditLogExporter != null) auditLogExporter.stop();
+                }));
+        plugin.getLogger().fine("Audit layer shutdown complete");
+    }
+
+    public AuditLogger getAuditLogger() {
+        return auditLogger;
+    }
+
+    public HybridAuditManager getHybridAuditManager() {
+        return hybridAuditManager;
+    }
+
+    public AuditLogCleanup getAuditLogCleanup() {
+        return auditLogCleanup;
+    }
+
+    public AuditLogExporter getAuditLogExporter() {
+        return auditLogExporter;
+    }
+}

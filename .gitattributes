@@ -1,3 +1,12 @@
 .gitattributes text eol=lf
+src/main/resources/config.yml text eol=crlf
+src/main/resources/messages.yml text eol=crlf
+docs/release/1.4.0-beta.1-runtime-matrix.json text eol=lf
+src/acceptance/resources/plugin.yml text eol=lf
+src/api-consumer/resources/plugin.yml text eol=lf
 syncmoney-web/** text=auto eol=lf
 src/main/resources/syncmoney-web/dist/** text=auto eol=lf
+syncmoney-protocol/src/main/resources/lua/*.lua text eol=lf
+/docs/release/1.4.0-artifact-pins.json text eol=lf
+/docs/release/1.4.0-stable-runtime-matrix.json text eol=lf
+/docs/release/1.4.0-stable-source-manifest.json text eol=lf

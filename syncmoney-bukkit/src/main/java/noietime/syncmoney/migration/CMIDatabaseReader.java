@@ -1,0 +1,521 @@
+package noietime.syncmoney.migration;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import noietime.syncmoney.config.SyncmoneyConfig;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.Plugin;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+
+/**
+ * CMI Database Reader.
+ * Reads player balance data from CMI database.
+ *
+ * Supports:
+ * - MySQL and SQLite database types
+ * - Automatic database configuration detection from DataBaseInfo.yml
+ * - Multi-server database consolidation (Latest strategy)
+ *
+ * [AsyncScheduler] Database reads should be executed on async threads.
+ */
+public final class CMIDatabaseReader {
+
+    private final Plugin plugin;
+    private final SyncmoneyConfig config;
+    private HikariDataSource dataSource;
+    private String tableName;
+    private StorageType storageType;
+    private String sourceIdentity;
+    private boolean initialized = false;
+
+    public enum StorageType {
+        MySQL,
+        SQLite
+    }
+
+    private String detectedTableName;
+
+    private static final String BALANCE_COLUMN = "Balance";
+
+    private static final String UUID_COLUMN = "player_uuid";
+
+    private static final String USERNAME_COLUMN = "username";
+
+    private static final String LASTLOGOFF_COLUMN = "LastLogoffTime";
+
+    public CMIDatabaseReader(Plugin plugin, SyncmoneyConfig config) {
+        this.plugin = plugin;
+        this.config = config;
+        this.storageType = StorageType.SQLite;
+        this.tableName = "users";
+    }
+
+    /**
+     * Gets the detected storage type without initializing the database connection.
+     * Uses auto-detect from DataBaseInfo.yml if enabled.
+     */
+    public StorageType getDetectedStorageType() {
+        if (config.migration().isCMIAutoDetect()) {
+            CMIDatabaseConfig cmiConfig = CMIDatabaseConfig.fromDataBaseInfo(plugin);
+            return cmiConfig.getType();
+        }
+        return StorageType.SQLite;
+    }
+
+    /**
+     * Lazily initializes database connection.
+     * This method is only invoked when migration command is executed.
+     */
+    public synchronized void initialize() {
+        if (initialized) {
+            return;
+        }
+
+        CMIDatabaseConfig cmiConfig = CMIDatabaseConfig.fromDataBaseInfo(plugin);
+        this.storageType = cmiConfig.getType();
+
+        if (storageType == StorageType.MySQL) {
+            this.tableName = cmiConfig.getTablePrefix() + "users";
+            this.sourceIdentity = "cmi-single|MySQL|" + cmiConfig.getHost() + ":" + cmiConfig.getPort()
+                    + "/" + cmiConfig.getDatabase() + "|" + cmiConfig.getTablePrefix();
+        } else {
+            this.tableName = "users";
+            String path = new File(cmiConfig.getSqlitePath()).getAbsoluteFile().toPath().normalize().toString();
+            this.sourceIdentity = "cmi-single|SQLite|" + path + "|" + tableName;
+        }
+
+        if (storageType == StorageType.MySQL) {
+            this.dataSource = createMySQLDataSource(cmiConfig);
+        } else {
+            this.dataSource = createSQLiteDataSource(cmiConfig.getSqlitePath());
+        }
+
+        initialized = true;
+        plugin.getLogger().fine("CMI Reader connected: type=" + storageType + ", table=" + tableName);
+    }
+
+    /**
+     * Checks if the reader has been initialized.
+     */
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    /**
+     * Closes the database connection.
+     */
+    public synchronized void shutdown() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+            plugin.getLogger().fine("CMI Reader connection closed.");
+        }
+        initialized = false;
+    }
+
+    /**
+     * Creates MySQL data source.
+     */
+    private HikariDataSource createMySQLDataSource(CMIDatabaseConfig cmiConfig) {
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl(String.format(
+                "jdbc:mysql://%s:%d/%s",
+                cmiConfig.getHost(),
+                cmiConfig.getPort(),
+                cmiConfig.getDatabase()));
+        hikariConfig.setUsername(cmiConfig.getUsername());
+        hikariConfig.setPassword(cmiConfig.getPassword());
+        hikariConfig.setMaximumPoolSize(5);
+        hikariConfig.setConnectionTimeout(10000);
+        hikariConfig.setPoolName("Syncmoney-CMI-Reader-MySQL");
+        return new HikariDataSource(hikariConfig);
+    }
+
+    /**
+     * Creates SQLite data source.
+     */
+    private HikariDataSource createSQLiteDataSource(String dbPath) {
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl("jdbc:sqlite:" + dbPath);
+        hikariConfig.setDriverClassName("org.sqlite.JDBC");
+        hikariConfig.setMaximumPoolSize(5);
+        hikariConfig.setConnectionTimeout(10000);
+        hikariConfig.setPoolName("Syncmoney-CMI-Reader-SQLite");
+        return new HikariDataSource(hikariConfig);
+    }
+
+    /**
+     * Tests CMI database connection.
+     * @return true if connection is successful
+     */
+    public boolean testConnection() {
+        ensureInitialized();
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(5);
+        } catch (SQLException e) {
+            plugin.getLogger().severe("CMI database connection failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Gets total player count in CMI table.
+     * @return player count
+     */
+    public int getTotalPlayerCount() {
+        ensureInitialized();
+        String sql = "SELECT COUNT(*) FROM " + tableName;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Failed to get CMI player count: " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI player count", e);
+        }
+        throw new IllegalStateException("CMI player count query returned no result");
+    }
+
+    /**
+     * Computes a credential-free digest of the migration-relevant source rows.
+     * The query is ordered by all fields that affect the digest so resume checks
+     * remain stable even when the database's natural row order changes.
+     */
+    MigrationSourceFingerprint.Result getSourceSnapshotFingerprint() {
+        ensureInitialized();
+        String sql = String.format(
+                "SELECT %s, %s, %s FROM %s ORDER BY LOWER(%s), %s, %s, %s",
+                USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN, tableName,
+                USERNAME_COLUMN, USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN
+        );
+        java.security.MessageDigest digest = MigrationSourceFingerprint.newDigest();
+        int rowCount = 0;
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                String playerName = rs.getString(USERNAME_COLUMN);
+                if (playerName == null || playerName.isBlank()) {
+                    throw new IllegalStateException("CMI source contains a player row without a username");
+                }
+
+                UUID uuid = null;
+                Object uuidObj = rs.getObject(UUID_COLUMN);
+                if (uuidObj != null) {
+                    try {
+                        uuid = UUID.fromString(uuidObj.toString());
+                    } catch (IllegalArgumentException ignored) {
+                        // CMI migration treats malformed UUIDs as absent and resolves by name.
+                    }
+                }
+
+                BigDecimal balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                MigrationSourceFingerprint.update(digest, new CMIPlayerData(uuid, playerName, balance, 0L));
+                rowCount++;
+            }
+        } catch (SQLException failure) {
+            plugin.getLogger().severe("Failed to fingerprint CMI source rows: " + failure.getMessage());
+            throw new IllegalStateException("Failed to fingerprint CMI source rows", failure);
+        }
+
+        return MigrationSourceFingerprint.finish(digest, rowCount);
+    }
+
+    /**
+     * Reads CMI player balance data (paginated).
+     * @param offset starting offset
+     * @param limit page size
+     * @return list of player balances
+     */
+    public List<CMIPlayerData> readPlayers(int offset, int limit) {
+        ensureInitialized();
+        List<CMIPlayerData> players = new ArrayList<>();
+
+        String sql = String.format(
+                "SELECT * FROM %s ORDER BY LOWER(%s), %s, %s, %s LIMIT ? OFFSET ?",
+                tableName, USERNAME_COLUMN, USERNAME_COLUMN, UUID_COLUMN, BALANCE_COLUMN
+        );
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1, limit);
+            stmt.setInt(2, offset);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    String playerName = rs.getString(USERNAME_COLUMN);
+                    if (playerName == null || playerName.isBlank()) {
+                        throw new IllegalStateException("CMI source contains a player row without a username");
+                    }
+                    Object uuidObj = rs.getObject(UUID_COLUMN);
+
+                    UUID uuid = null;
+                    if (uuidObj != null) {
+                        try {
+                            uuid = UUID.fromString(uuidObj.toString());
+                        } catch (IllegalArgumentException e) {
+                        }
+                    }
+
+                    BigDecimal balance;
+                    try {
+                        balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                    } catch (Exception e) {
+                        throw new IllegalStateException("Failed to read CMI balance for " + playerName, e);
+                    }
+
+                    long lastLogoffTime = 0;
+                    try {
+                        Object lastLogoffObj = rs.getObject(LASTLOGOFF_COLUMN);
+                        if (lastLogoffObj != null) {
+                            if (lastLogoffObj instanceof Number) {
+                                lastLogoffTime = ((Number) lastLogoffObj).longValue();
+                            } else {
+                                lastLogoffTime = Long.parseLong(lastLogoffObj.toString());
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    players.add(new CMIPlayerData(uuid, playerName, balance, lastLogoffTime));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Failed to read CMI players: " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI players", e);
+        }
+
+        return players;
+    }
+
+    /**
+     * Reads single player balance.
+     * @param playerName player name
+     * @return player balance data (if exists)
+     */
+    public CMIPlayerData readPlayer(String playerName) {
+        ensureInitialized();
+        String sql = String.format(
+                "SELECT * FROM %s WHERE LOWER(%s) = ?",
+                tableName, USERNAME_COLUMN
+        );
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, playerName.toLowerCase(Locale.ROOT));
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    Object uuidObj = rs.getObject(UUID_COLUMN);
+                    UUID uuid = null;
+                    if (uuidObj != null) {
+                        try {
+                            uuid = UUID.fromString(uuidObj.toString());
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+
+                    BigDecimal balance;
+                    try {
+                        balance = parseRequiredBalance(rs.getObject(BALANCE_COLUMN), playerName);
+                    } catch (Exception failure) {
+                        throw new IllegalStateException("Failed to read CMI balance for " + playerName, failure);
+                    }
+
+                    long lastLogoffTime = 0;
+                    try {
+                        Object lastLogoffObj = rs.getObject(LASTLOGOFF_COLUMN);
+                        if (lastLogoffObj != null) {
+                            if (lastLogoffObj instanceof Number) {
+                                lastLogoffTime = ((Number) lastLogoffObj).longValue();
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    return new CMIPlayerData(uuid, playerName, balance, lastLogoffTime);
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Failed to read CMI player " + playerName + ": " + e.getMessage());
+            throw new IllegalStateException("Failed to read CMI player " + playerName, e);
+        }
+
+        return null;
+    }
+
+    /**
+     * Ensures database connection is initialized.
+     */
+    private void ensureInitialized() {
+        if (!initialized || dataSource == null) {
+            throw new IllegalStateException("CMI Reader not initialized. Call initialize() first.");
+        }
+    }
+
+    /**
+     * Closes the database connection.
+     */
+    public void close() {
+        shutdown();
+    }
+
+    /**
+     * Gets storage type.
+     * @return MySQL or SQLite
+     */
+    public StorageType getStorageType() {
+        return storageType;
+    }
+
+    /**
+     * Gets table name.
+     * @return table name
+     */
+    public String getTableName() {
+        return tableName;
+    }
+
+    /** Stable, credential-free identity used to prevent resuming against another CMI source. */
+    public String getSourceIdentity() {
+        ensureInitialized();
+        return sourceIdentity;
+    }
+
+    static BigDecimal parseRequiredBalance(Object balanceObj, String playerName) {
+        if (balanceObj == null) {
+            throw new IllegalStateException("CMI source contains a null balance for " + playerName);
+        }
+        try {
+            return new BigDecimal(balanceObj.toString()).setScale(2, java.math.RoundingMode.HALF_UP);
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("CMI source contains an invalid balance for " + playerName, failure);
+        }
+    }
+
+    /**
+     * CMI database configuration class.
+     * Automatically reads configuration from DataBaseInfo.yml.
+     */
+    public static class CMIDatabaseConfig {
+        private StorageType type;
+        private String host;
+        private int port;
+        private String username;
+        private String password;
+        private String database;
+        private String tablePrefix;
+        private String sqlitePath;
+
+        public StorageType getType() {
+            return type;
+        }
+
+        public String getHost() {
+            return host;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public String getDatabase() {
+            return database;
+        }
+
+        public String getTablePrefix() {
+            return tablePrefix;
+        }
+
+        public String getSqlitePath() {
+            return sqlitePath;
+        }
+
+        /**
+         * Reads CMI configuration from DataBaseInfo.yml.
+         */
+        public static CMIDatabaseConfig fromDataBaseInfo(Plugin plugin) {
+            CMIDatabaseConfig config = new CMIDatabaseConfig();
+
+            File cmiConfigFile = new File(plugin.getDataFolder().getParent(), "CMI/Settings/DataBaseInfo.yml");
+
+            if (!cmiConfigFile.exists()) {
+                plugin.getLogger().warning("CMI DataBaseInfo.yml not found, using default MySQL config");
+                config.type = StorageType.MySQL;
+                config.host = "localhost";
+                config.port = 3306;
+                config.username = "root";
+                config.password = "";
+                config.database = "minecraft";
+                config.tablePrefix = "CMI_";
+                return config;
+            }
+
+            try {
+                YamlConfiguration yaml = YamlConfiguration.loadConfiguration(cmiConfigFile);
+
+                String method = yaml.getString("storage.method", "MySQL").toLowerCase(Locale.ROOT);
+                config.type = "sqlite".equals(method) ? StorageType.SQLite : StorageType.MySQL;
+
+                if (config.type == StorageType.MySQL) {
+                    String hostname = yaml.getString("mysql.hostname", "localhost:3306");
+                    String[] parts = hostname.split(":");
+                    config.host = parts[0];
+                    config.port = parts.length > 1 ? Integer.parseInt(parts[1]) : 3306;
+
+                    config.username = yaml.getString("mysql.username", "root");
+                    config.password = yaml.getString("mysql.password", "");
+                    config.database = yaml.getString("mysql.database", "minecraft");
+                    config.tablePrefix = yaml.getString("mysql.tablePrefix", "CMI_");
+
+                    plugin.getLogger().fine("CMI MySQL config: host=" + config.host + ", database=" + config.database);
+                } else {
+                    config.tablePrefix = "";
+                    config.sqlitePath = new File(plugin.getDataFolder().getParent(), "CMI/cmi.sqlite.db").getAbsolutePath();
+                    plugin.getLogger().fine("CMI SQLite config: path=" + config.sqlitePath);
+                }
+
+            } catch (Exception e) {
+                plugin.getLogger().severe("Failed to parse CMI DataBaseInfo.yml: " + e.getMessage());
+                config.type = StorageType.MySQL;
+                config.host = "localhost";
+                config.port = 3306;
+                config.username = "root";
+                config.password = "";
+                config.database = "minecraft";
+                config.tablePrefix = "CMI_";
+            }
+
+            return config;
+        }
+    }
+
+    /**
+     * CMI player data record.
+     * @param uuid player UUID (if available)
+     * @param playerName player name
+     * @param balance balance
+     * @param lastLogoffTime last logoff time (used for multi-server consolidation)
+     */
+    public record CMIPlayerData(UUID uuid, String playerName, BigDecimal balance, long lastLogoffTime) {}
+}

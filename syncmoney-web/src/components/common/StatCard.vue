@@ -38,7 +38,7 @@
 
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
-import { TrendingUp, TrendingDown } from 'lucide-vue-next'
+import { TrendingUp, TrendingDown } from '@lucide/vue'
 import Card from './Card.vue'
 import Skeleton from './Skeleton.vue'
 

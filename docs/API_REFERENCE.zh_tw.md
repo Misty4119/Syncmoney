@@ -1,6 +1,6 @@
 # Syncmoney Web API 參考
 
-> 專案版本：`1.3.2`
+> 專案版本：`1.4.0`
 > Backend：Undertow
 > shipped config 預設綁定：`localhost:8080`
 > 本文件描述目前 source tree 中已驗證的 route 與行為。
@@ -9,7 +9,7 @@
 
 ## 1. 基本行為
 
-Web Admin 預設停用。啟用後，server 提供 SPA、health endpoint、REST API、SSE，以及目前仍不完整的 WebSocket endpoint。
+Web Admin 預設停用。啟用後，server 提供 SPA、health endpoint、REST API 與 SSE endpoint。`/ws` 保留為 unavailable endpoint，所有 request 都固定回傳 `503 WEBSOCKET_UNAVAILABLE`。
 
 一般 API request 使用：
 
@@ -21,7 +21,7 @@ Authorization: Bearer <api-key>
 
 只有 `web-admin.security.trust-proxy=true` 時，才會從 `X-Forwarded-For` 讀取 forwarded client address；未啟用時，rate limiting 使用的 client identity 不信任該 header。
 
-Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limit 是 120 requests/minute；若 rate-limit setting 缺少，`WebAdminConfig` code fallback 為 60/minute。Config validation 會警告 `change-me-in-production`，但目前 server auto-disable logic 只檢查精確字串 `change-me`。因此在對外暴露服務前必須更換 shipped key。
+Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limit 是 120 requests/minute；若 rate-limit setting 缺少，`WebAdminConfig` code fallback 為 60/minute。API key 空白或 trim 後等於 `change-me` / `change-me-in-production`（不分大小寫）時，`WebServiceManager` 會停用 Web Admin，但 economy plugin 仍正常啟動。要啟用 Web Admin，請設定非 placeholder API key。
 
 ## 2. Response envelope
 
@@ -33,7 +33,7 @@ Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limi
   "data": {},
   "meta": {
     "timestamp": 0,
-    "version": "1.3.2"
+    "version": "1.4.0"
   }
 }
 ```
@@ -49,7 +49,7 @@ Shipped config 的 API-key placeholder 是 `change-me-in-production`，rate limi
   },
   "meta": {
     "timestamp": 0,
-    "version": "1.3.2"
+    "version": "1.4.0"
   }
 }
 ```
@@ -108,19 +108,15 @@ API key comparison 為 constant-time；one-time token validation 成功後即 co
 
 Client 應依 frontend token flow 重連，不應假設 token 可重複使用。
 
+缺少或無效認證的 request 會回傳 `401`，不會建立 SSE connection。
+
 ## 6. WebSocket 狀態
 
 ### `GET /ws` / WebSocket upgrade path
 
 目前 WebSocket implementation **不完整，不是受支援的 production transport**。
 
-已驗證行為：
-
-- 非 upgrade-shaped request 回 `503 WEBSOCKET_UNAVAILABLE`；
-- upgrade-shaped request 目前只要求 query token 非空；
-- handler 目前沒有呼叫 `WsTokenHandler.validateToken` 驗證該 token；
-- 會產生 101-shaped response 與 internal bookkeeping/logging；
-- broadcast method 尚未提供完整可用的 Undertow WebSocket message transport。
+所有 `/ws` request（包含帶有非空 token 的 WebSocket upgrade）都回 `503 WEBSOCKET_UNAVAILABLE`；server 不會回傳 upgrade response。完整 WebSocket transport 延後處理。
 
 前端即時通道應使用 `/api/sse`。不能因 `/ws` endpoint 存在就推定 authentication hardened 或 message delivery 完整。
 
@@ -257,13 +253,13 @@ Node handler 對 duplicate method/path 較晚註冊，因此提供目前有效�
 
 ### `GET /api/nodes`
 
-列出 nodes。
+列出 nodes。Node URL 欄位與 central-node `selfUrl` 會移除 URI user-info、query 與 fragment；無效 URL 以 `[invalid URL]` 表示。
 ### `POST /api/nodes`
 
-依目前 request model 建立/註冊 node。
+依目前 request model 建立/註冊 node。URL 不得包含 URI user-info、query 或 fragment，並須通過設定的 address restriction。
 ### `PUT /api/nodes/{index}`
 
-更新指定 index node。
+更新指定 index node。若有提供 URL，不得包含 URI user-info、query 或 fragment，並須通過設定的 address restriction。
 ### `DELETE /api/nodes/{index}`
 
 刪除指定 index node。
@@ -272,10 +268,10 @@ Node handler 對 duplicate method/path 較晚註冊，因此提供目前有效�
 執行 node ping/health。
 ### `GET /api/nodes/status`
 
-node status。
+node status；URL 欄位會在 API response 與 SSE broadcast 前移除 URI user-info、query 與 fragment，無效 URL 以 `[invalid URL]` 表示。
 ### `POST /api/nodes/{index}/proxy`
 
-透過 central node handler proxy 允許的 request；node URL、credential 與 proxy restriction 屬安全敏感內容。
+透過 central node handler proxy 允許的 request。`path` 必須是 `/api` 下不含 authority 或 fragment 的相對 URI；可選 query string 會原樣轉送至同一個設定的 node origin。Absolute URL、URI authority、fragment、dot-segment traversal（包含 percent-encoded 形式）與過度編碼都會被拒絕。允許的 proxy method 為 `GET`、`HEAD`、`OPTIONS`、`POST`、`PUT`、`PATCH`、`DELETE`。受 scope 限制的 API key 必須具備 `syncmoney.web.nodes.view` 才能使用此 endpoint，且也必須具備 target path 對應的 permission；未映射的 target path 只允許 `syncmoney.web.central`。會改變狀態的 method（`POST`、`PUT`、`PATCH`、`DELETE`）還需要 `syncmoney.web.nodes.manage` 或 `syncmoney.web.central`。不支援的 method 或權限不足會在使用已設定的 node key 前被拒絕。外層 request body 上限為 1 MiB；超過時會在 JSON 解析或使用 node key 前回 HTTP 413。上游 response body 會先完整讀入最多 8 MiB 的有界 buffer，再送出 response；超過上限時回 HTTP 502，且不會轉送部分內容。`POST`、`PUT`、`PATCH` 可在 `body` 欄位提供任意 JSON value，並以 JSON 傳送；其他 method 不會帶 request body。只有 path 與權限檢查通過後，request 才會送往設定的 node origin 並附上該 node 的 Bearer API key。設定的 node URL 會拒絕 user-info、query、fragment 與靜態列出的 local/special-use IPv4 位址範圍，包括 shared、protocol-assignment、documentation、benchmarking、multicast 與 reserved 區段，並拒絕 IPv6 unspecified、loopback、link-local、site-local、multicast 與 ULA 位址。Node URL 驗證失敗時只記錄例外類型，不會記錄 URL、user-info、query 或 fragment。Node URL 與 credential 屬安全敏感內容。DNS rebinding 防護為 `DEFERRED / NOT VERIFIED`；請將 server egress 限制於預期 node，並把受信任的 Web Admin API key 視為高權限憑證。
 ### `POST /api/nodes/sync`
 
 同步所有 configured nodes。
@@ -294,7 +290,9 @@ Registered API extension 位於此 prefix；實際 child route 由已安裝/註�
 
 ## 15. CORS、rate limit 與 proxy 部署
 
-Shipped `config.yml` 中 Web Admin 預設 disabled、host `localhost`、port `8080`、rate limit enabled 且 120/minute、`cors-allowed-origins` 為空 list。`WebAdminConfig` 在 key 缺失時有自己的 fallback，包括 `*` CORS fallback。
+Shipped `config.yml` 中 Web Admin 預設 disabled、host `localhost`、port `8080`、rate limit enabled 且 120/minute、`cors-allowed-origins` 為空 list。缺少或空值會拒絕跨來源瀏覽器存取。可設定 YAML list，或以逗號分隔的 scalar；只有明確設定 `*` 才允許 wildcard，origin 以完整字串比對。允許的 origin 會在 REST 與 SSE 的成功及錯誤 response 收到 `Access-Control-Allow-Origin`；service 不啟用 credential sharing。未列入的 origin 不會收到此 header。CORS 是瀏覽器 response policy，不能取代 Bearer API-key authentication，也不會阻止非瀏覽器 client。
+
+Node proxy path 限制在已設定 node origin 的 `/api` 路徑下。靜態 node URL 檢查會拒絕 user-info、query、fragment 與 local/special-use address range，但不會將 DNS 結果固定至最終 HTTP connection，因此 DNS rebinding 防護仍為 `DEFERRED / NOT VERIFIED`。請保護 Web Admin API key，並限制對外 network access 只到預期 node host。
 
 Internet-facing reverse proxy 應：
 

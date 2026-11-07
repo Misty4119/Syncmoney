@@ -1,0 +1,77 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+    id 'com.gradleup.nmcp'
+}
+
+group = 'io.github.misty4119'
+version = rootProject.version
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    withSourcesJar()
+    withJavadocJar()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+publishing {
+    publications {
+        syncmoneyApi(MavenPublication) {
+            from components.java
+            groupId = 'io.github.misty4119'
+            artifactId = 'syncmoney-api'
+            version = project.version.toString()
+            pom {
+                name = 'Syncmoney API'
+                description = 'Read-only Java API for querying the Syncmoney economy.'
+                url = 'https://github.com/Misty4119/Syncmoney'
+                licenses {
+                    license {
+                        name = 'Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                        distribution = 'repo'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'misty4119'
+                        name = 'Misty4119'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/Misty4119/Syncmoney.git'
+                    developerConnection = 'scm:git:ssh://github.com/Misty4119/Syncmoney.git'
+                    url = 'https://github.com/Misty4119/Syncmoney'
+                }
+            }
+        }
+    }
+}
+
+def signingInMemoryKey = providers.gradleProperty('signingInMemoryKey')
+        .orElse(providers.environmentVariable('SYNCMONEY_SIGNING_IN_MEMORY_KEY'))
+def signingInMemoryKeyPassword = providers.gradleProperty('signingInMemoryKeyPassword')
+        .orElse(providers.environmentVariable('SYNCMONEY_SIGNING_IN_MEMORY_KEY_PASSWORD'))
+if (signingInMemoryKey.isPresent()) {
+    signing {
+        useInMemoryPgpKeys(signingInMemoryKey.get(), signingInMemoryKeyPassword.getOrElse(''))
+        sign publishing.publications.syncmoneyApi
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.named('check') {
+    dependsOn(rootProject.tasks.named('verifyCentralPublisherIsolation'))
+}

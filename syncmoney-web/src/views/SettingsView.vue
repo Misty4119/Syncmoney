@@ -92,7 +92,7 @@ import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useNotificationStore } from '@/stores/notification'
 import { useNodesStore } from '@/stores/nodes'
-import { Palette, Globe, Moon, Sun, Clock, CheckCircle, Save } from 'lucide-vue-next'
+import { Palette, Globe, Moon, Sun, Clock, CheckCircle, Save } from '@lucide/vue'
 import Card from '@/components/common/Card.vue'
 import Button from '@/components/common/Button.vue'
 

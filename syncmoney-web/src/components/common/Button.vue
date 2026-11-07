@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
-import { Loader2 } from 'lucide-vue-next'
+import { Loader2 } from '@lucide/vue'
 
 interface Props {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'

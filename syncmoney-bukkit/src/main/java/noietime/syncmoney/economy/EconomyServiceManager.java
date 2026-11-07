@@ -1,0 +1,301 @@
+package noietime.syncmoney.economy;
+
+import noietime.syncmoney.Syncmoney;
+import noietime.syncmoney.config.SyncmoneyConfig;
+import noietime.syncmoney.storage.StorageManager;
+import noietime.syncmoney.uuid.NameResolver;
+import noietime.syncmoney.vault.SyncmoneyVaultProvider;
+import noietime.syncmoney.vault.VaultRuntimeDetector;
+import noietime.syncmoney.vault.VaultUnlockedIntegrationLoader;
+import noietime.syncmoney.shadow.ShadowSyncTask;
+import noietime.syncmoney.breaker.PlayerTransactionGuard;
+import noietime.syncmoney.initialization.ShutdownStepRunner;
+
+import java.math.BigDecimal;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * [SYNC-ECO-070] Unified economy service manager.
+ * Manages EconomyFacade, Vault integration, CrossServerSync, and ShadowSync.
+ */
+public class EconomyServiceManager {
+
+    private final Syncmoney plugin;
+    private final SyncmoneyConfig config;
+    private final StorageManager storageManager;
+
+    private EconomyFacade economyFacade;
+    private EconomyWriteQueue economyWriteQueue;
+    private FallbackEconomyWrapper fallbackWrapper;
+    private LocalEconomyHandler localHandler;
+    private SyncmoneyVaultProvider vaultProvider;
+    private Object vaultUnlockedRegistrar;
+    private CrossServerSyncManager crossServerSyncManager;
+    private EconomyModeRouter economyModeRouter;
+    private ShadowSyncTask shadowSyncTask;
+    private NameResolver nameResolver;
+    private final AtomicBoolean quiesced = new AtomicBoolean();
+
+
+    public EconomyServiceManager(Syncmoney plugin, SyncmoneyConfig config, StorageManager storageManager) {
+        this.plugin = plugin;
+        this.config = config;
+        this.storageManager = storageManager;
+    }
+
+    /**
+     * [SYNC-ECO-071] Initialize all economy components.
+     */
+    public void initialize() {
+        EconomyMode mode = config.getEconomyMode();
+
+        if (mode == EconomyMode.CMI) {
+            // CMI owns all local economy operations. Keep only the lightweight publisher
+            // required by the dedicated CMI Redis synchronization path.
+            this.crossServerSyncManager = new CrossServerSyncManager(
+                    plugin, config, storageManager.getRedisManager(), null, null);
+            this.economyModeRouter = new EconomyModeRouter(plugin, config);
+            this.economyModeRouter.initialize(null, null, null, crossServerSyncManager);
+            plugin.getLogger().info(
+                    "CMI mode: CMI owns economy operations; Syncmoney only synchronizes CMI balances.");
+            return;
+        }
+
+        this.economyWriteQueue = new EconomyWriteQueue(config.getQueueCapacity(), plugin.getLogger());
+        if (mode != EconomyMode.LOCAL) {
+            this.economyWriteQueue.closeAdmission();
+        }
+
+        this.fallbackWrapper = new FallbackEconomyWrapper(
+                plugin,
+                storageManager.getRedisManager(),
+                mode == EconomyMode.LOCAL
+        );
+
+        if (mode == EconomyMode.LOCAL) {
+            this.localHandler = new LocalEconomyHandler(plugin, config.local().getLocalSQLitePath());
+            plugin.getLogger().fine("Local Economy Handler initialized (SQLite mode)");
+        }
+
+
+
+        OverflowLogInterface overflowLog = new RedisOverflowLog(plugin, storageManager.getRedisManager());
+
+        this.economyFacade = new EconomyFacade(
+                plugin, config,
+                storageManager.getCacheManager(),
+                storageManager.getRedisManager(),
+                storageManager.getDatabaseManager(),
+                localHandler, economyWriteQueue, fallbackWrapper, null, overflowLog);
+
+        this.nameResolver = new NameResolver(
+                plugin,
+                storageManager.getCacheManager(),
+                storageManager.getDatabaseManager()
+        );
+
+        startShadowSyncIfEnabled();
+
+        this.vaultProvider = new SyncmoneyVaultProvider(
+                plugin,
+                economyFacade,
+                storageManager.getRedisManager(),
+                nameResolver,
+                storageManager.getDbWriteQueue()
+        );
+        initializeVaultIntegrations();
+
+        this.crossServerSyncManager = new CrossServerSyncManager(
+                plugin, config,
+                storageManager.getRedisManager(),
+                economyFacade,
+                storageManager.getCacheManager()
+        );
+
+        crossServerSyncManager.startPeriodicVersionCheck();
+
+        if (vaultProvider != null) {
+            vaultProvider.setSyncManager(crossServerSyncManager);
+            vaultProvider.setConfig(config);
+        }
+        plugin.getLogger().fine("CrossServerSyncManager initialized.");
+
+        this.economyModeRouter = new EconomyModeRouter(plugin, config);
+
+        EconomyModeRouter.EconomyFacadeWrapper wrapper = new EconomyModeRouter.EconomyFacadeWrapper() {
+            @Override
+            public BigDecimal deposit(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+                return economyFacade.deposit(uuid, amount, source);
+            }
+
+            @Override
+            public BigDecimal withdraw(UUID uuid, BigDecimal amount, EconomyEvent.EventSource source) {
+                return economyFacade.withdraw(uuid, amount, source);
+            }
+
+            @Override
+            public BigDecimal setBalance(UUID uuid, BigDecimal newBalance, EconomyEvent.EventSource source) {
+                return economyFacade.setBalance(uuid, newBalance, source);
+            }
+
+            @Override
+            public BigDecimal getBalance(UUID uuid) {
+                return economyFacade.getBalance(uuid);
+            }
+        };
+
+        economyModeRouter.initialize(wrapper, localHandler, null, crossServerSyncManager);
+
+        plugin.getLogger().fine("Economy layer initialized");
+    }
+
+    void startShadowSyncIfEnabled() {
+        if (config.isCMIMode()) {
+            plugin.getLogger().fine("Shadow Sync skipped: CMI mode is limited to CMI currency synchronization.");
+            return;
+        }
+        if (!config.shadowSync().isShadowSyncEnabled()) {
+            return;
+        }
+
+        this.shadowSyncTask = new ShadowSyncTask(
+                plugin, config, economyFacade,
+                storageManager.getCacheManager(),
+                storageManager.getDatabaseManager(),
+                storageManager::acquireDatabaseUseLease);
+        shadowSyncTask.start();
+    }
+
+    /**
+     * [SYNC-ECO-073] Selects the primary Vault API from runtime capabilities.
+     *
+     * <p>VaultUnlocked keeps the Bukkit plugin name "Vault", so the modern
+     * net.milkbowl.vault2 API is detected by class capability. Its provider is
+     * registered as the primary API while the legacy provider remains available
+     * for plugins compiled against Vault 1.7.
+     */
+    private void initializeVaultIntegrations() {
+        VaultRuntimeDetector.Runtime runtime = VaultRuntimeDetector.detect(plugin);
+
+        if (runtime == VaultRuntimeDetector.Runtime.VAULT_UNLOCKED) {
+            vaultUnlockedRegistrar = VaultUnlockedIntegrationLoader.register(
+                    plugin, economyFacade, nameResolver, config);
+            if (vaultUnlockedRegistrar != null) {
+                plugin.getLogger().info(
+                        "VaultUnlocked detected: Vault2 is the primary economy API; Vault 1.7 compatibility remains enabled.");
+            } else {
+                plugin.getLogger().warning(
+                        "VaultUnlocked detected but Vault2 registration failed; falling back to Vault 1.7 compatibility.");
+            }
+        } else if (runtime == VaultRuntimeDetector.Runtime.VAULT) {
+            plugin.getLogger().info("Legacy Vault detected: using the Vault 1.7 economy API.");
+        } else {
+            plugin.getLogger().warning("No enabled Vault-compatible runtime was detected.");
+        }
+
+        if (runtime != VaultRuntimeDetector.Runtime.NONE && vaultProvider.setupEconomy()) {
+            plugin.getLogger().fine("Syncmoney Vault 1.7 Economy registered successfully.");
+        } else if (runtime != VaultRuntimeDetector.Runtime.NONE) {
+            plugin.getLogger().warning("Vault 1.7 Economy registration failed.");
+        }
+    }
+
+    /**
+     * [SYNC-ECO-072] Shutdown economy components in reverse order.
+     */
+    public void quiesce() {
+        if (!quiesced.compareAndSet(false, true)) {
+            return;
+        }
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("economy write admission", () -> {
+                    if (economyFacade != null) economyFacade.beginShutdown();
+                }),
+                new ShutdownStepRunner.Step("Vault provider", () -> {
+                    if (vaultProvider != null) vaultProvider.shutdown();
+                }),
+                new ShutdownStepRunner.Step("VaultUnlocked provider", () ->
+                        VaultUnlockedIntegrationLoader.close(plugin, vaultUnlockedRegistrar)),
+                new ShutdownStepRunner.Step("cross-server version producer", () -> {
+                    if (crossServerSyncManager != null) crossServerSyncManager.shutdown();
+                }));
+    }
+
+    public void shutdown() {
+        quiesce();
+        plugin.getLogger().fine("Shutting down economy layer...");
+        ShutdownStepRunner.run(plugin.getLogger(),
+                new ShutdownStepRunner.Step("shadow sync", () -> {
+                    if (shadowSyncTask != null) shadowSyncTask.stop();
+                }),
+                new ShutdownStepRunner.Step("economy facade", () -> {
+                    if (economyFacade != null) economyFacade.shutdown();
+                }),
+                new ShutdownStepRunner.Step("LOCAL persistence", () -> {
+                    if (localHandler != null) localHandler.close();
+                }));
+        plugin.getLogger().fine("Economy layer shutdown complete");
+    }
+
+    public EconomyFacade getEconomyFacade() {
+        return economyFacade;
+    }
+
+    public NameResolver getNameResolver() {
+        return nameResolver;
+    }
+
+    public LocalEconomyHandler getLocalEconomyHandler() {
+        return localHandler;
+    }
+
+    public ShadowSyncTask getShadowSyncTask() {
+        return shadowSyncTask;
+    }
+
+    public SyncmoneyVaultProvider getVaultProvider() {
+        return vaultProvider;
+    }
+
+    public boolean isVaultUnlockedRegistered() {
+        return vaultUnlockedRegistrar != null;
+    }
+
+    public CrossServerSyncManager getCrossServerSyncManager() {
+        return crossServerSyncManager;
+    }
+
+    /**
+     * Set Discord webhook notifier for cross-server notifications.
+     */
+    public void setDiscordWebhookNotifier(noietime.syncmoney.breaker.DiscordWebhookNotifier discordWebhookNotifier) {
+        if (crossServerSyncManager != null) {
+            crossServerSyncManager.setDiscordWebhookNotifier(discordWebhookNotifier);
+        }
+    }
+
+    public EconomyWriteQueue getEconomyWriteQueue() {
+        return economyWriteQueue;
+    }
+
+    public OverflowLogInterface getOverflowLog() {
+        return economyFacade != null ? economyFacade.getOverflowLog() : null;
+    }
+
+    public PlayerTransactionGuard getPlayerTransactionGuard() {
+        return plugin.getPlayerTransactionGuard();
+    }
+
+    public FallbackEconomyWrapper getFallbackWrapper() {
+        return fallbackWrapper;
+    }
+
+    public EconomyModeRouter getEconomyModeRouter() {
+        return economyModeRouter;
+    }
+
+    public CMIEconomyHandler getCmiHandler() {
+        return economyModeRouter != null ? economyModeRouter.getCmiHandler() : null;
+    }
+}

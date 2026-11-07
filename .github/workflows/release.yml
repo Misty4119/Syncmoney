@@ -1,23 +1,19 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - '*.*.*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Existing core tag to publish'
+      version:
+        description: 'Release version to build, for example 1.4.0 or 1.4.0-Beta.1'
         required: true
         type: string
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  # Every version writes to the same Web mirror main branch. Serialize all releases.
+  group: release-${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
@@ -25,93 +21,784 @@ jobs:
     name: Validate release metadata
     if: github.repository == 'Misty4119/Syncmoney'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       channel: ${{ steps.metadata.outputs.channel }}
+      source_commit: ${{ steps.metadata.outputs.source_commit }}
+      pins_path: ${{ steps.metadata.outputs.pins_path }}
     steps:
-      - name: Checkout
+      - name: Checkout dispatch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Validate tag and source metadata
+      - name: Validate version and merged main source
         id: metadata
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
-            echo "Core release tag must use 1.2.3, 1.2.3-alpha.1, or 1.2.3-beta.1; got: $RELEASE_TAG" >&2
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release preparation must be dispatched from main; got: $GITHUB_REF" >&2
+            exit 1
+          fi
+          normalized_tag="$(printf '%s' "$RELEASE_VERSION" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$normalized_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "Release version must use 1.2.3, 1.2.3-alpha.1, or 1.2.3-Beta.1; got: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+
+          canonical_tag="$RELEASE_VERSION"
+          if [[ "$normalized_tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-(alpha|beta)\.([0-9]+)$ ]]; then
+            version_base="${BASH_REMATCH[1]}"
+            prerelease_kind="${BASH_REMATCH[2]}"
+            prerelease_number="${BASH_REMATCH[3]}"
+            if [[ "$prerelease_kind" == "beta" ]]; then
+              canonical_tag="${version_base}-Beta.${prerelease_number}"
+            else
+              canonical_tag="${version_base}-alpha.${prerelease_number}"
+            fi
+          fi
+
+          if [[ "$canonical_tag" != "$RELEASE_VERSION" ]]; then
+            echo "Release version must use canonical casing: $canonical_tag" >&2
+            exit 1
+          fi
+
+          git fetch origin main
+          release_commit="$(git rev-parse HEAD)"
+          if [[ "$release_commit" != "$GITHUB_SHA" ]]; then
+            echo "Checked-out source $release_commit does not match dispatch commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
+            echo "Release source $release_commit is not merged into main." >&2
             exit 1
           fi
 
           source_version="$(sed -n "s/^version = providers.gradleProperty('releaseVersion').orElse('\([^']*\)').get()/\1/p" build.gradle)"
           web_version="$(node -p "JSON.parse(require('fs').readFileSync('syncmoney-web/package.json', 'utf8')).version")"
           channel=stable
-          if [[ "$RELEASE_TAG" == *-alpha.* || "$RELEASE_TAG" == *-beta.* ]]; then
+          if [[ "$normalized_tag" == *-alpha.* || "$normalized_tag" == *-beta.* ]]; then
             channel=preview
           else
-            if [[ "$source_version" != "$RELEASE_TAG" ]]; then
-              echo "Stable release tag $RELEASE_TAG does not match build.gradle source version $source_version" >&2
+            if [[ "$source_version" != "$canonical_tag" ]]; then
+              echo "Stable release version $RELEASE_VERSION does not match build.gradle source version $source_version" >&2
               exit 1
             fi
-            if [[ "$web_version" != "$RELEASE_TAG" ]]; then
-              echo "Stable release tag $RELEASE_TAG does not match frontend package version $web_version" >&2
+            if [[ "$web_version" != "$canonical_tag" ]]; then
+              echo "Stable release version $RELEASE_VERSION does not match frontend package version $web_version" >&2
               exit 1
             fi
-            if ! grep -Fq "## [$RELEASE_TAG] - " CHANGELOG.md; then
-              echo "CHANGELOG.md has no section for stable release $RELEASE_TAG" >&2
+            if ! grep -Fq "## [$canonical_tag] - " CHANGELOG.md; then
+              echo "CHANGELOG.md has no section for stable release $RELEASE_VERSION" >&2
               exit 1
             fi
           fi
 
-          echo "version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          pins_path="docs/release/${canonical_tag,,}-artifact-pins.json"
+          python3 .github/scripts/verify_release_pins.py \
+            --pins "$pins_path" --version "$canonical_tag" --metadata-only
 
-  sync-web:
-    name: Sync frontend and publish Web tag
+          echo "version=$canonical_tag" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$release_commit" >> "$GITHUB_OUTPUT"
+          echo "pins_path=$pins_path" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, test, and checksum
     needs: prepare
     if: needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+      RELEASE_PINS_PATH: ${{ needs.prepare.outputs.pins_path }}
     steps:
-      - name: Check frontend release credential
-        id: credential
-        shell: bash
-        env:
-          SYNC_WEB_TOKEN: ${{ secrets.SYNC_WEB_RELEASE_TOKEN }}
-        run: |
-          if [[ -n "${SYNC_WEB_TOKEN:-}" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "SYNC_WEB_RELEASE_TOKEN is not configured; an existing Web release will be verified instead."
-          fi
-
-      - name: Checkout core release
-        if: steps.credential.outputs.available == 'true'
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.version }}
-          fetch-depth: 1
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Test release pin validator
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+      - name: Validate reviewed release pin metadata
+        run: python3 .github/scripts/verify_release_pins.py --pins "$RELEASE_PINS_PATH" --version "$RELEASE_VERSION" --metadata-only
+
+      - name: Set up Java 25
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.22.0
+          run_install: false
 
       - name: Set up Node.js 24
-        if: steps.credential.outputs.available == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: syncmoney-web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: syncmoney-web
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend checks and embedded build
+        working-directory: syncmoney-web
+        env:
+          SYNCMONEY_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          pnpm typecheck
+          pnpm test:coverage
+          pnpm build:embedded
+
+      - name: Verify embedded bundle and extraction list
+        shell: bash
+        run: |
+          set -euo pipefail
+          java_file=syncmoney-bukkit/src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
+          java_before="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          node syncmoney-web/scripts/sync-embedded-web.mjs
+          java_after="$(sha256sum "$java_file" | cut -d' ' -f1)"
+          if [[ "$java_before" != "$java_after" ]]; then
+            git diff -- "$java_file"
+            echo "WebAdminServer.extractIndividualFiles is not stable after regeneration." >&2
+            exit 1
+          fi
+          if [[ "${{ needs.prepare.outputs.channel }}" == "stable" ]]; then
+            if [[ -n "$(git status --porcelain -- "$java_file" src/main/resources/syncmoney-web/dist)" ]]; then
+              git status --short -- "$java_file" src/main/resources/syncmoney-web/dist
+              git diff -- "$java_file" src/main/resources/syncmoney-web/dist
+              echo "The stable release source does not contain the generated frontend bundle." >&2
+              exit 1
+            fi
+          elif [[ -n "$(git status --porcelain -- "$java_file")" ]]; then
+            git status --short -- "$java_file"
+            git diff -- "$java_file"
+            echo "WebAdminServer.extractIndividualFiles is out of sync with the preview bundle." >&2
+            exit 1
+          fi
+
+      - name: Install Playwright Chromium
+        working-directory: syncmoney-web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Frontend end-to-end tests
+        working-directory: syncmoney-web
+        run: pnpm test:e2e
+
+      - name: Test Central publisher and disposable signing fixture
+        run: |
+          python3 -m unittest discover -s tools/central-publisher/tests -v
+          python3 tools/central-publisher/verify_signing_fixture.py
+
+      - name: Test and build Java artifacts
+        run: bash ./gradlew -PreleaseVersion="$RELEASE_VERSION" test :syncmoney-api:check nmcpZipAggregation :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
+
+      - name: Restore preview-only generated embedded bundle
+        if: needs.prepare.outputs.channel == 'preview'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source="$RELEASE_SOURCE_COMMIT" --worktree -- src/main/resources/syncmoney-web/dist
+          if [[ -n "$(git status --porcelain --untracked-files=all -- src/main/resources/syncmoney-web/dist syncmoney-bukkit/src/main/java/noietime/syncmoney/web/server/WebAdminServer.java syncmoney-web/public/version.json)" ]]; then
+            git status --short -- src/main/resources/syncmoney-web/dist syncmoney-bukkit/src/main/java/noietime/syncmoney/web/server/WebAdminServer.java syncmoney-web/public/version.json
+            echo "Preview build left generated frontend metadata in the source checkout." >&2
+            exit 1
+          fi
+
+      - name: Validate Central bundle and offline consumer
+        run: |
+          python3 tools/central-publisher/publish_central.py validate --bundle build/nmcp/zip/aggregation.zip
+          python3 tools/central-publisher/publish_central.py verify-consumer --bundle build/nmcp/zip/aggregation.zip --gradle-wrapper ./gradlew
+
+      - name: Verify artifact pins and create source-bound manifest
+        run: >-
+          python3 .github/scripts/verify_release_pins.py
+          --pins "$RELEASE_PINS_PATH"
+          --version "$RELEASE_VERSION"
+          --root .
+          --write-release-manifest release-manifest.json
+
+      - name: Create and verify SHA-256 checksums
+        shell: bash
+        run: |
+          sha256sum \
+            "build/libs/Syncmoney-$RELEASE_VERSION.jar" \
+            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-$RELEASE_VERSION.jar" \
+            release-manifest.json \
+            > CHECKSUMS.txt
+          sha256sum --check CHECKSUMS.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: |
+            build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
+            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
+            build/acceptance/SyncmoneyAcceptance.jar
+            build/acceptance/SyncmoneyApiConsumer.jar
+            release-manifest.json
+            CHECKSUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    name: Attest verified release artifacts
+    needs: [prepare, build]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download tested artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v7.0.0
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: release-artifacts
+
+      - name: Recheck checksums after artifact transfer
+        working-directory: release-artifacts
+        run: sha256sum --check CHECKSUMS.txt
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-artifacts/build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
+            release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
+            release-artifacts/build/acceptance/SyncmoneyAcceptance.jar
+            release-artifacts/build/acceptance/SyncmoneyApiConsumer.jar
+            release-artifacts/release-manifest.json
+            release-artifacts/CHECKSUMS.txt
+
+  create-draft:
+    name: Create or refresh GitHub draft
+    needs: [prepare, build, attest]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.attest.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+      RELEASE_PINS_PATH: ${{ needs.prepare.outputs.pins_path }}
+    steps:
+      - name: Checkout release notes source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Download tested artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v7.0.0
+        with:
+          name: core-release-${{ needs.prepare.outputs.version }}
+          path: release-artifacts
+
+      - name: Extract versioned release notes
+        shell: bash
+        run: python .github/scripts/extract-changelog.py "$RELEASE_VERSION" CHANGELOG.md > release-notes.md
+
+      - name: Revalidate downloaded artifacts and source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          sha256sum --check CHECKSUMS.txt
+          cd ..
+          python3 .github/scripts/verify_release_pins.py \
+            --pins "$RELEASE_PINS_PATH" \
+            --version "$RELEASE_VERSION" \
+            --root release-artifacts \
+            --evidence-root . \
+            --verify-release-manifest release-artifacts/release-manifest.json \
+            --expected-commit "$RELEASE_SOURCE_COMMIT"
+
+      - name: Create or safely resume the reviewed release draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          core_jar="release-artifacts/build/libs/Syncmoney-$RELEASE_VERSION.jar"
+          papi_jar="release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-$RELEASE_VERSION.jar"
+          release_manifest="release-artifacts/release-manifest.json"
+          checksum_file="release-artifacts/CHECKSUMS.txt"
+          [[ -f "$core_jar" && -f "$papi_jar" && -f "$release_manifest" && -f "$checksum_file" ]]
+
+          expected_prerelease=false
+          if [[ "$RELEASE_CHANNEL" == "preview" ]]; then
+            expected_prerelease=true
+          fi
+
+          expected_asset_names="$(printf '%s\n' \
+            "Syncmoney-$RELEASE_VERSION.jar" \
+            "SyncmoneyExpansion-$RELEASE_VERSION.jar" \
+            "release-manifest.json" \
+            "CHECKSUMS.txt" | sort)"
+          expected_title="Syncmoney $RELEASE_VERSION"
+
+          # Create the official tag only after build, checksum, pin, and attestation gates pass.
+          verify_release_tag() {
+            local tag_ref="refs/tags/$RELEASE_VERSION"
+            local verify_ref="refs/verify-release/$RELEASE_VERSION"
+            git fetch origin "$tag_ref:$verify_ref"
+            local tag_commit
+            tag_commit="$(git rev-parse "$verify_ref^{commit}")"
+            if [[ "$tag_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
+              echo "Release tag $RELEASE_VERSION points to $tag_commit, not verified source $RELEASE_SOURCE_COMMIT." >&2
+              exit 1
+            fi
+          }
+
+          remote_tag_refs="$(git ls-remote origin "refs/tags/$RELEASE_VERSION" "refs/tags/$RELEASE_VERSION^{}")"
+          if [[ -n "$remote_tag_refs" ]]; then
+            verify_release_tag
+          else
+            gh auth setup-git
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$RELEASE_VERSION" "$RELEASE_SOURCE_COMMIT" -m "Syncmoney $RELEASE_VERSION"
+            git push origin "refs/tags/$RELEASE_VERSION"
+            verify_release_tag
+          fi
+
+          if release_json="$(gh release view "$RELEASE_VERSION" --json tagName,name,isDraft,isPrerelease,assets 2>/dev/null)"; then
+            :
+          elif [[ "$RELEASE_CHANNEL" == "preview" ]]; then
+            gh release create "$RELEASE_VERSION" "$core_jar" "$papi_jar" "$release_manifest" "$checksum_file" \
+              --verify-tag --draft --prerelease \
+              --title "$expected_title" --notes-file release-notes.md
+            release_json="$(gh release view "$RELEASE_VERSION" --json tagName,name,isDraft,isPrerelease,assets)"
+          else
+            gh release create "$RELEASE_VERSION" "$core_jar" "$papi_jar" "$release_manifest" "$checksum_file" \
+              --verify-tag --draft \
+              --title "$expected_title" --notes-file release-notes.md
+            release_json="$(gh release view "$RELEASE_VERSION" --json tagName,name,isDraft,isPrerelease,assets)"
+          fi
+
+          tag_name="$(jq -r '.tagName' <<<"$release_json")"
+          release_name="$(jq -r '.name // empty' <<<"$release_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+          is_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+          if [[ "$tag_name" != "$RELEASE_VERSION" || "$release_name" != "$expected_title" \
+            || "$is_prerelease" != "$expected_prerelease" ]]; then
+            echo "Existing release metadata does not match $RELEASE_VERSION; refusing to modify it." >&2
+            exit 1
+          fi
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Release $RELEASE_VERSION is not a draft; refusing to modify or accept it in the draft job." >&2
+            exit 1
+          fi
+
+          asset_names="$(jq -r '.assets[].name' <<<"$release_json")"
+          while IFS= read -r asset_name; do
+            [[ -z "$asset_name" ]] && continue
+            if ! grep -Fxq "$asset_name" <<<"$expected_asset_names"; then
+              echo "Existing release contains unexpected asset $asset_name; refusing to modify it." >&2
+              exit 1
+            fi
+          done <<<"$asset_names"
+
+          ensure_draft_asset() {
+            local asset_name="$1"
+            local local_path="$2"
+            if grep -Fxq "$asset_name" <<<"$asset_names"; then
+              return
+            fi
+            if [[ "$is_draft" != "true" ]]; then
+              echo "Published release is missing $asset_name; refusing to modify it." >&2
+              exit 1
+            fi
+            local current_is_draft
+            current_is_draft="$(gh release view "$RELEASE_VERSION" --json isDraft --jq '.isDraft')"
+            if [[ "$current_is_draft" != "true" ]]; then
+              echo "Release $RELEASE_VERSION stopped being a draft; refusing to upload $asset_name." >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_VERSION" "$local_path"
+          }
+
+          ensure_draft_asset "Syncmoney-$RELEASE_VERSION.jar" "$core_jar"
+          ensure_draft_asset "SyncmoneyExpansion-$RELEASE_VERSION.jar" "$papi_jar"
+          ensure_draft_asset "release-manifest.json" "$release_manifest"
+          ensure_draft_asset "CHECKSUMS.txt" "$checksum_file"
+
+          release_json="$(gh release view "$RELEASE_VERSION" --json tagName,name,isDraft,isPrerelease,assets)"
+          tag_name="$(jq -r '.tagName' <<<"$release_json")"
+          release_name="$(jq -r '.name // empty' <<<"$release_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+          is_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+          asset_names="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+          if [[ "$tag_name" != "$RELEASE_VERSION" || "$release_name" != "$expected_title" \
+            || "$is_draft" != "true" || "$is_prerelease" != "$expected_prerelease" \
+            || "$asset_names" != "$expected_asset_names" ]]; then
+            echo "Release metadata or asset set changed while preparing $RELEASE_VERSION." >&2
+            exit 1
+          fi
+
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf "$verify_dir"' EXIT
+          mkdir -p "$verify_dir/build/libs" "$verify_dir/syncmoney-papi-expansion/build/libs"
+          gh release download "$RELEASE_VERSION" --pattern "Syncmoney-$RELEASE_VERSION.jar" --dir "$verify_dir/build/libs"
+          gh release download "$RELEASE_VERSION" --pattern "SyncmoneyExpansion-$RELEASE_VERSION.jar" --dir "$verify_dir/syncmoney-papi-expansion/build/libs"
+          gh release download "$RELEASE_VERSION" --pattern release-manifest.json --dir "$verify_dir"
+          gh release download "$RELEASE_VERSION" --pattern CHECKSUMS.txt --dir "$verify_dir"
+          cmp "$core_jar" "$verify_dir/build/libs/Syncmoney-$RELEASE_VERSION.jar"
+          cmp "$papi_jar" "$verify_dir/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-$RELEASE_VERSION.jar"
+          cmp "$release_manifest" "$verify_dir/release-manifest.json"
+          cmp "$checksum_file" "$verify_dir/CHECKSUMS.txt"
+          (cd "$verify_dir" && sha256sum --check CHECKSUMS.txt)
+          python3 .github/scripts/verify_release_pins.py \
+            --pins "$RELEASE_PINS_PATH" \
+            --version "$RELEASE_VERSION" \
+            --root "$verify_dir" \
+            --evidence-root . \
+            --verify-release-manifest "$verify_dir/release-manifest.json" \
+            --expected-commit "$RELEASE_SOURCE_COMMIT"
+
+  publish:
+    name: Approve, sync Web, and publish
+    needs: [prepare, build, attest, create-draft]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.attest.result == 'success' && needs.create-draft.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.prepare.outputs.channel == 'preview' && 'preview-release' || 'production-release' }}
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+      RELEASE_PINS_PATH: ${{ needs.prepare.outputs.pins_path }}
+    steps:
+      - name: Checkout canonical release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
-      - name: Sync canonical frontend into the Web repository
-        if: steps.credential.outputs.available == 'true'
+      - name: Synchronize mirror, publish Core, then promote Web
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.SYNC_WEB_RELEASE_TOKEN }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          CORE_GH_TOKEN: ${{ github.token }}
+          SYNC_WEB_TOKEN: ${{ secrets.SYNC_WEB_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -z "$SYNC_WEB_TOKEN" ]]; then
+            echo "SYNC_WEB_RELEASE_TOKEN is required to sync and publish the Web mirror." >&2
+            exit 1
+          fi
+
+          expected_prerelease=false
+          if [[ "$RELEASE_CHANNEL" == "preview" ]]; then
+            expected_prerelease=true
+          fi
+          web_tag="v$RELEASE_VERSION"
+          core_jar_name="Syncmoney-$RELEASE_VERSION.jar"
+          papi_jar_name="SyncmoneyExpansion-$RELEASE_VERSION.jar"
+          expected_core_assets="$(printf '%s\n' "$core_jar_name" "$papi_jar_name" release-manifest.json CHECKSUMS.txt | sort)"
+          expected_web_assets="$(printf '%s\n' syncmoney-web.sha256 syncmoney-web.tar.gz | sort)"
+
+          core_gh() {
+            GH_TOKEN="$CORE_GH_TOKEN" gh "$@"
+          }
+          web_gh() {
+            GH_TOKEN="$SYNC_WEB_TOKEN" gh "$@"
+          }
+
+          verify_core_checksum_file() {
+            local root="$1"
+            python3 - "$root" "$RELEASE_VERSION" <<'PY'
+          import hashlib
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          version = sys.argv[2]
+          expected = {
+              f"build/libs/Syncmoney-{version}.jar",
+              f"syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-{version}.jar",
+              "release-manifest.json",
+          }
+          lines = (root / "CHECKSUMS.txt").read_text(encoding="utf-8").splitlines()
+          entries = {}
+          for line in lines:
+              match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+              if not match or match.group(2) in entries:
+                  raise SystemExit("Core CHECKSUMS.txt has a malformed or duplicate entry")
+              entries[match.group(2)] = match.group(1)
+          if set(entries) != expected:
+              raise SystemExit(f"Core CHECKSUMS.txt entries differ from expected: {sorted(entries)}")
+          for relative_path, expected_hash in entries.items():
+              path = root / relative_path
+              actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual_hash != expected_hash:
+                  raise SystemExit(f"Core checksum mismatch for {relative_path}")
+          PY
+          }
+
+          verify_core_release() {
+            local required_state="$1"
+            local release_json
+            if ! release_json="$(core_gh release view "$RELEASE_VERSION" --json databaseId,tagName,name,isDraft,isPrerelease,assets 2>/dev/null)"; then
+              echo "Core release $RELEASE_VERSION is missing." >&2
+              return 1
+            fi
+
+            local tag_name release_name is_draft is_prerelease asset_names release_id
+            tag_name="$(jq -r '.tagName' <<<"$release_json")"
+            release_name="$(jq -r '.name // empty' <<<"$release_json")"
+            is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+            is_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+            release_id="$(jq -r '.databaseId' <<<"$release_json")"
+            if [[ "$tag_name" != "$RELEASE_VERSION" || "$release_name" != "Syncmoney $RELEASE_VERSION" \
+              || "$is_prerelease" != "$expected_prerelease" ]]; then
+              echo "Core release metadata does not match $RELEASE_VERSION." >&2
+              return 1
+            fi
+            if [[ "$required_state" == "draft" && "$is_draft" != "true" \
+              || "$required_state" == "public" && "$is_draft" != "false" ]]; then
+              echo "Core release $RELEASE_VERSION is not in required state $required_state." >&2
+              return 1
+            fi
+
+            asset_names="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+            if [[ "$asset_names" != "$expected_core_assets" ]]; then
+              echo "Core release $RELEASE_VERSION assets do not match the verified build." >&2
+              return 1
+            fi
+
+            local verify_dir
+            verify_dir="$(mktemp -d)"
+            mkdir -p "$verify_dir/build/libs" "$verify_dir/syncmoney-papi-expansion/build/libs"
+            if ! core_gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$core_jar_name" --dir "$verify_dir/build/libs" \
+              || ! core_gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$papi_jar_name" --dir "$verify_dir/syncmoney-papi-expansion/build/libs" \
+              || ! core_gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+              --pattern release-manifest.json --dir "$verify_dir" \
+              || ! core_gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+              --pattern CHECKSUMS.txt --dir "$verify_dir"; then
+              rm -rf "$verify_dir"
+              echo "Unable to download every Core release asset for verification." >&2
+              return 1
+            fi
+
+            if ! verify_core_checksum_file "$verify_dir"; then
+              rm -rf "$verify_dir"
+              return 1
+            fi
+            local source_tree
+            source_tree="$(git rev-parse 'HEAD^{tree}')"
+            if ! python3 .github/scripts/verify_release_pins.py \
+              --pins "$GITHUB_WORKSPACE/$RELEASE_PINS_PATH" \
+              --version "$RELEASE_VERSION" \
+              --root "$verify_dir" \
+              --evidence-root "$GITHUB_WORKSPACE" \
+              --verify-release-manifest "$verify_dir/release-manifest.json" \
+              --expected-commit "$RELEASE_SOURCE_COMMIT" \
+              --public-only; then
+              rm -rf "$verify_dir"
+              return 1
+            fi
+            if ! python3 - "$verify_dir/release-manifest.json" "$GITHUB_WORKSPACE/$RELEASE_PINS_PATH" \
+              "$RELEASE_VERSION" "$RELEASE_SOURCE_COMMIT" "$source_tree" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest_path, pins_path, version, commit, tree = sys.argv[1:]
+          manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+          pins = json.loads(Path(pins_path).read_text(encoding="utf-8"))
+          expected = {
+              "schemaVersion": 1,
+              "version": version,
+              "source": {"commit": commit, "tree": tree},
+              "candidateEvidence": pins["candidateEvidence"],
+              "runtimeEvidence": pins["runtimeEvidence"],
+              "waivers": pins["waivers"],
+              "securityResiduals": pins["securityResiduals"],
+              "artifacts": pins["artifacts"],
+          }
+          if manifest != expected:
+              raise SystemExit("Core release manifest metadata differs from the reviewed source pins")
+          PY
+            then
+              rm -rf "$verify_dir"
+              return 1
+            fi
+            rm -rf "$verify_dir"
+
+            CORE_IS_DRAFT="$is_draft"
+            CORE_RELEASE_ID="$release_id"
+            return 0
+          }
+
+          verify_web_tag() {
+            local verified_ref="refs/verify-release/$web_tag"
+            if ! git -C web-release fetch --no-tags origin "+refs/tags/$web_tag:$verified_ref" >/dev/null; then
+              echo "Web tag $web_tag is missing from the mirror." >&2
+              return 1
+            fi
+            local tag_commit tagged_metadata tagged_version tagged_core_commit tagged_package_version
+            tag_commit="$(git -C web-release rev-parse "$verified_ref^{commit}")"
+            tagged_metadata="$(git -C web-release show "$verified_ref:public/version.json" \
+              | node -p "const v=JSON.parse(require('fs').readFileSync(0, 'utf8')); [v.version,v.coreCommit].join('\t')")"
+            IFS=$'\t' read -r tagged_version tagged_core_commit <<<"$tagged_metadata"
+            tagged_package_version="$(git -C web-release show "$verified_ref:package.json" \
+              | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+            if [[ "$tagged_version" != "$RELEASE_VERSION" || "$tagged_package_version" != "$RELEASE_VERSION" \
+              || "$tagged_core_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
+              echo "Web tag $web_tag does not pin the expected Beta.1 version and Core source commit." >&2
+              return 1
+            fi
+            if ! git -C web-release diff --quiet "$verified_ref" HEAD -- \
+              index.html package.json pnpm-lock.yaml pnpm-workspace.yaml playwright.config.ts \
+              postcss.config.js public src e2e mocks tailwind.config.js tsconfig.json \
+              tsconfig.node.json vite.config.ts vitest.config.ts \
+              scripts/build-embedded.mjs scripts/package-release.sh; then
+              echo "Web tag $web_tag does not match the synchronized mirror source." >&2
+              return 1
+            fi
+            WEB_TAG_COMMIT="$tag_commit"
+            return 0
+          }
+
+          verify_web_release() {
+            local release_json
+            if ! release_json="$(web_gh release view "$web_tag" --repo Misty4119/Syncmoney-web \
+              --json databaseId,tagName,name,isDraft,isPrerelease,assets 2>/dev/null)"; then
+              return 2
+            fi
+
+            local tag_name release_name is_draft is_prerelease asset_names release_id
+            tag_name="$(jq -r '.tagName' <<<"$release_json")"
+            release_name="$(jq -r '.name // empty' <<<"$release_json")"
+            is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+            is_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+            release_id="$(jq -r '.databaseId' <<<"$release_json")"
+            if [[ "$tag_name" != "$web_tag" || "$release_name" != "Syncmoney Web $RELEASE_VERSION" \
+              || "$is_prerelease" != "$expected_prerelease" ]]; then
+              echo "Web release metadata does not match $web_tag." >&2
+              return 1
+            fi
+            if [[ "$is_draft" != "true" && "$is_draft" != "false" ]]; then
+              echo "Web release $web_tag has an invalid draft state." >&2
+              return 1
+            fi
+            if [[ "$is_draft" == "false" ]] && ! verify_core_release public; then
+              echo "Refusing a public Web release without a matching public Core release." >&2
+              return 1
+            fi
+
+            asset_names="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+            while IFS= read -r asset_name; do
+              [[ -z "$asset_name" ]] && continue
+              if ! grep -Fxq "$asset_name" <<<"$expected_web_assets"; then
+                echo "Web release $web_tag contains unexpected asset $asset_name." >&2
+                return 1
+              fi
+            done <<<"$asset_names"
+            if [[ "$asset_names" != "$expected_web_assets" ]]; then
+              if [[ "$is_draft" == "true" ]]; then
+                return 2
+              fi
+              echo "Published Web release $web_tag has an incomplete asset set." >&2
+              return 1
+            fi
+
+            local verify_dir
+            verify_dir="$(mktemp -d)"
+            if ! web_gh release download "$web_tag" --repo Misty4119/Syncmoney-web \
+              --pattern syncmoney-web.tar.gz --pattern syncmoney-web.sha256 --dir "$verify_dir"; then
+              rm -rf "$verify_dir"
+              return 2
+            fi
+            if ! python3 - "$verify_dir/syncmoney-web.tar.gz" "$verify_dir/syncmoney-web.sha256" \
+              "$RELEASE_VERSION" "$RELEASE_SOURCE_COMMIT" <<'PY'
+          import hashlib
+          import json
+          import re
+          import sys
+          import tarfile
+
+          archive_path, checksum_path, version, core_commit = sys.argv[1:]
+          checksum_lines = open(checksum_path, encoding="utf-8").read().splitlines()
+          if len(checksum_lines) != 1:
+              raise SystemExit("Web checksum file must contain exactly one entry")
+          match = re.fullmatch(r"([0-9a-f]{64})  syncmoney-web\.tar\.gz", checksum_lines[0])
+          if not match:
+              raise SystemExit("Web checksum entry does not identify syncmoney-web.tar.gz")
+          digest = hashlib.sha256(open(archive_path, "rb").read()).hexdigest()
+          if digest != match.group(1):
+              raise SystemExit("Web archive checksum mismatch")
+          with tarfile.open(archive_path, "r:gz") as archive:
+              members = {member.name: member for member in archive.getmembers()}
+              package_member = members.get("syncmoney-web/package.json")
+              version_member = members.get("syncmoney-web/public/version.json")
+              if not package_member or not package_member.isfile() or not version_member or not version_member.isfile():
+                  raise SystemExit("Web archive is missing version metadata")
+              package = json.load(archive.extractfile(package_member))
+              metadata = json.load(archive.extractfile(version_member))
+          if package.get("version") != version or metadata.get("version") != version:
+              raise SystemExit("Web archive version metadata does not match the Core release")
+          if metadata.get("coreCommit") != core_commit:
+              raise SystemExit("Web archive coreCommit does not match the Core release source commit")
+          if not re.fullmatch(r"[0-9a-f]{40}", metadata["coreCommit"]):
+              raise SystemExit("Web archive coreCommit is not a full lowercase Git commit")
+          PY
+            then
+              rm -rf "$verify_dir"
+              return 1
+            fi
+            rm -rf "$verify_dir"
+
+            WEB_IS_DRAFT="$is_draft"
+            WEB_RELEASE_ID="$release_id"
+            return 0
+          }
+
+          git fetch origin "refs/tags/$RELEASE_VERSION:refs/tags/$RELEASE_VERSION"
+          core_tag_commit="$(git rev-parse "refs/tags/$RELEASE_VERSION^{commit}")"
+          if [[ "$core_tag_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
+            echo "Core tag $RELEASE_VERSION no longer points to the verified source commit." >&2
+            exit 1
+          fi
+          verify_core_release any
+
+          export GH_TOKEN="$SYNC_WEB_TOKEN"
           gh repo clone Misty4119/Syncmoney-web web-release -- --branch main --depth 1
           gh auth setup-git
 
@@ -146,269 +833,91 @@ jobs:
           cp -a syncmoney-web/scripts/build-embedded.mjs web-release/scripts/build-embedded.mjs
           cp -a syncmoney-web/scripts/package-release.sh web-release/scripts/package-release.sh
 
-          RELEASE_VERSION="$RELEASE_VERSION" node <<'NODE'
+          RELEASE_VERSION="$RELEASE_VERSION" CORE_SOURCE_COMMIT="$RELEASE_SOURCE_COMMIT" node <<'NODE'
           const fs = require('node:fs')
           const version = process.env.RELEASE_VERSION
           const packagePath = 'web-release/package.json'
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
           packageJson.version = version
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+          fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n')
 
           const versionPath = 'web-release/public/version.json'
           const versionJson = JSON.parse(fs.readFileSync(versionPath, 'utf8'))
           versionJson.version = version
-          fs.writeFileSync(versionPath, `${JSON.stringify(versionJson, null, 2)}\n`)
+          versionJson.coreCommit = process.env.CORE_SOURCE_COMMIT
+          fs.writeFileSync(versionPath, JSON.stringify(versionJson, null, 2) + '\n')
           NODE
 
           cd web-release
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A -- ':!README.md' ':!LICENSE' ':!.gitignore'
+          git fetch --tags origin
+          web_tag="v$RELEASE_VERSION"
+          if git show-ref --verify --quiet "refs/tags/$web_tag"; then
+            tagged_metadata="$(git show "$web_tag:public/version.json" | node -p "const v=JSON.parse(require('fs').readFileSync(0, 'utf8')); [v.version,v.coreCommit].join('\t')")"
+            IFS=$'\t' read -r tagged_version tagged_core_commit <<<"$tagged_metadata"
+            tagged_package_version="$(git show "$web_tag:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+            if [[ "$tagged_version" != "$RELEASE_VERSION" || "$tagged_package_version" != "$RELEASE_VERSION" \
+              || "$tagged_core_commit" != "$RELEASE_SOURCE_COMMIT" ]] \
+              || ! git diff --cached --quiet "$web_tag" -- . ':!README.md' ':!LICENSE' ':!.gitignore'; then
+              echo "Existing Web tag $web_tag does not match the exact synchronized source and Core commit; refusing to replace it." >&2
+              exit 1
+            fi
+          fi
           if ! git diff --cached --quiet; then
             git commit -m "release: sync frontend $RELEASE_VERSION"
             git push origin main
           fi
 
-          git fetch --tags origin
-          web_tag="v$RELEASE_VERSION"
           if ! git show-ref --verify --quiet "refs/tags/$web_tag"; then
             git tag -a "$web_tag" -m "Syncmoney Web $RELEASE_VERSION"
             git push origin "refs/tags/$web_tag"
           fi
+          cd ..
 
-  verify-web-release:
-    name: Wait for Web release
-    needs: [prepare, sync-web]
-    if: always() && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verify sync job and wait for Web release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-          SYNC_JOB_RESULT: ${{ needs.sync-web.result }}
-        run: |
-          set -euo pipefail
-          if [[ "$SYNC_JOB_RESULT" == "failure" || "$SYNC_JOB_RESULT" == "cancelled" ]]; then
-            echo "The frontend synchronization job failed." >&2
-            exit 1
-          fi
+          verify_web_tag
 
-          web_tag="v$RELEASE_VERSION"
+          web_ready=false
           for attempt in $(seq 1 60); do
-            if gh release view "$web_tag" --repo Misty4119/Syncmoney-web >/dev/null 2>&1; then
-              echo "Web release $web_tag is available."
-              exit 0
+            if verify_web_release; then
+              web_ready=true
+              break
+            else
+              verify_status=$?
             fi
-            echo "Waiting for Web release $web_tag ($attempt/60)..."
+            if [[ "$verify_status" -ne 2 ]]; then
+              exit "$verify_status"
+            fi
+            echo "Waiting for matching Web draft $web_tag and verified assets ($attempt/60)..."
             sleep 15
           done
-
-          echo "Timed out waiting for Web release $web_tag" >&2
-          exit 1
-
-  build:
-    name: Build and attest core artifacts
-    needs: [prepare, verify-web-release]
-    if: needs.prepare.result == 'success' && needs.verify-web-release.result == 'success'
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.version }}
-
-      - name: Set up Java 21
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 10.22.0
-          run_install: false
-
-      - name: Set up Node.js 24
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: syncmoney-web/pnpm-lock.yaml
-
-      - name: Install frontend dependencies
-        working-directory: syncmoney-web
-        run: pnpm install --frozen-lockfile
-
-      - name: Frontend checks and embedded build
-        working-directory: syncmoney-web
-        env:
-          SYNCMONEY_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          pnpm typecheck
-          pnpm test:coverage
-          pnpm build:embedded
-
-      - name: Verify embedded bundle and extract list
-        shell: bash
-        run: |
-          set -euo pipefail
-          java_file=src/main/java/noietime/syncmoney/web/server/WebAdminServer.java
-          java_before="$(sha256sum "$java_file" | cut -d' ' -f1)"
-          node syncmoney-web/scripts/sync-embedded-web.mjs
-          java_after="$(sha256sum "$java_file" | cut -d' ' -f1)"
-          if [[ "$java_before" != "$java_after" ]]; then
-            git diff -- "$java_file"
-            echo "WebAdminServer.extractIndividualFiles is not stable after regeneration." >&2
+          if [[ "$web_ready" != "true" ]]; then
+            echo "Timed out waiting for a matching Web draft $web_tag." >&2
             exit 1
           fi
-          if [[ "${{ needs.prepare.outputs.channel }}" == "stable" ]]; then
-            if [[ -n "$(git status --porcelain -- "$java_file" src/main/resources/syncmoney-web/dist)" ]]; then
-              git status --short -- "$java_file" src/main/resources/syncmoney-web/dist
-              git diff -- "$java_file" src/main/resources/syncmoney-web/dist
-              echo "The stable release source does not contain the generated frontend bundle." >&2
+
+          verify_core_release any
+          if [[ "$CORE_IS_DRAFT" == "true" ]]; then
+            if [[ "$WEB_IS_DRAFT" != "true" ]]; then
+              echo "Refusing to publish Core while the matching Web release is already public." >&2
               exit 1
             fi
-          elif [[ -n "$(git status --porcelain -- "$java_file")" ]]; then
-            git status --short -- "$java_file"
-            git diff -- "$java_file"
-            echo "WebAdminServer.extractIndividualFiles is out of sync with the preview bundle." >&2
+            core_gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$CORE_RELEASE_ID" \
+              -F draft=false -F prerelease="$expected_prerelease" >/dev/null
+          fi
+          verify_core_release public
+
+          if ! verify_web_release; then
+            echo "Web release changed before promotion; refusing to publish it." >&2
             exit 1
           fi
-
-      - name: Install Playwright Chromium
-        working-directory: syncmoney-web
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: End-to-end tests
-        working-directory: syncmoney-web
-        run: pnpm test:e2e
-
-      - name: Test and build Java artifacts
-        run: bash ./gradlew -PreleaseVersion="$RELEASE_VERSION" test :syncmoney-papi-expansion:test shadowJar :syncmoney-papi-expansion:jar acceptanceJar jacocoTestReport :syncmoney-papi-expansion:jacocoTestReport
-
-      - name: Create SHA-256 checksums
-        shell: bash
-        run: |
-          sha256sum \
-            "build/libs/Syncmoney-${RELEASE_VERSION}.jar" \
-            "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar" \
-            > CHECKSUMS.txt
-
-      - name: Attest release artifacts
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
-            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
-            CHECKSUMS.txt
-
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: core-release-${{ needs.prepare.outputs.version }}
-          path: |
-            build/libs/Syncmoney-${{ needs.prepare.outputs.version }}.jar
-            syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${{ needs.prepare.outputs.version }}.jar
-            CHECKSUMS.txt
-          if-no-files-found: error
-          retention-days: 14
-
-  publish-stable:
-    name: Publish stable Core release
-    needs: [prepare, build]
-    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.prepare.outputs.channel == 'stable'
-    runs-on: ubuntu-latest
-    environment:
-      name: production-release
-    steps:
-      - name: Checkout release notes
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.version }}
-
-      - name: Download release artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v7.0.0
-        with:
-          name: core-release-${{ needs.prepare.outputs.version }}
-          path: release-artifacts
-
-      - name: Prepare release notes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          python .github/scripts/extract-changelog.py "$RELEASE_VERSION" CHANGELOG.md > release-notes.md
-          printf '\n\n## GitHub changes\n\n' >> release-notes.md
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f "tag_name=$RELEASE_VERSION" \
-            --jq .body >> release-notes.md
-
-      - name: Publish stable GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "$RELEASE_VERSION" \
-            release-artifacts/build/libs/Syncmoney-${RELEASE_VERSION}.jar \
-            release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
-            release-artifacts/CHECKSUMS.txt \
-            --verify-tag \
-            --title "Syncmoney $RELEASE_VERSION" \
-            --notes-file release-notes.md
-
-  publish-preview:
-    name: Publish preview Core release
-    needs: [prepare, build]
-    if: needs.prepare.result == 'success' && needs.build.result == 'success' && needs.prepare.outputs.channel == 'preview'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout release notes
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.version }}
-
-      - name: Download release artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v7.0.0
-        with:
-          name: core-release-${{ needs.prepare.outputs.version }}
-          path: release-artifacts
-
-      - name: Prepare preview release notes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f "tag_name=$RELEASE_VERSION" \
-            --jq .body > release-notes.md
-
-      - name: Publish preview GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "$RELEASE_VERSION" \
-            release-artifacts/build/libs/Syncmoney-${RELEASE_VERSION}.jar \
-            release-artifacts/syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-${RELEASE_VERSION}.jar \
-            release-artifacts/CHECKSUMS.txt \
-            --verify-tag \
-            --prerelease \
-            --title "Syncmoney $RELEASE_VERSION" \
-            --notes-file release-notes.md
+          if [[ "$WEB_IS_DRAFT" == "true" ]]; then
+            web_gh api --method PATCH "repos/Misty4119/Syncmoney-web/releases/$WEB_RELEASE_ID" \
+              -F draft=false -F prerelease="$expected_prerelease" >/dev/null
+          fi
+          if ! verify_web_release || [[ "$WEB_IS_DRAFT" != "false" ]]; then
+            echo "Web release was not confirmed public with matching Core metadata and checksums." >&2
+            exit 1
+          fi
+          echo "Core $RELEASE_VERSION and Web $web_tag are public with verified matching source and artifacts."

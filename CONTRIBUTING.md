@@ -9,20 +9,20 @@ Before contributing, read [`AGENTS.md`](AGENTS.md), [`CONTEXT.md`](CONTEXT.md), 
 ## Development prerequisites
 
 - Git
-- JDK 21 for the Gradle toolchain/build
+- JDK 25 or newer for the 1.4.0 Gradle toolchain/build
 - the repository Gradle wrapper (`gradlew.bat` on Windows)
 - Node.js and pnpm for `syncmoney-web`
-- a compatible Paper/Folia/Canvas test server for runtime acceptance
+- a Paper, Folia, or Canvas test server in the 1.4.0 target range (Minecraft 26.2–26.3) for runtime acceptance; report the exact build exercised
 - Redis and/or SQL only when testing modes/features that require them
 - licensed CMI supplied locally when testing CMI integration; CMI is not distributed by this repository
 
-Newer Minecraft server releases can require a newer runtime JVM than the project compiler. Follow `tools/plugdev/README.md`; current PlugDev notes use Java 25 for newer Paper 26.1+ environments.
+For the current candidate source, package and frontend results, artifact pins, and open gates, see the [versioned 1.4.0 readiness record](docs/release/1.4.0-readiness.md). Candidate status changes with new evidence, so this guide points to the readiness snapshot instead of repeating a dated report.
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
-| `src/main/java/noietime/syncmoney` | Core plugin implementation |
+| `syncmoney-bukkit/src/main/java/noietime/syncmoney` | Core plugin implementation |
 | `src/main/resources` | Default config/messages, plugin descriptors, Lua/assets, embedded web bundle |
 | `syncmoney-papi-expansion` | Separate PlaceholderAPI expansion |
 | `syncmoney-web` | Vue/Vite Web Admin frontend |
@@ -57,7 +57,7 @@ Use the existing architecture:
 - `TransferOrchestrator` for cross-account transfers;
 - `EconomyModeRouter` and mode strategies for authority/persistence decisions.
 
-Preserve monotonic balance versions, duplicate/echo suppression, insufficient-funds behavior, queue backpressure/recovery, and shutdown draining of accepted writes. Re-check version freshness before applying delayed remote or CMI updates.
+Preserve per-account Redis version ordering for Redis-backed economy updates, duplicate/echo suppression, insufficient-funds behavior, queue backpressure/recovery, and shutdown draining of accepted writes. CMI retains its legacy timestamp-derived version, which is not globally monotonic; delayed CMI work must re-check locally observed freshness without claiming global ordering.
 
 CMI remains the economy authority in `cmi` mode. Do not convert migration or Shadow Sync into implicit live-authority changes.
 
@@ -153,14 +153,14 @@ Expected artifacts are:
 
 ## Release workflow
 
-The core repository is the canonical source for the Web Admin. The committed stable version lives in root `build.gradle`; preview builds pass `-PreleaseVersion` from CI so alpha and beta versions do not need to be committed as source metadata. The repository variable `NEXT_VERSION` currently selects the next preview line (`1.3.3`).
+The core repository is the canonical source for the Web Admin. The committed stable version lives in root `build.gradle`; preview builds pass `-PreleaseVersion` from CI so alpha and beta versions do not need to be committed as source metadata. CI uses the repository variable `NEXT_VERSION` when set and otherwise falls back to the root version. The hosted variable value is not available in this checkout, so documentation must not assume a fixed preview base.
 
-CI runs on pull requests and `main`, builds Java and Web artifacts, and labels preview artifacts as `1.3.3-alpha.<run-number>`. These artifacts are retained by GitHub Actions and do not create public Releases.
+CI runs on pull requests and `main`, builds Java and Web artifacts, and labels preview artifacts as `<base-version>-alpha.<run-number>`. These artifacts are retained by GitHub Actions and do not create public Releases.
 
 Release tags use no prefix in this repository:
 
-- `1.3.3-alpha.1` or `1.3.3-beta.1` publishes a prerelease;
-- `1.3.3` publishes a stable release after the `production-release` environment approval and a `CHANGELOG.md` section.
+- `<version>-alpha.1` or `<version>-beta.1` publishes a prerelease;
+- `<version>` publishes a stable release after the `production-release` environment approval and a `CHANGELOG.md` section.
 
 The release workflow synchronizes the canonical `syncmoney-web` source to [Misty4119/Syncmoney-web](https://github.com/Misty4119/Syncmoney-web), applies the release version, and pushes the corresponding `v`-prefixed tag there first. The Web workflow publishes the deterministic `syncmoney-web.tar.gz` source archive and checksum; only after that release exists does the core workflow publish the plugin and PlaceholderAPI JARs. The cross-repository job requires the fine-grained `SYNC_WEB_RELEASE_TOKEN` secret with write access limited to the Web repository.
 

@@ -6,13 +6,13 @@ This file gives Claude-family coding agents a compact repository-specific operat
 
 Syncmoney is a Vault-compatible Minecraft economy with optional VaultUnlocked/CMI integration, Redis cross-server synchronization, SQL/local persistence, audit and protection modules, an Undertow web administration service, and a separate PlaceholderAPI expansion.
 
-Correctness priorities are: no fund creation/loss, monotonic distributed state, region-thread safety, clean lifecycle ownership, non-blocking hot paths, and then ergonomics/performance improvements.
+Correctness priorities are: no fund creation/loss, preserve Redis-backed per-account ordering while documenting CMI's legacy non-global timestamp ordering, region-thread safety, clean lifecycle ownership, non-blocking hot paths, and then ergonomics/performance improvements.
 
 ## Ground truth
 
 Use code and executable configuration before prose:
 
-- `src/main/java/noietime/syncmoney`
+- `syncmoney-bukkit/src/main/java/noietime/syncmoney`
 - `src/main/resources/config.yml`
 - `src/main/resources/plugin.yml`
 - `build.gradle`
@@ -28,8 +28,8 @@ Public docs live in `README.md` and `docs/`. If behavior changes, update both En
 - Vault-facing reads must remain memory-backed and must not introduce blocking Redis/SQL/network I/O.
 - Writes go through the existing facade/state/writer/orchestrator path.
 - Preserve accepted-write durability across logout and shutdown.
-- Preserve monotonic versions and Pub/Sub echo suppression.
-- Re-check freshness before applying delayed asynchronous work.
+- Preserve Redis-backed per-account version ordering and Pub/Sub echo suppression. CMI retains its legacy timestamp-derived version, which is not globally monotonic.
+- Re-check locally observed freshness before applying delayed asynchronous work, including CMI entity callbacks.
 - CMI remains authority in `cmi` mode; player mutations run on the player's owning entity scheduler.
 - Migration and Shadow Sync are explicit workflows, not transparent authority changes.
 
@@ -54,13 +54,13 @@ During shutdown, stop producers first and drain accepted transaction events whil
 
 `SyncmoneyConfig` is a snapshot. Only `display`, `pay`, `permissions`, `admin-permissions`, and `debug` are currently live-reload roots. Treat connection/authority/module-owner changes as restart-required unless `ConfigReloadPolicy` says otherwise.
 
-The default Web Admin API key is `change-me-in-production`. Current validation warns about it, while `WebServiceManager` only auto-disables for `change-me`. Do not claim the shipped placeholder is automatically blocked.
+The default Web Admin API key is `change-me-in-production`. Web Admin auto-disables when its key is blank or equals `change-me` / `change-me-in-production` after trimming and case folding; the economy plugin still starts normally.
 
 ## Web and API
 
 Undertow serves Web Admin. REST calls normally use `Authorization: Bearer <api-key>`. `/health` is the health probe. The frontend live stream is `/api/sse`, using a session token issued by `POST /api/auth/ws-token`.
 
-`/ws` is not a complete production WebSocket transport in the current implementation. Do not document it as fully supported.
+Every `/ws` request returns `503 WEBSOCKET_UNAVAILABLE`. Do not document it as a production WebSocket transport.
 
 When changing routes, inspect the handler plus `RouteRegistry` and `HttpHandlerRegistry` and update both API-reference languages.
 
@@ -95,7 +95,7 @@ For scheduler/storage/lifecycle/cross-server changes, use PlugDev and report the
 
 ## Release facts
 
-Root Gradle currently resolves to `1.3.2`; Java compilation uses toolchain 21. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
+Root Gradle release metadata still resolves to `1.3.2` until the release task; the 1.4.0 foundation branch compiles with Java 25 and Gradle 9.8.0. The preserved 1.3.2 baseline used Java 21 / Gradle 9.1.0. PAPI inherits the root version. Main artifacts are `Syncmoney-<version>.jar`, `SyncmoneyExpansion-<version>.jar`, and `SyncmoneyAcceptance.jar`.
 
 Frontend release metadata and embedded `src/main/resources/syncmoney-web/dist` assets must move together when web release assets change.
 
