@@ -1,0 +1,77 @@
+{
+  "buildEvidence": {
+    "artifactBuildCommit": "1993e93eef45a15424d891bb740466e7836991fd",
+    "artifactSha256": {
+      "acceptance": {
+        "bytes": 54893,
+        "path": "build/acceptance/SyncmoneyAcceptance.jar",
+        "public": false,
+        "sha256": "c3fd6f21ce0949017ce9211c300056d04d2e197e82d96af01457fe1e01d561ba"
+      },
+      "apiConsumer": {
+        "bytes": 2754,
+        "path": "build/acceptance/SyncmoneyApiConsumer.jar",
+        "public": false,
+        "sha256": "2196933554215022ed8c7480ef9151217463ebd856bca3d319670e83ff0e6953"
+      },
+      "core": {
+        "bytes": 31668140,
+        "path": "build/libs/Syncmoney-1.4.0.jar",
+        "public": true,
+        "sha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001"
+      },
+      "papi": {
+        "bytes": 13872,
+        "path": "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar",
+        "public": true,
+        "sha256": "a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c"
+      }
+    },
+    "buildResult": "BUILD SUCCESSFUL; 69 actionable Gradle tasks (21 executed, 48 up-to-date); 1,029 Java tests, zero failures/errors/skips",
+    "frontend": "pnpm 10.22.0: typecheck, production build, and embedded bundle sync passed during stable metadata update. The 22/22 unit and 5/5 Playwright E2E results are earlier release-branch evidence and were not rerun for the exact stable version; release CI reruns them.",
+    "gradleDaemonJava": "21.0.6",
+    "gradleLauncherJava": "21.0.6",
+    "gradleVersion": "9.8.0",
+    "javaToolchain": "25.0.4"
+  },
+  "candidate": {
+    "bytes": 31668137,
+    "disposition": "STATIC_CANDIDATE_NOT_RELEASE_APPROVED",
+    "path": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
+    "runtimeStatus": "NOT VERIFIED; retained as internal candidate only",
+    "sha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
+    "version": "1.4.0-Beta.3"
+  },
+  "internalCandidateManifest": {
+    "path": "docs/release/1.4.0-beta3-source-manifest.json",
+    "sha256": "d8c5ea39530b328902e81577208397bfcdd8eed92653fbddd4cffcb705a4c1c6"
+  },
+  "runtimeBinding": {
+    "endpointCount": 6,
+    "jarSha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001",
+    "matrixPath": "docs/release/1.4.0-stable-runtime-matrix.json",
+    "matrixSha256": "b8ed18d922f24280ce4205df9c0a97aab3ff07a174cbe4e282ccab718b6c7712",
+    "matrixStatus": "PASS_BOUNDED_SUBCASE",
+    "version": "1.4.0"
+  },
+  "runtimeEnvironment": {
+    "database": "Disposable local MySQL 8.0.42 and run-owned Redis 8.10.1",
+    "java": "25.0.4",
+    "plugDevCliSha256": "40437ecfb68cc5f13f77bfcaf25be5f2bebbb90d269d482284a3129906e06155",
+    "plugDevCommit": "b59871ae8d9f2731d2bcbca061a735edddd23eb2",
+    "plugDevWorkingTreeDirty": true,
+    "plugDevWorkingTreeFingerprint": "bfd018b34b72c54bba8580a3503fb1428b2dbde5a56a40c15d5a0729a4bd6f32",
+    "scope": "Bounded SYNC flow: startup, Vault deposits, SQL/Redis persistence, restart reads, API consumer classloading, normal shutdown"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "clean": true,
+    "commit": "407569c640f96b5f486e644659e88068d01f33cd",
+    "tree": "3f1149eea49db0131e55d5c8d9fee5ceda7f5158"
+  },
+  "stableReleaseSource": {
+    "clean": true,
+    "commit": "1993e93eef45a15424d891bb740466e7836991fd",
+    "tree": "4ec92fa0547952d9016d57c47c80129b680691c9"
+  }
+}

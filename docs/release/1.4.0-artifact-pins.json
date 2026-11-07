@@ -1,0 +1,101 @@
+{
+  "artifacts": {
+    "acceptance": {
+      "bytes": 54893,
+      "path": "build/acceptance/SyncmoneyAcceptance.jar",
+      "public": false,
+      "sha256": "c3fd6f21ce0949017ce9211c300056d04d2e197e82d96af01457fe1e01d561ba"
+    },
+    "apiConsumer": {
+      "bytes": 2754,
+      "path": "build/acceptance/SyncmoneyApiConsumer.jar",
+      "public": false,
+      "sha256": "2196933554215022ed8c7480ef9151217463ebd856bca3d319670e83ff0e6953"
+    },
+    "core": {
+      "bytes": 31668140,
+      "path": "build/libs/Syncmoney-1.4.0.jar",
+      "public": true,
+      "sha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001"
+    },
+    "papi": {
+      "bytes": 13872,
+      "path": "syncmoney-papi-expansion/build/libs/SyncmoneyExpansion-1.4.0.jar",
+      "public": true,
+      "sha256": "a4d893ac4892e9e715a1710a4760d7fb168ee84a7987bc43d1baea86ec6c319c"
+    }
+  },
+  "candidateEvidence": {
+    "bytes": 31668137,
+    "disposition": "STATIC_CANDIDATE_NOT_RELEASE_APPROVED",
+    "jarPath": "build/libs/Syncmoney-1.4.0-Beta.3.jar",
+    "jarSha256": "1bfad2a898a85505004008dd05b9d77045703446bbe7d28b5f2737d2d124dcdf",
+    "sourceManifestPath": "docs/release/1.4.0-stable-source-manifest.json",
+    "sourceManifestSha256": "77ad82545580410b7539457afa10051bad0857d61d0e2ad6b917e9d79de9a31a",
+    "version": "1.4.0-Beta.3"
+  },
+  "candidateGatePassed": true,
+  "dependabotPolicy": {
+    "afterReleasePrMerge": "Close only PRs confirmed superseded by merged dependency changes",
+    "openPullRequests": "Keep open during release preparation"
+  },
+  "runtimeEvidence": {
+    "candidateJarSha256": "824dcaea57319f5188115bd767ea17ef549d7876273c85deb7f4e092a0906001",
+    "endpoints": {
+      "canvas-26.2": {
+        "build": 994,
+        "serverSha256": "8c4e36c0545a4e8d3332c6c0d6dce922001fd986ff47deec4b93fd26ba0de2b2",
+        "status": "PASS_BOUNDED_SUBCASE"
+      },
+      "canvas-26.3": {
+        "build": 1010,
+        "serverSha256": "e2572e9bd101cb657e0d16dea2dc8a622208aaa8bd39afdc6d96bad4f4fee057",
+        "status": "PASS_BOUNDED_SUBCASE"
+      },
+      "folia-26.2": {
+        "build": 7,
+        "serverSha256": "128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3",
+        "status": "PASS_BOUNDED_SUBCASE"
+      },
+      "folia-26.3": {
+        "build": 6,
+        "serverSha256": "3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d",
+        "status": "PASS_BOUNDED_SUBCASE"
+      },
+      "paper-26.2": {
+        "build": 135,
+        "serverSha256": "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1",
+        "status": "PASS_BOUNDED_SUBCASE"
+      },
+      "paper-26.3": {
+        "build": 244,
+        "serverSha256": "9601f9a26a2a52a0f2c807cf1abf691f96ee4fb287878313b601cebc2c51eabf",
+        "status": "PASS_BOUNDED_SUBCASE"
+      }
+    },
+    "matrixPath": "docs/release/1.4.0-stable-runtime-matrix.json",
+    "matrixSha256": "b8ed18d922f24280ce4205df9c0a97aab3ff07a174cbe4e282ccab718b6c7712",
+    "status": "PASS_BOUNDED_SUBCASE",
+    "version": "1.4.0"
+  },
+  "schemaVersion": 1,
+  "securityResiduals": {
+    "deepmerge": {
+      "accepted": true,
+      "advisory": "GHSA-gcqx-w48m-w2h4 / CVE-2026-93753",
+      "fullAuditExitCode": 1,
+      "patchedVersionAvailable": false,
+      "productionOnlyAuditExitCode": 0,
+      "scope": "build-time",
+      "severity": "low",
+      "version": "4.3.1"
+    },
+    "malwareAlerts": "UNKNOWN"
+  },
+  "version": "1.4.0",
+  "waivers": {
+    "CMI": "WAIVED / NOT VERIFIED",
+    "PAPI cross-pair": "WAIVED / NOT VERIFIED",
+    "T21": "WAIVED / NOT VERIFIED"
+  }
+}
