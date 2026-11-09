@@ -29,7 +29,7 @@ dependencies {
     integrationTestImplementation testFixtures(project(':syncmoney-testkit'))
     integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     integrationTestRuntimeOnly 'org.postgresql:postgresql:42.7.5'
-    integrationTestRuntimeOnly 'com.mysql:mysql-connector-j:9.2.0'
+    integrationTestRuntimeOnly 'com.mysql:mysql-connector-j:26.10.0'
     integrationTestRuntimeOnly 'org.mariadb.jdbc:mariadb-java-client:3.5.3'
     integrationTestRuntimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
 }
