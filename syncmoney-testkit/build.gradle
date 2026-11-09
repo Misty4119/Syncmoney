@@ -20,8 +20,8 @@ dependencies {
     testImplementation project(':syncmoney-core')
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    testRuntimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
-    testFixturesRuntimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
+    testRuntimeOnly 'org.xerial:sqlite-jdbc:3.54.1.0'
+    testFixturesRuntimeOnly 'org.xerial:sqlite-jdbc:3.54.1.0'
 }
 
 tasks.withType(JavaCompile).configureEach {

@@ -4,10 +4,10 @@ java { toolchain.languageVersion = JavaLanguageVersion.of(25) }
 dependencies {
     api project(':syncmoney-core')
     testImplementation testFixtures(project(':syncmoney-testkit'))
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.4'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    testRuntimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
+    testRuntimeOnly 'org.xerial:sqlite-jdbc:3.54.1.0'
 }
 test {
     useJUnitPlatform()
@@ -28,10 +28,10 @@ dependencies {
     integrationTestImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     integrationTestImplementation testFixtures(project(':syncmoney-testkit'))
     integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    integrationTestRuntimeOnly 'org.postgresql:postgresql:42.7.5'
+    integrationTestRuntimeOnly 'org.postgresql:postgresql:42.7.14'
     integrationTestRuntimeOnly 'com.mysql:mysql-connector-j:9.2.0'
     integrationTestRuntimeOnly 'org.mariadb.jdbc:mariadb-java-client:3.5.3'
-    integrationTestRuntimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
+    integrationTestRuntimeOnly 'org.xerial:sqlite-jdbc:3.54.1.0'
 }
 tasks.register('integrationTest', Test) {
     description = 'Runs real PostgreSQL, MySQL, and MariaDB persistence tests.'
