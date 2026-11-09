@@ -40,9 +40,9 @@ dependencies {
     integrationTestImplementation project(':syncmoney-bukkit')
     integrationTestImplementation 'com.zaxxer:HikariCP:6.2.1'
     integrationTestImplementation "io.papermc.paper:paper-api:${paperApiVersion}"
-    integrationTestImplementation 'org.mockito:mockito-core:5.8.0'
-    integrationTestImplementation 'net.bytebuddy:byte-buddy:1.17.5'
-    integrationTestImplementation 'net.bytebuddy:byte-buddy-agent:1.17.5'
+    integrationTestImplementation 'org.mockito:mockito-core:5.24.0'
+    integrationTestImplementation 'net.bytebuddy:byte-buddy:1.18.17'
+    integrationTestImplementation 'net.bytebuddy:byte-buddy-agent:1.18.17'
     integrationTestRuntimeOnly 'net.milkbowl.vault:VaultUnlockedAPI:2.20'
     integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
