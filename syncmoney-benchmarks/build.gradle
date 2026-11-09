@@ -68,7 +68,7 @@ dependencies {
     jmhImplementation 'com.google.code.gson:gson:2.11.0'
     jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
     jmhImplementation 'org.hdrhistogram:HdrHistogram:2.2.2'
-    jmhImplementation 'redis.clients:jedis:5.2.0'
+    jmhImplementation 'redis.clients:jedis:8.0.2'
     jmhImplementation 'org.mockito:mockito-core:5.8.0'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'

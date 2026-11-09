@@ -34,7 +34,7 @@ dependencies {
     integrationTestImplementation(testFixtures(project(':syncmoney-testkit'))) {
         exclude group: 'org.xerial', module: 'sqlite-jdbc'
     }
-    integrationTestImplementation 'redis.clients:jedis:5.2.0'
+    integrationTestImplementation 'redis.clients:jedis:8.0.2'
     integrationTestImplementation project(':syncmoney-core')
     integrationTestImplementation project(':syncmoney-storage')
     integrationTestImplementation project(':syncmoney-bukkit')
